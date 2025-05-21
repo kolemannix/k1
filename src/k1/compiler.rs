@@ -409,7 +409,7 @@ pub fn codegen_module<'ctx, 'module>(
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
-    if let Err(e) = codegen.codegen_module() {
+    if let Err(e) = codegen.codegen_program() {
         write_source_location(
             &mut std::io::stderr(),
             &codegen.k1.ast.spans,

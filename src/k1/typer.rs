@@ -2084,7 +2084,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::AlignOf => true,
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::TypeName => true,
-            IntrinsicOperation::TypeSchema => true,
             IntrinsicOperation::BoolNegate => true,
             IntrinsicOperation::BitNot => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
@@ -2100,6 +2099,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::MemSet => false,
             IntrinsicOperation::MemEquals => false,
             IntrinsicOperation::Exit => false,
+            IntrinsicOperation::TypeSchema => false,
         }
     }
 }
@@ -2389,6 +2389,7 @@ pub struct TypedProgram {
     pub exprs: Pool<TypedExpr, TypedExprId>,
     pub stmts: Pool<TypedStmt, TypedStmtId>,
     pub static_values: Pool<StaticValue, StaticValueId>,
+    pub type_schemas: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
@@ -2438,7 +2439,13 @@ impl TypedProgram {
             defns: Pool::with_capacity("type_defns", 4096),
             ast_type_defn_mapping: FxHashMap::new(),
             ast_ability_mapping: FxHashMap::new(),
-            builtins: BuiltinTypes { string: None, buffer: None, type_schema: None },
+            builtins: BuiltinTypes {
+                string: None,
+                buffer: None,
+                types_layout: None,
+                types_type_schema: None,
+                types_int_kind: None,
+            },
             config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
         };
 
@@ -2473,6 +2480,7 @@ impl TypedProgram {
             exprs: Pool::with_capacity("typed_exprs", 32768),
             stmts: Pool::with_capacity("typed_stmts", 8192),
             static_values: Pool::with_capacity("compile_time_values", 8192),
+            type_schemas: FxHashMap::new(),
             scopes,
             errors: Vec::new(),
             namespaces,
@@ -2512,7 +2520,7 @@ impl TypedProgram {
         let src_path_name = src_path.file_stem().unwrap().to_string_lossy();
         let module_name = self.ast.idents.intern(&src_path_name);
         if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
-            eprintln!("Module already included: {}", self.name_of(m.name),);
+            eprintln!("Module already included: {}", self.ident_str(m.name),);
             return Ok(m.id);
         }
         let is_core = self.modules.is_empty();
@@ -2585,8 +2593,8 @@ impl TypedProgram {
             if let Some(m) = self.modules.iter().find(|m| m.kind == ModuleKind::Executable) {
                 bail!(
                     "Cannot compile a program with 2 executable modules. {} and {}",
-                    self.name_of(m.name),
-                    self.name_of(module_name)
+                    self.ident_str(m.name),
+                    self.ident_str(module_name)
                 );
             }
         }
@@ -2647,15 +2655,15 @@ impl TypedProgram {
     pub fn name_of_type(&self, type_id: TypeId) -> &str {
         match self.types.get_defn_info(type_id) {
             None => self.types.get(type_id).kind_name(),
-            Some(info) => self.name_of(info.name),
+            Some(info) => self.ident_str(info.name),
         }
     }
 
-    pub fn name_of(&self, id: Identifier) -> &str {
+    pub fn ident_str(&self, id: Identifier) -> &str {
         self.ast.idents.get_name(id)
     }
 
-    pub fn name_of_opt(&self, id: Option<Identifier>) -> &str {
+    pub fn ident_str_opt(&self, id: Option<Identifier>) -> &str {
         match id {
             Some(id) => self.ast.idents.get_name(id),
             None => "<no name>",
@@ -2790,7 +2798,7 @@ impl TypedProgram {
                 return failf!(
                     parsed_type_defn.span,
                     "Type alias cannot be generic: {}",
-                    self.name_of(parsed_type_defn.name)
+                    self.ident_str(parsed_type_defn.name)
                 );
             }
             let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
@@ -2799,7 +2807,7 @@ impl TypedProgram {
                 return failf!(
                     parsed_type_defn.span,
                     "Type name '{}' is taken",
-                    self.name_of(parsed_type_defn.name).blue()
+                    self.ident_str(parsed_type_defn.name).blue()
                 );
             };
             return Ok(rhs);
@@ -2810,7 +2818,7 @@ impl TypedProgram {
         debug_assert!(!parsed_type_defn.flags.is_alias());
 
         // TODO: ident lookup
-        if self.name_of(parsed_type_defn.name) == "some" {
+        if self.ident_str(parsed_type_defn.name) == "some" {
             return failf!(parsed_type_defn.span, "'some' is not a valid type name");
         }
         let my_type_id = self.types.find_type_defn_mapping(parsed_type_defn_id).unwrap();
@@ -2848,7 +2856,7 @@ impl TypedProgram {
                 return failf!(
                     type_param.span,
                     "Type variable name '{}' is taken",
-                    self.name_of(type_param.name).blue()
+                    self.ident_str(type_param.name).blue()
                 );
             }
         }
@@ -3141,7 +3149,7 @@ impl TypedProgram {
                             return failf!(
                                 dot_acc.span,
                                 "Variant '{}' does not exist on Enum '{}'",
-                                self.name_of(dot_acc.member_name),
+                                self.ident_str(dot_acc.member_name),
                                 self.type_id_to_string(base_type)
                             );
                         };
@@ -3166,7 +3174,7 @@ impl TypedProgram {
                             return failf!(
                                 dot_acc.span,
                                 "Field {} does not exist on struct {}",
-                                self.name_of(dot_acc.member_name),
+                                self.ident_str(dot_acc.member_name),
                                 self.type_id_to_string(base_type)
                             );
                         };
@@ -3310,7 +3318,7 @@ impl TypedProgram {
             return Ok(None);
         }
         let ty_app = ty_app.clone();
-        match self.name_of(ty_app.name.name) {
+        match self.ident_str(ty_app.name.name) {
             "dyn" => {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
@@ -3376,7 +3384,7 @@ impl TypedProgram {
                             return failf!(
                                 ty_app.span,
                                 "Field '{}' has conflicting types in the two structs",
-                                self.name_of(field.name).blue()
+                                self.ident_str(field.name).blue()
                             );
                         }
                     }
@@ -3571,7 +3579,7 @@ impl TypedProgram {
                         &self.types.get_generic_instance_info(specialized_type).unwrap().type_args;
                     debug!(
                         "instantiated {} with params {} got expanded type: {}",
-                        self.name_of(self.types.defns.get(defn_id).name),
+                        self.ident_str(self.types.defns.get(defn_id).name),
                         self.pretty_print_types(inst_info, ", "),
                         self.type_id_to_string_ext(specialized_type, true)
                     );
@@ -3650,9 +3658,6 @@ impl TypedProgram {
             }
         }
 
-        // nocommit: I think this can go
-        let force_new = defn_info_to_attach.is_some();
-
         // If this type is already a generic instance of something, just
         // re-specialize it on the right inputs. So find out what the new value
         // of each type param should be and call instantiate_generic_type
@@ -3700,7 +3705,7 @@ impl TypedProgram {
                     }
                     field.type_id = new_field_type_id;
                 }
-                if force_new || any_change {
+                if any_change {
                     let generic_instance_info = generic_parent_to_attach
                         .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
@@ -3730,12 +3735,12 @@ impl TypedProgram {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
                         self.substitute_in_type(payload_type_id, substitution_pairs)
                     });
-                    if force_new || new_payload_id != variant.payload {
+                    if new_payload_id != variant.payload {
                         any_changed = true;
                         variant.payload = new_payload_id;
                     }
                 }
-                if force_new || any_changed {
+                if any_changed {
                     let generic_instance_info = generic_parent_to_attach
                         .map(|parent| GenericInstanceInfo {
                             generic_parent: parent,
@@ -3758,7 +3763,7 @@ impl TypedProgram {
             Type::Reference(reference) => {
                 let ref_inner = reference.inner_type;
                 let new_inner = self.substitute_in_type(ref_inner, substitution_pairs);
-                if force_new || new_inner != ref_inner {
+                if new_inner != ref_inner {
                     let specialized_reference = ReferenceType { inner_type: new_inner };
                     self.types.add_anon(Type::Reference(specialized_reference))
                 } else {
@@ -3803,7 +3808,7 @@ impl TypedProgram {
                     }
                     param.type_id = new_param_type;
                 }
-                if force_new || any_new {
+                if any_new {
                     let new_function_type_id = self.types.add_anon(Type::Function(new_fun_type));
                     new_function_type_id
                 } else {
@@ -3817,7 +3822,7 @@ impl TypedProgram {
                 let fn_type = lam_obj.function_type;
                 let parsed_id = lam_obj.parsed_id;
                 let new_fn_type = self.substitute_in_type(fn_type, substitution_pairs);
-                if new_fn_type != fn_type || force_new {
+                if new_fn_type != fn_type {
                     self.types.add_lambda_object(&self.ast.idents, new_fn_type, parsed_id)
                 } else {
                     type_id
@@ -3829,7 +3834,7 @@ impl TypedProgram {
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
-            Type::RecursiveReference(rr) => unreachable!(
+            Type::RecursiveReference(_rr) => unreachable!(
                 "substitute_in_type is not expected to be called on RecursiveReference"
             ),
         };
@@ -3982,7 +3987,7 @@ impl TypedProgram {
                     return failf!(
                         enum_pattern.span,
                         "Impossible pattern: No variant named '{}'",
-                        self.name_of(enum_pattern.variant_tag).blue()
+                        self.ident_str(enum_pattern.variant_tag).blue()
                     );
                 };
 
@@ -4036,7 +4041,7 @@ impl TypedProgram {
                             errf!(
                                 self.ast.get_pattern_span(*field_parsed_pattern_id),
                                 "Impossible pattern: Struct has no field named '{}'",
-                                self.name_of(*field_name).blue()
+                                self.ident_str(*field_name).blue()
                             )
                         })?;
                     let field_type_id = expected_field.type_id;
@@ -4100,15 +4105,15 @@ impl TypedProgram {
             if actual_field.name != expected_field.name {
                 return Err(format!(
                     "expected field name {} but got {}",
-                    self.name_of(expected_field.name),
-                    self.name_of(actual_field.name)
+                    self.ident_str(expected_field.name),
+                    self.ident_str(actual_field.name)
                 ));
             }
             self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(
                 |msg| {
                     format!(
                         "Struct type mismatch on field '{}': {}",
-                        self.name_of(actual_field.name),
+                        self.ident_str(actual_field.name),
                         msg
                     )
                 },
@@ -4123,12 +4128,12 @@ impl TypedProgram {
                 None => {
                     eprintln!(
                         "*********************\n\nUnresolved type parameter. {} in {}",
-                        self.name_of(tvar.name),
+                        self.ident_str(tvar.name),
                         self.scopes
                             .make_scope_name(self.scopes.get_scope(scope_id), &self.ast.idents)
                     );
                     eprintln!("{}", self.scope_id_to_string(scope_id));
-                    panic!("Unresolved type parameter. {}", self.name_of(tvar.name));
+                    panic!("Unresolved type parameter. {}", self.ident_str(tvar.name));
                 }
                 Some((resolved, _)) => {
                     if resolved == type_id {
@@ -4170,7 +4175,9 @@ impl TypedProgram {
                         "Comparing params {} and {} inside {}",
                         self.type_id_to_string(*exp_param),
                         self.type_id_to_string(*act_param),
-                        self.name_of(self.types.get_defn_info(spec1.generic_parent).unwrap().name)
+                        self.ident_str(
+                            self.types.get_defn_info(spec1.generic_parent).unwrap().name
+                        )
                     );
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                         let generic = self.types.get(spec1.generic_parent).expect_generic();
@@ -4181,7 +4188,7 @@ impl TypedProgram {
                             self.type_id_to_string(actual),
                         );
                         let detail =
-                            format!("Param '{}' is incorrect: {}", self.name_of(param.name), msg);
+                            format!("Param '{}' is incorrect: {}", self.ident_str(param.name), msg);
                         return Err(format!("{base_msg}: {detail}"));
                     }
                 }
@@ -4224,7 +4231,7 @@ impl TypedProgram {
                     Err(format!(
                         "expected enum {} but got variant {} of a different enum",
                         self.type_id_to_string(expected),
-                        self.name_of(actual_variant.name)
+                        self.ident_str(actual_variant.name)
                     ))
                 }
             }
@@ -4281,7 +4288,7 @@ impl TypedProgram {
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
                             return Err(format!(
                                 "Incorrect type for parameter '{}': {}",
-                                self.name_of(p1.name),
+                                self.ident_str(p1.name),
                                 msg
                             ));
                         }
@@ -4324,7 +4331,7 @@ impl TypedProgram {
                     return failf!(
                         v.span,
                         "Variable cannot be evaluated at compile time: {}",
-                        self.name_of(typed_variable.name)
+                        self.ident_str(typed_variable.name)
                     );
                 }
                 let Some(value) = global.initial_value else {
@@ -4547,7 +4554,7 @@ impl TypedProgram {
             return failf!(
                 global_span,
                 "Type mismatch for global {}: {}",
-                self.name_of(global_name),
+                self.ident_str(global_name),
                 msg
             );
         }
@@ -4723,7 +4730,7 @@ impl TypedProgram {
                     "Ability dump for {} {:02} in search of {} {:02}\n{}",
                     self.type_id_to_string(self_type_id),
                     self_type_id,
-                    self.name_of(self.get_ability(target_ability_id).name),
+                    self.ident_str(self.get_ability(target_ability_id).name),
                     target_ability_id.0,
                     impl_handles
                         .iter()
@@ -4731,7 +4738,7 @@ impl TypedProgram {
                             format!(
                                 "IMPL {:02} {} with args {}",
                                 h.ability_id.0,
-                                self.name_of(self.get_ability(h.ability_id).name),
+                                self.ident_str(self.get_ability(h.ability_id).name),
                                 self.pretty_print_named_type_slice(
                                     self.get_ability_impl(h.full_impl_id).impl_arguments,
                                     ", "
@@ -4748,7 +4755,7 @@ impl TypedProgram {
             return Some(concrete_impl);
         };
 
-        debug!("Blanket search for {}", self.name_of(self.get_ability(target_ability_id).name));
+        debug!("Blanket search for {}", self.ident_str(self.get_ability(target_ability_id).name));
         let target_base_ability_id = self.get_ability_base(target_ability_id);
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
             for blanket_impl_id in blanket_impls_for_base.clone() {
@@ -4795,7 +4802,7 @@ impl TypedProgram {
         let blanket_base = blanket_ability.parent_ability_id().unwrap_or(blanket_impl.ability_id);
 
         if blanket_base != target_base {
-            debug!("Wrong blanket base {}", self_.name_of(blanket_ability.name));
+            debug!("Wrong blanket base {}", self_.ident_str(blanket_ability.name));
             return None;
         }
 
@@ -4803,7 +4810,7 @@ impl TypedProgram {
 
         debug!(
             "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
-            self_.name_of(blanket_ability.name),
+            self_.ident_str(blanket_ability.name),
             self_.pretty_print_named_types(self_.named_types.get_slice(blanket_arguments), ", "),
             self_.pretty_print_named_type_slice(blanket_impl.impl_arguments, ", "),
         );
@@ -5222,7 +5229,7 @@ impl TypedProgram {
                     let variable_is_global = self.variables.get(variable_id).global_id.is_some();
 
                     let is_capture = variable_is_above_lambda && !variable_is_global;
-                    debug!("{}, is_capture={is_capture}", self.name_of(variable.name.name));
+                    debug!("{}, is_capture={is_capture}", self.ident_str(variable.name.name));
                     is_capture
                 } else {
                     false
@@ -5382,7 +5389,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Field {} is inaccessible from here",
-                            self.name_of(target_field.name)
+                            self.ident_str(target_field.name)
                         );
                     }
                 }
@@ -6128,7 +6135,7 @@ impl TypedProgram {
                 if ctx.scope_id != self.get_k1_scope_id() {
                     return failf!(*span, "All the known builtins constants live in the k1 scope");
                 }
-                match self.name_of(defn_name) {
+                match self.ident_str(defn_name) {
                     "TEST" => {
                         let is_test_build = self.ast.config.is_test_build;
                         Ok(self.exprs.add(TypedExpr::Bool(is_test_build, *span)))
@@ -6240,7 +6247,7 @@ impl TypedProgram {
                 return failf!(
                     struct_span,
                     "Struct is missing expected field '{}'",
-                    self.name_of(expected_field.name)
+                    self.ident_str(expected_field.name)
                 );
             };
             let parsed_expr = match passed_field.expr.as_ref() {
@@ -6262,7 +6269,7 @@ impl TypedProgram {
             return failf!(
                 struct_span,
                 "Struct has an unexpected field '{}'",
-                self.name_of(unknown_field.name)
+                self.ident_str(unknown_field.name)
             );
         }
 
@@ -6285,7 +6292,7 @@ impl TypedProgram {
                 return failf!(
                     passed_field.span,
                     "Field {} has incorrect type: {msg}",
-                    self.name_of(passed_field.name)
+                    self.ident_str(passed_field.name)
                 );
             }
             field_types.push(StructTypeField {
@@ -6774,12 +6781,12 @@ impl TypedProgram {
                         return failf!(
                             arg.span,
                             "Cannot infer lambda parameter type {} without more context",
-                            self.name_of(arg.binding)
+                            self.ident_str(arg.binding)
                         );
                     };
                     let Some(expected_ty) = expected_function_type.logical_params().get(index)
                     else {
-                        return failf!(arg.span, "Cannot infer lambda parameter type {}: expected type has fewer parameters than lambda", self.name_of(arg.binding));
+                        return failf!(arg.span, "Cannot infer lambda parameter type {}: expected type has fewer parameters than lambda", self.ident_str(arg.binding));
                     };
                     expected_ty.type_id
                 }
@@ -6847,7 +6854,7 @@ impl TypedProgram {
             .name;
         let name = self.ast.idents.intern(format!(
             "{}_{{lambda}}_{}",
-            self.name_of(encl_fn_name),
+            self.ident_str(encl_fn_name),
             lambda_scope_id,
         ));
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
@@ -7137,7 +7144,7 @@ impl TypedProgram {
                                     return failf!(
                                         this_binding.span,
                                         "Patterns in a multiple pattern arm must have the exact same bindings; but the type differs for {}: {} vs {}",
-                                        self.name_of(exp_binding.name),
+                                        self.ident_str(exp_binding.name),
                                         self.type_id_to_string(exp_binding.type_id),
                                         self.type_id_to_string(this_binding.type_id)
                                     );
@@ -7306,7 +7313,7 @@ impl TypedProgram {
                     let var_name = self
                         .ast
                         .idents
-                        .intern(format!("field_{}", self.name_of(pattern_field.name)));
+                        .intern(format!("field_{}", self.ident_str(pattern_field.name)));
                     let struct_field_variable =
                         self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
@@ -7376,7 +7383,7 @@ impl TypedProgram {
                             span: enum_pattern.span,
                         }));
                     let var_name =
-                        self.ast.idents.intern(format!("payload_{}", self.name_of(variant_name)));
+                        self.ast.idents.intern(format!("payload_{}", self.ident_str(variant_name)));
                     let payload_variable =
                         self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
@@ -7904,7 +7911,7 @@ impl TypedProgram {
                 errf!(
                     span_for_error,
                     "Missing ability '{}' for '{}'. It implements the following abilities:\n{}",
-                    self.name_of(self.get_ability(ability_id).name),
+                    self.ident_str(self.get_ability(ability_id).name),
                     self.type_id_to_string(type_id),
                     &self
                         .ability_impl_table
@@ -8053,7 +8060,7 @@ impl TypedProgram {
                 return failf!(
                     dupe_binding[1].span,
                     "Duplicate binding of name '{}' within same matching if; normally we like shadowing but this is probably never good.",
-                    self.name_of(dupe_binding[1].name)
+                    self.ident_str(dupe_binding[1].name)
                 );
             }
         } else {
@@ -8553,7 +8560,7 @@ impl TypedProgram {
                         failf!(
                             call_span,
                             "Function not found: '{}'",
-                            self.name_of(fn_call.name.name)
+                            self.ident_str(fn_call.name.name)
                         )
                     };
                     if !fn_call.name.namespaces.is_empty() {
@@ -8565,7 +8572,7 @@ impl TypedProgram {
                         let function_variable = self.variables.get(variable_id);
                         debug!(
                             "Variable {} has type {}",
-                            self.name_of(fn_call.name.name),
+                            self.ident_str(fn_call.name.name),
                             self.type_id_to_string(function_variable.type_id)
                         );
                         match self.types.get(function_variable.type_id) {
@@ -8672,7 +8679,7 @@ impl TypedProgram {
     ) -> TyperResult<Option<TypedExprId>> {
         let call_span = fn_call.span;
         let calling_scope = ctx.scope_id;
-        match self.name_of(fn_call.name.name) {
+        match self.ident_str(fn_call.name.name) {
             "return" => {
                 if fn_call.args.len() != 1 {
                     return failf!(fn_call.span, "return(...) must have exactly one argument",);
@@ -8868,7 +8875,7 @@ impl TypedProgram {
             failf!(
                 call_span,
                 "Method '{}' does not exist on type: '{}'",
-                self.name_of(fn_call.name.name),
+                self.ident_str(fn_call.name.name),
                 self.type_id_to_string(base_expr_type),
             )
         };
@@ -8878,7 +8885,7 @@ impl TypedProgram {
             "abilities_in_scope: {:?}",
             abilities_in_scope
                 .iter()
-                .map(|a| self.name_of(self.get_ability(*a).name))
+                .map(|a| self.ident_str(self.get_ability(*a).name))
                 .collect::<Vec<_>>()
         );
 
@@ -8945,7 +8952,7 @@ impl TypedProgram {
             let new_function_type =
                 self.add_lambda_env_to_function_type(new_function.type_id, function_defn_span);
             new_function.type_id = new_function_type;
-            let old_name = self.name_of(new_function.name);
+            let old_name = self.ident_str(new_function.name);
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let new_function_id = self.add_function(new_function);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
@@ -9006,7 +9013,7 @@ impl TypedProgram {
 
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
         if passed_len != ability_fn_signature.logical_params().len() {
-            return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.name_of(fn_call.name.name));
+            return failf!(call_span, "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)", self.ident_str(fn_call.name.name));
         }
 
         // First, we need to solve for 'Self' and all of the ability's other type parameters
@@ -9124,7 +9131,7 @@ impl TypedProgram {
             return failf!(
                 call_span,
                 "Call to {} with type Self = {} does not work, since it does not implement ability {}",
-                self.name_of(self.get_function(function_id).name),
+                self.ident_str(self.get_function(function_id).name),
                 self.type_id_to_string(solved_self.type_id),
                 self.ability_signature_to_string(ability_id, SliceHandle::Empty),
             );
@@ -9179,13 +9186,13 @@ impl TypedProgram {
             Type::Enum(e) => (e, false),
             _ => return Ok(None),
         };
-        let fn_name = self.name_of(fn_call.name.name);
+        let fn_name = self.ident_str(fn_call.name.name);
         if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
             let span = fn_call.span;
             let Some(variant) = e.variants.iter().find(|v| {
                 let mut s = String::with_capacity(16);
                 s.push_str("as");
-                let name = self.name_of(v.name);
+                let name = self.ident_str(v.name);
                 let name_capitalized = strings::capitalize_first(name);
                 s.push_str(&name_capitalized);
 
@@ -9311,7 +9318,7 @@ impl TypedProgram {
                     span,
                 )?))
             } else {
-                failf!(span, "No such variant: {}", self.name_of(variant_name))
+                failf!(span, "No such variant: {}", self.ident_str(variant_name))
             }
         } else if let Type::Generic(g) = base_enum_or_generic_enum {
             let Some(inner_enum) = self.types.get(g.inner).as_enum() else { return Ok(None) };
@@ -9326,7 +9333,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Variant {} requires a payload",
-                            self.name_of(generic_variant.name)
+                            self.ident_str(generic_variant.name)
                         )
                     }
                     Some(payload_parsed_expr) => {
@@ -9339,7 +9346,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Variant {} does not take a payload",
-                            self.name_of(generic_variant.name)
+                            self.ident_str(generic_variant.name)
                         )
                     }
                 },
@@ -9495,7 +9502,7 @@ impl TypedProgram {
                         return failf!(
                             span,
                             "Failed to find context parameter '{}'. No context variables of type {} are in scope",
-                            self.name_of(context_param.name),
+                            self.ident_str(context_param.name),
                             self.type_id_to_string(context_param.type_id)
                         );
                     } else {
@@ -9525,7 +9532,7 @@ impl TypedProgram {
             return failf!(
                 span,
                 "Incorrect number of arguments to {}: expected {}, got {}",
-                self.name_of(fn_call.name.name),
+                self.ident_str(fn_call.name.name),
                 total_expected,
                 total_passed
             );
@@ -9555,7 +9562,7 @@ impl TypedProgram {
                         return failf!(
                             fn_call.span,
                             "Missing named argument for parameter {}",
-                            self.name_of(fn_param.name)
+                            self.ident_str(fn_param.name)
                         );
                     };
                     if let Some(dupe) =
@@ -9572,8 +9579,8 @@ impl TypedProgram {
                     return failf!(
                         span,
                         "Missing argument to {}: {}",
-                        self.name_of(fn_name).blue(),
-                        self.name_of(fn_param.name).red()
+                        self.ident_str(fn_name).blue(),
+                        self.ident_str(fn_param.name).red()
                     );
                 };
                 final_args.push(MaybeTypedExpr::Parsed(param.value));
@@ -9596,7 +9603,7 @@ impl TypedProgram {
             return failf!(
                 self.exprs.get(arg).get_span(),
                 "Invalid type for parameter {}: {}",
-                self.name_of(param.name),
+                self.ident_str(param.name),
                 e
             );
         };
@@ -9792,7 +9799,27 @@ impl TypedProgram {
                     let source_location = self.synth_source_location(span);
                     Ok(source_location)
                 }
-                // Bring it back here, keep a TypeId -> StaticValueId cache, and profit!
+                IntrinsicOperation::TypeId => {
+                    let type_arg = self.named_types.get_nth(call.type_args, 0);
+                    let type_id_u64 = type_arg.type_id.as_u32() as u64;
+
+                    // We generate a schema for every concrete type for which a typeId is requested
+                    // This guarantees that we have it available at runtime when typeSchema is
+                    // called
+                    if !self
+                        .types
+                        .get_contained_type_variable_counts(type_arg.type_id)
+                        .is_abstract()
+                    {
+                        let _schema_value_id = self.get_type_schema(type_arg.type_id, span);
+                    }
+
+                    let int_expr = TypedExpr::Integer(TypedIntegerExpr {
+                        value: TypedIntValue::U64(type_id_u64),
+                        span,
+                    });
+                    Ok(self.exprs.add(int_expr))
+                }
                 _ => Ok(self.exprs.add(TypedExpr::Call(call))),
             }
         } else {
@@ -9935,7 +9962,7 @@ impl TypedProgram {
                 "Could not solve for {} given arguments:\n{}",
                 unsolved_params
                     .iter()
-                    .map(|p| self_.name_of(p.name()))
+                    .map(|p| self_.ident_str(p.name()))
                     .collect::<Vec<_>>()
                     .join(", "),
                 argument_types
@@ -10070,7 +10097,7 @@ impl TypedProgram {
                     e.span,
                     "{}. Therefore, cannot call function '{}' with given types: {}",
                     e.message,
-                    self.name_of(fn_call.name.name),
+                    self.ident_str(fn_call.name.name),
                     self.pretty_print_named_type_slice(solved_type_params, ", ")
                 )
             })?;
@@ -10114,8 +10141,8 @@ impl TypedProgram {
                 debug!(
                     "The param for function_type_param {} {} is {} and passed: {:?}",
                     function_type_param.type_id,
-                    self.name_of(function_type_param.name),
-                    self.name_of(corresponding_value_param.name),
+                    self.ident_str(function_type_param.name),
+                    self.ident_str(corresponding_value_param.name),
                     corresponding_arg
                 );
 
@@ -10656,7 +10683,7 @@ impl TypedProgram {
             {
                 debug!(
                     "Found existing specialization for function {} with types: {}, functions: {}",
-                    self.name_of(generic_function.name),
+                    self.ident_str(generic_function.name),
                     self.pretty_print_named_type_slice(
                         existing_specialization.type_arguments,
                         ", "
@@ -10708,7 +10735,7 @@ impl TypedProgram {
             use std::fmt::Write;
             let generic_function = m.get_function(generic_function_id);
             let spec_num = generic_function.child_specializations.len() + 1;
-            write!(s, "{}__", m.name_of(generic_function.name)).unwrap();
+            write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
             for nt in m.named_types.get_slice(type_arguments) {
                 m.display_type_id(nt.type_id, false, s).unwrap()
             }
@@ -10875,7 +10902,7 @@ impl TypedProgram {
                     return failf!(
                         parsed_use.target.span,
                         "Could not find {}",
-                        self.name_of(parsed_use.target.name)
+                        self.ident_str(parsed_use.target.name)
                     );
                 };
                 self.scopes.add_use_binding(
@@ -11137,7 +11164,7 @@ impl TypedProgram {
         ability_impl_info: Option<(AbilityId, TypeId)>,
     ) -> Result<IntrinsicOperation, String> {
         let fn_name_str = self.ast.idents.get_name(fn_name);
-        let second = namespace_chain.get(2).map(|id| self.name_of(*id));
+        let second = namespace_chain.get(2).map(|id| self.ident_str(*id));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             match (ability_id, self.types.get(ability_impl_type_id)) {
                 // Leaving this example of how to do intrinsic ability fns
@@ -11226,7 +11253,7 @@ impl TypedProgram {
                 "Could not resolve intrinsic function type for function {}/{}",
                 namespace_chain
                     .iter()
-                    .map(|i| self.name_of(*i).to_string())
+                    .map(|i| self.ident_str(*i).to_string())
                     .collect::<Vec<_>>()
                     .join("/"),
                 fn_name_str,
@@ -11247,7 +11274,7 @@ impl TypedProgram {
             return failf!(
                 span,
                 "No variant '{}' exists in enum '{}'",
-                self.name_of(variant_name).blue(),
+                self.ident_str(variant_name).blue(),
                 self.type_id_to_string(concrete_enum_type)
             );
         };
@@ -11259,7 +11286,7 @@ impl TypedProgram {
                     failf!(
                         span,
                         "Variant '{}' does not have a payload",
-                        self.name_of(variant_name).blue()
+                        self.ident_str(variant_name).blue()
                     )
                 } else {
                     Ok(None)
@@ -11280,7 +11307,7 @@ impl TypedProgram {
                     failf!(
                         span,
                         "Variant '{}' requires a payload",
-                        self.name_of(variant_name).blue()
+                        self.ident_str(variant_name).blue()
                     )
                 }
             }
@@ -11346,10 +11373,10 @@ impl TypedProgram {
                     return failf!(
                             span,
                             "Provided type {} := {} does implement required ability {}, but the implementation parameter {} is wrong: Expected type was {} but the actual implementation uses {}",
-                            self.name_of(name),
+                            self.ident_str(name),
                             self.type_id_to_string(target_type),
-                            self.name_of(self.get_ability(signature.ability_id).name),
-                            self.name_of(constraint_arg.name),
+                            self.ident_str(self.get_ability(signature.ability_id).name),
+                            self.ident_str(constraint_arg.name),
                             self.type_id_to_string(constraint_arg.type_id),
                             self.type_id_to_string(passed_arg.type_id),
                         );
@@ -11360,9 +11387,9 @@ impl TypedProgram {
             failf!(
                 span,
                 "Provided type for {} is {} which does not implement required ability {}",
-                self.name_of(name),
+                self.ident_str(name),
                 self.type_id_to_string(target_type),
-                self.name_of(self.get_ability(signature.ability_id).name)
+                self.ident_str(self.get_ability(signature.ability_id).name)
             )
         }
     }
@@ -11401,7 +11428,7 @@ impl TypedProgram {
         for arg in self.named_types.get_slice(arguments) {
             let has_matching_param = ability_parameters.iter().any(|param| param.name == arg.name);
             if !has_matching_param {
-                return failf!(span, "No parameter named {}", self.name_of(arg.name));
+                return failf!(span, "No parameter named {}", self.ident_str(arg.name));
             }
         }
 
@@ -11420,7 +11447,7 @@ impl TypedProgram {
                 return failf!(
                     span,
                     "Missing argument for ability parameter {}",
-                    self.name_of(param.name)
+                    self.ident_str(param.name)
                 );
             };
             // Ensure that the passed type meets the parameter's declared constraints
@@ -11470,7 +11497,7 @@ impl TypedProgram {
         {
             debug!(
                 "Using cached ability specialization for {}",
-                self.name_of(self.get_ability(cached_specialization.specialized_child).name)
+                self.ident_str(self.get_ability(cached_specialization.specialized_child).name)
             );
             return Ok(cached_specialization.specialized_child);
         };
@@ -11478,7 +11505,7 @@ impl TypedProgram {
         let specialized_ability_name = {
             use std::fmt::Write;
             let mut s = std::mem::take(&mut self.buffers.name_builder);
-            write!(&mut s, "{}_", self.name_of(ability_name)).unwrap();
+            write!(&mut s, "{}_", self.ident_str(ability_name)).unwrap();
             for (index, arg) in self.named_types.get_slice(arguments).iter().enumerate() {
                 self.write_ident(&mut s, arg.name).unwrap();
                 write!(&mut s, "_").unwrap();
@@ -11694,9 +11721,9 @@ impl TypedProgram {
                 write!(
                     &mut s,
                     "{}_{}_{}",
-                    self_.name_of(self_.get_ability(ability_id.unwrap()).name),
+                    self_.ident_str(self_.get_ability(ability_id.unwrap()).name),
                     self_.type_id_to_string(target_type),
-                    self_.name_of(parsed_function_name),
+                    self_.ident_str(parsed_function_name),
                 )
                 .unwrap();
                 self_.ast.idents.intern(s)
@@ -11876,7 +11903,7 @@ impl TypedProgram {
                     return failf!(
                         fn_param.span,
                         "Duplicate parameter name: {}",
-                        self_.name_of(fn_param.name)
+                        self_.ident_str(fn_param.name)
                     );
                 }
             }
@@ -12008,7 +12035,7 @@ impl TypedProgram {
                 let error = errf!(
                     signature_span,
                     "Function name {} is taken",
-                    self_.name_of(parsed_function_name)
+                    self_.ident_str(parsed_function_name)
                 );
                 self_.push_error(error);
             }
@@ -12081,7 +12108,7 @@ impl TypedProgram {
                     return failf!(
                         return_type_span,
                         "Function {} return type mismatch: {}",
-                        self.name_of(function_name),
+                        self.ident_str(function_name),
                         msg
                     );
                 } else {
@@ -12093,7 +12120,7 @@ impl TypedProgram {
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
         }
-        if self.name_of(function_name) == "slice_spec_enum Char(char) | String(string)_3" {
+        if self.ident_str(function_name) == "slice_spec_enum Char(char) | String(string)_3" {
             eprintln!("{}", self.scope_id_to_string(fn_scope_id));
         }
         if is_debug {
@@ -12161,7 +12188,7 @@ impl TypedProgram {
                 return failf!(
                     ability_param.span,
                     "Duplicate type variable: {}",
-                    self.name_of(ability_param.name)
+                    self.ident_str(ability_param.name)
                 );
             };
             ability_params.push(TypedAbilityParam {
@@ -12194,7 +12221,7 @@ impl TypedProgram {
             return failf!(
                 parsed_ability.span,
                 "Namespace with name {} already exists",
-                self.name_of(parsed_ability.name)
+                self.ident_str(parsed_ability.name)
             );
         }
 
@@ -12215,7 +12242,7 @@ impl TypedProgram {
             return failf!(
                 parsed_ability.span,
                 "Ability with name {} already exists",
-                self.name_of(parsed_ability.name)
+                self.ident_str(parsed_ability.name)
             );
         }
         self.types.add_ability_mapping(parsed_ability_id, ability_id);
@@ -12262,13 +12289,13 @@ impl TypedProgram {
                     failf!(
                         ability_name.span,
                         "No ability '{}' is in scope",
-                        self.name_of(ability_name.name)
+                        self.ident_str(ability_name.name)
                     )
                 }
                 Some((pending_ability, ability_scope)) => {
                     debug!(
                         "Recursing into pending ability {} from {}",
-                        self.name_of(ability_name.name),
+                        self.ident_str(ability_name.name),
                         self.ast.get_lines_for_span_id(ability_name.span).unwrap().0.content
                     );
                     let ability_id = self.eval_ability(pending_ability, ability_scope)?;
@@ -12315,7 +12342,7 @@ impl TypedProgram {
                 return failf!(
                     generic_impl_param.span,
                     "Duplicate generic impl parameter name: {}",
-                    self.name_of(generic_impl_param.name)
+                    self.ident_str(generic_impl_param.name)
                 );
             }
 
@@ -12354,7 +12381,7 @@ impl TypedProgram {
                 return failf!(
                     span,
                     "Ability '{}' already implemented for type: {}",
-                    self.name_of(self.get_ability(ability_id).name).blue(),
+                    self.ident_str(self.get_ability(ability_id).name).blue(),
                     self.type_id_to_string(impl_self_type).blue()
                 );
             }
@@ -12366,7 +12393,7 @@ impl TypedProgram {
         let impl_scope_name = format_ident!(
             self,
             "{}_impl_{}",
-            self.name_of(ability_name),
+            self.ident_str(ability_name),
             self.type_id_to_string(impl_self_type)
         );
         self.scopes.get_scope_mut(impl_scope_id).name = Some(impl_scope_name);
@@ -12384,7 +12411,7 @@ impl TypedProgram {
                 return failf!(
                     span,
                     "Type parameter name {} is already used by an ability parameter",
-                    self.name_of(argument.name)
+                    self.ident_str(argument.name)
                 );
             }
         }
@@ -12398,8 +12425,8 @@ impl TypedProgram {
                 return failf!(
                     ability_expr.span,
                     "Missing implementation-side parameter for Ability {}: {}",
-                    self.name_of(ability_name),
-                    self.name_of(impl_param.name)
+                    self.ident_str(ability_name),
+                    self.ident_str(impl_param.name)
                 );
             };
 
@@ -12415,7 +12442,7 @@ impl TypedProgram {
 
             debug!(
                 "Binding impl param {} to {}",
-                self.name_of(impl_param.name),
+                self.ident_str(impl_param.name),
                 self.type_id_to_string(arg_type)
             );
             let added =
@@ -12448,8 +12475,8 @@ impl TypedProgram {
                 return failf!(
                     span,
                     "Missing implementation for function '{}' in ability '{}'",
-                    self.name_of(ability_function_ref.function_name).blue(),
-                    self.name_of(ability_name).blue()
+                    self.ident_str(ability_function_ref.function_name).blue(),
+                    self.ident_str(ability_name).blue()
                 );
             };
             // Report extra functions too
@@ -12461,7 +12488,7 @@ impl TypedProgram {
                     return failf!(
                         span,
                         "Extra function in ability impl: {}",
-                        self.name_of(parsed_fn_name)
+                        self.ident_str(parsed_fn_name)
                     );
                 };
             }
@@ -12729,13 +12756,15 @@ impl TypedProgram {
                         self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
                     if !added {
                         let span = parsed_type_defn.span;
-                        self.push_error(errf!(span, "Type {} exists", self.name_of(name)));
+                        self.push_error(errf!(span, "Type {} exists", self.ident_str(name)));
                     }
 
                     // Detect builtin types and store their IDs for fast lookups
                     if namespace_scope_id == self.scopes.types_scope_id {
                         if name == self.ast.idents.builtins.TypeSchema {
-                            self.types.builtins.type_schema = Some(type_id);
+                            self.types.builtins.types_type_schema = Some(type_id);
+                        } else if name == self.ast.idents.builtins.IntKind {
+                            self.types.builtins.types_int_kind = Some(type_id);
                         }
                     }
                 }
@@ -12749,7 +12778,7 @@ impl TypedProgram {
                     .get_scope_mut(namespace_scope_id)
                     .add_pending_ability_defn(name, parsed_ability_id);
                 if !added {
-                    self.push_error(errf!(span, "Ability {} exists", self.name_of(name)));
+                    self.push_error(errf!(span, "Ability {} exists", self.ident_str(name)));
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
@@ -12895,7 +12924,7 @@ impl TypedProgram {
             return failf!(
                 ast_namespace.span,
                 "Namespace name {} is taken",
-                self.name_of(name).blue()
+                self.ident_str(name).blue()
             );
         }
 
@@ -12910,24 +12939,25 @@ impl TypedProgram {
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.get_namespace(parsed_namespace_id).clone();
 
-        let namespace_id =
-            if let Some(existing) = self.scopes.find_namespace(parent_scope, ast_namespace.name) {
-                if self.module_in_progress.unwrap()
-                    != self.namespaces.get(existing).owner_module.unwrap()
-                {
-                    return failf!(
-                        ast_namespace.span,
-                        "Cannot extend definition of namespace from another module"
-                    );
-                }
-                // Namespace extension
-                // Map this separate namespace AST node to the same semantic namespace
-                self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
-                debug!("Inserting re-definition node for ns {}", self.name_of(ast_namespace.name));
-                existing
-            } else {
-                self.create_namespace(parsed_namespace_id, parent_scope)?
-            };
+        let namespace_id = if let Some(existing) =
+            self.scopes.find_namespace(parent_scope, ast_namespace.name)
+        {
+            if self.module_in_progress.unwrap()
+                != self.namespaces.get(existing).owner_module.unwrap()
+            {
+                return failf!(
+                    ast_namespace.span,
+                    "Cannot extend definition of namespace from another module"
+                );
+            }
+            // Namespace extension
+            // Map this separate namespace AST node to the same semantic namespace
+            self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
+            debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));
+            existing
+        } else {
+            self.create_namespace(parsed_namespace_id, parent_scope)?
+        };
 
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
@@ -13076,7 +13106,7 @@ impl TypedProgram {
                 let error = errf!(
                     parsed_use.span,
                     "Unresolved use of {}",
-                    self.name_of(parsed_use.target.name)
+                    self.ident_str(parsed_use.target.name)
                 );
                 self.write_error(&mut err_writer, &error)?;
                 self.errors.push(error)
@@ -13111,7 +13141,7 @@ impl TypedProgram {
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
-                buffer_struct.fields.iter().map(|f| self.name_of(f.name)).collect::<Vec<_>>()
+                buffer_struct.fields.iter().map(|f| self.ident_str(f.name)).collect::<Vec<_>>()
                     == vec!["len", BUFFER_DATA_FIELD_NAME]
             );
         }
@@ -13124,7 +13154,7 @@ impl TypedProgram {
             let list_struct = self.types.get(list_generic.inner).expect_struct();
             debug_assert!(info.name == get_ident!(self, "List"));
             debug_assert!(
-                list_struct.fields.iter().map(|f| self.name_of(f.name)).collect::<Vec<_>>()
+                list_struct.fields.iter().map(|f| self.ident_str(f.name)).collect::<Vec<_>>()
                     == vec!["len", "buffer"]
             );
         }
@@ -13407,12 +13437,138 @@ impl TypedProgram {
             qident!(self, span, ["core"], "assertEquals"),
             qident!(self, span, ["core"], "assertMsg"),
             qident!(self, span, ["core"], "crash"),
+            qident!(self, span, ["core"], "mem"),
         ];
         for du in default_uses.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse { target: du, alias: None, span });
             self.eval_use_definition(scope, use_id)?;
         }
         Ok(())
+    }
+
+    fn get_type_schema(&mut self, type_id: TypeId, span: SpanId) -> StaticValueId {
+        if let Some(static_value_id) = self.type_schemas.get(&type_id) {
+            return *static_value_id;
+        }
+
+        let type_schema =
+            self.types.get(self.types.builtins.types_type_schema.unwrap()).expect_enum();
+        let int_kind = self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
+        let get_schema_variant =
+            |name: &str| type_schema.variant_by_name(get_ident!(self, name)).unwrap();
+        let make_variant = |name: &str, payload: Option<StaticValueId>| {
+            let v = get_schema_variant(name);
+            StaticEnum {
+                variant_type_id: v.my_type_id,
+                variant_index: v.index,
+                typed_as_enum: true,
+                payload,
+            }
+        };
+        let word_enum = self.types.get(get_schema_variant("Word").payload.unwrap()).expect_enum();
+        let typ = self.types.get_no_follow(type_id);
+        let static_enum = match typ {
+            Type::Unit => make_variant("Unit", None),
+            Type::Char => make_variant("Char", None),
+            Type::Bool => make_variant("Bool", None),
+            Type::Pointer => make_variant("Pointer", None),
+            Type::Integer(integer_type) => {
+                let payload_type = match integer_type {
+                    IntegerType::U8 => int_kind.variant_by_index(0),
+                    IntegerType::U16 => int_kind.variant_by_index(1),
+                    IntegerType::U32 => int_kind.variant_by_index(2),
+                    IntegerType::U64 => int_kind.variant_by_index(3),
+                    IntegerType::I8 => int_kind.variant_by_index(4),
+                    IntegerType::I16 => int_kind.variant_by_index(5),
+                    IntegerType::I32 => int_kind.variant_by_index(6),
+                    IntegerType::I64 => int_kind.variant_by_index(7),
+                    IntegerType::UWord(_) => word_enum.variant_by_index(0),
+                    IntegerType::IWord(_) => word_enum.variant_by_index(1),
+                };
+                let payload_value = StaticEnum {
+                    variant_type_id: payload_type.my_type_id,
+                    variant_index: payload_type.index,
+                    typed_as_enum: true,
+                    payload: None,
+                };
+                let payload_value_id = self.static_values.add(StaticValue::Enum(payload_value));
+                let enum_value = make_variant("Int", Some(payload_value_id));
+                enum_value
+            }
+            Type::Float(_float_type) => todo!("float schema"),
+            Type::Struct(struct_type) => {
+                let struct_schema_payload_type_id = get_schema_variant("Struct").payload.unwrap();
+                // { fields: Buffer[{}] }
+                let struct_schema_payload_struct =
+                    self.types.get(struct_schema_payload_type_id).expect_struct();
+                // { fields: Buffer[{ ... }] }
+                let struct_schema_fields_buffer_type_id =
+                    struct_schema_payload_struct.fields[0].type_id;
+                let struct_schema_field_item_struct_type_id = self
+                    .types
+                    .get(struct_schema_fields_buffer_type_id)
+                    .as_buffer_instance()
+                    .unwrap()
+                    .type_args[0];
+                // { name: string, typeId: u64, offset: uword }
+                // let struct_schema_field_item_struct =
+                //     self.types.get(struct_schema_field_item_struct_type_id).expect_struct();
+                let struct_layout = self.types.get_struct_layout(type_id);
+                let mut field_values: EcoVec<StaticValueId> =
+                    EcoVec::with_capacity(struct_type.fields.len());
+                for (index, f) in struct_type.fields.iter().enumerate() {
+                    let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
+                    let name_string_value_id =
+                        self.static_values.add(StaticValue::String(name_string_id));
+                    let type_id_u32 = f.type_id.as_u32();
+                    let type_id_value_id = self
+                        .static_values
+                        .add(StaticValue::Integer(TypedIntValue::U64(type_id_u32 as u64)));
+                    let offset_u32 = struct_layout.field_offsets[index];
+                    let offset_value_id = self
+                        .static_values
+                        .add(StaticValue::Integer(TypedIntValue::UWord64(offset_u32 as u64)));
+                    let field_struct = StaticValue::Struct(StaticStruct {
+                        type_id: struct_schema_field_item_struct_type_id,
+                        fields: eco_vec![
+                            // name: string
+                            name_string_value_id,
+                            // typeId: u64
+                            type_id_value_id,
+                            // offset: uword
+                            offset_value_id
+                        ],
+                    });
+                    field_values.push(self.static_values.add(field_struct));
+                }
+                let buffer = self.static_values.add(StaticValue::Buffer(StaticBuffer {
+                    elements: field_values,
+                    type_id: struct_schema_fields_buffer_type_id,
+                }));
+                let payload = self.static_values.add(StaticValue::Struct(StaticStruct {
+                    fields: eco_vec![buffer],
+                    type_id: struct_schema_payload_type_id,
+                }));
+                make_variant("Struct", Some(payload))
+            }
+            Type::Reference(_reference_type) => todo!(),
+            Type::Enum(_typed_enum) => self.ice_with_span("TypeSchema for enum", span),
+            Type::EnumVariant(_typed_enum_variant) => todo!(),
+            Type::Function(_function_type) => todo!(),
+            Type::Lambda(_lambda_type) => todo!(),
+            Type::LambdaObject(_lambda_object_type) => todo!(),
+            Type::Generic(_)
+            | Type::TypeParameter(_)
+            | Type::FunctionTypeParameter(_)
+            | Type::InferenceHole(_)
+            | Type::Unresolved(_)
+            | Type::RecursiveReference(_)
+            | Type::Never => self.ice_with_span(format!("TypeSchema on {}", typ.kind_name()), span),
+        };
+
+        let static_value_id = self.static_values.add(StaticValue::Enum(static_enum));
+        self.type_schemas.insert(type_id, static_value_id);
+        static_value_id
     }
 
     fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
@@ -13830,7 +13986,7 @@ impl TypedProgram {
         let starting_namespace = self.scopes.nearest_parent_namespace(scope);
         let namespace_chain = self.namespaces.name_chain(starting_namespace);
         for identifier in namespace_chain.iter() {
-            let ident_str = self.name_of(*identifier);
+            let ident_str = self.ident_str(*identifier);
 
             let is_root = ident_str == "_root";
             if !(skip_root && is_root) {
@@ -13849,7 +14005,7 @@ impl TypedProgram {
         skip_root: bool,
     ) -> String {
         let mut buf = Vec::with_capacity(64);
-        self.write_qualified_name(&mut buf, scope, self.name_of(name), delimiter, skip_root);
+        self.write_qualified_name(&mut buf, scope, self.ident_str(name), delimiter, skip_root);
         String::from_utf8(buf).unwrap()
     }
 

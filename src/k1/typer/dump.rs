@@ -12,7 +12,7 @@ impl Display for TypedProgram {
         f.write_str("--- Namespaces ---\n")?;
         for (id, namespace) in self.namespaces.iter().enumerate() {
             write!(f, "ns {:02} ", id)?;
-            f.write_str(self.name_of(namespace.name))?;
+            f.write_str(self.ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
         if !skip_variables {
@@ -74,7 +74,7 @@ impl TypedProgram {
             writ.write_str("\tVARS\n")?;
         }
         for (id, variable_in_scope) in scope.variables.iter() {
-            write!(writ, "\t{} -> ", self.name_of(*id))?;
+            write!(writ, "\t{} -> ", self.ident_str(*id))?;
             match variable_in_scope {
                 VariableInScope::Masked => writ.write_str("masked")?,
                 VariableInScope::Defined(variable_id) => {
@@ -111,7 +111,7 @@ impl TypedProgram {
         for (_name, namespace_id) in scope.namespaces.iter() {
             write!(writ, "{} -> ", namespace_id)?;
             let namespace = self.namespaces.get(*namespace_id);
-            writ.write_str(self.name_of(namespace.name))?;
+            writ.write_str(self.ident_str(namespace.name))?;
             writ.write_str("\n")?;
         }
         Ok(())
@@ -121,7 +121,7 @@ impl TypedProgram {
         if var.is_mutable {
             writ.write_str("mut ")?;
         }
-        writ.write_str(self.name_of(var.name))?;
+        writ.write_str(self.ident_str(var.name))?;
         writ.write_str(": ")?;
         self.display_type_id(var.type_id, false, writ)
     }
@@ -198,7 +198,7 @@ impl TypedProgram {
             Type::Pointer => w.write_str("Pointer"),
             Type::Struct(struc) => {
                 if let Some(defn_info) = defn_info {
-                    w.write_str(self.name_of(defn_info.name))?;
+                    w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = struc.generic_instance_info.as_ref() {
                         self.display_instance_info(w, spec_info, expand)?;
                     }
@@ -220,9 +220,9 @@ impl TypedProgram {
                     w.write_str(&scope_name)?;
                     w.write_str(".")?;
                     w.write_str("'")?;
-                    w.write_str(self.name_of(tv.name))?;
+                    w.write_str(self.ident_str(tv.name))?;
                 } else {
-                    w.write_str(self.name_of(tv.name))?;
+                    w.write_str(self.ident_str(tv.name))?;
                 }
                 Ok(())
             }
@@ -243,7 +243,7 @@ impl TypedProgram {
             }
             Type::Enum(e) => {
                 if let Some(defn_info) = defn_info {
-                    w.write_str(self.name_of(defn_info.name))?;
+                    w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = e.generic_instance_info.as_ref() {
                         self.display_instance_info(w, spec_info, expand)?;
                     }
@@ -292,10 +292,10 @@ impl TypedProgram {
             Type::Never => w.write_str("never"),
             Type::Generic(gen) => {
                 let defn_info = defn_info.unwrap();
-                w.write_str(self.name_of(defn_info.name))?;
+                w.write_str(self.ident_str(defn_info.name))?;
                 w.write_str("[")?;
                 for (idx, param) in self.named_types.get_slice(gen.params).iter().enumerate() {
-                    w.write_str(self.name_of(param.name))?;
+                    w.write_str(self.ident_str(param.name))?;
                     let last = idx == gen.params.len() - 1;
                     if !last {
                         w.write_str(", ")?;
@@ -340,7 +340,7 @@ impl TypedProgram {
             Type::Unresolved(_u) => w.write_str("<unresolved>"),
             Type::RecursiveReference(rr) => {
                 let info = self.types.get_defn_info(rr.root_type_id).unwrap();
-                w.write_str(self.name_of(info.name))?;
+                w.write_str(self.ident_str(info.name))?;
                 Ok(())
             }
         }
@@ -384,7 +384,7 @@ impl TypedProgram {
         }
 
         w.write_str("fn ")?;
-        w.write_str(self.name_of(function.name))?;
+        w.write_str(self.ident_str(function.name))?;
         if !function.type_params.is_empty() {
             w.write_char('[')?;
             for (idx, tp) in self.named_types.get_slice(function.type_params).iter().enumerate() {
@@ -401,7 +401,7 @@ impl TypedProgram {
             if idx > 0 {
                 w.write_str(", ")?;
             }
-            w.write_str(self.name_of(param.name))?;
+            w.write_str(self.ident_str(param.name))?;
             w.write_str(": ")?;
             self.display_type_id(param.type_id, false, w)?;
         }
@@ -538,7 +538,7 @@ impl TypedProgram {
                         writ.write_str(",\n")?;
                     }
                     writ.write_str(&"  ".repeat(indentation + 1))?;
-                    writ.write_str(self.name_of(field.name))?;
+                    writ.write_str(self.ident_str(field.name))?;
                     writ.write_str(": ")?;
                     self.display_expr_id(field.expr, writ, indentation)?;
                 }
@@ -548,7 +548,7 @@ impl TypedProgram {
             }
             TypedExpr::Variable(v) => {
                 let variable = self.variables.get(v.variable_id);
-                writ.write_str(self.name_of(variable.name))
+                writ.write_str(self.ident_str(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr_id(field_access.base, writ, indentation)?;
@@ -638,7 +638,7 @@ impl TypedProgram {
             TypedExpr::EnumConstructor(enum_constr) => {
                 writ.write_str(".")?;
                 let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();
-                writ.write_str(self.name_of(variant.name))?;
+                writ.write_str(self.ident_str(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     writ.write_str("(")?;
                     self.display_expr_id(*payload, writ, indentation)?;
@@ -693,7 +693,7 @@ impl TypedProgram {
                 self.display_type_id(lambda_type.env_type, false, writ).unwrap();
                 writ.write_str("]")?;
                 for arg in fn_type.logical_params() {
-                    writ.write_str(self.name_of(arg.name))?;
+                    writ.write_str(self.ident_str(arg.name))?;
                     writ.write_str(": ")?;
                     self.display_type_id(arg.type_id, false, writ)?;
                 }
@@ -705,18 +705,18 @@ impl TypedProgram {
             }
             TypedExpr::FunctionReference(fr) => {
                 let fun = self.get_function(fr.function_id);
-                writ.write_str(self.name_of(fun.name))?;
+                writ.write_str(self.ident_str(fun.name))?;
                 writ.write_str(".toRef()")
             }
             TypedExpr::FunctionToLambdaObject(fn2lam) => {
                 let fun = self.get_function(fn2lam.function_id);
-                writ.write_str(self.name_of(fun.name))?;
+                writ.write_str(self.ident_str(fun.name))?;
                 writ.write_str(".toDyn()")
             }
             TypedExpr::PendingCapture(pending_capture) => {
                 writ.write_str("capture(")?;
                 let variable = self.variables.get(pending_capture.captured_variable_id);
-                writ.write_str(self.name_of(variable.name))?;
+                writ.write_str(self.ident_str(variable.name))?;
                 writ.write_str(")")?;
                 Ok(())
             }
@@ -837,7 +837,7 @@ impl TypedProgram {
             PatternConstructor::Struct { fields } => {
                 writ.write_str("{ ")?;
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
-                    writ.write_str(self.name_of(*field_name))?;
+                    writ.write_str(self.ident_str(*field_name))?;
                     writ.write_str(": ")?;
                     self.display_pattern_ctor(field_pattern, writ)?;
                     let last = index == fields.len() - 1;
@@ -851,7 +851,7 @@ impl TypedProgram {
                 Ok(())
             }
             PatternConstructor::Enum { variant_name, inner } => {
-                writ.write_str(self.name_of(*variant_name))?;
+                writ.write_str(self.ident_str(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
                     writ.write_str("(")?;
                     self.display_pattern_ctor(payload, writ)?;
@@ -880,10 +880,10 @@ impl TypedProgram {
             TypedPattern::LiteralFloat(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
-            TypedPattern::Variable(var) => writ.write_str(self.name_of(var.name)),
+            TypedPattern::Variable(var) => writ.write_str(self.ident_str(var.name)),
             TypedPattern::Wildcard(_) => writ.write_str("_"),
             TypedPattern::Enum(enum_pat) => {
-                writ.write_str(self.name_of(enum_pat.variant_tag_name))?;
+                writ.write_str(self.ident_str(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload.as_ref() {
                     writ.write_str("(")?;
                     self.display_pattern(payload, writ)?;
@@ -894,7 +894,7 @@ impl TypedProgram {
             TypedPattern::Struct(struct_pat) => {
                 writ.write_str("{ ")?;
                 for (index, field_pat) in struct_pat.fields.iter().enumerate() {
-                    writ.write_str(self.name_of(field_pat.name))?;
+                    writ.write_str(self.ident_str(field_pat.name))?;
                     writ.write_str(": ")?;
                     self.display_pattern(&field_pat.pattern, writ)?;
                     let last = index == struct_pat.fields.len() - 1;
@@ -916,7 +916,7 @@ impl TypedProgram {
     }
 
     pub fn display_named_type(&self, w: &mut impl Write, nt: impl NamedType) -> std::fmt::Result {
-        write!(w, "{} := {}", self.name_of(nt.name()), self.type_id_to_string(nt.type_id()))
+        write!(w, "{} := {}", self.ident_str(nt.name()), self.type_id_to_string(nt.type_id()))
     }
 
     pub fn named_type_to_string(&self, nt: impl NamedType) -> String {
@@ -1046,7 +1046,7 @@ impl TypedProgram {
             if !first {
                 s.push_str(sep)
             }
-            write!(s, "{} := {}", self.name_of(nt.name()), self.type_id_to_string(nt.type_id()))
+            write!(s, "{} := {}", self.ident_str(nt.name()), self.type_id_to_string(nt.type_id()))
                 .unwrap();
             first = false;
         }
@@ -1054,7 +1054,7 @@ impl TypedProgram {
     }
 
     pub fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
-        w.write_str(self.name_of(ident))
+        w.write_str(self.ident_str(ident))
     }
 
     pub fn display_namespaced_identifier(
@@ -1085,7 +1085,7 @@ impl TypedProgram {
         write!(w, "type #{:02} {:10} ", id, self.types.get_no_follow(id).kind_name())?;
         let tvar_info = self.types.get_contained_type_variable_counts(id);
         let l = self.types.layouts.get(id);
-        let defn_name = self.types.get_defn_info(id).map(|i| self.name_of(i.name));
+        let defn_name = self.types.get_defn_info(id).map(|i| self.ident_str(i.name));
         write!(w, "defn_name={} size={} align={} ", defn_name.unwrap_or("-"), l.size, l.align)?;
         write!(
             w,
