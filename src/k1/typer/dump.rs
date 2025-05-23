@@ -746,17 +746,16 @@ impl TypedProgram {
                 write!(w, "{}", typed_float_value)
             }
             StaticValue::String(s) => {
-                write!(w, "\"{}\"", s)
+                write!(w, "\"{}\"", self.get_string(*s))
             }
             StaticValue::NullPointer => {
                 write!(w, "NULL")
             }
-            StaticValue::Struct(compile_time_struct) => {
+            StaticValue::Struct(static_struct) => {
                 w.write_str("{ ")?;
-                let fields =
-                    self.types.get(compile_time_struct.type_id).expect_struct().fields.clone();
+                let fields = self.types.get(static_struct.type_id).expect_struct().fields.clone();
                 for (idx, (field_value_id, field_type)) in
-                    compile_time_struct.fields.iter().zip(fields.iter()).enumerate()
+                    static_struct.fields.iter().zip(fields.iter()).enumerate()
                 {
                     if idx > 0 {
                         w.write_str(", ")?;
@@ -767,11 +766,38 @@ impl TypedProgram {
                 }
                 w.write_str(" }")
             }
-            StaticValue::Enum(_compile_time_enum) => todo!("dump static enum"),
+            StaticValue::Enum(static_enum) => {
+                let variant_type =
+                    self.types.get(static_enum.variant_type_id).expect_enum_variant();
+                let enum_defn = self.types.get_defn_info(variant_type.enum_type_id);
+                match enum_defn {
+                    Some(defn) => {
+                        self.write_ident(w, defn.name)?;
+                    }
+                    None => {}
+                };
+                write!(w, ".")?;
+                self.write_ident(w, variant_type.name)?;
+                match static_enum.payload {
+                    None => {}
+                    Some(payload_id) => {
+                        write!(w, "(")?;
+                        self.display_static_value(w, payload_id)?;
+                        write!(w, ")")?;
+                    }
+                };
+                Ok(())
+            }
             StaticValue::Buffer(buf) => {
-                let element_type =
-                    self.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
-                write!(w, "< {} x {} >", self.type_id_to_string(element_type), buf.elements.len())?;
+                write!(w, "[")?;
+                for (index, elem) in buf.elements.iter().enumerate() {
+                    self.display_static_value(w, *elem)?;
+                    let last = index == buf.elements.len() - 1;
+                    if !last {
+                        write!(w, ", ")?;
+                    }
+                }
+                write!(w, "]")?;
                 Ok(())
             }
         }

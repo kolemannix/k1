@@ -65,6 +65,7 @@ ns types {
     Float(either F32, F64),
     Bool,
     Pointer,
+    Reference({ innerTypeId: u64 }),
     Struct({
       fields: Buffer[{ 
         name: string, 
@@ -76,11 +77,9 @@ ns types {
       tagType: IntKind,
       variants: Buffer[{
         name: string,
-        payloadTypeId: u64,
-        payloadOffset: uword
+        payload: { typeId: u64, offset: uword }?
       }],
     }),
-    Reference({ innerTypeId: u64 }),
     Other(string)
   )
 

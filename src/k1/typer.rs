@@ -3388,7 +3388,7 @@ impl TypedProgram {
                             );
                         }
                     }
-                    combined_fields.push(field.clone());
+                    combined_fields.push(*field);
                 }
 
                 let defn_id = context
@@ -4409,20 +4409,6 @@ impl TypedProgram {
         no_reset: bool,
     ) -> TyperResult<(TypeId, StaticValueId)> {
         let mut vm = std::mem::take(&mut self.vm).unwrap();
-        // let mut vm = match *std::mem::take(&mut self.vm) {
-        //     None => {
-        //         let span = self.ast.get_expr_span(parsed_expr);
-        //         let (source, location) = self.get_span_location(span);
-        //         eprintln!(
-        //             "Had to make a static-in-static VM at {}:{}. Should we have a pool of them? We should make them fast to make anyway",
-        //             source.filename,
-        //             location.line_number()
-        //         );
-        //         let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
-        //         new_vm
-        //     }
-        //     Some(vm) => vm,
-        // };
         let res = self.execute_static_expr_with_vm(
             &mut vm,
             parsed_expr,
@@ -5441,7 +5427,7 @@ impl TypedProgram {
                 })))
             }
             t @ Type::Enum(_opt_type) => {
-                if let Some(opt) = t.as_optional() {
+                if let Some(opt) = t.as_opt_instance() {
                     if !field_access.is_coalescing {
                         return failf!(span, "Optionals have no direct fields; did you mean to use the '?.' operator?");
                     }
@@ -13456,6 +13442,7 @@ impl TypedProgram {
         let int_kind = self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
         let get_schema_variant =
             |name: &str| type_schema.variant_by_name(get_ident!(self, name)).unwrap();
+        let word_enum = self.types.get(get_schema_variant("Word").payload.unwrap()).expect_enum();
         let make_variant = |name: &str, payload: Option<StaticValueId>| {
             let v = get_schema_variant(name);
             StaticEnum {
@@ -13465,7 +13452,27 @@ impl TypedProgram {
                 payload,
             }
         };
-        let word_enum = self.types.get(get_schema_variant("Word").payload.unwrap()).expect_enum();
+        let make_int_kind = |integer_type: IntegerType| {
+            let int_kind_variant = match integer_type {
+                IntegerType::U8 => int_kind.variant_by_index(0),
+                IntegerType::U16 => int_kind.variant_by_index(1),
+                IntegerType::U32 => int_kind.variant_by_index(2),
+                IntegerType::U64 => int_kind.variant_by_index(3),
+                IntegerType::I8 => int_kind.variant_by_index(4),
+                IntegerType::I16 => int_kind.variant_by_index(5),
+                IntegerType::I32 => int_kind.variant_by_index(6),
+                IntegerType::I64 => int_kind.variant_by_index(7),
+                IntegerType::UWord(_) => word_enum.variant_by_index(0),
+                IntegerType::IWord(_) => word_enum.variant_by_index(1),
+            };
+            let int_kind_enum_value = StaticEnum {
+                variant_type_id: int_kind_variant.my_type_id,
+                variant_index: int_kind_variant.index,
+                typed_as_enum: true,
+                payload: None,
+            };
+            int_kind_enum_value
+        };
         let typ = self.types.get_no_follow(type_id);
         let static_enum = match typ {
             Type::Unit => make_variant("Unit", None),
@@ -13473,25 +13480,10 @@ impl TypedProgram {
             Type::Bool => make_variant("Bool", None),
             Type::Pointer => make_variant("Pointer", None),
             Type::Integer(integer_type) => {
-                let payload_type = match integer_type {
-                    IntegerType::U8 => int_kind.variant_by_index(0),
-                    IntegerType::U16 => int_kind.variant_by_index(1),
-                    IntegerType::U32 => int_kind.variant_by_index(2),
-                    IntegerType::U64 => int_kind.variant_by_index(3),
-                    IntegerType::I8 => int_kind.variant_by_index(4),
-                    IntegerType::I16 => int_kind.variant_by_index(5),
-                    IntegerType::I32 => int_kind.variant_by_index(6),
-                    IntegerType::I64 => int_kind.variant_by_index(7),
-                    IntegerType::UWord(_) => word_enum.variant_by_index(0),
-                    IntegerType::IWord(_) => word_enum.variant_by_index(1),
-                };
-                let payload_value = StaticEnum {
-                    variant_type_id: payload_type.my_type_id,
-                    variant_index: payload_type.index,
-                    typed_as_enum: true,
-                    payload: None,
-                };
-                let payload_value_id = self.static_values.add(StaticValue::Enum(payload_value));
+                let int_kind_enum_value = make_int_kind(*integer_type);
+
+                let payload_value_id =
+                    self.static_values.add(StaticValue::Enum(int_kind_enum_value));
                 let enum_value = make_variant("Int", Some(payload_value_id));
                 enum_value
             }
@@ -13551,12 +13543,119 @@ impl TypedProgram {
                 }));
                 make_variant("Struct", Some(payload))
             }
-            Type::Reference(_reference_type) => todo!(),
-            Type::Enum(_typed_enum) => self.ice_with_span("TypeSchema for enum", span),
+            Type::Reference(reference_type) => {
+                let reference_schema_payload_type_id =
+                    get_schema_variant("Reference").payload.unwrap();
+                // { innerTypeId: u64 }
+                let inner_type_id_value_id = self.static_values.add(StaticValue::Integer(
+                    TypedIntValue::U64(reference_type.inner_type.as_u32() as u64),
+                ));
+                let payload_struct_id = self.static_values.add(StaticValue::Struct(StaticStruct {
+                    type_id: reference_schema_payload_type_id,
+                    fields: eco_vec![inner_type_id_value_id],
+                }));
+                make_variant("Reference", Some(payload_struct_id))
+            }
+            Type::Enum(typed_enum) => {
+                let either_payload_type_id = get_schema_variant("Either").payload.unwrap();
+                let either_payload_struct = self.types.get(either_payload_type_id).expect_struct();
+                let variants_buffer_type_id = either_payload_struct.fields[1].type_id;
+                let variant_struct_type_id =
+                    self.types.get(variants_buffer_type_id).as_buffer_instance().unwrap().type_args
+                        [0];
+                let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
+                let tag_type_value_id =
+                    self.static_values.add(StaticValue::Enum(make_int_kind(*tag_type)));
+                let mut variant_values = EcoVec::with_capacity(typed_enum.variants.len());
+                for variant in &typed_enum.variants {
+                    let name_string_id =
+                        self.ast.strings.intern(self.ast.idents.get_name(variant.name));
+                    let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
+                    let payload_info_opt_type_id =
+                        self.types.get(variant_struct_type_id).expect_struct().fields[1].type_id;
+                    let payload_info_struct_id = self
+                        .types
+                        .get(payload_info_opt_type_id)
+                        .as_opt_instance()
+                        .unwrap()
+                        .inner_type;
+                    let payload_info_value_id = match variant.payload {
+                        None => synth_static_option(
+                            &self.types,
+                            &mut self.static_values,
+                            payload_info_opt_type_id,
+                            None,
+                        ),
+                        Some(type_id) => {
+                            let type_id_value_id = self.static_values.add(StaticValue::Integer(
+                                TypedIntValue::U64(type_id.as_u32() as u64),
+                            ));
+                            let payload_offset_value_id = self.static_values.add(
+                                StaticValue::Integer(TypedIntValue::UWord64(
+                                    self.types.enum_variant_payload_offset_bytes(variant) as u64,
+                                )),
+                            );
+                            let payload_info_struct_id =
+                                self.static_values.add(StaticValue::Struct(StaticStruct {
+                                    type_id: payload_info_struct_id,
+                                    fields: eco_vec![type_id_value_id, payload_offset_value_id],
+                                }));
+                            synth_static_option(
+                                &self.types,
+                                &mut self.static_values,
+                                payload_info_opt_type_id,
+                                Some(payload_info_struct_id),
+                            )
+                        }
+                    };
+
+                    variant_values.push(self.static_values.add(StaticValue::Struct(StaticStruct {
+                        type_id: variant_struct_type_id,
+                        fields: eco_vec![
+                            // name: string,
+                            name_value_id,
+                            // payload: { typeId: u64, offset: uword }?,
+                            payload_info_value_id,
+                        ],
+                    })))
+                }
+                let variants_buffer_value_id =
+                    self.static_values.add(StaticValue::Buffer(StaticBuffer {
+                        elements: variant_values,
+                        type_id: variants_buffer_type_id,
+                    }));
+                let payload_value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
+                    type_id: either_payload_type_id,
+                    fields: eco_vec![tag_type_value_id, variants_buffer_value_id],
+                }));
+                eprintln!(
+                    "Constructed type schema for Either: {}",
+                    self.static_value_to_string(payload_value_id)
+                );
+                make_variant("Either", Some(payload_value_id))
+            }
             Type::EnumVariant(_typed_enum_variant) => todo!(),
-            Type::Function(_function_type) => todo!(),
-            Type::Lambda(_lambda_type) => todo!(),
-            Type::LambdaObject(_lambda_object_type) => todo!(),
+            Type::Function(_function_type) => make_variant(
+                "Other",
+                Some(
+                    self.static_values
+                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
+                ),
+            ),
+            Type::Lambda(_lambda_type) => make_variant(
+                "Other",
+                Some(
+                    self.static_values
+                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
+                ),
+            ),
+            Type::LambdaObject(_lambda_object_type) => make_variant(
+                "Other",
+                Some(
+                    self.static_values
+                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
+                ),
+            ),
             Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
@@ -13970,11 +14069,6 @@ impl TypedProgram {
         self.synth_typed_function_call(qident!(self, span, ["core"], "discard"), &[], &[value], ctx)
     }
 
-    pub fn push_error(&mut self, e: TyperError) {
-        self.write_error(&mut std::io::stderr(), &e).unwrap();
-        self.errors.push(e);
-    }
-
     pub fn write_qualified_name(
         &self,
         w: &mut impl std::io::Write,
@@ -14007,6 +14101,13 @@ impl TypedProgram {
         let mut buf = Vec::with_capacity(64);
         self.write_qualified_name(&mut buf, scope, self.ident_str(name), delimiter, skip_root);
         String::from_utf8(buf).unwrap()
+    }
+
+    // Errors and logging
+
+    pub fn push_error(&mut self, e: TyperError) {
+        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        self.errors.push(e);
     }
 
     pub fn write_error(
@@ -14043,4 +14144,29 @@ impl TypedProgram {
         self.write_location_error(&mut std::io::stderr(), span);
         panic!("not yet implemented: {}", msg.as_ref())
     }
+}
+
+fn synth_static_option(
+    types: &Types,
+    static_values: &mut Pool<StaticValue, StaticValueId>,
+    option_type_id: TypeId,
+    value_id: Option<StaticValueId>,
+) -> StaticValueId {
+    let opt_enum_type = types.get(option_type_id).expect_enum();
+    let static_enum = match value_id {
+        None => StaticEnum {
+            variant_type_id: opt_enum_type.variant_by_index(0).my_type_id,
+            variant_index: 0,
+            typed_as_enum: true,
+            payload: None,
+        },
+        Some(value_id) => StaticEnum {
+            variant_type_id: opt_enum_type.variant_by_index(1).my_type_id,
+            variant_index: 1,
+            typed_as_enum: true,
+            payload: Some(value_id),
+        },
+    };
+
+    static_values.add(StaticValue::Enum(static_enum))
 }
