@@ -43,10 +43,24 @@ ns type_refl {
     let pointByteSchema = getTypeSchema[Point3[u8]]();
     require pointByteSchema is .Struct({ fields }) else { crash("") };
     assertEquals(fields.len, 3);
-    println(printStructShape[Point3[u8]]());
-    println(printStructShape[TypeSchema.Struct.value]());
-    println(printStructShape[TypeSchema.Either]());
+    assert(getTypeSchema[i32*]() is .Reference(_));
+    assertEquals(
+      getTypeSchema[i32*]().asReference().!.value.innerTypeId,
+      typeId[i32]()
+    );
+    assertEquals(
+      getTypeSchema[bool**]().asReference().!.value.innerTypeId,
+      typeId[bool*]()
+    );
+
+    assert(getTypeSchema[either Yes]()  is .Int(.I64));
     //assert(getTypeSchema[either Yes, No, MaybeSo(string)]()  is .Int(.I64));
+
+    assert(getTypeSchema[\(int) -> int]() is .Other("function"));
+
+    //println(printStructShape[Point3[u8]]());
+    //println(printStructShape[TypeSchema.Struct.value]());
+    //println(printStructShape[TypeSchema.Either]());
   
     ()
   }

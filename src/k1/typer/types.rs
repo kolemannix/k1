@@ -18,6 +18,7 @@ pub struct StructTypeField {
     pub type_id: TypeId,
     pub private: bool,
 }
+impl_copy_if_small!(12, StructTypeField);
 
 #[derive(Debug, Clone)]
 pub struct StructLayout {
@@ -632,7 +633,7 @@ impl Type {
         }
     }
 
-    pub fn as_optional(&self) -> Option<OptionalType> {
+    pub fn as_opt_instance(&self) -> Option<OptionalType> {
         if let Type::Enum(e) = self {
             e.generic_instance_info.as_ref().and_then(|spec_info| {
                 if spec_info.generic_parent == OPTIONAL_TYPE_ID {
@@ -695,7 +696,7 @@ impl Type {
     }
 
     pub fn expect_optional(&self) -> OptionalType {
-        self.as_optional().unwrap()
+        self.as_opt_instance().unwrap()
     }
 
     pub fn as_struct(&self) -> Option<&StructType> {

@@ -127,7 +127,6 @@ New tagline? "C with typeclasses and tagged unions"
     - [x] static -> vm
     - [x] LLVM gen
     - [ ] Allow upgrading them to fixed-length Arrays (so cool actually)
-  - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [x] reference to reference cast
   - [x] Introduce uword/iword types
   - [x] Switch to a single stack
@@ -140,16 +139,18 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
   - [x] All tests passing in #static mode
+  - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
-
-## Project: Macro system built on 'static': both string #insert and parsed code #insert, like Jai
 
 ## Project: static reflection and metaprogramming story
 - [ ] functions taking only a single type could be invoked with
       a nice syntax like `type.sizeOf`
-- [ ] Runtime type info story
-- [ ] typeOf, typeInfo, and 'any' type
+- [x] Runtime type info story
+- [x] typeOf, typeId
+- [ ] TypeSchema for all types
+- [ ] 'any' type
 - [ ] 'Type predicate' functions as type bounds
+## Project: Macro system built on 'static': both string #insert and parsed code #insert, like Jai
 
 ## Project: Array types
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
