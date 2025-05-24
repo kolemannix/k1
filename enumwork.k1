@@ -1,0 +1,19 @@
+deftype EE = either A(u8), B(u32)
+
+fn takeit(foo: EE): unit {
+  printIt(foo.tag);
+  ()
+}
+
+fn returnit(): EE {
+  .A(10)
+}
+
+fn main(): i32 {
+  let x: EE = .A(1);
+  let y: EE = .B(3);
+  takeit(x);
+  takeit(y);
+  returnit();
+  0
+}

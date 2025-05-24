@@ -80,6 +80,7 @@ ns types {
         payload: { typeId: u64, offset: uword }?
       }],
     }),
+    Never,
     Other(string)
   )
 

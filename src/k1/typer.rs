@@ -13656,13 +13656,15 @@ impl TypedProgram {
                         .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
                 ),
             ),
+            Type::Never => make_variant("Never", None),
             Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
             | Type::Unresolved(_)
-            | Type::RecursiveReference(_)
-            | Type::Never => self.ice_with_span(format!("TypeSchema on {}", typ.kind_name()), span),
+            | Type::RecursiveReference(_) => {
+                self.ice_with_span(format!("TypeSchema on {}", typ.kind_name()), span)
+            }
         };
 
         let static_value_id = self.static_values.add(StaticValue::Enum(static_enum));
@@ -14128,18 +14130,21 @@ impl TypedProgram {
             .unwrap()
     }
 
+    #[track_caller]
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
         self.write_location_error(&mut std::io::stderr(), span);
         panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
+    #[track_caller]
     pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperError>) -> ! {
         if let Some(error) = error {
             self.write_error(&mut std::io::stderr(), error).unwrap();
         }
-        panic!("Internal Compiler Error: {}", msg.as_ref())
+        panic!("Internal Compiler Error at: {}", msg.as_ref())
     }
 
+    #[track_caller]
     pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
         self.write_location_error(&mut std::io::stderr(), span);
         panic!("not yet implemented: {}", msg.as_ref())
