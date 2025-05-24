@@ -1,0 +1,36 @@
+let static gScalar: unit = ();
+
+let static gInt: i32 = 42;
+
+let static gString: string = "Hello, world ;)";
+
+let static gStruct: { x: u8, y: u8 } = { x: 1, y: 2 };
+// Ensure function:
+// define inlinealways void ? @_root__gStruct(ptr sret({ i8, i8 }) %sret_arg) {
+//   %x_ptr = getelementptr({ i8, i8 }, %sret_arg, 0, 0);
+//   store %x_ptr, i8 1, align 1
+//   %y_ptr = getelementptr({ i8, i8 }, %sret_arg, 0, 1);
+//   store %y_ptr, i8 2, align 1
+//}
+//... generate this at use-site: alloca + a call to function:
+//... %static_sret = alloca { i8, i8 }, align <k1 align>
+//... call void @_root__gStruct(ptr %static_sret) 
+//... %static_sret
+//... The downside is that we use our own stack space instead
+//    of just pointing at static space, but I'm hoping it gets
+//    optimized really heavily since its all constants, might
+//    even not build the full TypeSchema object since it can
+//    "see through" to the usage, so it may even reduce our 
+//    final code size quite a bit!
+//
+
+fn main(): i32 {
+  gInt;
+  gString;
+  gStruct;
+  gEnum;
+  gStructWithEnum;
+  gStructWithEnumWitthBuffer;
+  
+  0
+}
