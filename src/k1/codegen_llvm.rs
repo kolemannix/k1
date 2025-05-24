@@ -1727,6 +1727,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut vm = vm::Vm::make(1024 * 1024, 1024 * 1024);
                 // FIXME: Needs to use the Target word size, where VM currently always uses host
                 // Oh man, just set word size for the VM that codegen uses
+                // nocommit: This is completely broken because it will bake pointers to the VM's buffers
+                //           into the binary. New plan is to represent complex (struct and enum)
+                //           static values as FUNCTIONS, giving me the full power of LLVM (bitcast
+                //           ptrs, load/store, etc), these functions will be entirely optimizable
+                //           since they'll work with nothing but constants.
+                //
+                //           So, accessing a static values becomes a _call_ to the static value's function,
+                //           which can be inlined
                 let enum_ptr = vm::static_value_to_vm_value(
                     &mut vm,
                     vm::StackSelection::StaticSpace,

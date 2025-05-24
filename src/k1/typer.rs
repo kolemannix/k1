@@ -278,12 +278,12 @@ pub enum StaticValue {
 }
 
 impl StaticValue {
-    pub fn kind(&self) -> &'static str {
+    pub fn kind_name(&self) -> &'static str {
         match self {
             StaticValue::Unit => "unit",
             StaticValue::Boolean(_) => "bool",
             StaticValue::Char(_) => "char",
-            StaticValue::Integer(i) => i.kind_str(),
+            StaticValue::Integer(i) => i.kind_name(),
             StaticValue::Float(_) => "float",
             StaticValue::String(_) => "string",
             StaticValue::NullPointer => "nullptr",
@@ -1216,7 +1216,7 @@ macro_rules! int_binop {
 }
 
 impl TypedIntValue {
-    pub fn kind_str(&self) -> &'static str {
+    pub fn kind_name(&self) -> &'static str {
         match self {
             TypedIntValue::U8(_) => "u8",
             TypedIntValue::U16(_) => "u16",
@@ -4324,7 +4324,11 @@ impl TypedProgram {
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
-                    return failf!(v.span, "Comptime only supports global variables for now");
+                    return failf!(
+                        v.span,
+                        "Variable cannot be evaluated at compile time: {}",
+                        self.ident_str(typed_variable.name)
+                    );
                 };
                 let global = self.globals.get(global_id);
                 if !global.is_static {

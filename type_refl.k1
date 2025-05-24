@@ -53,7 +53,7 @@ ns type_refl {
       typeId[bool*]()
     );
 
-    assert(getTypeSchema[either Yes]()  is .Int(.I64));
+    assert(getTypeSchema[either Yes]()  is .Either(_));
     //assert(getTypeSchema[either Yes, No, MaybeSo(string)]()  is .Int(.I64));
 
     assert(getTypeSchema[\(int) -> int]() is .Other("function"));
