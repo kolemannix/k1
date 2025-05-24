@@ -15,7 +15,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::{
     compiler::WordSize,
-    failf, get_ident, int_binop,
+    failf, int_binop,
     lex::SpanId,
     nz_u32_id,
     parse::{Identifier, NumericWidth, StringId},
@@ -386,14 +386,14 @@ impl Value {
         }
     }
 
-    fn expect_agg(&self) -> *const u8 {
+    pub fn expect_agg(&self) -> *const u8 {
         match self {
             Value::Agg { ptr, .. } => *ptr,
             _ => unreachable!("expect_agg on value {:?}", self),
         }
     }
 
-    fn expect_float(&self) -> TypedFloatValue {
+    pub fn expect_float(&self) -> TypedFloatValue {
         match self {
             Value::Float(fv) => *fv,
             _ => unreachable!("expect_float on value {:?}", self),
@@ -1811,7 +1811,7 @@ fn aligned_to_mut(ptr: *mut u8, align_bytes: usize) -> *mut u8 {
     unsafe { ptr.byte_add(bytes_needed) }
 }
 
-fn build_enum_at_location(
+pub fn build_enum_at_location(
     dst: *mut u8,
     types: &Types,
     variant_type_id: TypeId,
