@@ -23,14 +23,17 @@ let static gStruct: { x: u8, y: u8 } = { x: 1, y: 2 };
 //    "see through" to the usage, so it may even reduce our 
 //    final code size quite a bit!
 //
+// codegen_global: enum for whether its a global, or a fn call, etc.
+
+let static gEnum: either Yes, No = .No;
 
 fn main(): i32 {
   gInt;
   gString;
   gStruct;
   gEnum;
-  gStructWithEnum;
-  gStructWithEnumWitthBuffer;
+  //gStructWithEnum;
+  //gStructWithEnumWitthBuffer;
   
   0
 }

@@ -4458,7 +4458,7 @@ impl TypedProgram {
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
-        let is_comptime = parsed_global.is_comptime;
+        let is_static = parsed_global.is_static;
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
@@ -4477,7 +4477,7 @@ impl TypedProgram {
             ty: type_id,
             span: global_span,
             is_referencing,
-            is_static: is_comptime,
+            is_static,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
