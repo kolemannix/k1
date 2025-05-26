@@ -52,7 +52,7 @@ use crate::typer::{
     TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId,
     UnaryOpKind, VariableId, WhileLoop,
 };
-use crate::{vm, SV8};
+use crate::SV8;
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -94,6 +94,7 @@ impl Display for CodegenError {
 
 impl Error for CodegenError {}
 
+#[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_bit_size(typ) as u32 / 8, align: td.get_abi_alignment(typ) }
 }
@@ -463,7 +464,7 @@ pub struct Codegen<'ctx, 'k1> {
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
-    strings: FxHashMap<StringId, StructValue<'ctx>>,
+    strings: FxHashMap<StringId, PointerValue<'ctx>>,
     debug: DebugContext<'ctx>,
 }
 
@@ -534,8 +535,18 @@ impl<'ctx> DebugContext<'ctx> {
 
 #[derive(Copy, Clone, Debug)]
 enum VariableValue<'ctx> {
-    Indirect { pointer_value: PointerValue<'ctx> },
-    Direct { value: BasicValueEnum<'ctx> },
+    Indirect {
+        pointer_value: PointerValue<'ctx>,
+    },
+    Direct {
+        value: BasicValueEnum<'ctx>,
+    },
+    /// Call this function using sret to get the value of this variable
+    /// Used for complex static values that cannot be built using LLVM's
+    /// constant and global mechanisms
+    ByFunctionCall {
+        function: FunctionValue<'ctx>,
+    },
 }
 
 #[derive(Debug)]
@@ -693,6 +704,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
+    #[allow(unused)]
     fn llvm_size_info(&self, typ: &dyn AnyType) -> Layout {
         let td = self.llvm_machine.get_target_data();
         llvm_size_info(&td, typ)
@@ -1629,7 +1641,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if llvm_type.is_aggregate() {
             self.memcpy_entire_value(dest, value.into_pointer_value(), llvm_type)
         } else {
-            self.builder.build_store(dest, value).unwrap()
+            let store = self.builder.build_store(dest, value).unwrap();
+            store.set_alignment(llvm_type.rich_repr_layout().align).unwrap();
+            store
         }
     }
 
@@ -1671,6 +1685,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.load_k1_value(k1_llvm_type, pointer_value, "", false)
             }
             VariableValue::Direct { value } => value,
+            VariableValue::ByFunctionCall { function } => {
+                let ptr = self.build_k1_alloca(k1_llvm_type, "load_variable_sret");
+                let callsite_value = self.builder.build_call(function, &[ptr.into()], "").unwrap();
+                // Call-site sret
+                let sret_attribute =
+                    self.make_sret_attribute(k1_llvm_type.rich_repr_type().as_any_type_enum());
+                eprintln!("I generated a call to static maker function: {}", callsite_value);
+                callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
+                ptr.as_basic_value_enum()
+            }
         }
     }
 
@@ -1678,7 +1702,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let result = match self.k1.static_values.get(static_value_id) {
+        eprintln!("codegen_static_value {}", self.k1.static_value_to_string(static_value_id));
+        let v = self.k1.static_values.get(static_value_id);
+
+        // Invariant: If the value is_statically_representable, we cannot emit any instructions
+        //            since this value could be used in a global context
+        //            However, if it is not, we will be inside a function context, and
+        //            can emit instructions
+        let insert_block = self.builder.get_insert_block();
+        if insert_block.is_none() && !is_statically_representable(v) {
+            self.k1.ice(
+                "Tried to codegen a static value outside of a function context, which is not allowed",
+                None
+            )
+        }
+
+        let result = match v {
             StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
             StaticValue::Boolean(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
@@ -1690,95 +1729,69 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
-                let string_struct = self.codegen_string_id(*string_id).unwrap();
-                string_struct.as_basic_value_enum()
+                let string_ptr = self.codegen_string_id(*string_id).unwrap();
+                string_ptr.as_basic_value_enum()
             }
             StaticValue::NullPointer => {
                 self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
-                // let llvm_type = self.codegen_type(s.type_id)?.expect_struct();
-                let mut type_fields = Vec::with_capacity(s.fields.len());
-                let mut fields_basic_values = Vec::with_capacity(s.fields.len());
-                // We actually have to specialize the LLVM struct type here because it won't allow
-                // an Opt[i64] type with a Some[i64] value
-                //
-                // Just means that when we load the value into 'runtime' code, we may have to cast
-                // it back to the struct type. Since we treat it as a ptr it should actually work
-                // perfectly
-                for field in s.fields.iter() {
+                let llvm_type = self.codegen_type(s.type_id)?;
+
+                // We cannot use build_k1_alloca since we aren't inside a k1 function
+                // So we have to ensure we align properly ourselves
+                // I'm not worried about pushing these allocas up to the top since we
+                // only have 1 basic block anyway, we'll never branch in static values
+                let dest_ptr =
+                    self.builder.build_alloca(llvm_type.rich_repr_type(), "static_struc").unwrap();
+                dest_ptr
+                    .as_instruction()
+                    .unwrap()
+                    .set_alignment(llvm_type.rich_repr_layout().align)
+                    .unwrap();
+
+                let llvm_type = llvm_type.expect_struct();
+                for (field_index, field) in s.fields.iter().enumerate() {
                     let value = self.codegen_static_value(*field)?;
-                    type_fields.push(value.get_type());
-                    fields_basic_values.push(value);
+                    let field_llvm_type = &llvm_type.fields[field_index];
+                    let dest_offset = self
+                        .builder
+                        .build_struct_gep(llvm_type.struct_type, dest_ptr, field_index as u32, "")
+                        .unwrap();
+                    self.store_k1_value(field_llvm_type, dest_offset, value);
                 }
-                let specialized_type = self.ctx.struct_type(&type_fields, false);
-                let struct_value = specialized_type.const_named_struct(&fields_basic_values);
-                debug!(
-                    "comptime struct for {} type {} is {}",
-                    self.k1.type_id_to_string(s.type_id),
-                    specialized_type,
-                    struct_value
-                );
-                struct_value.as_basic_value_enum()
+                dest_ptr.into()
             }
             StaticValue::Enum(e) => {
-                let llvm_type = self.codegen_type(e.variant_type_id)?.expect_enum();
-                // nocommit: Making a new VM
-                let mut vm = vm::Vm::make(1024 * 1024, 1024 * 1024);
-                // FIXME: Needs to use the Target word size, where VM currently always uses host
-                // Oh man, just set word size for the VM that codegen uses
-                // nocommit: This is completely broken because it will bake pointers to the VM's buffers
-                //           into the binary. New plan is to represent complex (struct and enum)
-                //           static values as FUNCTIONS, giving me the full power of LLVM (bitcast
-                //           ptrs, load/store, etc), these functions will be entirely optimizable
-                //           since they'll work with nothing but constants.
-                //
-                //           So, accessing a static values becomes a _call_ to the static value's function,
-                //           which can be inlined
-                let enum_ptr = vm::static_value_to_vm_value(
-                    &mut vm,
-                    vm::StackSelection::StaticSpace,
-                    self.k1,
-                    static_value_id,
-                )
-                .unwrap()
-                .expect_agg();
-                let bytes_as_int_values =
-                    unsafe { std::slice::from_raw_parts(enum_ptr, llvm_type.layout.size as usize) };
-                let enum_array_value = self.ctx.i8_type().const_array(
-                    &bytes_as_int_values
-                        .iter()
-                        .map(|b| self.ctx.i8_type().const_int(*b as u64, false))
-                        .collect_vec(),
-                );
-                enum_array_value.as_basic_value_enum()
+                let llvm_type = self.codegen_type(e.variant_type_id)?;
+                let enum_ptr =
+                    self.builder.build_alloca(llvm_type.rich_repr_type(), "static_struc").unwrap();
+                enum_ptr
+                    .as_instruction()
+                    .unwrap()
+                    .set_alignment(llvm_type.rich_repr_layout().align)
+                    .unwrap();
 
-                // let variant = &llvm_type.variants[e.variant_index as usize];
-                // let physical_struct = variant.variant_struct_type;
-                // let enum_value = match e.payload {
-                //     None => physical_struct
-                //         .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
-                //     Some(payload_comptime_value_id) => {
-                //         let payload_value = self.codegen_static_value(payload_comptime_value_id)?;
-                //         // We have to construct a unique type for this value because
-                //         // if we use the variant struct, the payload will come back with
-                //         // a more specific type than it, since everything is represented as its
-                //         // most specific, concrete types in this static world (specifically enum values)
-                //         let unique_struct_type = self.ctx.struct_type(
-                //             &[llvm_type.tag_type.as_basic_type_enum(), payload_value.get_type()],
-                //             false,
-                //         );
-                //         debug_assert_eq!(
-                //             self.size_info(&unique_struct_type),
-                //             self.size_info(&variant.variant_struct_type)
-                //         );
-                //         unique_struct_type.const_named_struct(&[
-                //             variant.tag_value.as_basic_value_enum(),
-                //             payload_value,
-                //         ])
-                //     }
-                // };
-                // enum_value.as_basic_value_enum()
+                let llvm_type = llvm_type.expect_enum();
+                let enum_variant = &llvm_type.variants[e.variant_index as usize];
+                // Store the tag_value in the first slot
+                let tag_pointer = self
+                    .builder
+                    .build_struct_gep(enum_variant.variant_struct_type, enum_ptr, 0, "")
+                    .unwrap();
+                self.builder.build_store(tag_pointer, enum_variant.tag_value).unwrap();
+
+                if let Some(payload_id) = &e.payload {
+                    let value = self.codegen_static_value(*payload_id)?;
+                    let payload_pointer = self
+                        .builder
+                        .build_struct_gep(enum_variant.variant_struct_type, enum_ptr, 1, "")
+                        .unwrap();
+                    let payload_type = enum_variant.payload_type.as_ref().unwrap();
+                    self.store_k1_value(payload_type, payload_pointer, value);
+                }
+
+                enum_ptr.into()
             }
             StaticValue::Buffer(buf) => {
                 let buffer_type = self.k1.types.get(buf.type_id);
@@ -1827,7 +1840,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(result)
     }
 
-    fn make_string_struct(&self, rust_str: &str) -> CodegenResult<StructValue<'ctx>> {
+    fn make_string_llvm_global(
+        &self,
+        rust_str: &str,
+        name: Option<&str>,
+    ) -> CodegenResult<PointerValue<'ctx>> {
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(rust_str.len() as u32),
             None,
@@ -1835,13 +1852,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         let str_data_array = i8_array_from_str(self.ctx, rust_str);
         global_str_data.set_initializer(&str_data_array);
+        global_str_data.set_constant(true);
 
         let char_buffer_type_id =
             self.k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
 
         let string_type = self.codegen_type(STRING_TYPE_ID)?.expect_struct();
         let char_buffer_struct_type = (string_type.fields[0].clone()).expect_struct().struct_type;
-        let string_wrapper_struct = string_type.struct_type;
+        let string_wrapper_struct_type = string_type.struct_type;
         // Ensure the string layout is what we expect
         // deftype string = { buffer: Buffer[char] }
         debug_assert!(
@@ -1863,21 +1881,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             rust_str.len() as u64,
             global_str_data.as_pointer_value(),
         )?;
-        let string_struct = string_wrapper_struct
+        let string_wrapper_struct = string_wrapper_struct_type
             .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
-        Ok(string_struct)
+
+        let global_str_struct =
+            self.llvm_module.add_global(string_wrapper_struct_type, None, name.unwrap_or(""));
+        global_str_struct.set_initializer(&string_wrapper_struct);
+        global_str_struct.set_constant(true);
+
+        Ok(global_str_struct.as_pointer_value())
     }
 
-    fn codegen_string_id(&mut self, string_id: StringId) -> CodegenResult<StructValue<'ctx>> {
+    fn codegen_string_id(&mut self, string_id: StringId) -> CodegenResult<PointerValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
-            // Get a hold of the type for 'string'
             let string_value = self.k1.get_string(string_id);
-            let v = self.make_string_struct(string_value)?;
+            let ptr = self.make_string_llvm_global(string_value, None)?;
 
-            self.strings.insert(string_id, v);
-            Ok(v)
+            self.strings.insert(string_id, ptr);
+            Ok(ptr)
         }
     }
 
@@ -2877,16 +2900,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
 
         if llvm_function_type.is_sret {
-            let sret_attribute = self.ctx.create_type_attribute(
-                Attribute::get_named_enum_kind_id("sret"),
+            let sret_attribute = self.make_sret_attribute(
                 llvm_function_type.return_type.rich_repr_type().as_any_type_enum(),
             );
             callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
-            // let align_attribute = self.ctx.create_enum_attribute(
-            //     Attribute::get_named_enum_kind_id("align"),
-            //     llvm_function_type.return_type.rich_repr_layout().align as u64,
-            // );
-            // callsite_value.add_attribute(AttributeLoc::Param(0), align_attribute);
         };
         match callsite_value.try_as_basic_value() {
             either::Either::Left(value) => Ok(LlvmValue::BasicValue(value)),
@@ -2983,10 +3000,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let type_param = self.k1.named_types.get_nth(call.type_args, 0);
                 // TODO: Eventually, move this to part of typeInfo, and cache them
                 let name = self.k1.type_id_to_string(type_param.type_id);
-                let name_struct = self.make_string_struct(&name)?;
-                let string_type = self.codegen_type(STRING_TYPE_ID)?;
-                let name_ptr = self.build_k1_alloca(&string_type, "");
-                self.builder.build_store(name_ptr, name_struct).unwrap();
+                let name_ptr = self.make_string_llvm_global(&name, None)?;
                 Ok(name_ptr.as_basic_value_enum().into())
             }
             IntrinsicOperation::PointerIndex => {
@@ -3436,11 +3450,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let sret_attribute = if is_sret {
             let struct_type = llvm_function_type.return_type.rich_repr_type();
-            let sret_attribute = self.ctx.create_type_attribute(
-                Attribute::get_named_enum_kind_id("sret"),
-                struct_type.as_any_type_enum(),
+            let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
+            let align_attribute = self.make_align_attribute(
+                llvm_function_type.return_type.rich_repr_layout().align as u64,
             );
-            Some(sret_attribute)
+            Some((sret_attribute, align_attribute))
         } else {
             None
         };
@@ -3472,8 +3486,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_function_type.llvm_function_type,
             llvm_linkage,
         );
-        if let Some(attribute) = sret_attribute {
-            function_value.add_attribute(AttributeLoc::Param(0), attribute);
+        if let Some((sret_attribute, align_attribute)) = sret_attribute {
+            function_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
+            function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
         }
 
         let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
@@ -3628,27 +3643,76 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
         let global = self.k1.globals.get(global_id);
-        let initialized_basic_value = self.codegen_static_value(global.initial_value.unwrap())?;
+        let initial_static_value_id = global.initial_value.unwrap();
         let variable = self.k1.variables.get(global.variable_id);
         let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
-        let llvm_global = self.llvm_module.add_global(
-            initialized_basic_value.get_type(),
-            Some(AddressSpace::default()),
-            &name,
-        );
-        llvm_global.set_constant(global.is_static);
-        llvm_global.set_initializer(&initialized_basic_value);
-        let is_reference_type = self.k1.types.get(global.ty).as_reference().is_some();
-        let variable_value = if is_reference_type {
-            // Direct; global is a ptr, which is the correct type
-            // This will not be 'loaded' by load_variable_value
-            VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
+        // nocommit: What do we do about mutable global memory
+        // with this new 'function' approach? When do we run the function.
+        // We have to run it at startup, which sucks.
+        //
+        // Ok, we'll disallow complex initializers for mutable
+        // globals. If you want that, you use Pointer/NULL and
+        // initialize it yourself
+        //
+        if is_statically_representable(self.k1.static_values.get(initial_static_value_id)) {
+            let initialized_basic_value = self.codegen_static_value(initial_static_value_id)?;
+            let llvm_global = self.llvm_module.add_global(
+                initialized_basic_value.get_type(),
+                Some(AddressSpace::default()),
+                &name,
+            );
+            llvm_global.set_constant(global.is_static);
+            llvm_global.set_initializer(&initialized_basic_value);
+            let is_reference_type = self.k1.types.get(global.ty).as_reference().is_some();
+            let variable_value = if is_reference_type {
+                // Direct; global is a ptr, which is the correct type
+                // This will not be 'loaded' by load_variable_value
+                VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
+            } else {
+                // Indirect; global is a ptr to the value of correct type
+                // This will be 'loaded' by load_variable_value
+                VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
+            };
+            self.variable_to_value.insert(global.variable_id, variable_value);
         } else {
-            // Indirect; global is a ptr to the value of correct type
-            // This will be 'loaded' by load_variable_value
-            VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
-        };
-        self.variable_to_value.insert(global.variable_id, variable_value);
+            if !global.is_static {
+                return failf!(global.span, "cant do complex non-static lets?");
+            }
+            // For complex static values, we create a function that returns the value
+            // And we call it wherever the static is used, probably with inlinealways
+            let k1_llvm_type = self.codegen_type(global.ty)?;
+            let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
+            let function = self.llvm_module.add_function(&name, fn_type, None);
+            let sret_param = function.get_first_param().unwrap();
+            sret_param.set_name("sret_param");
+            let sret_ptr = sret_param.into_pointer_value();
+
+            let sret_attribute =
+                self.make_sret_attribute(k1_llvm_type.rich_repr_type().as_any_type_enum());
+            let align_attribute =
+                self.make_align_attribute(k1_llvm_type.rich_repr_layout().align as u64);
+            // Function-side sret
+            function.add_attribute(AttributeLoc::Param(0), sret_attribute);
+            function.add_attribute(AttributeLoc::Param(0), align_attribute);
+
+            let block = self.ctx.append_basic_block(function, "");
+            self.builder.position_at_end(block);
+
+            // This recursively builds up the value
+            let final_value = self.codegen_static_value(initial_static_value_id)?;
+
+            // final_value is coming back as the StructValue, since we haven't re-written
+            // it yet
+            // We can expect everything to be in its canonical form except String, which will need
+            // an alloca
+
+            self.store_k1_value(&k1_llvm_type, sret_ptr, final_value);
+            self.builder.build_return(None).unwrap();
+
+            self.variable_to_value
+                .insert(global.variable_id, VariableValue::ByFunctionCall { function });
+            eprintln!("I built a static value maker function:\n{}", function);
+        }
         Ok(())
     }
 
@@ -3821,5 +3885,31 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn word_size(&self) -> WordSize {
         self.k1.ast.config.target.word_size()
+    }
+
+    fn make_sret_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {
+        self.ctx.create_type_attribute(Attribute::get_named_enum_kind_id("sret"), typ)
+    }
+    fn make_align_attribute(&self, align: u64) -> Attribute {
+        self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), align)
+    }
+}
+
+/// If true, we codegen an LLVM global or a const struct for this value
+/// If false, we represent it as a call to a function that builds up
+/// the struct or enum or buffer using 'runtime' code, albeit entirely
+/// compile-time known, so it gets massively optimized
+fn is_statically_representable(static_value: &StaticValue) -> bool {
+    match static_value {
+        StaticValue::Unit => true,
+        StaticValue::Boolean(_) => true,
+        StaticValue::Char(_) => true,
+        StaticValue::Integer(_) => true,
+        StaticValue::Float(_) => true,
+        StaticValue::String(_) => true,
+        StaticValue::NullPointer => true,
+        StaticValue::Struct(_) => false,
+        StaticValue::Enum(_) => false,
+        StaticValue::Buffer(_) => false,
     }
 }
