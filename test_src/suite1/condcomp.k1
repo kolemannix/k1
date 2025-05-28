@@ -6,8 +6,10 @@ let static MY_VALUE_NEG: bool = not MY_VALUE;
 
 fn test(): unit {
   use core/k1;
-  assert(k1/OS == "macos");
-  assert(k1/TEST == false);
+  let a = k1/OS;
+  let b = "macos";
+  assertEquals(k1/OS, "macos");
+  assertEquals(k1/TEST, false);
 
   #if MY_VALUE_NEG {
     crash("does not happen")

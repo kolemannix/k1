@@ -1,0 +1,8 @@
+ns test_string_literal;
+let g: string = "imglobal";
+
+fn test(): unit {
+  assertEquals(g.len(), 8);
+  assertEquals(g, "imglobal");
+  ()
+}

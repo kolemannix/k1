@@ -255,11 +255,44 @@ impl IntegerType {
             Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::IWord(_) => true,
         }
     }
+
+    pub fn zero(&self) -> TypedIntValue {
+        match self {
+            IntegerType::U8 => TypedIntValue::U8(0),
+            IntegerType::U16 => TypedIntValue::U16(0),
+            IntegerType::U32 => TypedIntValue::U32(0),
+            IntegerType::U64 => TypedIntValue::U64(0),
+            IntegerType::UWord(WordSize::W32) => TypedIntValue::UWord32(0),
+            IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(0),
+            IntegerType::I8 => TypedIntValue::I8(0),
+            IntegerType::I16 => TypedIntValue::I16(0),
+            IntegerType::I32 => TypedIntValue::I32(0),
+            IntegerType::I64 => TypedIntValue::I64(0),
+            IntegerType::IWord(WordSize::W32) => TypedIntValue::IWord32(0),
+            IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(0),
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct FloatType {
-    pub size: NumericWidth,
+#[derive(Debug, Clone, Copy)]
+pub enum FloatType {
+    F32,
+    F64,
+}
+impl FloatType {
+    pub fn zero(&self) -> TypedFloatValue {
+        match self {
+            FloatType::F32 => TypedFloatValue::F32(0.0),
+            FloatType::F64 => TypedFloatValue::F64(0.0),
+        }
+    }
+
+    pub fn size(&self) -> NumericWidth {
+        match self {
+            FloatType::F32 => NumericWidth::B32,
+            FloatType::F64 => NumericWidth::B64,
+        }
+    }
 }
 
 // pub struct Spanned<T> {
@@ -378,7 +411,7 @@ impl PartialEq for Type {
             (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::Float(f1), Type::Float(f2)) => f1.size == f2.size,
+            (Type::Float(f1), Type::Float(f2)) => f1.size() == f2.size(),
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
@@ -548,7 +581,7 @@ impl std::hash::Hash for Type {
             }
             Type::Float(ft) => {
                 "float".hash(state);
-                ft.size.bits().hash(state);
+                ft.size().bits().hash(state);
             }
             Type::Pointer => {
                 "ptr".hash(state);
@@ -894,8 +927,8 @@ impl Types {
         this.add_anon(Type::Bool);
         this.add_anon(Type::Never);
         this.add_anon(Type::Pointer);
-        this.add_anon(Type::Float(FloatType { size: NumericWidth::B32 }));
-        this.add_anon(Type::Float(FloatType { size: NumericWidth::B64 }));
+        this.add_anon(Type::Float(FloatType::F32));
+        this.add_anon(Type::Float(FloatType::F64));
 
         this
     }
@@ -1352,7 +1385,7 @@ impl Types {
             Type::Unit => Layout::from_scalar_bytes(1),
             Type::Char => Layout::from_scalar_bytes(1),
             Type::Integer(integer_type) => Layout::from_scalar_bits(integer_type.width().bits()),
-            Type::Float(float_type) => Layout::from_scalar_bits(float_type.size.bits()),
+            Type::Float(float_type) => Layout::from_scalar_bits(float_type.size().bits()),
             Type::Bool => Layout::from_scalar_bytes(1),
             Type::Pointer => Layout::from_scalar_bits(self.word_size_bits()),
             Type::Struct(struct_type) => {

@@ -1,6 +1,10 @@
 fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
   if a != b {
-    crash("ASSERT FAILED: \{a} != \{b}")
+    let aShow = a.show();
+    let bShow = b.show();
+    println(aShow);
+    println(bShow);
+    crash("ASSERT FAILED: \{aShow} != \{bShow}")
   }
 }
 
@@ -251,6 +255,12 @@ impl Print for u64 {
 
 impl Print for u8 {
   fn printTo[W: Writer](self: u8, w: W*): unit {
+    (self as uword).printTo(w)
+  }
+}
+
+impl Print for u16 {
+  fn printTo[W: Writer](self: u16, w: W*): unit {
     (self as uword).printTo(w)
   }
 }

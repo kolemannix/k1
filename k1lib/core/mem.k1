@@ -18,6 +18,8 @@ ns mem {
   ): unit
   intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
 
+  intern fn zeroed[T](): T
+
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
     malloc:  (\(uword, uword) -> Pointer)*,
@@ -157,9 +159,7 @@ ns mem {
     }
   }
 
-  let* _k1_tempArena: Arena* = { 
-    basePtr: Pointer/NULL, curAddr: 0, maxAddr: 0
-  };
+  let* _k1_tempArena: Arena* = zeroed[Arena]();
 
   let* _k1_currentAllocMode: mem/AllocMode* = AllocMode/SYSTEM_HEAP;
 

@@ -1,5 +1,6 @@
 fn low(): unit {
   println("testing 'low'");
+  test_string_literal/test();
   arith/test();
   bool_test/test();
   char_test/test();

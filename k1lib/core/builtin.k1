@@ -219,10 +219,13 @@ impl Equals for bool {
 
 // TODO(vm): Great metaprogramming use-case!
 impl Equals for u8 { fn equals(self: u8, other: u8): bool { self == other } }
-impl Equals for u64 { fn equals(self: u64, other: u64): bool { self == other } }
+impl Equals for u16 { fn equals(self: u16, other: u16): bool { self == other } }
 impl Equals for u32 { fn equals(self: u32, other: u32): bool { self == other } }
+impl Equals for u64 { fn equals(self: u64, other: u64): bool { self == other } }
 impl Equals for uword { fn equals(self: Self, other: Self): bool { self == other } }
 
+impl Equals for i8 { fn equals(self: i8, other: i8): bool { self == other } }
+impl Equals for i16 { fn equals(self: i16, other: i16): bool { self == other } }
 impl Equals for i32 { fn equals(self: i32, other: i32): bool { self == other } }
 impl Equals for i64 { fn equals(self: i64, other: i64): bool { self == other } }
 impl Equals for iword { fn equals(self: Self, other: Self): bool { self == other } }

@@ -44,7 +44,9 @@ fn test(): unit {
   assert(1 != 2);
   assert(2 == 2);
 
-  assertEquals(0.show(), "0");
+  let z = 0.show();
+  let zs = "0";
+  assertEquals(z, "0");
   assertEquals(1.show(), "1");
   assertEquals(2.show(), "2");
   assertEquals(3.show(), "3");

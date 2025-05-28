@@ -18,14 +18,14 @@ use crate::{
     failf, int_binop,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, NumericWidth, StringId},
+    parse::{Identifier, StringId},
     pool::SliceHandle,
     typer::{
         self, make_fail_span,
         types::{
-            IntegerType, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID, CHAR_TYPE_ID,
-            F32_TYPE_ID, F64_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, POINTER_TYPE_ID,
-            STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
+            FloatType, IntegerType, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
+            CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID,
+            POINTER_TYPE_ID, STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
         BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum, StaticStruct, StaticValue,
@@ -1428,6 +1428,46 @@ fn execute_intrinsic(
             let align_bytes = layout.align as u64;
             Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
         }
+        IntrinsicOperation::Zeroed => {
+            let type_id = m.named_types.get_nth(type_args, 0).type_id;
+            let value = match m.types.get(type_id) {
+                Type::Unit => Value::Unit,
+                Type::Char => Value::Char(0),
+                Type::Bool => Value::Bool(false),
+                Type::Pointer => Value::Pointer(0),
+                Type::Integer(integer_type) => {
+                    let zero_value = integer_type.zero();
+                    Value::Int(zero_value)
+                }
+                Type::Float(float_type) => Value::Float(float_type.zero()),
+                Type::Reference(_) => Value::Reference { type_id, ptr: core::ptr::null() },
+                Type::Struct(_)
+                | Type::Enum(_)
+                | Type::EnumVariant(_)
+                | Type::Lambda(_)
+                | Type::LambdaObject(_) => {
+                    debug_assert!(m.types.is_aggregate_repr(type_id));
+                    let layout = m.types.get_layout(type_id);
+                    let data = vm.stack.push_layout_uninit(layout);
+                    Value::Agg { type_id, ptr: data }
+                }
+                Type::Never
+                | Type::Function(_)
+                | Type::Generic(_)
+                | Type::TypeParameter(_)
+                | Type::FunctionTypeParameter(_)
+                | Type::InferenceHole(_)
+                | Type::Unresolved(_)
+                | Type::RecursiveReference(_) => m.ice_with_span(
+                    format!(
+                        "not a value type; zeroed() for type {} is undefined",
+                        m.types.get(type_id).kind_name()
+                    ),
+                    vm.eval_span,
+                ),
+            };
+            Ok(VmResult::Value(value))
+        }
         IntrinsicOperation::TypeId => {
             //nocommit move to typer
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
@@ -1749,10 +1789,9 @@ pub fn load_value(
         }
         Type::Float(float_type) => {
             let float_value = unsafe {
-                match float_type.size {
-                    NumericWidth::B32 => TypedFloatValue::F32((ptr as *const f32).read()),
-                    NumericWidth::B64 => TypedFloatValue::F64((ptr as *const f64).read()),
-                    _ => unreachable!(),
+                match float_type {
+                    FloatType::F32 => TypedFloatValue::F32((ptr as *const f32).read()),
+                    FloatType::F64 => TypedFloatValue::F64((ptr as *const f64).read()),
                 }
             };
             Ok(Value::Float(float_value))

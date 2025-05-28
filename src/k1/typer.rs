@@ -254,7 +254,10 @@ pub struct StaticBuffer {
 }
 
 impl StaticBuffer {
-    #[allow(clippy::len_without_is_empty)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn len(&self) -> usize {
         self.elements.len()
     }
@@ -2049,19 +2052,22 @@ pub enum IntrinsicBitwiseBinopKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicOperation {
-    // Inline 'operations'
     // Static, nocommit owned by typer phase
     SizeOf,
     SizeOfStride,
     AlignOf,
+    Zeroed,
     TypeId,
     TypeName,
     CompilerSourceLocation,
+    // Actual function
+    TypeSchema,
 
     BoolNegate,
     BitNot,
     BitwiseBinop(IntrinsicBitwiseBinopKind),
     PointerIndex,
+
     // Actual functions
     Allocate,
     AllocateZeroed,
@@ -2073,7 +2079,6 @@ pub enum IntrinsicOperation {
     Exit,
     // Static-only
     EmitCompilerMessage,
-    TypeSchema,
 }
 
 impl IntrinsicOperation {
@@ -2082,6 +2087,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::SizeOf => true,
             IntrinsicOperation::SizeOfStride => true,
             IntrinsicOperation::AlignOf => true,
+            IntrinsicOperation::Zeroed => true,
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::TypeName => true,
             IntrinsicOperation::BoolNegate => true,
@@ -2944,8 +2950,8 @@ impl TypedProgram {
                     BOOL_TYPE_ID => Type::Bool,
                     NEVER_TYPE_ID => Type::Never,
                     POINTER_TYPE_ID => Type::Pointer,
-                    F32_TYPE_ID => Type::Float(FloatType { size: NumericWidth::B32 }),
-                    F64_TYPE_ID => Type::Float(FloatType { size: NumericWidth::B64 }),
+                    F32_TYPE_ID => Type::Float(FloatType::F32),
+                    F64_TYPE_ID => Type::Float(FloatType::F64),
                     U8_TYPE_ID => Type::Integer(IntegerType::U8),
                     U16_TYPE_ID => Type::Integer(IntegerType::U16),
                     U32_TYPE_ID => Type::Integer(IntegerType::U32),
@@ -7571,11 +7577,13 @@ impl TypedProgram {
                 ),
             },
             Type::Float(from_float_type) => match self.types.get(target_type) {
-                Type::Float(to_float_type) => match from_float_type.size.cmp(&to_float_type.size) {
-                    Ordering::Less => Ok(CastType::FloatExtend),
-                    Ordering::Greater => Ok(CastType::FloatTruncate),
-                    Ordering::Equal => failf!(cast.span, "Useless float cast"),
-                },
+                Type::Float(to_float_type) => {
+                    match from_float_type.size().cmp(&to_float_type.size()) {
+                        Ordering::Less => Ok(CastType::FloatExtend),
+                        Ordering::Greater => Ok(CastType::FloatTruncate),
+                        Ordering::Equal => failf!(cast.span, "Useless float cast"),
+                    }
+                }
                 Type::Integer(to_int_type) => match to_int_type {
                     IntegerType::U32 => Ok(CastType::FloatToInteger),
                     IntegerType::U64 => Ok(CastType::FloatToInteger),
@@ -11201,6 +11209,7 @@ impl TypedProgram {
                     "allocZeroed" => Some(IntrinsicOperation::AllocateZeroed),
                     "realloc" => Some(IntrinsicOperation::Reallocate),
                     "free" => Some(IntrinsicOperation::Free),
+                    "zeroed" => Some(IntrinsicOperation::Zeroed),
                     "copy" => Some(IntrinsicOperation::MemCopy),
                     "set" => Some(IntrinsicOperation::MemSet),
                     "equals" => Some(IntrinsicOperation::MemEquals),

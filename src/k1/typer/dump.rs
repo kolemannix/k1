@@ -188,11 +188,9 @@ impl TypedProgram {
                 write!(w, "{}", int_type)?;
                 Ok(())
             }
-            Type::Float(float_type) => match float_type.size {
-                NumericWidth::B8 => write!(w, "f8"),
-                NumericWidth::B16 => write!(w, "f16"),
-                NumericWidth::B32 => write!(w, "f32"),
-                NumericWidth::B64 => write!(w, "f64"),
+            Type::Float(float_type) => match float_type {
+                FloatType::F32 => write!(w, "f32"),
+                FloatType::F64 => write!(w, "f64"),
             },
             Type::Bool => w.write_str("bool"),
             Type::Pointer => w.write_str("Pointer"),

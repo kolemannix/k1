@@ -1,0 +1,46 @@
+use core/mem/zeroed
+
+fn main(): i32 {
+  let v8: u8 = zeroed();
+  let v16: u16 = zeroed();
+  let v32: u32 = zeroed();
+  let v64: u64 = zeroed();
+  assertEquals(v8, 0);
+  assertEquals(v16, 0);
+  assertEquals(v32, 0);
+  assertEquals(v64, 0);
+
+  let vi8: i8 = zeroed();
+  let vi16: i16 = zeroed();
+  let vi32: i32 = zeroed();
+  let vi64: i64 = zeroed();
+  assertEquals(vi8, 0);
+  assertEquals(vi16, 0);
+  assertEquals(vi32, 0);
+  assertEquals(vi64, 0);
+
+  let vword: iword = zeroed();
+  let vuword: uword = zeroed();
+  assertEquals(vword, 0);
+  assertEquals(vuword, 0);
+
+  let* i32Ptr: i32* = zeroed();
+  assertEquals(i32Ptr.*, 0);
+  let i32Null: i32* = zeroed();
+  assert(i32Null as Pointer == Pointer/NULL);
+
+  let point: { x: u8, y: u8, z: i32 } = zeroed();
+  assertEquals(point.x, 0);
+  assertEquals(point.y, 0);
+  assertEquals(point.z, 0);
+
+  let o: typeOf(point)? = zeroed();
+  assertEquals(o.tag, 0);
+
+
+  let point = #static {
+    ({ x: 1, y: 2 })
+  };
+  assertEquals(point.x, 1);
+  0
+}
