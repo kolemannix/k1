@@ -12,8 +12,8 @@ fn test(): unit {
   let point = #static {
     ({ x: 1, y: 2 })
   };
-  assert(point.x == 1);
-  assert(point.y == 2);
+  assertEquals(point.x, 1);
+  assertEquals(point.y, 2);
 
   // Scalars
   assert(#static true);

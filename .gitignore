@@ -9,3 +9,4 @@ zig-out
 k1_lsp.log*
 .aider*
 .DS_Store
+*module_dump.txt
