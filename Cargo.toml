@@ -1,7 +1,7 @@
 [package]
 name = "k1"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 default-run = "compiler"
 
 [lib]
@@ -30,7 +30,7 @@ mimalloc = "0.1.43"
 
 # LLVM / compiler toolchain stuff
 llvm-sys = { version = "181.2.0" }
-inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.5.0", features = [ "llvm18-0"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.6.0", features = [ "llvm18-1"] }
 zstd-sys = "2.0.8"
 libffi = "4.0.0"
 

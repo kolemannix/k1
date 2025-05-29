@@ -1,6 +1,8 @@
 fn main(): i32 {
   let a = none[int]();
-  let partial = some({ x: some(42), y: none[int]() });
+  if a is Opt.None {
+    ()
+  };
   0
 }
 

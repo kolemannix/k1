@@ -4,14 +4,14 @@ use std::num::NonZeroU32;
 use crate::compiler::CompilerConfig;
 use crate::pool::{Pool, SliceHandle};
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
-use crate::{impl_copy_if_small, lex::*, nz_u32_id, static_assert_size, SV8};
-use ecow::{eco_vec, EcoVec};
+use crate::{SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
+use TokenKind as K;
+use ecow::{EcoVec, eco_vec};
 use fxhash::FxHashMap;
 use log::trace;
-use smallvec::{smallvec, SmallVec};
-use string_interner::backend::StringBackend;
+use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;
-use TokenKind as K;
+use string_interner::backend::StringBackend;
 
 trait CanPush<T> {
     fn push_it(&mut self, value: T);
@@ -906,11 +906,7 @@ impl ParsedExpr {
     }
 
     pub fn as_match(&self) -> Option<&ParsedMatchExpression> {
-        if let Self::Match(v) = self {
-            Some(v)
-        } else {
-            None
-        }
+        if let Self::Match(v) = self { Some(v) } else { None }
     }
 
     pub fn expect_cast(&self) -> &ParsedAsCast {
@@ -963,7 +959,8 @@ pub struct ParsedStructPattern {
 
 #[derive(Debug, Clone)]
 pub struct ParsedEnumPattern {
-    pub variant_tag: Identifier,
+    pub enum_name: Option<Identifier>,
+    pub variant_name: Identifier,
     pub payload_pattern: Option<ParsedPatternId>,
     pub span: SpanId,
 }
@@ -2122,11 +2119,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
 
     fn extend_to_here(&mut self, span: SpanId) -> SpanId {
         let here = self.peek_back();
-        if here.kind == K::Eof {
-            span
-        } else {
-            self.extend_span(span, here.span)
-        }
+        if here.kind == K::Eof { span } else { self.extend_span(span, here.span) }
     }
 
     fn extend_span(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
@@ -2159,7 +2152,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
     }
 
     fn expect_pattern_base(&mut self) -> ParseResult<ParsedPatternId> {
-        let first = self.peek();
+        let (first, second) = self.peek_two();
         if let Some(literal_id) = self.parse_literal()? {
             let pattern = ParsedPattern::Literal(literal_id);
             let id = self.ast.patterns.add_pattern(pattern);
@@ -2193,21 +2186,32 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let pattern = ParsedStructPattern { fields, span };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
-        } else if first.kind == K::Dot {
-            let dot = self.tokens.next();
-            let ident_token = self.expect_eat_token(K::Ident)?;
-            let ident = self.intern_ident_token(ident_token);
+        } else if first.kind == K::Dot || (first.kind == K::Ident && second.kind == K::Dot) {
+            let enum_name = if first.kind == K::Ident {
+                // Eats the Dot
+                self.advance();
+                let enum_name = self.intern_ident_token(first);
+                self.expect_eat_token(K::Dot)?;
+                Some(enum_name)
+            } else {
+                // Eats the Dot
+                self.advance();
+                None
+            };
+            let variant_name_token = self.expect_eat_token(K::Ident)?;
+            let variant_name_ident = self.intern_ident_token(variant_name_token);
             let (payload_pattern, span) = if self.peek().kind == K::OpenParen {
                 self.advance();
                 let payload_pattern_id = self.expect_parse_pattern()?;
                 let close_paren = self.expect_eat_token(K::CloseParen)?;
-                (Some(payload_pattern_id), self.ast.spans.extend(dot.span, close_paren.span))
+                (Some(payload_pattern_id), self.ast.spans.extend(first.span, close_paren.span))
             } else {
-                (None, ident_token.span)
+                (None, self.ast.spans.extend(first.span, variant_name_token.span))
             };
             let pattern_id =
                 self.ast.patterns.add_pattern(ParsedPattern::Enum(ParsedEnumPattern {
-                    variant_tag: ident,
+                    enum_name,
+                    variant_name: variant_name_ident,
                     payload_pattern,
                     span,
                 }));
@@ -2422,7 +2426,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 mode = Mode::Base;
                             } else {
                                 return Err(error(
-                                    format!("Unexpected character inside interpolated identifier: {c}, expected more or '}}'"),
+                                    format!(
+                                        "Unexpected character inside interpolated identifier: {c}, expected more or '}}'"
+                                    ),
                                     first,
                                 ));
                             }
@@ -2834,7 +2840,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         return Err(error_expected(
                             "Field name, or postfix &, *, or !",
                             self.peek(),
-                        ))
+                        ));
                     }
                 };
                 let (type_args, _) = self.parse_bracketed_type_args_new()?;

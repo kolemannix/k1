@@ -1,0 +1,19 @@
+//deftype Red[T] = { t: T, b: Black[T]* }
+//deftype Black[T] = {  t: T, r: Red[T]* }
+//fn returnRed[T](t: T): Red[T] {
+//  let rNull: Red[T]* = core/Pointer/NULL as Red[T]*;
+//  let b: Black[T]* = core/mem/new({ t: t, r: rNull });
+//  let r: Red[T] = { t: t, b: b };
+//  r
+//}
+
+deftype Tree[T] = { x: T, info: Tree[int]*, child: Tree[T]* }
+Tree[int] = { info: int, child: Recurse(Tree[int].id) }
+@debug fn test(): i32 {
+  let* t1: Tree[unit]* = { info: 0, child: core/Pointer/NULL as Tree[unit]* };
+  let t: Tree[unit] = { info: 1, child: t1 };
+  returnRed[int](12);
+
+  0
+}
+

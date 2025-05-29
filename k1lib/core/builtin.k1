@@ -44,18 +44,13 @@ deftype alias byte = u8
 
 ns types {
   intern fn typeId[T](): u64
-  intern fn typeName[T](): string
 
   intern fn typeSchema(id: u64): TypeSchema
+  intern fn typeName(id: u64): string
 
   deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
 
   deftype Layout = { size: uword, align: uword }
-
-  // deftype TypeInfo = {
-  //   layout: Layout,
-  //   schema: TypeSchema,
-  // }
 
   deftype TypeSchema = (either
     Unit,
@@ -80,6 +75,17 @@ ns types {
         payload: { typeId: u64, offset: uword }?
       }],
     }),
+    Variant({
+      enumTypeId: u64,
+      name: string,
+    }),
+    // TODO: Function schema, lambda schema, lambda object schema
+    // Function({
+    //   returnTypeId: u64,
+    //   params: [{ name: string, typeId: u64 }],
+    // }),
+    // Lambda({ typeId: u64, functionTypeId: u64 }),
+    // LambdaObject({ functionTypeId: u64 }),
     Never,
     Other(string)
   )

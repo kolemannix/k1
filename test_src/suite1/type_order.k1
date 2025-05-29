@@ -1,6 +1,6 @@
 ns type_order;
 
-// nocommit Concession: for now, aliases depend on declaration order again
+// Concession: for now, aliases depend on declaration order again
 deftype alias Point = { x: int, y: int }
 deftype alias PointList = List[Point]
 
