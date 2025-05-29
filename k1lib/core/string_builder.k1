@@ -1,10 +1,10 @@
-deftype StringBuilder = { parts: List[either Char(char), String(string)]* }
+deftype StringBuilder = { charList: List[char]* }
 ns StringBuilder {
-  deftype alias Part = StringBuilder.parts.value.T
+  deftype alias Part = StringBuilder.charList.value.T
 
   fn withCapacity(cap: uword): StringBuilder {
-    let parts = mem/new(List/withCapacity[Part](cap));
-    { parts: parts }
+    let charList = mem/new(List/withCapacity[Part](cap));
+    { charList: charList }
   }
 
   fn new(): StringBuilder {
@@ -12,36 +12,17 @@ ns StringBuilder {
   }
 
   fn putChar(self: StringBuilder, c: char): unit {
-    self.parts.push(.Char(c))
+    self.charList.push(c)
   }
   fn putString(self: StringBuilder, s: string): unit {
-    self.parts.push(.String(s))
+    // TODO(stdlib): Need an appendBufferCopy, or similarly
+    // to solve for the 'copy' vs 'non-copy' problem
+    self.charList.appendBuffer(s.innerBuffer())
   }
   fn putByte(self: StringBuilder, b: byte): unit {
-    self.parts.push(.Char(b as char))
-  }
-  fn len(self: StringBuilder): uword {
-    let mut len = 0: uword;
-    for part in self.parts.* do {
-      let partLen: uword = switch part { .Char(_) -> 1, .String(s) -> s.len() };
-      len = len + partLen;
-    };
-    len
+    self.charList.push(b as char)
   }
   fn build(self: StringBuilder): string {
-    if self.parts.len == 0 return("");
-
-    let* bytes = List/withCapacity[char](self.len());
-    for part in self.parts.* do {
-      switch part {
-        .Char(c) -> bytes.push(c),
-        .String(s) -> {
-          for c in s do {
-            bytes.push(c)
-          }
-        }
-      }
-    };
-    string/wrapList(bytes)
+    string/wrapList(self.charList)
   }
 }

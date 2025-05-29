@@ -5,10 +5,11 @@ New tagline? "C with typeclasses and tagged unions"
   ->              ^^^^^^^^^^^^^^^^
 	Match arm has wrong type. Expected T but got bool
 
-- [ ] Bug: technically I should require that the blanket impl params appear in the Self type expression
+- [ ] Generic (co)recursive types do not work
+- [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Related: Detect duplicate blanket impls?
 - [ ] Bug: Fix returning Result from main
-- [ ] Typecheck 'main'
+- [ ] Typecheck 'main' better
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 
@@ -122,11 +123,11 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: VM for `static` execution
 - [ ] vm: static execution
   - [x] Order-independence for globals used in static code
-  - [ ] Static Buffers (slices)
+  - [x] Static Buffers (slices)
     - [x] vm -> static
     - [x] static -> vm
     - [x] LLVM gen
-    - [ ] Allow upgrading them to fixed-length Arrays (so cool actually)
+  - [ ] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
   - [x] reference to reference cast
   - [x] Introduce uword/iword types
   - [x] Switch to a single stack
@@ -142,15 +143,16 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
-## Project: static reflection and metaprogramming story
+## Project: static reflection
 - [ ] functions taking only a single type could be invoked with
       a nice syntax like `type.sizeOf`
 - [x] Runtime type info story
 - [x] typeOf, typeId
-- [ ] TypeSchema for all types
-- [ ] 'any' type
-- [ ] 'Type predicate' functions as type bounds
-## Project: Macro system built on 'static': both string #insert and parsed code #insert, like Jai
+- [x] TypeSchema for all types
+- [ ] Test 'Any' type
+- [ ] (static only?) 'Type predicate' functions as type bounds
+
+## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 
 ## Project: Array types
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`

@@ -1,7 +1,5 @@
-ns type_refl {
+ns type_schema {
   deftype Point3[T] = {
-    // nocommit reject dupe field name in struct definition
-    // z: T, y: T, z: T
     x: T, y: T, z: T
   }
   
@@ -13,24 +11,25 @@ ns type_refl {
   fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
   
   fn printStructShape[T](): string {
+    let id = typeId[T]();
     require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
-    let name = typeName[T]();
-    sb.putString("--- Struct \{name} ---\n");
+    let name = typeName(id);
+    sb.putString("Struct \{name} {\n");
     for field in fields do {
+      sb.putString("  ");
       sb.putString(field.name);
-      sb.putString(": TypeId(");
-      // Should use 'Writer' ability
-      sb.putString(field.typeId.show());
-      sb.putString(")\n");
+      sb.putString(": ");
+      sb.putString(typeName(field.typeId));
+      sb.putString("\n");
     };
+    sb.putString("}");
     sb.build()
   }
   
   fn test(): unit {
   
-    // nocommit: Parsing bug
-    // assert(unitSchema is TypeSchema.Unit);
+    assert(getTypeSchema[unit]() is TypeSchema.Unit);
     assert(getTypeSchema[unit]() is .Unit);
     assert(getTypeSchema[u8]()   is .Int(.U8));
     assert(getTypeSchema[u16]()  is .Int(.U16));
@@ -53,20 +52,36 @@ ns type_refl {
       typeId[bool*]()
     );
 
-    assert(getTypeSchema[either Yes]()  is .Either(_));
-    //assert(getTypeSchema[either Yes, No, MaybeSo(string)]()  is .Int(.I64));
+    assert(getTypeSchema[either Yes]() is .Either(_));
+
+    require getTypeSchema[either Yes, No, MaybeSo(string)]() 
+      is .Either({ variants }) 
+      and variants.len == 3 
+      and variants.get(0).name == "Yes"
+      and variants.get(1).name == "No"
+      and variants.get(2).name == "MaybeSo"
+      and variants.get(2).payload is .Some({ typeId, offset })
+      and typeId == typeId[string]()
+      and offset == 8
+      else crash("");
+
+    require getTypeSchema[(either Yes).Yes]()
+      is .Variant(v)
+      and v.enumTypeId == typeId[either Yes]()
+      and v.name == "Yes"
+      else crash("");
 
     assert(getTypeSchema[\(int) -> int]() is .Other("function"));
 
-    //println(printStructShape[Point3[u8]]());
-    //println(printStructShape[TypeSchema.Struct.value]());
-    //println(printStructShape[TypeSchema.Either]());
+    println(printStructShape[Point3[u8]]());
+    println(printStructShape[TypeSchema.Struct.value]());
+    println(printStructShape[TypeSchema.Either]());
   
     ()
   }
 }
 
 fn main(): i32 {
-  test();
+  type_schema/test();
   0
 }

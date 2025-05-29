@@ -4,7 +4,7 @@ use log::debug;
 use smallvec::SmallVec;
 
 use std::{
-    collections::{hash_map::Entry, HashSet},
+    collections::{HashSet, hash_map::Entry},
     fmt::Display,
     num::NonZeroU32,
 };
@@ -16,8 +16,8 @@ use crate::{
     parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId},
     pool::Pool,
     typer::{
-        make_error, AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId,
-        TypedExprId, TyperResult, VariableId,
+        AbilityId, FunctionId, Identifier, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
+        TyperResult, VariableId, make_error,
     },
 };
 
@@ -316,7 +316,6 @@ impl Scopes {
 
     pub fn find_type(&self, scope_id: ScopeId, ident: Identifier) -> Option<(TypeId, ScopeId)> {
         let scope = self.get_scope(scope_id);
-        debug!("Find type {} in {:?}", ident, scope.types);
         if let v @ Some(_r) = scope.find_type(ident) {
             return v.map(|v| (v, scope_id));
         }

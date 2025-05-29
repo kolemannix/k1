@@ -25,7 +25,8 @@ use inkwell::types::{
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
 };
 use inkwell::values::{
-    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, InstructionValue, IntValue, PointerValue, StructValue
+    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
+    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 use itertools::Itertools;
@@ -33,16 +34,17 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
+use crate::SV8;
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Identifier, StringId};
 use crate::pool::Pool;
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    FloatType, FnParamType, IntegerType, Type, TypeDefnInfo, TypeId, BOOL_TYPE_ID,
-    BUFFER_DATA_FIELD_NAME, CHAR_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID,
-    NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID,
-    U8_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
+    BOOL_TYPE_ID, BUFFER_DATA_FIELD_NAME, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID,
+    I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
+    STRING_TYPE_ID, Type, TypeDefnInfo, TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID,
+    UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId,
@@ -52,7 +54,6 @@ use crate::typer::{
     TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId,
     UnaryOpKind, VariableId, WhileLoop,
 };
-use crate::SV8;
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -1493,8 +1494,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         trace!(
             "codegen_let referencing={} {}: pointee_ty: {variable_type:?}",
-            let_stmt.is_referencing,
-            name
+            let_stmt.is_referencing, name
         );
 
         // Disable to hide compiler-internal variables!
@@ -1885,7 +1885,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let llvm_type = llvm_type.expect_struct();
                 for (field_index, field) in s.fields.iter().enumerate() {
                     let value = self.codegen_static_value_as_code(*field)?;
-                    eprintln!("generated struct field {} as {}", self.k1.static_value_to_string(*field), value);
                     let field_llvm_type = &llvm_type.fields[field_index];
                     let dest_offset = self
                         .builder
@@ -1941,7 +1940,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
                 for (index, elem) in buf.elements.iter().enumerate() {
                     let elem_basic_value = self.codegen_static_value_as_code(*elem)?;
-                    let array_offset_ptr = unsafe { self.builder.build_in_bounds_gep(element_basic_type, data_global.as_pointer_value(), &[self.ctx.i32_type().const_int(index as u64, false)], "").unwrap() };
+                    let array_offset_ptr = unsafe {
+                        self.builder
+                            .build_in_bounds_gep(
+                                element_basic_type,
+                                data_global.as_pointer_value(),
+                                &[self.ctx.i32_type().const_int(index as u64, false)],
+                                "",
+                            )
+                            .unwrap()
+                    };
                     self.store_k1_value(&element_backend_type, array_offset_ptr, elem_basic_value);
                     values.push(elem_basic_value);
                 }
@@ -1996,10 +2004,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .get_bit_width()
                 == 64
         );
-        debug_assert!(char_buffer_struct_type
-            .get_field_type_at_index(1)
-            .unwrap()
-            .is_pointer_type());
+        debug_assert!(
+            char_buffer_struct_type.get_field_type_at_index(1).unwrap().is_pointer_type()
+        );
         debug_assert!(char_buffer_struct_type.count_fields() == 2);
 
         let char_buffer_struct_value = self.make_buffer_struct(
@@ -2377,7 +2384,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // representation type for aggregates _is_ ptr in our codegen
                 Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
             }
-            TypedExpr::StaticValue(value_id, .., _) => {
+            TypedExpr::StaticValue(value_id, ..) => {
                 let static_value = self.codegen_static_value_as_code(*value_id)?;
                 Ok(static_value.into())
             }
@@ -2520,8 +2527,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // pointer because we know it from the type still
                 let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
-                // nocommit: Does this 'store' the whole struct? Should be a memcpy if so, and
-                // clean up the types
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
                 let fn_value =
@@ -2533,7 +2538,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let lam_obj =
                     self.builder.build_insert_value(lam_obj, lambda_env_value, 1, "").unwrap();
 
-                // Aggregates have to be pointers because that's just how we represent them
                 let lam_obj_ptr =
                     self.build_alloca(self.builtin_types.dynamic_lambda_object, "lam_obj_ptr");
                 self.builder.build_store(lam_obj_ptr, lam_obj).unwrap();
@@ -3006,7 +3010,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 return failf!(
                     call.span,
                     "Internal Compiler Error: cannot codegen an Abstract callee"
-                )
+                );
             }
         };
 
@@ -3061,28 +3065,27 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::SizeOf
             | IntrinsicOperation::SizeOfStride
             | IntrinsicOperation::AlignOf => {
-                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
-                let layout = self.k1.types.get_layout(type_param.type_id);
-                let num_bytes = match intrinsic_type {
-                    IntrinsicOperation::SizeOf => layout.size,
-                    IntrinsicOperation::SizeOfStride => layout.stride(),
-                    IntrinsicOperation::AlignOf => layout.align,
-                    _ => unreachable!(),
-                };
-                let size_value =
-                    self.builtin_types.ptr_sized_int.const_int(num_bytes as u64, false);
-                Ok(size_value.as_basic_value_enum().into())
+                unreachable!("Handled by typer phase {:?}", intrinsic_type)
             }
             IntrinsicOperation::Zeroed => {
                 let type_param = self.k1.named_types.get_nth(call.type_args, 0);
                 let k1_type = self.codegen_type(type_param.type_id)?;
                 if k1_type.is_aggregate() {
                     let ptr = self.build_k1_alloca(&k1_type, "zeroed");
-                    self.builder.build_memset(ptr, k1_type.rich_repr_layout().align, self.ctx.i8_type().const_zero(), self.ctx.i32_type().const_int(k1_type.rich_repr_layout().size as u64, false)).unwrap();
+                    self.builder
+                        .build_memset(
+                            ptr,
+                            k1_type.rich_repr_layout().align,
+                            self.ctx.i8_type().const_zero(),
+                            self.ctx
+                                .i32_type()
+                                .const_int(k1_type.rich_repr_layout().size as u64, false),
+                        )
+                        .unwrap();
                     Ok(ptr.as_basic_value_enum().into())
                 } else {
-                let zero_value = k1_type.rich_repr_type().const_zero();
-                Ok(zero_value.into())
+                    let zero_value = k1_type.rich_repr_type().const_zero();
+                    Ok(zero_value.into())
                 }
             }
             IntrinsicOperation::BoolNegate => {
@@ -3118,13 +3121,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicOperation::TypeId => {
                 unreachable!("TypeId is handled in typer phase")
-            }
-            IntrinsicOperation::TypeName => {
-                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
-                // TODO: Eventually, move this to part of typeInfo, and cache them
-                let name = self.k1.type_id_to_string(type_param.type_id);
-                let name_ptr = self.make_string_llvm_global(&name, None)?;
-                Ok(name_ptr.as_basic_value_enum().into())
             }
             IntrinsicOperation::PointerIndex => {
                 //  Reference:
@@ -3273,13 +3269,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let _result = call.try_as_basic_value().unwrap_right();
                 self.builder.build_unreachable().unwrap()
             }
-            IntrinsicOperation::TypeSchema => {
+
+            IntrinsicOperation::TypeSchema | IntrinsicOperation::TypeName => {
                 // intern fn typeSchema(id: u64): TypeSchema
                 let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
-                // let type_schema_type = self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?;
+                let type_schema_llvm_type =
+                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?;
                 let entry_block = self.builder.get_insert_block().unwrap();
 
-                // typeSchema returns a struct, so we have to do sret shenanigans
+                // typeSchema and typeName return a struct, so we have to do sret shenanigans
                 let sret_ptr = self.llvm_functions.get(&function_id).unwrap().sret_pointer.unwrap();
 
                 let else_block = self.append_basic_block("miss");
@@ -3288,6 +3286,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
 
                 let finish_block = self.append_basic_block("finish");
+
+                let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
@@ -3298,10 +3298,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.position_at_end(my_block);
                     let type_id_int_value =
                         self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-                    let schema_value = self.codegen_static_value_as_code(*schema_value_id)?;
-                    // eprintln!("Schema Value ty: {}", schema_value.get_type());
-                    // eprintln!("Schema Value: {}", schema_value);
-                    self.builder.build_store(sret_ptr, schema_value).unwrap();
+
+                    let value = if is_type_name {
+                        let s = self.k1.type_id_to_string(*type_id);
+                        let global = self
+                            .make_string_llvm_global(&s, Some(&format!("type_name_{}", *type_id)))
+                            .unwrap();
+                        global.as_pointer_value().as_basic_value_enum()
+                    } else {
+                        self.codegen_static_value_as_code(*schema_value_id)?
+                    };
+                    self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
                     self.builder.build_unconditional_branch(finish_block).unwrap();
                     cases.push((type_id_int_value, my_block));
                 }
@@ -3771,14 +3778,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
         let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
         let is_reference_type = maybe_reference_type.is_some();
-        // nocommit: What do we do about mutable global memory
-        // with this new 'function' approach? When do we run the function.
-        // We have to run it at startup, which sucks.
-        //
-        // Ok, we'll disallow complex initializers for mutable
-        // globals. If you want that, you use Pointer/NULL and
-        // initialize it yourself
-        //
+
         if is_llvm_const_representable(&self.k1.static_values, initial_static_value_id) {
             let initialized_basic_value =
                 self.codegen_static_value_as_const(initial_static_value_id)?;
@@ -3803,7 +3803,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         } else {
             if !global.is_static {
                 return failf!(
-                    global.span, 
+                    global.span,
                     "Value is too complex to use as initializer for a mutable global, because I'll never run any code at startup behind your back: {}",
                     self.k1.static_value_to_string(initial_static_value_id)
                 );
@@ -3813,7 +3813,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let global_type = self.codegen_type(global.ty)?;
             let value_k1_llvm_type = match maybe_reference_type {
                 None => &global_type,
-                Some(_) => &global_type.expect_reference().pointee_type
+                Some(_) => &global_type.expect_reference().pointee_type,
             };
             let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
             let function = self.llvm_module.add_function(&name, fn_type, None);

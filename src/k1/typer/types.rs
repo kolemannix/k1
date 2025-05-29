@@ -8,7 +8,7 @@ use crate::typer::scopes::*;
 use crate::parse::Identifier;
 use crate::parse::{ParsedId, ParsedTypeDefnId};
 
-use crate::{impl_copy_if_small, nz_u32_id, typer::*, SV4};
+use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
 nz_u32_id!(TypeId);
 
@@ -334,6 +334,7 @@ impl FunctionType {
 #[derive(Debug, Clone)]
 pub struct RecursiveReference {
     pub root_type_id: TypeId,
+    pub type_args: SV4<TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -558,11 +559,11 @@ impl std::hash::Hash for Type {
                 variant.payload.hash(state);
             }
             // Inherently unique as well
-            Type::Generic(gen) => {
+            Type::Generic(generic) => {
                 "gen".hash(state);
-                gen.inner.hash(state);
-                gen.params.index().hash(state);
-                gen.params.len().hash(state);
+                generic.inner.hash(state);
+                generic.params.index().hash(state);
+                generic.params.len().hash(state);
             }
             Type::Function(fun) => {
                 "fun".hash(state);
@@ -655,11 +656,7 @@ impl Type {
     pub fn as_buffer_instance(&self) -> Option<&GenericInstanceInfo> {
         if let Type::Struct(s) = self {
             s.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == BUFFER_TYPE_ID {
-                    Some(spec_info)
-                } else {
-                    None
-                }
+                if spec_info.generic_parent == BUFFER_TYPE_ID { Some(spec_info) } else { None }
             })
         } else {
             None
@@ -1054,8 +1051,8 @@ impl Types {
             }
             _ => {
                 *typ = type_value.clone();
-                // nocommit: I forgot to insert this. Can we have a
-                // single place for 'set type'? Ugh
+                // FIXME: Adding a type is a mess, since we have all these places to update
+                // and we have to do it differently if we're resolving vs adding new.
                 self.existing_types_mapping.insert(type_value, unresolved_type_id);
 
                 let variable_counts = self.count_type_variables(unresolved_type_id);
@@ -1359,7 +1356,16 @@ impl Types {
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => self.count_type_variables(co.function_type),
             Type::Unresolved(_) => EMPTY,
-            Type::RecursiveReference(_rr) => EMPTY,
+            Type::RecursiveReference(rr) => {
+                if let Type::Generic(generic) = self.get(rr.root_type_id) {
+                    TypeVariableInfo {
+                        inference_variable_count: 0,
+                        type_parameter_count: generic.params.len() as u32,
+                    }
+                } else {
+                    EMPTY
+                }
+            }
         }
     }
 

@@ -288,13 +288,13 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Never => w.write_str("never"),
-            Type::Generic(gen) => {
+            Type::Generic(generic) => {
                 let defn_info = defn_info.unwrap();
                 w.write_str(self.ident_str(defn_info.name))?;
                 w.write_str("[")?;
-                for (idx, param) in self.named_types.get_slice(gen.params).iter().enumerate() {
+                for (idx, param) in self.named_types.get_slice(generic.params).iter().enumerate() {
                     w.write_str(self.ident_str(param.name))?;
-                    let last = idx == gen.params.len() - 1;
+                    let last = idx == generic.params.len() - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
@@ -302,7 +302,7 @@ impl TypedProgram {
                 w.write_str("]")?;
                 if expand {
                     w.write_str("(")?;
-                    self.display_type_id(gen.inner, expand, w)?;
+                    self.display_type_id(generic.inner, expand, w)?;
                     w.write_str(")")?;
                 }
                 Ok(())
@@ -337,8 +337,23 @@ impl TypedProgram {
             }
             Type::Unresolved(_u) => w.write_str("<unresolved>"),
             Type::RecursiveReference(rr) => {
+                w.write_str("recurse~>(")?;
                 let info = self.types.get_defn_info(rr.root_type_id).unwrap();
                 w.write_str(self.ident_str(info.name))?;
+                if let Type::Generic(generic) = self.types.get(rr.root_type_id) {
+                    w.write_str("[")?;
+                    for (idx, param) in
+                        self.named_types.get_slice(generic.params).iter().enumerate()
+                    {
+                        w.write_str(self.ident_str(param.name))?;
+                        let last = idx == generic.params.len() - 1;
+                        if !last {
+                            w.write_str(", ")?;
+                        }
+                    }
+                    w.write_str("]")?;
+                }
+                w.write_str(")")?;
                 Ok(())
             }
         }

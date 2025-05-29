@@ -11,7 +11,7 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 use k1_types::{CompilerMessageLevel, K1Buffer, K1SourceLocation};
 use log::debug;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 use crate::{
     compiler::WordSize,
@@ -21,16 +21,16 @@ use crate::{
     parse::{Identifier, StringId},
     pool::SliceHandle,
     typer::{
-        self, make_fail_span,
-        types::{
-            FloatType, IntegerType, Type, TypeId, TypedEnumVariant, Types, BOOL_TYPE_ID,
-            CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID,
-            POINTER_TYPE_ID, STRING_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
-        },
-        BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
+        self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum, StaticStruct, StaticValue,
         StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue,
         TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr, VariableId,
+        make_fail_span,
+        types::{
+            BOOL_TYPE_ID, CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, FloatType, I32_TYPE_ID,
+            I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeId,
+            TypedEnumVariant, Types, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
+        },
     },
 };
 
@@ -73,8 +73,10 @@ pub mod k1_types {
         ///# Safety
         /// Really make sure its a char buffer
         pub unsafe fn to_str<'a>(self) -> &'a str {
-            let slice = self.to_slice();
-            std::str::from_utf8(slice).unwrap()
+            unsafe {
+                let slice = self.to_slice();
+                std::str::from_utf8(slice).unwrap()
+            }
         }
     }
 }
@@ -1407,26 +1409,10 @@ fn execute_intrinsic(
     intrinsic_type: IntrinsicOperation,
 ) -> TyperResult<VmResult> {
     match intrinsic_type {
-        IntrinsicOperation::SizeOf => {
-            //nocommit move to typer
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            let layout = m.types.get_layout(type_id);
-            let size_bytes = layout.size as u64;
-            Ok(Value::Int(TypedIntValue::UWord64(size_bytes)).into())
-        }
-        IntrinsicOperation::SizeOfStride => {
-            //nocommit move to typer
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            let layout = m.types.get_layout(type_id);
-            let stride_bytes = layout.stride() as u64;
-            Ok(Value::Int(TypedIntValue::UWord64(stride_bytes)).into())
-        }
-        IntrinsicOperation::AlignOf => {
-            //nocommit move to typer
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            let layout = m.types.get_layout(type_id);
-            let align_bytes = layout.align as u64;
-            Ok(Value::Int(TypedIntValue::UWord64(align_bytes)).into())
+        IntrinsicOperation::SizeOf
+        | IntrinsicOperation::SizeOfStride
+        | IntrinsicOperation::AlignOf => {
+            unreachable!("Handled by typer phase")
         }
         IntrinsicOperation::Zeroed => {
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
@@ -1469,21 +1455,34 @@ fn execute_intrinsic(
             Ok(VmResult::Value(value))
         }
         IntrinsicOperation::TypeId => {
-            //nocommit move to typer
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            Ok(Value::from(type_id.as_u32() as u64).into())
+            unreachable!("Handled by typer phase")
         }
         IntrinsicOperation::TypeName => {
-            //nocommit move to typer
-            let type_id = m.named_types.get_nth(type_args, 0).type_id;
-            let name = m.type_id_to_string(type_id);
-            let data_allocation = vm.static_stack.push_slice(name.as_bytes());
-            let k1_string = K1Buffer { len: name.len(), data: data_allocation };
-            let string_struct_on_stack = vm.stack.push_t(k1_string);
-            Ok(Value::Agg { type_id: STRING_TYPE_ID, ptr: string_struct_on_stack }.into())
+            let TypedIntValue::U64(type_id_value) =
+                execute_expr_return_exit!(vm, m, args[0])?.expect_int()
+            else {
+                m.ice_with_span("Malformed TypeName call", vm.eval_span)
+            };
+            let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_value as u32).unwrap());
+            let string_id = *m.type_names.get(&type_id).unwrap();
+            let value = string_id_to_value(vm, StackSelection::CallStackCurrent, m, string_id);
+            Ok(VmResult::Value(value))
         }
         IntrinsicOperation::TypeSchema => {
-            unreachable!("Operation TypeSchema is handled in typer")
+            let TypedIntValue::U64(type_id_value) =
+                execute_expr_return_exit!(vm, m, args[0])?.expect_int()
+            else {
+                m.ice_with_span("Malformed TypeSchema call", vm.eval_span)
+            };
+            let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_value as u32).unwrap());
+            let schema_static_value_id = *m.type_schemas.get(&type_id).unwrap();
+            let value = static_value_to_vm_value(
+                vm,
+                StackSelection::CallStackCurrent,
+                m,
+                schema_static_value_id,
+            )?;
+            Ok(VmResult::Value(value))
         }
         IntrinsicOperation::CompilerSourceLocation => {
             unreachable!("Operation CompilerSourceLocation is handled in typer")
@@ -1718,7 +1717,7 @@ pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
 
 #[inline]
 unsafe fn copy_aggregate(dst: *mut u8, src: *const u8, size: usize) {
-    dst.copy_from_nonoverlapping(src, size)
+    unsafe { dst.copy_from_nonoverlapping(src, size) }
 }
 
 pub fn load_value_copying_aggs(
@@ -2289,7 +2288,11 @@ pub fn vm_value_to_static_value(
             if value == 0 {
                 StaticValue::NullPointer
             } else {
-                return failf!(span, "Raw pointer ({:0x}) cannot be converted to a static value; use a Reference or a plain value type instead.", value);
+                return failf!(
+                    span,
+                    "Raw pointer ({:0x}) cannot be converted to a static value; use a Reference or a plain value type instead.",
+                    value
+                );
             }
         }
         Value::Reference { .. } => {
@@ -2556,6 +2559,7 @@ fn make_stack_trace(m: &TypedProgram, stack: &Stack) -> String {
     s
 }
 
+#[track_caller]
 fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
     eprintln!("{}", make_stack_trace(m, &vm.stack));
     m.ice_with_span(msg, vm.eval_span)
