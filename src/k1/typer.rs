@@ -3106,7 +3106,7 @@ impl TypedProgram {
                     }
                 };
 
-                let mut variants = Vec::with_capacity(variant_count);
+                let mut variants = EcoVec::with_capacity(variant_count);
                 for (index, v) in e.variants.iter().enumerate() {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
@@ -3613,16 +3613,17 @@ impl TypedProgram {
                     .collect();
                 let inner = gen_type.inner;
 
-                eprintln!("Instantiating Generic rhs {}", self.type_id_to_string_ext(inner, true));
+                debug!("Instantiating Generic rhs {}", self.type_id_to_string_ext(inner, true));
                 let specialized_type = self.substitute_in_type_ext(
                     inner,
                     &substitution_pairs,
                     Some(generic_type),
                     Some(defn_id),
                 );
-                if specialized_type == inner {
-                    panic!("Instantiate should never no-op")
-                }
+                //For working on recursive generics
+                //if specialized_type == inner {
+                //    panic!("Instantiate should never no-op")
+                //}
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
                         &self.types.get_generic_instance_info(specialized_type).unwrap().type_args;
@@ -3780,7 +3781,7 @@ impl TypedProgram {
                 let defn_id_to_use = defn_info_to_attach.or(original_defn_info);
                 let original_instance_info = e.generic_instance_info.clone();
                 let original_explicit_tag_type = e.tag_type;
-                for variant in new_variants.iter_mut() {
+                for variant in new_variants.make_mut().iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
                         self.substitute_in_type(payload_type_id, substitution_pairs)
                     });
@@ -9909,6 +9910,8 @@ impl TypedProgram {
                 // Same for typeName
                 if !self.types.get_contained_type_variable_counts(type_id).is_abstract() {
                     let _schema_value_id = self.get_type_schema(type_id, span);
+                }
+                if !self.type_names.contains_key(&type_id) {
                     let name_str = self.type_id_to_string(type_id);
                     let name_id = self.ast.strings.intern(name_str);
                     self.type_names.insert(type_id, name_id);
@@ -13569,12 +13572,14 @@ impl TypedProgram {
         }
 
         let type_schema =
-            self.types.get(self.types.builtins.types_type_schema.unwrap()).expect_enum();
+            self.types.get(self.types.builtins.types_type_schema.unwrap()).expect_enum().clone();
         let int_kind = self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
-        let get_schema_variant =
-            |name: &str| type_schema.variant_by_name(get_ident!(self, name)).unwrap();
-        let word_enum = self.types.get(get_schema_variant("Word").payload.unwrap()).expect_enum();
-        let make_variant = |name: &str, payload: Option<StaticValueId>| {
+        let get_schema_variant = |ident| type_schema.variant_by_name(ident).unwrap();
+        let word_enum = self
+            .types
+            .get(get_schema_variant(get_ident!(self, "Word")).payload.unwrap())
+            .expect_enum();
+        let make_variant = |name: Identifier, payload: Option<StaticValueId>| {
             let v = get_schema_variant(name);
             StaticEnum {
                 variant_type_id: v.my_type_id,
@@ -13606,21 +13611,22 @@ impl TypedProgram {
         };
         let typ = self.types.get_no_follow(type_id);
         let static_enum = match typ {
-            Type::Unit => make_variant("Unit", None),
-            Type::Char => make_variant("Char", None),
-            Type::Bool => make_variant("Bool", None),
-            Type::Pointer => make_variant("Pointer", None),
+            Type::Unit => make_variant(get_ident!(self, "Unit"), None),
+            Type::Char => make_variant(get_ident!(self, "Char"), None),
+            Type::Bool => make_variant(get_ident!(self, "Bool"), None),
+            Type::Pointer => make_variant(get_ident!(self, "Pointer"), None),
             Type::Integer(integer_type) => {
                 let int_kind_enum_value = make_int_kind(*integer_type);
 
                 let payload_value_id =
                     self.static_values.add(StaticValue::Enum(int_kind_enum_value));
-                let enum_value = make_variant("Int", Some(payload_value_id));
+                let enum_value = make_variant(get_ident!(self, "Int"), Some(payload_value_id));
                 enum_value
             }
             Type::Float(_float_type) => todo!("float schema"),
             Type::Struct(struct_type) => {
-                let struct_schema_payload_type_id = get_schema_variant("Struct").payload.unwrap();
+                let struct_schema_payload_type_id =
+                    get_schema_variant(get_ident!(self, "Struct")).payload.unwrap();
                 // { fields: Buffer[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
@@ -13633,17 +13639,22 @@ impl TypedProgram {
                     .as_buffer_instance()
                     .unwrap()
                     .type_args[0];
-                // { name: string, typeId: u64, offset: uword }
+                // { name: string), typeId: u64, offset: uword }
                 // let struct_schema_field_item_struct =
                 //     self.types.get(struct_schema_field_item_struct_type_id).expect_struct();
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: EcoVec<StaticValueId> =
                     EcoVec::with_capacity(struct_type.fields.len());
-                for (index, f) in struct_type.fields.iter().enumerate() {
+                for (index, f) in struct_type.fields.clone().iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
                     let name_string_value_id =
                         self.static_values.add(StaticValue::String(name_string_id));
                     let type_id_u32 = f.type_id.as_u32();
+
+                    // We need to ensure that any and all typeIds that we share with the user
+                    // are available at runtime, by calling these functions at least once.
+                    self.register_type_metainfo(f.type_id, span);
+
                     let type_id_value_id = self
                         .static_values
                         .add(StaticValue::Integer(TypedIntValue::U64(type_id_u32 as u64)));
@@ -13672,23 +13683,28 @@ impl TypedProgram {
                     fields: eco_vec![buffer],
                     type_id: struct_schema_payload_type_id,
                 }));
-                make_variant("Struct", Some(payload))
+                make_variant(get_ident!(self, "Struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_schema_payload_type_id =
-                    get_schema_variant("Reference").payload.unwrap();
+                    get_schema_variant(get_ident!(self, "Reference")).payload.unwrap();
                 // { innerTypeId: u64 }
                 let inner_type_id_value_id = self.static_values.add(StaticValue::Integer(
                     TypedIntValue::U64(reference_type.inner_type.as_u32() as u64),
                 ));
+                // We need to ensure that any and all typeIds that we share with the user
+                // are available at runtime, by calling these functions at least once.
+                self.register_type_metainfo(reference_type.inner_type, span);
+
                 let payload_struct_id = self.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id: reference_schema_payload_type_id,
                     fields: eco_vec![inner_type_id_value_id],
                 }));
-                make_variant("Reference", Some(payload_struct_id))
+                make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
             }
             Type::Enum(typed_enum) => {
-                let either_payload_type_id = get_schema_variant("Either").payload.unwrap();
+                let either_payload_type_id =
+                    get_schema_variant(get_ident!(self, "Either")).payload.unwrap();
                 let either_payload_struct = self.types.get(either_payload_type_id).expect_struct();
                 let variants_buffer_type_id = either_payload_struct.fields[1].type_id;
                 let variant_struct_type_id =
@@ -13698,7 +13714,7 @@ impl TypedProgram {
                 let tag_type_value_id =
                     self.static_values.add(StaticValue::Enum(make_int_kind(*tag_type)));
                 let mut variant_values = EcoVec::with_capacity(typed_enum.variants.len());
-                for variant in &typed_enum.variants {
+                for variant in typed_enum.variants.clone().iter() {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
                     let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
@@ -13717,10 +13733,14 @@ impl TypedProgram {
                             payload_info_opt_type_id,
                             None,
                         ),
-                        Some(type_id) => {
+                        Some(payload_type_id) => {
                             let type_id_value_id = self.static_values.add(StaticValue::Integer(
-                                TypedIntValue::U64(type_id.as_u32() as u64),
+                                TypedIntValue::U64(payload_type_id.as_u32() as u64),
                             ));
+                            // We need to ensure that any and all typeIds that we share with the user
+                            // are available at runtime, by calling these functions at least once.
+                            self.register_type_metainfo(payload_type_id, span);
+
                             let payload_offset_value_id = self.static_values.add(
                                 StaticValue::Integer(TypedIntValue::UWord64(
                                     self.types.enum_variant_payload_offset_bytes(variant) as u64,
@@ -13759,48 +13779,55 @@ impl TypedProgram {
                     type_id: either_payload_type_id,
                     fields: eco_vec![tag_type_value_id, variants_buffer_value_id],
                 }));
-                make_variant("Either", Some(payload_value_id))
+                make_variant(get_ident!(self, "Either"), Some(payload_value_id))
             }
             Type::EnumVariant(variant) => {
                 // {
                 //   enumTypeId: u64,
                 //   name: string,
                 // }
-                let variant_payload_type_id = get_schema_variant("Variant").payload.unwrap();
+                let variant_payload_type_id =
+                    get_schema_variant(get_ident!(self, "Variant")).payload.unwrap();
+                let variant_name = variant.name;
                 let enum_type_id_value_id = self.static_values.add(StaticValue::Integer(
                     TypedIntValue::U64(variant.enum_type_id.as_u32() as u64),
                 ));
+
+                // We need to ensure that any and all typeIds that we share with the user
+                // are available at runtime, by calling these functions at least once.
+                self.register_type_metainfo(variant.enum_type_id, span);
+
                 let name_string_id =
-                    self.ast.strings.intern(self.ast.idents.get_name(variant.name));
+                    self.ast.strings.intern(self.ast.idents.get_name(variant_name));
                 let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
                 let payload_value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id: variant_payload_type_id,
                     fields: eco_vec![enum_type_id_value_id, name_value_id],
                 }));
-                make_variant("Variant", Some(payload_value_id))
+                make_variant(get_ident!(self, "Variant"), Some(payload_value_id))
             }
             Type::Function(_function_type) => make_variant(
-                "Other",
+                get_ident!(self, "Other"),
                 Some(
                     self.static_values
                         .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
                 ),
             ),
             Type::Lambda(_lambda_type) => make_variant(
-                "Other",
+                get_ident!(self, "Other"),
                 Some(
                     self.static_values
                         .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
                 ),
             ),
             Type::LambdaObject(_lambda_object_type) => make_variant(
-                "Other",
+                get_ident!(self, "Other"),
                 Some(
                     self.static_values
                         .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
                 ),
             ),
-            Type::Never => make_variant("Never", None),
+            Type::Never => make_variant(get_ident!(self, "Never"), None),
             Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
@@ -13814,6 +13841,23 @@ impl TypedProgram {
         let static_value_id = self.static_values.add(StaticValue::Enum(static_enum));
         self.type_schemas.insert(type_id, static_value_id);
         static_value_id
+    }
+
+    fn get_type_name(&mut self, type_id: TypeId) -> StringId {
+        if let Some(existing) = self.type_names.get(&type_id) {
+            return *existing;
+        }
+
+        let type_string = self.type_id_to_string(type_id);
+        let string_id = self.ast.strings.intern(type_string);
+
+        self.type_names.insert(type_id, string_id);
+        string_id
+    }
+
+    fn register_type_metainfo(&mut self, type_id: TypeId, span: SpanId) {
+        let _ = self.get_type_schema(type_id, span);
+        let _ = self.get_type_name(type_id);
     }
 
     fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {

@@ -874,7 +874,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .as_type(),
                 })
             };
-        eprintln!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
+        debug!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
         let mut no_cache = false;
         // Might be better to switch to the debug context span, rather than the type's span
         let span = self.k1.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
@@ -1698,10 +1698,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        eprintln!(
-            "codegen_static_value_as_const {}",
-            self.k1.static_value_to_string(static_value_id)
-        );
+        debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
 
         if !is_llvm_const_representable(&self.k1.static_values, static_value_id) {
             self.k1.ice(
@@ -1832,7 +1829,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        eprintln!("codegen_static_value {}", self.k1.static_value_to_string(static_value_id));
+        debug!("codegen_static_value_as_code {}", self.k1.static_value_to_string(static_value_id));
 
         // Invariant: If the value is_statically_representable, we cannot emit any instructions
         //            since this value could be used in a global context
@@ -3292,25 +3289,45 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
                 // TODO: sort the schemas so codegen more predictably
-                for (type_id, schema_value_id) in self.k1.type_schemas.iter() {
-                    let my_block =
-                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                    self.builder.position_at_end(my_block);
-                    let type_id_int_value =
-                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+                if is_type_name {
+                    for (type_id, string_id) in self
+                        .k1
+                        .type_names
+                        .iter()
+                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                    {
+                        let my_block =
+                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                        self.builder.position_at_end(my_block);
+                        let type_id_int_value =
+                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
-                    let value = if is_type_name {
-                        let s = self.k1.type_id_to_string(*type_id);
-                        let global = self
-                            .make_string_llvm_global(&s, Some(&format!("type_name_{}", *type_id)))
-                            .unwrap();
-                        global.as_pointer_value().as_basic_value_enum()
-                    } else {
-                        self.codegen_static_value_as_code(*schema_value_id)?
-                    };
-                    self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
-                    self.builder.build_unconditional_branch(finish_block).unwrap();
-                    cases.push((type_id_int_value, my_block));
+                        let value = {
+                            let global_value = self.codegen_string_id(*string_id)?;
+                            global_value.as_pointer_value().as_basic_value_enum()
+                        };
+                        self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
+                        self.builder.build_unconditional_branch(finish_block).unwrap();
+                        cases.push((type_id_int_value, my_block));
+                    }
+                } else {
+                    for (type_id, schema_value_id) in self
+                        .k1
+                        .type_schemas
+                        .iter()
+                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                    {
+                        let my_block =
+                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                        self.builder.position_at_end(my_block);
+                        let type_id_int_value =
+                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+
+                        let value = self.codegen_static_value_as_code(*schema_value_id)?;
+                        self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
+                        self.builder.build_unconditional_branch(finish_block).unwrap();
+                        cases.push((type_id_int_value, my_block));
+                    }
                 }
                 self.builder.position_at_end(entry_block);
                 let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();

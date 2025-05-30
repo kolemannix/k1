@@ -152,7 +152,7 @@ pub struct TypedEnumVariant {
 
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
-    pub variants: Vec<TypedEnumVariant>,
+    pub variants: EcoVec<TypedEnumVariant>,
     pub defn_id: Option<TypeDefnId>,
     /// Populated for specialized copies of generic enums, contains provenance info
     pub generic_instance_info: Option<GenericInstanceInfo>,
@@ -366,7 +366,7 @@ pub struct FunctionValue {
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
-static_assert_size!(Type, 80);
+static_assert_size!(Type, 72);
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit,
@@ -977,7 +977,7 @@ impl Types {
 
         let defn_id = e.defn_id;
 
-        for v in e.variants.iter_mut() {
+        for v in e.variants.make_mut().iter_mut() {
             let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
             v.my_type_id = variant_id;
             v.enum_type_id = enum_type_id;
