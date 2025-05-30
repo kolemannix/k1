@@ -1,6 +1,5 @@
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
-use log::debug;
 use smallvec::SmallVec;
 
 use std::{
