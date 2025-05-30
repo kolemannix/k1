@@ -121,13 +121,12 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] we link with other deps w/ the linker
 
 ## Project: VM for `static` execution
-- [ ] vm: static execution
+- [x] vm: static execution
   - [x] Order-independence for globals used in static code
   - [x] Static Buffers (slices)
     - [x] vm -> static
     - [x] static -> vm
     - [x] LLVM gen
-  - [ ] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
   - [x] reference to reference cast
   - [x] Introduce uword/iword types
   - [x] Switch to a single stack
@@ -140,6 +139,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
   - [x] All tests passing in #static mode
+  - [ ] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
   - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 

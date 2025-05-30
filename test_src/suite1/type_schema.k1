@@ -81,7 +81,8 @@ ns type_schema {
   }
 }
 
-fn main(): i32 {
+fn main(): i32 { 
   type_schema/test();
+  #static type_schema/test();
   0
 }
