@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<ExitCode> {
 
     match compiler_thread.join() {
         Ok(result) => result,
-        Err(e) => Ok(ExitCode::FAILURE),
+        Err(_) => Ok(ExitCode::FAILURE),
     }
 }
 

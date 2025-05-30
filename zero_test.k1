@@ -1,6 +1,8 @@
+ns zero_test;
+
 use core/mem/zeroed
 
-fn main(): i32 {
+fn test(): unit {
   let v8: u8 = zeroed();
   let v16: u16 = zeroed();
   let v32: u32 = zeroed();
@@ -24,6 +26,11 @@ fn main(): i32 {
   assertEquals(vword, 0);
   assertEquals(vuword, 0);
 
+  let vf32: f32 = zeroed();
+  assert(vf32 == 0.0);
+  let vf64: f64 = zeroed();
+  assert(vf64 == 0.0);
+
   let* i32Ptr: i32* = zeroed();
   assertEquals(i32Ptr.*, 0);
   let i32Null: i32* = zeroed();
@@ -39,8 +46,11 @@ fn main(): i32 {
 
 
   let point = #static {
-    ({ x: 1, y: 2 })
+    ({ x: 1, y: #static 2 })
   };
+  #static "I should have enough alt vms for this";
+  #static "I should have enough alt vms for this too";
   assertEquals(point.x, 1);
-  0
+
+  ()
 }

@@ -2447,8 +2447,14 @@ pub struct TypedProgram {
     pub named_types: Pool<NameAndType, NameAndTypeId>,
     pub function_type_params: Pool<FunctionTypeParam, FunctionTypeParamId>,
 
-    // Can execute code statically
+    // Can execute code statically; primary VM; gets 'rented out'
+    // from the TypedProgram to avoid borrow bullshit
     pub vm: Box<Option<vm::Vm>>,
+    // Used to execute static code if it is first encountered
+    // while excuting the surrounding code statically
+    // It should be run in its own environment; as it should
+    // not see any of the values from its environment.
+    pub alt_vms: Vec<vm::Vm>,
 }
 
 impl TypedProgram {
@@ -2494,6 +2500,8 @@ impl TypedProgram {
         {
             panic!("Root namespace was taken, hmmmm");
         }
+        let vm_stack_size = crate::MEGABYTE * 10;
+        let vm_static_stack_size = crate::MEGABYTE;
         TypedProgram {
             modules: Pool::with_capacity("modules", 32),
             functions: Pool::with_capacity("typed_functions", 8192),
@@ -2532,7 +2540,11 @@ impl TypedProgram {
             buffers: TypedModuleBuffers { name_builder: String::with_capacity(4096) },
             named_types: Pool::with_capacity("named_types", 8192),
             function_type_params: Pool::with_capacity("function_type_params", 4096),
-            vm: Box::new(Some(vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE))),
+            vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
+            alt_vms: vec![
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+            ],
         }
     }
 
@@ -4492,7 +4504,34 @@ impl TypedProgram {
         is_inference: bool,
         no_reset: bool,
     ) -> TyperResult<(TypeId, StaticValueId)> {
-        let mut vm = std::mem::take(&mut self.vm).unwrap();
+        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
+            None => {
+                let span = self.ast.get_expr_span(parsed_expr);
+                let maybe_alt = self.alt_vms.pop();
+                let (source, location) = self.get_span_location(span);
+                let alt_vm = match maybe_alt {
+                    None => {
+                        eprintln!(
+                            "Had to make a new alt VM at {}:{}. We should make them faster to make (virtual alloc?)",
+                            source.filename,
+                            location.line_number()
+                        );
+                        let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+                        new_vm
+                    }
+                    Some(alt_vm) => {
+                        eprintln!(
+                            "We have PLENTY of VMs! at {}:{}",
+                            source.filename,
+                            location.line_number()
+                        );
+                        alt_vm
+                    }
+                };
+                (alt_vm, true)
+            }
+            Some(vm) => (vm, false),
+        };
         let res = self.execute_static_expr_with_vm(
             &mut vm,
             parsed_expr,
@@ -4502,7 +4541,12 @@ impl TypedProgram {
             is_inference,
             no_reset,
         );
-        *self.vm = Some(vm);
+        if !used_alt {
+            *self.vm = Some(vm);
+        } else {
+            eprintln!("Restoring an alt VM");
+            self.alt_vms.push(vm)
+        }
         res
     }
 
