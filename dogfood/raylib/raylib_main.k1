@@ -21,6 +21,7 @@ ns raylib {
 
 let static RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
 let static GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
+
 fn main(): i32 {
     let context allocMode = core/mem/AllocMode/TEMP;
     raylib/InitWindow(800, 450, "raylib [core] example - basic window".toCString().ptr);

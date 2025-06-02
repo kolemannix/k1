@@ -7,8 +7,8 @@ use crate::nz_u32_id;
 use crate::parse::FileId;
 use crate::pool::Pool;
 use crate::typer::BinaryOpKind;
-use log::trace;
 use TokenKind as K;
+use log::trace;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token { span: SpanId::NONE, kind: TokenKind::Eof, flags: 0 };

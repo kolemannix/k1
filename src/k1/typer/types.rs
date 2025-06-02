@@ -683,6 +683,7 @@ impl Type {
             _ => None,
         }
     }
+    #[track_caller]
     pub fn expect_reference(&self) -> &ReferenceType {
         match self {
             Type::Reference(r) => r,
@@ -690,6 +691,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_enum_mut(&mut self) -> &mut TypedEnum {
         match self {
             Type::Enum(e) => e,
@@ -697,13 +699,15 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_enum_variant(&self) -> &TypedEnumVariant {
         match self {
             Type::EnumVariant(v) => v,
-            _ => panic!("expected enum variant type"),
+            _ => panic!("expected enum variant on {}", self.kind_name()),
         }
     }
 
+    #[track_caller]
     pub fn expect_enum_variant_mut(&mut self) -> &mut TypedEnumVariant {
         match self {
             Type::EnumVariant(v) => v,
@@ -718,6 +722,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_enum(&self) -> &TypedEnum {
         match self {
             Type::Enum(e) => e,
@@ -725,6 +730,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_optional(&self) -> OptionalType {
         self.as_opt_instance().unwrap()
     }
@@ -736,6 +742,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_struct(&self) -> &StructType {
         match self {
             Type::Struct(struc) => struc,
@@ -743,6 +750,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_generic(&self) -> &GenericType {
         match self {
             Type::Generic(g) => g,
@@ -750,6 +758,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_integer(&self) -> &IntegerType {
         match self {
             Type::Integer(int) => int,
@@ -764,6 +773,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_recursive_reference(&mut self) -> &mut RecursiveReference {
         match self {
             Type::RecursiveReference(r) => r,
@@ -812,6 +822,7 @@ impl Type {
         }
     }
 
+    #[track_caller]
     pub fn expect_function(&self) -> &FunctionType {
         match self {
             Type::Function(f) => f,

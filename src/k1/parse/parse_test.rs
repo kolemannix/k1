@@ -26,7 +26,7 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
     let ns_id = parse::init_module(module_name, ast);
-    let parser = Parser::make(module_name, ns_id, ast, token_vec, file_id);
+    let parser = Parser::make_for_file(module_name, ns_id, ast, token_vec, file_id);
     parser
 }
 

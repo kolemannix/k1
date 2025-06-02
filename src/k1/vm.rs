@@ -21,11 +21,11 @@ use crate::{
     parse::{Identifier, StringId},
     pool::SliceHandle,
     typer::{
-        self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
-        MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum, StaticStruct, StaticValue,
-        StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue,
-        TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr, VariableId,
-        make_fail_span,
+        self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
+        MatchingCondition, MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum,
+        StaticStruct, StaticValue, StaticValueId, ToEmit, TypedExpr, TypedExprId, TypedFloatValue,
+        TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult,
+        VariableExpr, VariableId, make_fail_span,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, FloatType, I32_TYPE_ID,
             I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeId,
@@ -100,6 +100,8 @@ pub struct Vm {
     stack: Stack,
     eval_depth: AtomicU64,
     eval_span: SpanId,
+
+    pub emits: Vec<CodeEmission>,
 }
 
 impl Vm {
@@ -111,6 +113,7 @@ impl Vm {
 
         self.eval_depth.store(0, Ordering::Relaxed);
         self.eval_span = SpanId::NONE;
+        self.emits.clear();
     }
 
     pub fn make(stack_size_bytes: usize, static_size_bytes: usize) -> Self {
@@ -122,6 +125,7 @@ impl Vm {
             stack,
             eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
+            emits: Vec::with_capacity(128),
         }
     }
 
@@ -959,6 +963,18 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, *value_id)?;
             Ok(vm_value.into())
         }
+        TypedExpr::Emit(e) => match e.to_emit {
+            ToEmit::Parsed(parsed_expr_id) => {
+                vm.emits.push(CodeEmission::Parsed(parsed_expr_id));
+                Ok(VmResult::UNIT)
+            }
+            ToEmit::String(typed_string_expr) => {
+                let string_value = execute_expr_return_exit!(vm, m, typed_string_expr)?;
+                let string_id = value_to_string_id(m, string_value);
+                vm.emits.push(CodeEmission::String(string_id));
+                Ok(VmResult::UNIT)
+            }
+        },
     };
     if cfg!(debug_assertions) {
         if let Ok(VmResult::Value(v)) = result {
@@ -1475,12 +1491,17 @@ fn execute_intrinsic(
                 m.ice_with_span("Malformed TypeSchema call", vm.eval_span)
             };
             let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_value as u32).unwrap());
-            let schema_static_value_id = *m.type_schemas.get(&type_id).unwrap();
+            let Some(schema_static_value_id) = m.type_schemas.get(&type_id) else {
+                m.ice_with_span(
+                    format!("Missing type schema: {}", m.type_id_to_string(type_id)),
+                    vm.eval_span,
+                )
+            };
             let value = static_value_to_vm_value(
                 vm,
                 StackSelection::CallStackCurrent,
                 m,
-                schema_static_value_id,
+                *schema_static_value_id,
             )?;
             Ok(VmResult::Value(value))
         }

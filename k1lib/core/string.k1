@@ -179,16 +179,6 @@ ns string {
 
 }
 
-impl Equals for string {
-  fn equals(self: string, that: string): bool {
-    self.buffer == that.buffer
-  }
-}
-
-impl Print for string {
-  fn printTo[W: Writer](self: string, w: W*): unit { w.writeString(self) }
-}
-
 impl Show for string {
   fn show(self: string): string { self }
 }

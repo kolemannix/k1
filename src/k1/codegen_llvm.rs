@@ -2385,6 +2385,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let static_value = self.codegen_static_value_as_code(*value_id)?;
                 Ok(static_value.into())
             }
+            TypedExpr::Emit(_) => Ok(self.builtin_types.unit_basic().into()),
             e @ TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {e:?}")
             }
@@ -3296,6 +3297,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .iter()
                         .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
                     {
+                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
+                        {
+                            // No point re-ifying types that don't exist at runtime
+                            // like type parameters
+                            continue;
+                        }
                         let my_block =
                             self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
                         self.builder.position_at_end(my_block);
@@ -3317,6 +3324,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .iter()
                         .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
                     {
+                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
+                        {
+                            // No point re-ifying types that don't exist at runtime
+                            // like type parameters
+                            continue;
+                        }
                         let my_block =
                             self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
                         self.builder.position_at_end(my_block);

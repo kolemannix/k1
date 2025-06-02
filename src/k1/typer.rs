@@ -26,14 +26,14 @@ use scopes::*;
 use types::*;
 
 use crate::compiler::{CompilerConfig, WordSize};
-use crate::lex::{SpanId, Spans, TokenKind};
+use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId, NamespacedIdentifier,
-    NumericWidth, ParsedAbilityId, ParsedAbilityImplId, ParsedBlockKind, ParsedCallArg,
-    ParsedDirective, ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr,
-    ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedStmtId,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedWhileExpr, Sources, StringId, StructValueField,
+    self, FileId, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId,
+    NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
+    ParsedBlockKind, ParsedCallArg, ParsedDirective, ParsedExprId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
+    ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
+    ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources, StringId, StructValueField,
 };
 use crate::parse::{
     Identifier, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
@@ -163,11 +163,16 @@ pub struct InferenceContext {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct StaticExecContext {
+    allow_emit: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
     is_inference: bool,
-    is_static: bool,
+    static_ctx: Option<StaticExecContext>,
     global_defn_name: Option<Identifier>,
 }
 impl EvalExprContext {
@@ -176,9 +181,13 @@ impl EvalExprContext {
             scope_id,
             expected_type_id: None,
             is_inference: false,
-            is_static: false,
+            static_ctx: None,
             global_defn_name: None,
         }
+    }
+
+    pub fn is_static(&self) -> bool {
+        self.static_ctx.is_some()
     }
 
     pub fn with_expected_type(&self, expected_element_type: Option<TypeId>) -> EvalExprContext {
@@ -186,7 +195,7 @@ impl EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: expected_element_type,
             is_inference: self.is_inference,
-            is_static: false,
+            static_ctx: self.static_ctx,
             global_defn_name: None,
         }
     }
@@ -196,7 +205,7 @@ impl EvalExprContext {
             scope_id: self.scope_id,
             expected_type_id: None,
             is_inference: self.is_inference,
-            is_static: false,
+            static_ctx: self.static_ctx,
             global_defn_name: None,
         }
     }
@@ -207,10 +216,6 @@ impl EvalExprContext {
 
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
-    }
-
-    fn with_static(&self, arg: bool) -> EvalExprContext {
-        EvalExprContext { is_static: arg, ..*self }
     }
 }
 
@@ -1697,6 +1702,19 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ToEmit {
+    Parsed(ParsedStmtId),
+    /// Expression evaluating to a string, to be parsed, if executed at compile-time
+    String(TypedExprId),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TypedEmit {
+    pub to_emit: ToEmit,
+    pub span: SpanId,
+}
+
 // TODO(perf): TypedExpr is very big
 static_assert_size!(TypedExpr, 88);
 #[derive(Debug, Clone)]
@@ -1752,6 +1770,7 @@ pub enum TypedExpr {
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
     StaticValue(StaticValueId, TypeId, SpanId),
+    Emit(TypedEmit),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1791,6 +1810,7 @@ impl TypedExpr {
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
             TypedExpr::StaticValue(_, type_id, _) => *type_id,
+            TypedExpr::Emit(_) => UNIT_TYPE_ID,
         }
     }
 
@@ -1824,6 +1844,7 @@ impl TypedExpr {
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
             TypedExpr::StaticValue(_, _, span) => *span,
+            TypedExpr::Emit(e) => e.span,
         }
     }
 
@@ -1981,6 +2002,7 @@ pub struct Namespace {
     pub companion_type_id: Option<TypeId>,
     pub parent_id: Option<NamespaceId>,
     pub owner_module: Option<ModuleId>,
+    pub parsed_id: ParsedId,
 }
 
 pub struct Namespaces {
@@ -2221,7 +2243,7 @@ pub fn write_error(
     level: ErrorLevel,
     span: SpanId,
 ) -> std::io::Result<()> {
-    parse::write_source_location(w, spans, sources, span, level)?;
+    parse::write_source_location(w, spans, sources, span, level, 6)?;
     writeln!(w, "\t{}\n", message.as_ref())?;
     Ok(())
 }
@@ -2371,6 +2393,20 @@ pub struct AbilityImplHandle {
 
 pub struct TypedModuleBuffers {
     name_builder: String,
+    emitted_code: String,
+    emit_lexer_tokens: Vec<lex::Token>,
+}
+
+#[derive(Clone, Copy)]
+pub enum CodeEmission {
+    Parsed(crate::parse::ParsedStmtId),
+    String(StringId),
+}
+
+pub struct VmExecuteResult {
+    pub type_id: TypeId,
+    pub static_value_id: StaticValueId,
+    pub emits: Vec<CodeEmission>,
 }
 
 nz_u32_id!(ModuleId);
@@ -2490,6 +2526,7 @@ impl TypedProgram {
             companion_type_id: None,
             parent_id: None,
             owner_module: None,
+            parsed_id: ParsedId::Namespace(ParsedNamespaceId::ONE),
         };
         let root_namespace_id = namespaces.add(root_namespace);
         scopes
@@ -2537,7 +2574,11 @@ impl TypedProgram {
                 substitutions_vec: Vec::with_capacity(256),
             },
             type_defn_stack: Vec::with_capacity(8),
-            buffers: TypedModuleBuffers { name_builder: String::with_capacity(4096) },
+            buffers: TypedModuleBuffers {
+                name_builder: String::with_capacity(4096),
+                emitted_code: String::with_capacity(8192),
+                emit_lexer_tokens: Vec::new(),
+            },
             named_types: Pool::with_capacity("named_types", 8192),
             function_type_params: Pool::with_capacity("function_type_params", 4096),
             vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
@@ -2599,7 +2640,7 @@ impl TypedProgram {
                 }
                 Ok(_) => {}
             };
-            let mut parser = parse::Parser::make(
+            let mut parser = parse::Parser::make_for_file(
                 module_name,
                 parsed_namespace_id,
                 &mut self.ast,
@@ -2685,7 +2726,7 @@ impl TypedProgram {
     }
 
     pub fn get_string(&self, string_id: StringId) -> &str {
-        self.ast.strings.get_name(string_id)
+        self.ast.strings.get_string(string_id)
     }
 
     pub fn name_of_type(&self, type_id: TypeId) -> &str {
@@ -2950,9 +2991,6 @@ impl TypedProgram {
                 specializations: FxHashMap::with_capacity(16),
             };
             self.types.resolve_unresolved(my_type_id, Type::Generic(gen_type));
-            // Update some info of the RHS
-            let rhs_counts = self.types.get_contained_type_variable_counts(rhs_type_id);
-            eprintln!("The generic's rhs has {} type params", rhs_counts.type_parameter_count);
             my_type_id
         } else {
             my_type_id
@@ -3913,7 +3951,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
     ) -> TyperResult<Option<ModuleManifest>> {
-        let namespace = self.ast.get_namespace(parsed_namespace_id);
+        let namespace = self.ast.namespaces.get(parsed_namespace_id);
         let Some(manifest_function) = namespace
             .definitions
             .iter()
@@ -3924,16 +3962,18 @@ impl TypedProgram {
         };
         let manifest_global = self.ast.get_global(manifest_function).clone();
         let type_id = self.eval_type_expr(manifest_global.ty, Scopes::ROOT_SCOPE_ID)?;
-        let (_, manifest_value_id) = self.execute_static_expr(
+        let manifest_result = self.execute_static_expr(
             manifest_global.value_expr,
             Some(type_id),
             Scopes::ROOT_SCOPE_ID,
             None,
             false,
             false,
+            StaticExecContext { allow_emit: false },
         )?;
 
-        let StaticValue::Struct(value) = self.static_values.get(manifest_value_id) else {
+        let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
+        else {
             panic!("Expected module manifest to be a struct")
         };
         let kind = self.static_values.get(value.fields[0]).as_enum().unwrap();
@@ -4423,18 +4463,12 @@ impl TypedProgram {
                     );
                 };
                 let global = self.globals.get(global_id);
-                if !global.is_static {
-                    return failf!(
-                        v.span,
-                        "Variable cannot be evaluated at compile time: {}",
-                        self.ident_str(typed_variable.name)
-                    );
+                if let Some(value) = global.initial_value {
+                    let value = self.static_values.get(value).clone();
+                    Ok(Some(self.static_values.add(value)))
+                } else {
+                    Ok(None)
                 }
-                let Some(value) = global.initial_value else {
-                    self.ice_with_span("global body is missing", v.span)
-                };
-                let value = self.static_values.get(value).clone();
-                Ok(Some(self.static_values.add(value)))
             }
             _ => Ok(None),
         }
@@ -4449,7 +4483,8 @@ impl TypedProgram {
         global_name: Option<Identifier>,
         is_inference: bool,
         no_reset: bool,
-    ) -> TyperResult<(TypeId, StaticValueId)> {
+        static_ctx: StaticExecContext,
+    ) -> TyperResult<VmExecuteResult> {
         if is_inference {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
@@ -4460,15 +4495,24 @@ impl TypedProgram {
             scope_id,
             expected_type_id,
             is_inference,
-            is_static: true,
+            static_ctx: Some(static_ctx),
             global_defn_name: global_name,
         };
 
         let expr = self.eval_expr(parsed_expr, eval_ctx)?;
+        //eprintln!(
+        //    "executed '{}' with vm and eval_ctx.static: {:?}",
+        //    self.expr_to_string(expr),
+        //    &eval_ctx.static_ctx
+        //);
         let type_id = self.exprs.get(expr).get_type();
 
-        if let Some(shortcut) = self.eval_trivial_static_expr(expr, scope_id)? {
-            return Ok((type_id, shortcut));
+        if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, scope_id)? {
+            return Ok(VmExecuteResult {
+                type_id,
+                static_value_id: shortcut_value_id,
+                emits: vec![],
+            });
         }
 
         let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
@@ -4489,10 +4533,12 @@ impl TypedProgram {
         // Horrible borrow hack again
         let static_value_id = vm::vm_value_to_static_value(self, vm, value, span)?;
 
+        let emits = vm.emits.clone();
+
         if !no_reset {
             vm.reset();
         }
-        Ok((type_id, static_value_id))
+        Ok(VmExecuteResult { type_id, static_value_id, emits })
     }
 
     fn execute_static_expr(
@@ -4503,7 +4549,8 @@ impl TypedProgram {
         global_name: Option<Identifier>,
         is_inference: bool,
         no_reset: bool,
-    ) -> TyperResult<(TypeId, StaticValueId)> {
+        static_ctx: StaticExecContext,
+    ) -> TyperResult<VmExecuteResult> {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let span = self.ast.get_expr_span(parsed_expr);
@@ -4540,6 +4587,7 @@ impl TypedProgram {
             global_name,
             is_inference,
             no_reset,
+            static_ctx,
         );
         if !used_alt {
             *self.vm = Some(vm);
@@ -4555,15 +4603,18 @@ impl TypedProgram {
         cond: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<bool> {
-        let (_, condition_value) = self.execute_static_expr(
+        let vm_cond_result = self.execute_static_expr(
             cond,
             Some(BOOL_TYPE_ID),
             ctx.scope_id,
             None,
             ctx.is_inference,
             false,
+            StaticExecContext { allow_emit: false },
         )?;
-        let StaticValue::Boolean(condition_bool) = self.static_values.get(condition_value) else {
+        let StaticValue::Boolean(condition_bool) =
+            self.static_values.get(vm_cond_result.static_value_id)
+        else {
             let cond_span = self.ast.get_expr_span(cond);
             return failf!(cond_span, "Condition is not a boolean");
         };
@@ -4640,7 +4691,7 @@ impl TypedProgram {
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
 
-        let (_, static_value_id) = match vm_to_use {
+        let vm_result = match vm_to_use {
             None => self.execute_static_expr(
                 value_expr_id,
                 Some(type_to_check),
@@ -4648,6 +4699,7 @@ impl TypedProgram {
                 Some(global_name),
                 false,
                 false,
+                StaticExecContext { allow_emit: false },
             ),
             Some(vm) => self.execute_static_expr_with_vm(
                 vm,
@@ -4657,12 +4709,13 @@ impl TypedProgram {
                 Some(global_name),
                 false,
                 true,
+                StaticExecContext { allow_emit: false },
             ),
         }?;
 
         if let Err(msg) = self.check_types(
             type_to_check,
-            self.static_values.get(static_value_id).get_type(),
+            self.static_values.get(vm_result.static_value_id).get_type(),
             scope_id,
         ) {
             return failf!(
@@ -4673,7 +4726,7 @@ impl TypedProgram {
             );
         }
 
-        self.globals.get_mut(global_id).initial_value = Some(static_value_id);
+        self.globals.get_mut(global_id).initial_value = Some(vm_result.static_value_id);
 
         Ok(())
     }
@@ -5917,24 +5970,7 @@ impl TypedProgram {
         });
         let should_compile = match conditional_compile_expr {
             None => true,
-            Some(condition) => {
-                let (_, static_value) = self_.execute_static_expr(
-                    condition,
-                    Some(BOOL_TYPE_ID),
-                    ctx.scope_id,
-                    None,
-                    ctx.is_inference,
-                    false,
-                )?;
-                let typed_condition =
-                    self_.static_values.get(static_value).as_boolean().ok_or_else(|| {
-                        errf!(
-                            self_.ast.exprs.get_span(condition),
-                            "Condition must be a compile-time-known boolean"
-                        )
-                    })?;
-                typed_condition
-            }
+            Some(condition) => self_.execute_static_bool(condition, ctx)?,
         };
         if !should_compile {
             eprintln!("#if was false; yeeting in a unit for now");
@@ -6249,9 +6285,6 @@ impl TypedProgram {
                 Ok(res)
             }
             ParsedExpr::Builtin(span) => {
-                if !ctx.is_static {
-                    return failf!(*span, "All the builtins should currently be comptime");
-                }
                 let Some(defn_name) = ctx.global_defn_name else {
                     return failf!(*span, "builtin can only be used as a top-level expression");
                 };
@@ -6286,17 +6319,134 @@ impl TypedProgram {
                 let base_expr = stat.base_expr;
 
                 let expected_type_id = ctx.expected_type_id;
-                let (type_id, static_value_id) = self.execute_static_expr(
+                let vm_result = self.execute_static_expr(
                     base_expr,
                     expected_type_id,
                     ctx.scope_id,
                     None,
                     ctx.is_inference,
                     false,
+                    StaticExecContext { allow_emit: true },
                 )?;
-                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, type_id, span)))
+
+                let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
+                    vm_result.static_value_id,
+                    vm_result.type_id,
+                    span,
+                ));
+                if !vm_result.emits.is_empty() {
+                    // First, we write the emitted code to a text buffer, parsed or string
+                    let mut content = std::mem::take(&mut self.buffers.emitted_code);
+                    content.push_str("{\n");
+                    for emit in vm_result.emits.iter() {
+                        match emit {
+                            CodeEmission::Parsed(parsed_stmt_id) => {
+                                let parsed_stmt_span = self.ast.get_stmt_span(*parsed_stmt_id);
+                                let span_content = self.ast.get_span_content(parsed_stmt_span);
+                                eprintln!("content of parsed span is: {}", span_content);
+                                content.push_str(span_content)
+                            }
+                            CodeEmission::String(string_id) => {
+                                content.push_str(self.ast.strings.get_string(*string_id));
+                            }
+                        }
+                        content.push_str(";\n");
+                    }
+                    content.push('}');
+                    eprintln!("Emitted content:\n{content}");
+                    let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
+                    let origin_file = self.ast.spans.get(span).file_id;
+                    let origin_source = self.ast.sources.get_source(origin_file);
+                    let source_for_emission =
+                        self.ast.sources.add_source(crate::parse::Source::make(
+                            0,
+                            origin_source.directory.clone(),
+                            generated_filename,
+                            content.clone(),
+                        ));
+
+                    let parsed_block_result =
+                        self.parse_ad_hoc_block(source_for_emission, &content);
+                    content.clear();
+                    self.buffers.emitted_code = content;
+                    let parsed_block = parsed_block_result?;
+                    let mut typed_block = self.eval_block(&parsed_block, ctx, false)?;
+                    eprintln!("Emitted compiled block:\n{}", self.block_to_string(&typed_block));
+                    self.add_expr_id_to_block(&mut typed_block, static_value_expr);
+
+                    Ok(self.exprs.add(TypedExpr::Block(typed_block)))
+                } else {
+                    Ok(static_value_expr)
+                }
+            }
+            ParsedExpr::Emit(emit) => {
+                if ctx.static_ctx.is_some_and(|sctx| !sctx.allow_emit) {
+                    return failf!(
+                        emit.span,
+                        "#emit can only be used from explicit `#static` blocks"
+                    );
+                }
+                // Emit is a special expression that, when invoked statically from
+                // a location L, causes the emitted code to be placed at L upon
+                // static execution completion.
+                // At runtime, the #emit expressions simply produce a unit value.
+                let span = emit.span;
+
+                // nocommit: Better syntax than #emitstring!
+                let to_emit = match emit.emitted {
+                    parse::ParsedEmitKind::String(parsed_expr_id) => {
+                        let expr = self.eval_expr(parsed_expr_id, ctx)?;
+                        if let Err(msg) = self.check_types(
+                            STRING_TYPE_ID,
+                            self.exprs.get(expr).get_type(),
+                            ctx.scope_id,
+                        ) {
+                            return failf!(span, "Emission must be string: {msg}");
+                        }
+                        ToEmit::String(expr)
+                    }
+                    parse::ParsedEmitKind::Code(parsed_stmt_id) => ToEmit::Parsed(parsed_stmt_id),
+                };
+                Ok(self.exprs.add(TypedExpr::Emit(TypedEmit { to_emit, span })))
             }
         }
+    }
+
+    fn parse_ad_hoc_block(&mut self, file_id: FileId, code_str: &str) -> TyperResult<ParsedBlock> {
+        let module = self.modules.get(self.module_in_progress.unwrap());
+        let parsed_namespace_id =
+            self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
+        // nocommit: Make a file for each static emission, that way we can print the entire
+        let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
+        // nocommit Re-use buffer
+        let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
+        // nocommit: Preserve the location of the #emitstring call instead
+        if let Err(e) = lexer.run(&mut tokens) {
+            let e = ParseError::Lex(e);
+            parse::print_error(&self.ast, &e);
+            tokens.clear();
+            return failf!(e.span(), "Failed to lex code emitted from here");
+        };
+
+        let mut p = crate::parse::Parser::make_for_file(
+            module.name,
+            parsed_namespace_id,
+            &mut self.ast,
+            &tokens,
+            file_id,
+        );
+
+        let result = match p.expect_block(ParsedBlockKind::LexicalBlock) {
+            Err(e) => {
+                failf!(e.span(), "Failed to parse your emitted code: {}", e)
+            }
+            Ok(parsed_block) => Ok(parsed_block),
+        };
+
+        tokens.clear();
+        self.buffers.emit_lexer_tokens = tokens;
+
+        result
     }
 
     fn eval_anonymous_struct(
@@ -6817,6 +6967,7 @@ impl TypedProgram {
             TypedExpr::FunctionToLambdaObject(_) => {}
             TypedExpr::PendingCapture(_) => {}
             TypedExpr::StaticValue(_, _, _) => {}
+            TypedExpr::Emit(_) => {}
         };
         None
     }
@@ -6948,7 +7099,9 @@ impl TypedProgram {
                 let block = parse::ParsedBlock {
                     span: other_expr.get_span(),
                     kind: ParsedBlockKind::FunctionBody,
-                    stmts: vec![self.ast.stmts.add(parse::ParsedStmt::LoneExpression(lambda_body))],
+                    stmts: eco_vec![
+                        self.ast.stmts.add(parse::ParsedStmt::LoneExpression(lambda_body))
+                    ],
                 };
                 block
             }
@@ -8054,7 +8207,7 @@ impl TypedProgram {
         )
     }
 
-    fn eval_comptime_if_expr(
+    fn eval_static_if_expr(
         &mut self,
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
@@ -8080,8 +8233,8 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        if if_expr.is_condition_compile_time {
-            return self.eval_comptime_if_expr(if_expr, ctx);
+        if if_expr.is_static {
+            return self.eval_static_if_expr(if_expr, ctx);
         }
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
@@ -8879,9 +9032,6 @@ impl TypedProgram {
                 todo!("implement continue")
             }
             "testCompile" => {
-                if ctx.is_static {
-                    return failf!(call_span, "testCompile(...) cannot be used in static context");
-                }
                 if fn_call.args.len() != 1 {
                     return failf!(call_span, "testCompile takes one argument");
                 }
@@ -9014,11 +9164,8 @@ impl TypedProgram {
         );
 
         // FIXME: ability call resolution is pretty expensive, to scan all in-scope abilities before we try regular
-        // functions. I think we should try functions first. Even if we do so, it may be worth
-        // maintaining an index of function names -> ability, then if we hit, just ensure its in scope.
-        //
-        // Real functions should also take priority logically,
-        // more concrete thing > more abstract thing
+        // functions. it may be worth maintaining an index of function names -> ability,
+        // then if we hit, just ensure its in scope.
         let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
             .iter()
             .find_map(|ability_id| self.get_ability(*ability_id).find_function_by_name(fn_name))
@@ -9948,18 +10095,11 @@ impl TypedProgram {
                 let type_id = type_arg.type_id;
                 let type_id_u64 = type_arg.type_id.as_u32() as u64;
 
-                // We generate a schema for every concrete type for which a typeId is requested
+                // We generate a schema for every type for which a typeId is requested
                 // This guarantees that we have it available at runtime when typeSchema is
                 // called
                 // Same for typeName
-                if !self.types.get_contained_type_variable_counts(type_id).is_abstract() {
-                    let _schema_value_id = self.get_type_schema(type_id, span);
-                }
-                if !self.type_names.contains_key(&type_id) {
-                    let name_str = self.type_id_to_string(type_id);
-                    let name_id = self.ast.strings.intern(name_str);
-                    self.type_names.insert(type_id, name_id);
-                }
+                self.register_type_metainfo(type_id, span);
 
                 let int_expr = TypedExpr::Integer(TypedIntegerExpr {
                     value: TypedIntValue::U64(type_id_u64),
@@ -11007,6 +11147,7 @@ impl TypedProgram {
             .expect(
                 "specialize_function_body wants a normal specialization or a blanket impl defn",
             );
+        //eprintln!("specialize function {}", self.function_id_to_string(parent_function, true));
         let parent_function = self.get_function(parent_function);
         debug_assert!(parent_function.body_block.is_some());
         debug_assert!(specialized_function.body_block.is_none());
@@ -11828,13 +11969,10 @@ impl TypedProgram {
     ) -> TyperResult<Option<FunctionId>> {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
-        // TODO(perf): clone of ParsedFunction
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         if let Some(condition_expr) = parsed_function.condition {
-            let condition_value = self.execute_static_bool(
-                condition_expr,
-                EvalExprContext::make(parent_scope_id).with_static(true),
-            )?;
+            let condition_value =
+                self.execute_static_bool(condition_expr, EvalExprContext::make(parent_scope_id))?;
             if !condition_value {
                 return Ok(None);
             }
@@ -12374,6 +12512,7 @@ impl TypedProgram {
             companion_type_id: None,
             parent_id: Some(parent_namespace_id),
             owner_module: Some(self.module_in_progress.unwrap()),
+            parsed_id: ParsedId::Ability(parsed_ability_id),
         };
         let namespace_id = self.namespaces.add(ability_namespace);
         let ns_added =
@@ -12883,7 +13022,7 @@ impl TypedProgram {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
         for &parsed_definition_id in
-            self.ast.get_namespace(parsed_namespace_id).definitions.clone().iter()
+            self.ast.namespaces.get(parsed_namespace_id).definitions.clone().iter()
         {
             if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
                 if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
@@ -12958,7 +13097,7 @@ impl TypedProgram {
         let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(*namespace_id);
         let namespace_scope_id = namespace.scope_id;
-        let parsed_namespace = self.ast.get_namespace(parsed_namespace_id);
+        let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
 
         for parsed_definition_id in parsed_namespace.definitions.clone().iter() {
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
@@ -12980,7 +13119,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
     ) -> TyperResult<()> {
-        let parsed_namespace = self.ast.get_namespace(parsed_namespace_id);
+        let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(namespace_id);
         let namespace_scope_id = namespace.scope_id;
@@ -12994,7 +13133,7 @@ impl TypedProgram {
         &mut self,
         ast_namespace_id: ParsedNamespaceId,
     ) -> TyperResult<NamespaceId> {
-        let ast_namespace = self.ast.get_namespace(ast_namespace_id).clone();
+        let ast_namespace = self.ast.namespaces.get(ast_namespace_id).clone();
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
         for defn in &ast_namespace.definitions {
@@ -13047,7 +13186,7 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope_id: ScopeId,
     ) -> TyperResult<NamespaceId> {
-        let ast_namespace = self.ast.get_namespace(parsed_namespace_id);
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name = ast_namespace.name;
 
         let ns_scope_id =
@@ -13081,6 +13220,7 @@ impl TypedProgram {
             companion_type_id: None,
             parent_id: Some(parent_ns_id),
             owner_module: Some(self.module_in_progress.unwrap()),
+            parsed_id: ParsedId::Namespace(parsed_namespace_id),
         };
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
@@ -13103,7 +13243,7 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
     ) -> TyperResult<NamespaceId> {
-        let ast_namespace = self.ast.get_namespace(parsed_namespace_id).clone();
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
 
         let namespace_id = if let Some(existing) =
             self.scopes.find_namespace(parent_scope, ast_namespace.name)
@@ -13229,7 +13369,7 @@ impl TypedProgram {
         // Everything else declaration phase
         eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
         for &parsed_definition_id in
-            self.ast.get_namespace(module_namespace_id).definitions.clone().iter()
+            self.ast.namespaces.get(module_namespace_id).definitions.clone().iter()
         {
             let result = self.eval_definition_declaration_phase(
                 parsed_definition_id,
@@ -13258,7 +13398,7 @@ impl TypedProgram {
         // Everything else evaluation phase
         eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
         for &parsed_definition_id in
-            self.ast.get_namespace(module_namespace_id).definitions.clone().iter()
+            self.ast.namespaces.get(module_namespace_id).definitions.clone().iter()
         {
             self.eval_definition_body_phase(parsed_definition_id, namespace_scope_id);
         }
@@ -13601,7 +13741,9 @@ impl TypedProgram {
             qident!(self, span, ["core"], "assertEquals"),
             qident!(self, span, ["core"], "assertMsg"),
             qident!(self, span, ["core"], "crash"),
+            qident!(self, span, ["_root"], "core"),
             qident!(self, span, ["core"], "mem"),
+            qident!(self, span, ["core"], "types"),
         ];
         for du in default_uses.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse { target: du, alias: None, span });
@@ -13850,30 +13992,18 @@ impl TypedProgram {
                 }));
                 make_variant(get_ident!(self, "Variant"), Some(payload_value_id))
             }
-            Type::Function(_function_type) => make_variant(
-                get_ident!(self, "Other"),
-                Some(
-                    self.static_values
-                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
-                ),
-            ),
-            Type::Lambda(_lambda_type) => make_variant(
-                get_ident!(self, "Other"),
-                Some(
-                    self.static_values
-                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
-                ),
-            ),
-            Type::LambdaObject(_lambda_object_type) => make_variant(
-                get_ident!(self, "Other"),
-                Some(
-                    self.static_values
-                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
-                ),
-            ),
             Type::Never => make_variant(get_ident!(self, "Never"), None),
+            Type::Function(_)
+            | Type::Lambda(_)
+            | Type::LambdaObject(_)
+            | Type::TypeParameter(_) => make_variant(
+                get_ident!(self, "Other"),
+                Some(
+                    self.static_values
+                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
+                ),
+            ),
             Type::Generic(_)
-            | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
             | Type::Unresolved(_)
@@ -14353,13 +14483,27 @@ impl TypedProgram {
     }
 
     pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) {
-        parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Info)
-            .unwrap()
+        parse::write_source_location(
+            w,
+            &self.ast.spans,
+            &self.ast.sources,
+            span,
+            ErrorLevel::Info,
+            6,
+        )
+        .unwrap()
     }
 
     pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId) {
-        parse::write_source_location(w, &self.ast.spans, &self.ast.sources, span, ErrorLevel::Error)
-            .unwrap()
+        parse::write_source_location(
+            w,
+            &self.ast.spans,
+            &self.ast.sources,
+            span,
+            ErrorLevel::Error,
+            6,
+        )
+        .unwrap()
     }
 
     #[track_caller]

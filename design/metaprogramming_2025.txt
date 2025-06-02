@@ -1,0 +1,30 @@
+deftype Todo = {
+  title: string, createdAt: Instant, userId: u64, description: string, starred: bool
+}
+
+// Type predicate:
+// Any function that takes only type parameters and returns a boolean AND has
+// a static body? But I could just call it statically instead...
+
+fn hasId[T](): bool {
+  let info = typeInfo[T]();
+  require info is .Struct(s) else { crash("Only structs are supported") };
+  for s.fields do {
+    if it.name == "id" or it.name == "ID" return true
+  };
+  false
+}
+
+// template-style min
+//macro min(a, b) { if a <= b a else b }
+//->
+//expand fn min(t1: code, t2: code): code {
+//  #code if t1 <= t2 t1 else t2
+//}
+
+fn main(): i32 {
+  let todo1 = {};
+  let print = debugPrinter[Todo]();
+  print(todo1);
+  0
+}

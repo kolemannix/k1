@@ -219,24 +219,6 @@ ns Buffer {
 
 }
 
-impl Equals for Buffer[u8] {
-  fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
-    self.equalsBits(other)
-  }
-}
-
-impl Equals for Buffer[char] {
-  fn equals(self: Buffer[char], other: Buffer[char]): bool {
-    self.equalsBits(other)
-  }
-}
-
-impl Equals for Buffer[int] {
-  fn equals(self: Buffer[int], other: Buffer[int]): bool {
-    self.equalsBits(other)
-  }
-}
-
 deftype BufferIterator[T] = {
   buf: Buffer[T],
   pos: uword

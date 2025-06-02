@@ -51,13 +51,10 @@ nz_u32_id!(ParsedGlobalId);
 pub struct ParsedAbilityId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedAbilityImplId(u32);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedNamespaceId(u32);
 
+nz_u32_id!(ParsedNamespaceId);
 nz_u32_id!(ParsedExprId);
-
 nz_u32_id!(ParsedStmtId);
-
 nz_u32_id!(ParsedTypeExprId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -132,6 +129,13 @@ impl ParsedId {
     pub fn as_global_id(&self) -> Option<ParsedGlobalId> {
         match self {
             ParsedId::Global(global_id) => Some(*global_id),
+            _ => None,
+        }
+    }
+
+    pub fn as_namespace_id(&self) -> Option<ParsedNamespaceId> {
+        match self {
+            ParsedId::Namespace(ns_id) => Some(*ns_id),
             _ => None,
         }
     }
@@ -257,7 +261,7 @@ impl StringPool {
     pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
         self.intern_pool.get(&s).map(StringId)
     }
-    pub fn get_name(&self, id: StringId) -> &str {
+    pub fn get_string(&self, id: StringId) -> &str {
         self.intern_pool.resolve(id.0).expect("failed to resolve string id")
     }
 }
@@ -784,6 +788,18 @@ pub struct ParsedStaticExpr {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone)]
+pub enum ParsedEmitKind {
+    Code(ParsedStmtId),
+    String(ParsedExprId),
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedEmit {
+    pub emitted: ParsedEmitKind,
+    pub span: SpanId,
+}
+
 static_assert_size!(ParsedExpr, 56);
 #[derive(Debug, Clone)]
 pub enum ParsedExpr {
@@ -866,6 +882,7 @@ pub enum ParsedExpr {
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
+    Emit(ParsedEmit),
 }
 
 impl ParsedExpr {
@@ -902,6 +919,7 @@ impl ParsedExpr {
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
             Self::Static(s) => s.span,
+            Self::Emit(e) => e.span,
         }
     }
 
@@ -1011,7 +1029,7 @@ pub struct ParsedIfExpr {
     pub cons: ParsedExprId,
     pub alt: Option<ParsedExprId>,
     pub span: SpanId,
-    pub is_condition_compile_time: bool,
+    pub is_static: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1075,7 +1093,7 @@ pub enum ParsedBlockKind {
 
 #[derive(Debug, Clone)]
 pub struct ParsedBlock {
-    pub stmts: Vec<ParsedStmtId>,
+    pub stmts: EcoVec<ParsedStmtId>,
     pub kind: ParsedBlockKind,
     pub span: SpanId,
 }
@@ -1236,6 +1254,7 @@ pub struct ParsedTypeParam {
 #[derive(Debug, Clone)]
 pub enum ParsedTypeConstraintExpr {
     Ability(ParsedAbilityExpr),
+    // Predicate(NamespaceIdentifier)
 }
 
 impl ParsedTypeConstraintExpr {
@@ -1256,17 +1275,17 @@ pub struct ParsedTypeConstraint {
 #[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub name: Identifier,
-    pub type_params: Vec<ParsedTypeParam>,
+    pub type_params: EcoVec<ParsedTypeParam>,
     // TODO(perf, efficient ast): Migrate params and context_params to a single SliceHandle
-    pub params: Vec<FnArgDef>,
-    pub context_params: Vec<FnArgDef>,
+    pub params: EcoVec<FnArgDef>,
+    pub context_params: EcoVec<FnArgDef>,
     pub ret_type: ParsedTypeExprId,
     pub block: Option<ParsedExprId>,
     pub signature_span: SpanId,
     pub span: SpanId,
     pub linkage: Linkage,
-    pub directives: Vec<ParsedDirective>,
-    pub additional_where_constraints: Vec<ParsedTypeConstraint>,
+    pub directives: EcoVec<ParsedDirective>,
+    pub additional_where_constraints: EcoVec<ParsedTypeConstraint>,
     pub condition: Option<ParsedExprId>,
     pub id: ParsedFunctionId,
 }
@@ -1397,7 +1416,7 @@ pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
     expressions: Pool<ParsedExpr, ParsedExprId>,
     type_hints: Pool<Option<ParsedTypeExprId>, ParsedExprId>,
-    directives: FxHashMap<ParsedExprId, Vec<ParsedDirective>>,
+    directives: FxHashMap<ParsedExprId, EcoVec<ParsedDirective>>,
 }
 impl ParsedExpressionPool {
     pub fn new(capacity: usize) -> Self {
@@ -1416,7 +1435,7 @@ impl ParsedExpressionPool {
         *self.type_hints.get(id)
     }
 
-    pub fn add_directives(&mut self, id: ParsedExprId, directives: Vec<ParsedDirective>) {
+    pub fn add_directives(&mut self, id: ParsedExprId, directives: EcoVec<ParsedDirective>) {
         self.directives.insert(id, directives);
     }
 
@@ -1501,10 +1520,11 @@ pub struct Sources {
 }
 
 impl Sources {
-    pub fn insert(&mut self, mut source: Source) {
+    pub fn add_source(&mut self, mut source: Source) -> FileId {
         let id = self.next_file_id();
         source.file_id = id;
         self.sources.push(source);
+        id
     }
 
     pub fn get_main(&self) -> &Source {
@@ -1550,7 +1570,7 @@ pub struct ParsedProgram {
     pub functions: Vec<ParsedFunction>,
     pub globals: Pool<ParsedGlobal, ParsedGlobalId>,
     pub type_defns: Vec<ParsedTypeDefn>,
-    pub namespaces: Vec<ParsedNamespace>,
+    pub namespaces: Pool<ParsedNamespace, ParsedNamespaceId>,
     pub abilities: Vec<ParsedAbility>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
@@ -1579,7 +1599,7 @@ impl ParsedProgram {
             functions: Vec::new(),
             globals: Pool::with_capacity("parsed_globals", 4096),
             type_defns: Vec::new(),
-            namespaces: Vec::new(),
+            namespaces: Pool::with_capacity("parsed_namespaces", 4096),
             abilities: Vec::new(),
             ability_impls: Vec::new(),
             sources: Sources::default(),
@@ -1618,18 +1638,11 @@ impl ParsedProgram {
         id
     }
 
-    pub fn get_namespace(&self, id: ParsedNamespaceId) -> &ParsedNamespace {
-        &self.namespaces[id.0 as usize]
-    }
-
-    pub fn get_namespace_mut(&mut self, id: ParsedNamespaceId) -> &mut ParsedNamespace {
-        &mut self.namespaces[id.0 as usize]
-    }
-
     pub fn add_namespace(&mut self, mut namespace: ParsedNamespace) -> ParsedNamespaceId {
-        let id = ParsedNamespaceId(self.namespaces.len() as u32);
+        let id = self.namespaces.next_id();
         namespace.id = id;
-        self.namespaces.push(namespace);
+        let real_id = self.namespaces.add(namespace);
+        debug_assert_eq!(real_id, id);
         id
     }
 
@@ -1704,7 +1717,7 @@ impl ParsedProgram {
     }
 
     pub fn get_root_namespace(&self) -> &ParsedNamespace {
-        &self.namespaces[0]
+        self.namespaces.get(ParsedNamespaceId::ONE)
     }
 
     pub fn get_expression_type_hint(&self, id: ParsedExprId) -> Option<ParsedTypeExprId> {
@@ -1820,6 +1833,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 &module.sources,
                 lex_error.span,
                 ErrorLevel::Error,
+                6,
             )
             .unwrap();
             eprintln!("{}", lex_error.message);
@@ -1845,6 +1859,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 &module.sources,
                 span,
                 ErrorLevel::Error,
+                6,
             )
             .unwrap();
             eprintln!();
@@ -1858,6 +1873,7 @@ pub fn write_source_location(
     sources: &Sources,
     span_id: SpanId,
     level: ErrorLevel,
+    context_lines: usize,
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
@@ -1866,7 +1882,6 @@ pub fn write_source_location(
         return Ok(());
     };
     use colored::*;
-    const CONTEXT_LINES: usize = 4;
 
     // If the span is longer than the line, just highlight the whole line
     let highlight_length =
@@ -1874,8 +1889,9 @@ pub fn write_source_location(
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let mut code = String::new();
-    for i in 0..CONTEXT_LINES {
-        let lookback_lines = CONTEXT_LINES as i32 - i as i32;
+    // nocommit: Look backward _and_ forward for context lines
+    for i in 0..context_lines {
+        let lookback_lines = context_lines as i32 - i as i32;
         let this_line_index = (line.line_index as i32) - lookback_lines;
         if this_line_index >= 0 {
             if let Some(this_line) = source.get_line(this_line_index as usize) {
@@ -1986,7 +2002,7 @@ pub fn init_module(module_name: Identifier, ast: &mut ParsedProgram) -> ParsedNa
         ast.add_namespace(ParsedNamespace {
             name,
             definitions: EcoVec::new(),
-            id: ParsedNamespaceId(0),
+            id: ParsedNamespaceId::ONE,
             span: SpanId::NONE,
         })
     } else {
@@ -1996,10 +2012,11 @@ pub fn init_module(module_name: Identifier, ast: &mut ParsedProgram) -> ParsedNa
     let module_namespace_id = ast.add_namespace(ParsedNamespace {
         name: module_name,
         definitions: eco_vec![],
-        id: ParsedNamespaceId(0),
+        id: root_namespace_id,
         span: SpanId::NONE,
     });
-    ast.get_namespace_mut(root_namespace_id)
+    ast.namespaces
+        .get_mut(root_namespace_id)
         .definitions
         .push(ParsedId::Namespace(module_namespace_id));
     module_namespace_id
@@ -2012,7 +2029,7 @@ pub fn parse_file(
     file_id: FileId,
     tokens: &[Token],
 ) -> ParseResult<()> {
-    let mut parser = Parser::make(module_name, module_namespace_id, ast, tokens, file_id);
+    let mut parser = Parser::make_for_file(module_name, module_namespace_id, ast, tokens, file_id);
     parser.parse_file();
     Ok(())
 }
@@ -2026,7 +2043,7 @@ pub struct Parser<'toks, 'module> {
 }
 
 impl<'toks, 'ast> Parser<'toks, 'ast> {
-    pub fn make(
+    pub fn make_for_file(
         module_name: Identifier,
         module_namespace_id: ParsedNamespaceId,
         ast: &'ast mut ParsedProgram,
@@ -2049,7 +2066,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             }
         }
 
-        self.ast.get_namespace_mut(self.module_namespace_id).definitions.extend(new_definitions);
+        self.ast.namespaces.get_mut(self.module_namespace_id).definitions.extend(new_definitions);
     }
 
     pub fn parse_definition(&mut self, terminator: TokenKind) -> ParseResult<Option<ParsedId>> {
@@ -2070,7 +2087,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else if let Some(global_id) = self.parse_global()? {
             self.expect_eat_token(K::Semicolon)?;
             Ok(Some(ParsedId::Global(global_id)))
-        } else if let Some(function_id) = self.parse_function()? {
+        } else if let Some(function_id) = self.parse_function(condition)? {
             Ok(Some(ParsedId::Function(function_id)))
         } else if let Some(type_defn_id) = self.parse_type_defn()? {
             Ok(Some(ParsedId::TypeDefn(type_defn_id)))
@@ -2333,7 +2350,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     pub fn add_expression_with_directives(
         &mut self,
         expression: ParsedExpr,
-        directives: Vec<ParsedDirective>,
+        directives: EcoVec<ParsedDirective>,
     ) -> ParsedExprId {
         let id = self.ast.exprs.add_expression(expression);
         self.ast.exprs.add_directives(id, directives);
@@ -2904,15 +2921,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(with_postfix))
     }
 
-    fn expect_block(&mut self, kind: ParsedBlockKind) -> ParseResult<ParsedBlock> {
+    pub fn expect_block(&mut self, kind: ParsedBlockKind) -> ParseResult<ParsedBlock> {
         Parser::expect("block", self.peek(), self.parse_block(kind))
     }
 
-    fn expect_expression(&mut self) -> ParseResult<ParsedExprId> {
+    pub fn expect_expression(&mut self) -> ParseResult<ParsedExprId> {
         Parser::expect("expression", self.peek(), self.parse_expression())
     }
 
-    fn parse_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
+    pub fn parse_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let Some(mut expr) = self.parse_expression_with_postfix_ops()? else {
             return Ok(None);
         };
@@ -3241,7 +3258,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::Hash {
             self.advance();
 
-            match self.peek().kind {
+            let maybe_directive = self.peek();
+            match maybe_directive.kind {
                 K::KeywordStatic => {
                     self.advance();
                     let base_expr = self.expect_expression()?;
@@ -3253,12 +3271,34 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         })),
                     ))
                 }
+                K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+                    let chars = self.token_chars(maybe_directive);
+                    match chars {
+                        "emit" | "emitstring" => {
+                            let emit_kind = if chars == "emit" {
+                                self.advance();
+                                let emitted_statement = self.expect_statement()?;
+                                ParsedEmitKind::Code(emitted_statement)
+                            } else {
+                                self.advance();
+                                let string_expr = self.expect_expression()?;
+                                ParsedEmitKind::String(string_expr)
+                            };
+                            let span = self.extend_to_here(first.span);
+                            Ok(Some(self.add_expression(ParsedExpr::Emit(ParsedEmit {
+                                emitted: emit_kind,
+                                span,
+                            }))))
+                        }
+                        _ => Err(error("Unknown directive following #", self.peek())),
+                    }
+                }
                 K::KeywordIf => {
                     let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-                    if_expr.is_condition_compile_time = true;
+                    if_expr.is_static = true;
                     Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
                 }
-                _ => Err(error_expected("static, or if, following #", self.peek())),
+                _ => Err(error("Unknown directive following #", self.peek())),
             }
         } else {
             // More expression types
@@ -3562,7 +3602,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let found_delim = self.maybe_consume_next(delim);
             if found_delim.is_none() {
                 break Err(error(
-                    format!("Expected delimeter '{delim}' while parsing {name}"),
+                    format!("Expected delimiter '{delim}' while parsing {name}"),
                     self.peek(),
                 ));
             }
@@ -3595,7 +3635,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             cons: consequent_expr,
             alt,
             span,
-            is_condition_compile_time: false,
+            is_static: false,
         };
         Ok(Some(if_expr))
     }
@@ -3613,8 +3653,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedWhileExpr { cond, body, span }))
     }
 
+    pub fn expect_statement(&mut self) -> ParseResult<ParsedStmtId> {
+        Parser::expect("statement", self.peek(), self.parse_statement())
+    }
+
     pub fn parse_statement(&mut self) -> ParseResult<Option<ParsedStmtId>> {
-        trace!("eat_statement {:?}", self.peek());
+        trace!("parse_statement {:?}", self.peek());
         if let Some(use_id) = self.parse_use()? {
             let span = self.ast.uses.get_use(use_id).span;
             Ok(Some(self.ast.stmts.add(ParsedStmt::Use(UseStmt { span, use_id }))))
@@ -3641,20 +3685,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_block(&mut self, kind: ParsedBlockKind) -> ParseResult<Option<ParsedBlock>> {
+    pub fn parse_block(&mut self, kind: ParsedBlockKind) -> ParseResult<Option<ParsedBlock>> {
         let Some(block_start) = self.maybe_consume_next(K::OpenBrace) else {
             return Ok(None);
         };
         let parse_statement =
             |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
-        let (block_statements, statements_span) = self.eat_delimited(
+        let mut stmts = eco_vec![];
+        let (statements_span, _) = self.eat_delimited_ext(
             "Block statements",
+            &mut stmts,
             K::Semicolon,
             &[K::CloseBrace],
             parse_statement,
         )?;
         let span = self.extend_span(block_start.span, statements_span);
-        Ok(Some(ParsedBlock { stmts: block_statements, kind, span }))
+        Ok(Some(ParsedBlock { stmts, kind, span }))
     }
 
     fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParam> {
@@ -3680,8 +3726,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     /// Directives look like this: @<directive kind: ident>(<directive arg>, ...)
-    fn parse_directives(&mut self) -> ParseResult<Vec<ParsedDirective>> {
-        let mut directives: Vec<ParsedDirective> = vec![];
+    fn parse_directives(&mut self) -> ParseResult<EcoVec<ParsedDirective>> {
+        let mut directives: EcoVec<ParsedDirective> = eco_vec![];
         while let Some(_at) = self.maybe_consume_next(K::At) {
             let directive = {
                 let kind_token = self.expect_eat_token(K::Ident)?;
@@ -3695,15 +3741,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(directives)
     }
 
-    fn parse_function(&mut self) -> ParseResult<Option<ParsedFunctionId>> {
+    fn parse_function(
+        &mut self,
+        preexisting_condition: Option<ParsedExprId>,
+    ) -> ParseResult<Option<ParsedFunctionId>> {
         trace!("parse_function");
         let directives = self.parse_directives()?;
-        let condition = if self.maybe_consume_next(K::Hash).is_some() {
-            self.expect_eat_token(K::KeywordIf)?;
-            let condition_expr = self.expect_expression()?;
-            Some(condition_expr)
-        } else {
-            None
+        let condition = match preexisting_condition {
+            None => {
+                if self.maybe_consume_next(K::Hash).is_some() {
+                    self.expect_eat_token(K::KeywordIf)?;
+                    let condition_expr = self.expect_expression()?;
+                    Some(condition_expr)
+                } else {
+                    None
+                }
+            }
+            Some(condition) => Some(condition),
         };
         let initial_pos = self.cursor_position();
         let is_intrinsic = self.maybe_consume_next(K::KeywordIntern).is_some();
@@ -3733,17 +3787,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
-        let type_arguments: Vec<ParsedTypeParam> =
+        let type_arguments: EcoVec<ParsedTypeParam> =
             if self.maybe_consume_next(K::OpenBracket).is_some() {
-                let (type_args, _type_arg_span) = self.eat_delimited(
+                let mut type_args = eco_vec![];
+                let _ = self.eat_delimited_ext(
                     "Type arguments",
+                    &mut type_args,
                     TokenKind::Comma,
                     &[TokenKind::CloseBracket],
                     |p| p.expect_type_param(),
                 )?;
                 type_args
             } else {
-                vec![]
+                eco_vec![]
             };
         let (params, params_span) = self.eat_fn_params()?;
         self.expect_eat_token(K::Colon)?;
@@ -3751,8 +3807,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let additional_type_constraints = if self.maybe_consume_next(K::KeywordWhere).is_some() {
             // FIXME(brittle parsing): Has to backtrack to un-consume the next token in the fn call;
             // the open brace
-            let (additional_type_constraints, _span) = self.eat_delimited(
+            let mut additional_type_constraints = eco_vec![];
+            let _ = self.eat_delimited_ext(
                 "Type variable constraints",
+                &mut additional_type_constraints,
                 K::Comma,
                 &[K::OpenBrace],
                 Parser::expect_named_type_constraint,
@@ -3760,7 +3818,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.tokens.retreat(); // Un-eat the close sentinel
             additional_type_constraints
         } else {
-            vec![]
+            eco_vec![]
         };
         let signature_span = self.extend_to_here(func_name.span);
         let block = self.parse_block(ParsedBlockKind::FunctionBody)?;
@@ -3858,7 +3916,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         self.expect_eat_token(K::OpenBrace)?;
         let mut functions = Vec::new();
-        while let Some(parsed_function) = self.parse_function()? {
+        while let Some(parsed_function) = self.parse_function(None)? {
             functions.push(parsed_function);
         }
         let close_token = self.expect_eat_token(K::CloseBrace)?;
@@ -3918,7 +3976,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let mut functions = Vec::with_capacity(2);
         self.expect_eat_token(K::OpenBrace)?;
 
-        while let Some(parsed_function) = self.parse_function()? {
+        while let Some(parsed_function) = self.parse_function(None)? {
             functions.push(parsed_function);
         }
 
@@ -4007,7 +4065,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let namespace_id = self.ast.add_namespace(ParsedNamespace {
             name,
             definitions,
-            id: ParsedNamespaceId(0),
+            id: ParsedNamespaceId::ONE,
             span,
         });
         Ok(Some(namespace_id))
@@ -4036,7 +4094,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 // Display
 impl ParsedProgram {
     fn get_string(&self, id: StringId) -> &str {
-        self.strings.get_name(id)
+        self.strings.get_string(id)
     }
 
     pub fn expr_id_to_string(&self, expr: ParsedExprId) -> String {
@@ -4172,6 +4230,21 @@ impl ParsedProgram {
             ParsedExpr::Static(stat) => {
                 w.write_str("#static ")?;
                 self.display_expr_id(stat.base_expr, w)?;
+                Ok(())
+            }
+            ParsedExpr::Emit(emit) => {
+                w.write_str("#emit")?;
+                match emit.emitted {
+                    ParsedEmitKind::Code(parsed_stmt_id) => {
+                        w.write_str("(code) ")?;
+                        self.display_stmt_id(w, parsed_stmt_id)?;
+                    }
+                    ParsedEmitKind::String(parsed_expr_id) => {
+                        w.write_str("(string) \"")?;
+                        self.display_expr_id(parsed_expr_id, w)?;
+                        w.write_char('"')?;
+                    }
+                }
                 Ok(())
             }
         }
@@ -4324,7 +4397,7 @@ pub fn lex_text(
     tokens: &mut Vec<Token>,
 ) -> ParseResult<()> {
     let file_id = source.file_id;
-    module.sources.insert(source);
+    module.sources.add_source(source);
     let text = &module.sources.get_source(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
@@ -4352,7 +4425,8 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
     let module_name = ast.idents.intern("test_module");
     let module_ns_id = init_module(module_name, &mut ast);
 
-    let mut parser = Parser::make(module_name, module_ns_id, &mut ast, &token_vec, file_id);
+    let mut parser =
+        Parser::make_for_file(module_name, module_ns_id, &mut ast, &token_vec, file_id);
     parser.parse_file();
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);
