@@ -1888,21 +1888,28 @@ pub fn write_source_location(
         if span.len as usize > line.content.len() { line.content.len() } else { span.len as usize };
     let thingies = "^".repeat(highlight_length);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
-    let mut code = String::new();
-    // nocommit: Look backward _and_ forward for context lines
-    for i in 0..context_lines {
-        let lookback_lines = context_lines as i32 - i as i32;
-        let this_line_index = (line.line_index as i32) - lookback_lines;
-        if this_line_index >= 0 {
-            if let Some(this_line) = source.get_line(this_line_index as usize) {
-                writeln!(&mut code, "    {}", &this_line.content).unwrap();
+    let line_start = line.line_index as i32 - context_lines as i32 / 2;
+    let line_end = line_start + context_lines as i32;
+    let red_arrow = "->".red();
+    for line_index in line_start..line_end {
+        if line_index >= 0 {
+            if let Some(this_line) = source.get_line(line_index as usize) {
+                if line_index == line.line_index as i32 {
+                    writeln!(
+                        w,
+                        "  {red_arrow}{}\n  {red_arrow}{spaces}{thingies}",
+                        &this_line.content
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(w, "    {}", &this_line.content).unwrap();
+                }
             }
         }
     }
-    write!(&mut code, "  ->{}\n  ->{spaces}{thingies}", &line.content).unwrap();
     writeln!(
         w,
-        "  {} at {}/{}:{}\n\n{code}",
+        "\n  {} at {}/{}:{}",
         match level {
             ErrorLevel::Error => "Error".red(),
             ErrorLevel::Warn => "Warning".yellow(),

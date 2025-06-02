@@ -2244,7 +2244,7 @@ pub fn write_error(
     span: SpanId,
 ) -> std::io::Result<()> {
     parse::write_source_location(w, spans, sources, span, level, 6)?;
-    writeln!(w, "\t{}\n", message.as_ref())?;
+    writeln!(w, "    |\n    |->  {}\n", message.as_ref())?;
     Ok(())
 }
 
@@ -7411,6 +7411,12 @@ impl TypedProgram {
                         }
                         Some(expected_bindings) => {
                             let this_pattern_bindings = pattern.all_bindings();
+                            if this_pattern_bindings.is_empty() && !expected_bindings.is_empty() {
+                                return failf!(
+                                    pattern.span_id(),
+                                    "Patterns in a multiple pattern arm must have the exact same bindings; but this one has none"
+                                );
+                            }
                             for (exp_binding, this_binding) in
                                 expected_bindings.iter().zip(this_pattern_bindings.iter())
                             {

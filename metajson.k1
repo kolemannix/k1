@@ -33,8 +33,7 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
       let tName = types/typeName(typeId);
       crash("Cannot yet create a JSON writer for either: \{tName}")
     },
-    // nocommit: Disallow bindings here
-    .Other(n) or _ -> {
+    _ -> {
       #emit w.writeString("\"other\"")
     }
   }
