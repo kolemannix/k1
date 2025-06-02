@@ -167,6 +167,37 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 }
 
 /////////////////////////////////
+// Impls that we want to have available early
+
+impl Equals for Buffer[u8] {
+  fn equals(self: Buffer[u8], other: Buffer[u8]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for Buffer[char] {
+  fn equals(self: Buffer[char], other: Buffer[char]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for Buffer[int] {
+  fn equals(self: Buffer[int], other: Buffer[int]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for string {
+  fn equals(self: string, that: string): bool {
+    self.buffer == that.buffer
+  }
+}
+
+impl Print for string {
+  fn printTo[W: Writer](self: string, w: W*): unit { w.writeString(self) }
+}
+
+/////////////////////////////////
 // Compiler builtins
 ns k1 {
   // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
@@ -177,7 +208,10 @@ ns k1 {
   let static DEBUG: bool = builtin;
 
   let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-  let static OS_MACOS: bool = OS == "macos";
+  // nocommit: We need builtin to be a lib,
+  // move this to 'core' so it has string equals and shit
+  let static OS_MACOS: bool = true;
+  // let static OS_MACOS: bool = OS == "macos";
   let static OS_POSIX: bool = OS == "macos" or OS == "linux";
 
   intern fn emitCompilerMessage(

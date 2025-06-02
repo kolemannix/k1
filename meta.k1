@@ -1,0 +1,65 @@
+use core/Writer
+use types/TypeSchema
+use types/typeSchema
+
+fn _writeJsonFromSchema(name: string, schema: TypeSchema): unit {
+  switch schema {
+    .Struct(s) -> {
+      #emit w.writeChar('{');
+      for f in s.fields do {
+        let fName = f.name;
+
+        let fieldLetName = "_\{name}\{fName}";
+        // Future API: staticCtx global 
+        // staticCtx.emitString()
+        // #emitstring [[let \{fieldLetName} = \{name}.\{fName}]];
+        #emitstring "let \{fieldLetName} = \{name}.\{fName}";
+        #emit w.writeChar('"');
+        #emitstring "w.writeString(\"\{fName}\")";
+        #emit w.writeString("\":");
+        
+        _writeJsonFromSchema(fieldLetName, typeSchema(f.typeId));
+        let last = itIndex == s.fields.len - 1;
+        if not last {
+          #emit w.writeString(",");
+        }
+      };
+      #emit w.writeChar('}');
+    },
+    .Bool -> {
+      #emitstring "w.writeString(if \{name} \"true\" else \"false\")" 
+    },
+    .Word(_) or .Int(_) -> #emitstring "\{name}.printTo(w)",
+    _ -> #emit w.writeString("\"unknown\"")
+  }
+}
+
+fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
+  // nocommit We can get hygienic about 'captures' later by just specifying in the #static
+  // opener what we are OK with capturing, then we hide everything else when running the
+  // static code! #static(t, w)
+  //#static({ emitCapture: [w, t] }) {
+  let asdf = #static {
+    let typeId = types/typeId[T]();
+    _writeJsonFromSchema("t", typeSchema(typeId));
+    42
+  };
+  assert(asdf == 42);
+}
+
+fn toJson[T](t: T): string {
+  let* w = List/empty[char]();
+  writeJson(context w)(t);
+  let s = string/wrapList(w);
+  println("Json: `\{s}`");
+  s
+}
+
+fn main(): i32 {
+  let* w = List/empty[char]();
+
+  toJson({ x: 1, y: 2 });
+  toJson(true);
+
+  0
+}

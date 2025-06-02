@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<ExitCode> {
         let module_name = ast.idents.intern("REPL");
         let parsed_ns_id = k1::parse::init_module(module_name, &mut ast);
         let mut parser =
-            k1::parse::Parser::make(module_name, parsed_ns_id, &mut ast, &tokens, file_id);
+            k1::parse::Parser::make_for_file(module_name, parsed_ns_id, &mut ast, &tokens, file_id);
         match parser.parse_statement() {
             Ok(None) => match parser.parse_definition(TokenKind::Eof) {
                 Ok(Some(_defn)) => eprintln!("thanks for your definition"),

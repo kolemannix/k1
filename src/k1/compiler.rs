@@ -5,9 +5,9 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::parse::{self};
-use crate::parse::{write_source_location, NumericWidth};
+use crate::parse::{NumericWidth, write_source_location};
 use crate::typer::{ErrorLevel, TypedProgram};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::info;
 
@@ -416,6 +416,7 @@ pub fn codegen_module<'ctx, 'module>(
             &codegen.k1.ast.sources,
             e.span,
             ErrorLevel::Error,
+            6,
         )
         .unwrap();
         write_program_dump(codegen.k1);

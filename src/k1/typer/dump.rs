@@ -531,211 +531,233 @@ impl TypedProgram {
     pub fn display_expr(
         &self,
         expr: &TypedExpr,
-        writ: &mut impl Write,
+        w: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
         match expr {
-            TypedExpr::Unit(_) => writ.write_str("()"),
-            TypedExpr::Char(c, _) => write!(writ, "'{}'", c),
-            TypedExpr::Integer(int) => write!(writ, "{}", int.value),
-            TypedExpr::Float(float) => write!(writ, "{}", float.value),
-            TypedExpr::Bool(b, _) => write!(writ, "{}", b),
+            TypedExpr::Unit(_) => w.write_str("()"),
+            TypedExpr::Char(c, _) => write!(w, "'{}'", *c as char),
+            TypedExpr::Integer(int) => write!(w, "{}", int.value),
+            TypedExpr::Float(float) => write!(w, "{}", float.value),
+            TypedExpr::Bool(b, _) => write!(w, "{}", b),
             TypedExpr::String(s, _) => {
-                write!(writ, "\"{}\"", self.get_string(*s))?;
+                write!(w, "\"{}\"", self.get_string(*s))?;
                 Ok(())
             }
             TypedExpr::Struct(struc) => {
-                writ.write_str("{\n")?;
+                w.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {
                     if idx > 0 {
-                        writ.write_str(",\n")?;
+                        w.write_str(",\n")?;
                     }
-                    writ.write_str(&"  ".repeat(indentation + 1))?;
-                    writ.write_str(self.ident_str(field.name))?;
-                    writ.write_str(": ")?;
-                    self.display_expr_id(field.expr, writ, indentation)?;
+                    w.write_str(&"  ".repeat(indentation + 1))?;
+                    w.write_str(self.ident_str(field.name))?;
+                    w.write_str(": ")?;
+                    self.display_expr_id(field.expr, w, indentation)?;
                 }
-                writ.write_str("\n")?;
-                writ.write_str(&"  ".repeat(indentation))?;
-                writ.write_str("}")
+                w.write_str("\n")?;
+                w.write_str(&"  ".repeat(indentation))?;
+                w.write_str("}")
             }
             TypedExpr::Variable(v) => {
                 let variable = self.variables.get(v.variable_id);
-                writ.write_str(self.ident_str(variable.name))
+                w.write_str(self.ident_str(variable.name))
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                self.display_expr_id(field_access.base, writ, indentation)?;
-                writ.write_str(".")?;
-                self.write_ident(writ, field_access.target_field)?;
+                self.display_expr_id(field_access.base, w, indentation)?;
+                w.write_str(".")?;
+                self.write_ident(w, field_access.target_field)?;
                 Ok(())
             }
             TypedExpr::Call(fn_call) => {
                 match &fn_call.callee {
                     Callee::StaticLambda { function_id, .. } => {
                         let name = self.get_function(*function_id).name;
-                        self.write_ident(writ, name)?;
+                        self.write_ident(w, name)?;
                     }
                     Callee::StaticFunction(function_id) => {
                         let name = self.get_function(*function_id).name;
-                        self.write_ident(writ, name)?;
+                        self.write_ident(w, name)?;
                     }
                     Callee::Abstract { .. } => {
-                        writ.write_str("<abstract>")?;
+                        w.write_str("<abstract>")?;
                     }
                     Callee::DynamicFunction { function_reference_expr } => {
-                        self.display_expr_id(*function_reference_expr, writ, indentation)?;
+                        self.display_expr_id(*function_reference_expr, w, indentation)?;
                     }
                     Callee::DynamicLambda(callee_expr) => {
-                        self.display_expr_id(*callee_expr, writ, indentation)?;
+                        self.display_expr_id(*callee_expr, w, indentation)?;
                     }
                     Callee::DynamicAbstract { variable_id, .. } => {
                         let variable = self.variables.get(*variable_id);
-                        self.write_ident(writ, variable.name)?;
+                        self.write_ident(w, variable.name)?;
                     }
                 };
-                writ.write_str("(")?;
+                w.write_str("(")?;
                 for (idx, arg) in fn_call.args.iter().enumerate() {
                     if idx > 0 {
-                        writ.write_str(", ")?;
+                        w.write_str(", ")?;
                     }
-                    self.display_expr_id(*arg, writ, indentation)?;
+                    self.display_expr_id(*arg, w, indentation)?;
                 }
-                writ.write_str(")")
+                w.write_str(")")
             }
-            TypedExpr::Block(block) => self.display_block(block, writ, indentation),
+            TypedExpr::Block(block) => self.display_block(block, w, indentation),
             TypedExpr::Match(typed_match) => {
                 for stmt in &typed_match.initial_let_statements {
-                    self.display_stmt(*stmt, writ, indentation)?;
+                    self.display_stmt(*stmt, w, indentation)?;
                 }
-                writ.write_str("switch {\n")?;
+                w.write_str("switch {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
-                    writ.write_str(&"  ".repeat(indentation + 1))?;
-                    writeln!(writ, "ARM {idx:02}").unwrap();
-                    self.display_matching_condition(writ, &case.condition, indentation)?;
+                    w.write_str(&"  ".repeat(indentation + 1))?;
+                    writeln!(w, "ARM {idx:02}").unwrap();
+                    self.display_matching_condition(w, &case.condition, indentation)?;
 
-                    writ.write_str(&"  ".repeat(indentation + 2))?;
-                    writ.write_str("-> ")?;
-                    self.display_expr_id(case.consequent_expr, writ, indentation)?;
+                    w.write_str(&"  ".repeat(indentation + 2))?;
+                    w.write_str("-> ")?;
+                    self.display_expr_id(case.consequent_expr, w, indentation)?;
                     if idx < typed_match.arms.len() - 1 {
-                        writ.write_str("\n")?;
+                        w.write_str("\n")?;
                     }
                 }
-                writ.write_str("\n")?;
-                writ.write_str(&"  ".repeat(indentation))?;
-                writ.write_str("}")
+                w.write_str("\n")?;
+                w.write_str(&"  ".repeat(indentation))?;
+                w.write_str("}")
             }
             TypedExpr::WhileLoop(while_loop) => {
-                writ.write_str("while ")?;
-                self.display_matching_condition(writ, &while_loop.condition_block, indentation)?;
-                writ.write_str(" ")?;
-                self.display_expr_id(while_loop.body, writ, indentation)
+                w.write_str("while ")?;
+                self.display_matching_condition(w, &while_loop.condition_block, indentation)?;
+                w.write_str(" ")?;
+                self.display_expr_id(while_loop.body, w, indentation)
             }
             TypedExpr::LoopExpr(loop_expr) => {
-                writ.write_str("loop ")?;
+                w.write_str("loop ")?;
                 let TypedExpr::Block(body_block) = self.exprs.get(loop_expr.body_block) else {
                     unreachable!()
                 };
-                self.display_block(body_block, writ, indentation)
+                self.display_block(body_block, w, indentation)
             }
             TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
                 UnaryOpKind::Dereference => {
-                    self.display_expr_id(unary_op.expr, writ, indentation)?;
-                    writ.write_str(".*")
+                    self.display_expr_id(unary_op.expr, w, indentation)?;
+                    w.write_str(".*")
                 }
             },
             TypedExpr::BinaryOp(binary_op) => {
-                self.display_expr_id(binary_op.lhs, writ, indentation)?;
-                write!(writ, " {} ", binary_op.kind)?;
-                self.display_expr_id(binary_op.rhs, writ, indentation)
+                self.display_expr_id(binary_op.lhs, w, indentation)?;
+                write!(w, " {} ", binary_op.kind)?;
+                self.display_expr_id(binary_op.rhs, w, indentation)
             }
             TypedExpr::EnumConstructor(enum_constr) => {
-                writ.write_str(".")?;
+                w.write_str(".")?;
                 let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();
-                writ.write_str(self.ident_str(variant.name))?;
+                w.write_str(self.ident_str(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
-                    writ.write_str("(")?;
-                    self.display_expr_id(*payload, writ, indentation)?;
-                    writ.write_str(")")?;
+                    w.write_str("(")?;
+                    self.display_expr_id(*payload, w, indentation)?;
+                    w.write_str(")")?;
                 }
                 Ok(())
             }
             TypedExpr::EnumIsVariant(is_variant_expr) => {
-                self.display_expr_id(is_variant_expr.enum_expr, writ, indentation)?;
-                writ.write_str(".is[.")?;
+                self.display_expr_id(is_variant_expr.enum_expr, w, indentation)?;
+                w.write_str(".is[.")?;
                 let variant = self
                     .get_expr_type(is_variant_expr.enum_expr)
                     .expect_enum()
                     .variant_by_index(is_variant_expr.variant_index);
-                self.write_ident(writ, variant.name)?;
-                writ.write_str("]()")
+                self.write_ident(w, variant.name)?;
+                w.write_str("]()")
             }
             TypedExpr::Cast(cast) => {
-                self.display_expr_id(cast.base_expr, writ, indentation)?;
-                write!(writ, " as({}) ", cast.cast_type)?;
-                self.display_type_id(cast.target_type_id, false, writ)
+                self.display_expr_id(cast.base_expr, w, indentation)?;
+                write!(w, " as({}) ", cast.cast_type)?;
+                self.display_type_id(cast.target_type_id, false, w)
             }
             TypedExpr::EnumGetTag(get_tag) => {
-                self.display_expr_id(get_tag.enum_expr, writ, indentation)?;
-                writ.write_str(".tag")?;
+                self.display_expr_id(get_tag.enum_expr, w, indentation)?;
+                w.write_str(".tag")?;
                 Ok(())
             }
             TypedExpr::EnumGetPayload(get_payload_expr) => {
-                self.display_expr_id(get_payload_expr.enum_variant_expr, writ, indentation)?;
-                writ.write_str(".payload[")?;
-                let variant =
-                    self.get_expr_type(get_payload_expr.enum_variant_expr).expect_enum_variant();
-                self.write_ident(writ, variant.name)?;
-                writ.write_char(']')?;
+                self.display_expr_id(get_payload_expr.enum_variant_expr, w, indentation)?;
+                w.write_str(".payload")?;
+                if get_payload_expr.is_referencing {
+                    w.write_char('*')?;
+                }
+                w.write_char('[')?;
+                let variant = self
+                    .types
+                    .get_type_dereferenced(
+                        self.get_expr_type_id(get_payload_expr.enum_variant_expr),
+                    )
+                    .expect_enum_variant();
+                self.write_ident(w, variant.name)?;
+                w.write_char(']')?;
                 Ok(())
             }
             TypedExpr::Return(ret) => {
-                writ.write_str("return(")?;
-                self.display_expr_id(ret.value, writ, indentation)?;
-                writ.write_char(')')
+                w.write_str("return(")?;
+                self.display_expr_id(ret.value, w, indentation)?;
+                w.write_char(')')
             }
             TypedExpr::Break(brk) => {
-                writ.write_str("break(")?;
-                self.display_expr_id(brk.value, writ, indentation)?;
-                writ.write_char(')')
+                w.write_str("break(")?;
+                self.display_expr_id(brk.value, w, indentation)?;
+                w.write_char(')')
             }
             TypedExpr::Lambda(lambda_expr) => {
-                writ.write_char('\\')?;
+                w.write_char('\\')?;
                 let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
-                writ.write_str("env=[")?;
-                self.display_type_id(lambda_type.env_type, false, writ).unwrap();
-                writ.write_str("]")?;
+                w.write_str("env=[")?;
+                self.display_type_id(lambda_type.env_type, false, w).unwrap();
+                w.write_str("]")?;
                 for arg in fn_type.logical_params() {
-                    writ.write_str(self.ident_str(arg.name))?;
-                    writ.write_str(": ")?;
-                    self.display_type_id(arg.type_id, false, writ)?;
+                    w.write_str(self.ident_str(arg.name))?;
+                    w.write_str(": ")?;
+                    self.display_type_id(arg.type_id, false, w)?;
                 }
-                writ.write_str(" -> ")?;
+                w.write_str(" -> ")?;
                 let lambda_body =
                     self.get_function(lambda_type.body_function_id).body_block.as_ref().unwrap();
-                self.display_expr_id(*lambda_body, writ, indentation)?;
+                self.display_expr_id(*lambda_body, w, indentation)?;
                 Ok(())
             }
             TypedExpr::FunctionReference(fr) => {
                 let fun = self.get_function(fr.function_id);
-                writ.write_str(self.ident_str(fun.name))?;
-                writ.write_str(".toRef()")
+                w.write_str(self.ident_str(fun.name))?;
+                w.write_str(".toRef()")
             }
             TypedExpr::FunctionToLambdaObject(fn2lam) => {
                 let fun = self.get_function(fn2lam.function_id);
-                writ.write_str(self.ident_str(fun.name))?;
-                writ.write_str(".toDyn()")
+                w.write_str(self.ident_str(fun.name))?;
+                w.write_str(".toDyn()")
             }
             TypedExpr::PendingCapture(pending_capture) => {
-                writ.write_str("capture(")?;
+                w.write_str("capture(")?;
                 let variable = self.variables.get(pending_capture.captured_variable_id);
-                writ.write_str(self.ident_str(variable.name))?;
-                writ.write_str(")")?;
+                w.write_str(self.ident_str(variable.name))?;
+                w.write_str(")")?;
                 Ok(())
             }
             TypedExpr::StaticValue(id, _, _) => {
-                writ.write_str("#static ")?;
-                self.display_static_value(writ, *id)?;
+                w.write_str("#static ")?;
+                self.display_static_value(w, *id)?;
+                Ok(())
+            }
+            TypedExpr::Emit(e) => {
+                w.write_str("#emit ")?;
+                match &e.to_emit {
+                    ToEmit::Parsed(stmt_id) => {
+                        self.ast.display_stmt_id(w, *stmt_id)?;
+                    }
+                    ToEmit::String(typed_expr) => {
+                        w.write_char('"')?;
+                        self.display_expr_id(*typed_expr, w, indentation)?;
+                        w.write_char('"')?;
+                    }
+                }
                 Ok(())
             }
         }
@@ -751,7 +773,7 @@ impl TypedProgram {
         match self.static_values.get(id) {
             StaticValue::Unit => w.write_str("()"),
             StaticValue::Boolean(b) => write!(w, "{}", *b),
-            StaticValue::Char(c) => write!(w, "{}", *c),
+            StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Integer(typed_integer_value) => {
                 write!(w, "{}", typed_integer_value)
             }
