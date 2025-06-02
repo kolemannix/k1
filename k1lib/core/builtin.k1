@@ -257,7 +257,12 @@ impl Equals for bool {
   }
 }
 
-// TODO(vm): Great metaprogramming use-case!
+// nocommit: Metaprogramming for definitions.
+// #static {
+//   for t in ["u8", "u16", "i64"] do {
+//     #emit [[ impl Equals for $t { fn equals(self: $t, other: $t): bool { self == other } } ]]
+//   }
+// }
 impl Equals for u8 { fn equals(self: u8, other: u8): bool { self == other } }
 impl Equals for u16 { fn equals(self: u16, other: u16): bool { self == other } }
 impl Equals for u32 { fn equals(self: u32, other: u32): bool { self == other } }
