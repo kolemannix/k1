@@ -6393,6 +6393,12 @@ impl TypedProgram {
                 let span = emit.span;
 
                 // nocommit: Better syntax than #emitstring!
+                // - Raw string syntax: backticks?
+                // - Improved string interpolation syntax: ditch the \, require escaping '{' like rust instead
+                // - ??? Allow expressions inside interpolations, not just variables. Big lexer
+                //       and parser change
+                // -
+                // - Emitting non-statements? Definitions.
                 let to_emit = match emit.emitted {
                     parse::ParsedEmitKind::String(parsed_expr_id) => {
                         let expr = self.eval_expr(parsed_expr_id, ctx)?;
@@ -6416,11 +6422,9 @@ impl TypedProgram {
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
-        // nocommit: Make a file for each static emission, that way we can print the entire
+        // nocommit: Make a file for each static emission, that way debugger can see
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
-        // nocommit Re-use buffer
         let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
-        // nocommit: Preserve the location of the #emitstring call instead
         if let Err(e) = lexer.run(&mut tokens) {
             let e = ParseError::Lex(e);
             parse::print_error(&self.ast, &e);

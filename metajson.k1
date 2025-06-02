@@ -2,23 +2,21 @@ use core/Writer
 use types/TypeSchema
 use types/typeSchema
 
-fn _writeJsonFromSchema(name: string, schema: TypeSchema): unit {
-  switch schema {
+fn _writeJsonFromSchema(name: string, typeId: u64): unit {
+  switch typeSchema(typeId) {
     .Struct(s) -> {
       #emit w.writeChar('{');
       for f in s.fields do {
         let fName = f.name;
 
         let fieldLetName = "_\{name}\{fName}";
-        // Future API: staticCtx global 
-        // staticCtx.emitString()
-        // #emitstring [[let \{fieldLetName} = \{name}.\{fName}]];
+
         #emitstring "let \{fieldLetName} = \{name}.\{fName}";
         #emit w.writeChar('"');
         #emitstring "w.writeString(\"\{fName}\")";
         #emit w.writeString("\":");
         
-        _writeJsonFromSchema(fieldLetName, typeSchema(f.typeId));
+        _writeJsonFromSchema(fieldLetName, f.typeId);
         let last = itIndex == s.fields.len - 1;
         if not last {
           #emit w.writeString(",");
@@ -26,25 +24,28 @@ fn _writeJsonFromSchema(name: string, schema: TypeSchema): unit {
       };
       #emit w.writeChar('}');
     },
+    .Unit -> #emit w.writeString("\"unit\""),
     .Bool -> {
       #emitstring "w.writeString(if \{name} \"true\" else \"false\")" 
     },
     .Word(_) or .Int(_) -> #emitstring "\{name}.printTo(w)",
-    _ -> #emit w.writeString("\"unknown\"")
+    .Either(_) -> { 
+      let tName = types/typeName(typeId);
+      crash("Cannot yet create a JSON writer for either: \{tName}")
+    },
+    // nocommit: Disallow bindings here
+    .Other(n) or _ -> {
+      #emit w.writeString("\"other\"")
+    }
   }
 }
 
 fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
-  // nocommit We can get hygienic about 'captures' later by just specifying in the #static
-  // opener what we are OK with capturing, then we hide everything else when running the
-  // static code! #static(t, w)
-  //#static({ emitCapture: [w, t] }) {
-  let asdf = #static {
+  // To say dont even typecheck this function generically: "template fn"
+  #static {
     let typeId = types/typeId[T]();
-    _writeJsonFromSchema("t", typeSchema(typeId));
-    42
-  };
-  assert(asdf == 42);
+    _writeJsonFromSchema("t", typeId);
+  }
 }
 
 fn toJson[T](t: T): string {
@@ -59,6 +60,7 @@ fn main(): i32 {
   let* w = List/empty[char]();
 
   toJson({ x: 1, y: 2 });
+  toJson(some(1337));
   toJson(true);
 
   0

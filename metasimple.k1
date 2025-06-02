@@ -1,0 +1,14 @@
+fn main(): i32 {
+  let mut x = 10;
+  #static {
+    for core/IntRange/upTo(5) do {
+      #emit x = x + 1;
+      #emit if x % 2 == 0 println("buzz")
+    }
+  };
+  println("X is: \{x}");
+  0
+}
+// > buzz
+// > buzz
+// > X is: 15
