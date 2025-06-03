@@ -77,6 +77,7 @@ impl<'toks> TokenIter<'toks> {
     }
 
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         let tok = self.tokens[self.cursor];
         self.cursor += 1;
@@ -472,6 +473,9 @@ impl Span {
 
     pub fn extended(&self, other: Span) -> Span {
         if cfg!(debug_assertions) {
+            // Fuck off clippy: nothing wrong with this:
+            // "If the other end is not past our end"
+            #[allow(clippy::nonminimal_bool)]
             if !(other.end() >= self.end()) {
                 panic!("Attempt to extend span from {} to {}", self.end(), other.end())
             }
@@ -586,6 +590,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         let mut line_comment_start = 0;
         let mut is_string = false;
         let mut is_number = false;
+        let mut is_code = false;
+        let mut brace_depth: usize = 0;
         let peeked_whitespace = self.peek().is_whitespace();
         let make_token = |lex: &mut Lexer, kind: TokenKind, start: u32, len: u32| {
             let span = lex.add_span(start, len);
@@ -619,6 +625,35 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
             }
             if is_string {
+                if is_code {
+                    if c == '{' {
+                        tok_buf.push(c);
+                        brace_depth += 1;
+                        self.advance();
+                        eprintln!("[lex] new depth {brace_depth}");
+                    } else if c == '}' {
+                        // "abc{w.x.y}"
+                        // ^
+                        // |  |
+                        // SStart
+                        //     |     |
+                        //     Interp SEnd
+                        //
+                        tok_buf.push(c);
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            is_code = false;
+                            // Break with an Interp token.
+                            // Or, add metadata to String token
+                        }
+                        self.advance();
+                        eprintln!("[lex] new depth {brace_depth}");
+                    } else {
+                        tok_buf.push(c);
+                        self.advance();
+                    }
+                    continue;
+                }
                 let (_, next) = self.peek_two();
                 if c == '\\' && STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
                     tok_buf.push(c);
@@ -627,6 +662,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     continue;
                 } else if c == '\\' && next == '{' {
+                    // nocommit remove this \{ handler
                     // One day we'll handle these differently than regular escaped chars
                     // If we support either a subset of the language or the full language inside
                     // interpolated strings
@@ -634,6 +670,21 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     tok_buf.push(next);
                     self.advance();
                     self.advance();
+                    continue;
+                } else if c == '{' {
+                    if next == '{' {
+                        self.advance();
+                        self.advance();
+                        tok_buf.push('{');
+                        tok_buf.push('{');
+                    } else {
+                        tok_buf.push('{');
+                        self.advance();
+                        // Track brace depth and done when == 0
+                        brace_depth = 1;
+                        eprintln!("[lex] starting code");
+                        is_code = true;
+                    }
                     continue;
                 } else if c == '"' {
                     self.advance();

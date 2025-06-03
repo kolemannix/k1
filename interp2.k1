@@ -1,0 +1,6 @@
+fn main(): i32 {
+  let w = "World";
+  println("woof");
+  println("{w}");
+  0
+}

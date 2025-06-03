@@ -6423,6 +6423,7 @@ impl TypedProgram {
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
         // nocommit: Make a file for each static emission, that way debugger can see
+        // Maybe in .k1-out?
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
         let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
         if let Err(e) = lexer.run(&mut tokens) {
@@ -6775,6 +6776,10 @@ impl TypedProgram {
                             },
                         ));
                         self.synth_show_ident_call(variable_expr_id, block_ctx)?
+                    }
+                    parse::InterpolatedStringPart::Expr(expr_id) => {
+                        let typed_expr_to_stringify = self.eval_expr(expr_id, ctx)?;
+                        self.synth_show_call(typed_expr_to_stringify, ctx)?
                     }
                 };
                 debug_assert!(self.exprs.get(string_expr).get_type() == STRING_TYPE_ID);
@@ -14363,6 +14368,22 @@ impl TypedProgram {
             self.synth_parsed_function_call(qident!(self, span, ["Show"], "show"), &[], &[caller]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, None, ctx)
+    }
+
+    fn synth_show_call(
+        &mut self,
+        to_show: TypedExprId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let span = self.exprs.get(to_show).get_span();
+        let type_id = self.exprs.get(to_show).get_type();
+        // nocommit: Use printTo
+        self.synth_typed_function_call(
+            qident!(self, span, ["Show"], "show"),
+            &[type_id],
+            &[to_show],
+            ctx.with_no_expected_type(),
+        )
     }
 
     pub fn synth_struct_expr(
