@@ -197,6 +197,30 @@ impl Print for string {
   fn printTo[W: Writer](self: string, w: W*): unit { w.writeString(self) }
 }
 
+ns mem {
+
+  // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
+  intern fn alloc(size: uword, align: uword): Pointer
+  intern fn allocZeroed(size: uword, align: uword): Pointer
+  intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+  intern fn free(ptr: Pointer, size: uword, align: uword): unit
+
+  intern fn copy(
+    dst: Pointer,
+    src: Pointer,
+    count: uword
+  ): unit
+  intern fn set(
+    dst: Pointer,
+    value: u8,
+    count: uword
+  ): unit
+  intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+
+  intern fn zeroed[T](): T
+
+}
+
 /////////////////////////////////
 // Compiler builtins
 ns k1 {
@@ -208,10 +232,7 @@ ns k1 {
   let static DEBUG: bool = builtin;
 
   let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-  // nocommit: We need builtin to be a lib,
-  // move this to 'core' so it has string equals and shit
-  let static OS_MACOS: bool = true;
-  // let static OS_MACOS: bool = OS == "macos";
+  let static OS_MACOS: bool = OS == "macos";
   let static OS_POSIX: bool = OS == "macos" or OS == "linux";
 
   intern fn emitCompilerMessage(

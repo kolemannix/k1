@@ -774,6 +774,7 @@ pub enum InterpolatedStringPart {
     // TODO: Put spans on each string part
     String(StringId),
     Identifier(Identifier),
+    Expr(ParsedExprId),
 }
 
 #[derive(Debug, Clone)]
@@ -2429,18 +2430,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     &self.ast.spans,
                     self.ast.sources.get_source(self.file_id),
                     first,
-                );
+                )
+                // nocommit Avoid new clone? we need mut self to parse :(
+                .to_string();
+                //
+                // nocommit reuse buf
                 let mut buf = String::with_capacity(text.len());
                 let mut chars = text.chars();
                 enum Mode {
                     Base,
-                    InterpIdent(String),
+                    Interp(String),
                 }
                 let mut mode = Mode::Base;
                 let mut parts: Vec<InterpolatedStringPart> = Vec::new();
                 while let Some(c) = chars.next() {
                     match &mut mode {
-                        Mode::InterpIdent(ident_str) => {
+                        Mode::Interp(ident_str) => {
                             if crate::lex::is_ident_char(c) {
                                 ident_str.push(c)
                             } else if c == '}' {
@@ -2458,6 +2463,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             }
                         }
                         Mode::Base => {
+                            if c == '{' {
+                                let Some(next) = chars.next() else {
+                                    return Err(error("String ended with '{'", first));
+                                };
+                                if next == '{' {
+                                    buf.push('{');
+                                } else {
+                                    if !buf.is_empty() {
+                                        let string_id = self.ast.strings.intern(&buf);
+                                        buf.clear();
+                                        parts.push(InterpolatedStringPart::String(string_id));
+                                    }
+                                    let expr = self.expect_expression()?;
+                                    if chars.next() != Some('}') {
+                                        return Err(error_expected("'}'", self.peek()));
+                                    }
+                                    parts.push(InterpolatedStringPart::Expr(expr));
+                                    mode = Mode::Base;
+                                }
+                            }
                             if c == '\\' {
                                 let Some(next) = chars.next() else {
                                     return Err(error("String ended with '\\'", first));
@@ -2466,7 +2491,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     let string_id = self.ast.strings.intern(&buf);
                                     buf.clear();
                                     parts.push(InterpolatedStringPart::String(string_id));
-                                    mode = Mode::InterpIdent(String::with_capacity(16));
+                                    mode = Mode::Interp(String::with_capacity(16));
                                 } else if let Some(c) =
                                     STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
                                 {
@@ -2490,7 +2515,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             parts.push(InterpolatedStringPart::String(string_id))
                         }
                     }
-                    Mode::InterpIdent(s) => {
+                    Mode::Interp(s) => {
                         return Err(error(
                             format!("Unterminated interpolated identifier: {s}"),
                             first,
@@ -4106,23 +4131,23 @@ impl ParsedProgram {
 
     pub fn expr_id_to_string(&self, expr: ParsedExprId) -> String {
         let mut buffer = String::new();
-        self.display_expr_id(expr, &mut buffer).unwrap();
+        self.display_expr_id(&mut buffer, expr).unwrap();
         buffer
     }
 
-    pub fn display_expr_id(&self, expr: ParsedExprId, w: &mut impl Write) -> std::fmt::Result {
+    pub fn display_expr_id(&self, w: &mut impl Write, expr: ParsedExprId) -> std::fmt::Result {
         match self.exprs.get(expr) {
             ParsedExpr::Builtin(_span) => w.write_str("builtin"),
             ParsedExpr::BinaryOp(op) => {
                 w.write_str("(")?;
-                self.display_expr_id(op.lhs, w)?;
+                self.display_expr_id(w, op.lhs)?;
                 write!(w, " {} ", op.op_kind)?;
-                self.display_expr_id(op.rhs, w)?;
+                self.display_expr_id(w, op.rhs)?;
                 w.write_str(")")
             }
             ParsedExpr::UnaryOp(op) => {
                 write!(w, "{}", op.op_kind)?;
-                self.display_expr_id(op.expr, w)
+                self.display_expr_id(w, op.expr)
             }
             ParsedExpr::Literal(lit) => w.write_fmt(format_args!("{}", lit)),
             ParsedExpr::InterpolatedString(is) => {
@@ -4131,8 +4156,14 @@ impl ParsedProgram {
                     match part {
                         InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
                         InterpolatedStringPart::Identifier(ident) => {
+                            w.write_char('\\')?;
                             w.write_char('{')?;
                             w.write_str(self.idents.get_name(*ident))?;
+                            w.write_char('{')?;
+                        }
+                        InterpolatedStringPart::Expr(expr_id) => {
+                            w.write_char('{')?;
+                            self.display_expr_id(w, *expr_id);
                             w.write_char('{')?;
                         }
                     }
@@ -4151,7 +4182,7 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedExpr::FieldAccess(acc) => {
-                self.display_expr_id(acc.base, w)?;
+                self.display_expr_id(w, acc.base)?;
                 w.write_str(".")?;
                 w.write_str(self.idents.get_name(acc.field_name))?;
                 Ok(())
@@ -4160,8 +4191,8 @@ impl ParsedProgram {
             ParsedExpr::If(if_expr) => w.write_fmt(format_args!("{:?}", if_expr)),
             ParsedExpr::While(while_expr) => {
                 w.write_str("while ")?;
-                self.display_expr_id(while_expr.cond, w)?;
-                self.display_expr_id(while_expr.body, w)?;
+                self.display_expr_id(w, while_expr.cond)?;
+                self.display_expr_id(w, while_expr.body)?;
                 Ok(())
             }
             ParsedExpr::Loop(loop_expr) => {
@@ -4177,19 +4208,19 @@ impl ParsedProgram {
                 w.write_str(self.idents.get_name(anon_enum.variant_name))?;
                 if let Some(payload) = anon_enum.payload.as_ref() {
                     w.write_str("(")?;
-                    self.display_expr_id(*payload, w)?;
+                    self.display_expr_id(w, *payload)?;
                     w.write_str(")")?;
                 }
                 Ok(())
             }
             ParsedExpr::Is(is_expr) => {
-                self.display_expr_id(is_expr.target_expression, w)?;
+                self.display_expr_id(w, is_expr.target_expression)?;
                 w.write_str(" is ")?;
                 self.display_pattern_expression_id(is_expr.pattern, w)
             }
             ParsedExpr::Match(match_expr) => {
                 w.write_str("switch ")?;
-                self.display_expr_id(match_expr.match_subject, w)?;
+                self.display_expr_id(w, match_expr.match_subject)?;
                 w.write_str(" {")?;
                 for ParsedMatchCase { patterns, guard_condition_expr, expression } in
                     match_expr.cases.iter()
@@ -4204,16 +4235,16 @@ impl ParsedProgram {
                     }
                     if let Some(guard_condition_expr) = guard_condition_expr {
                         w.write_str(" if ")?;
-                        self.display_expr_id(*guard_condition_expr, w)?;
+                        self.display_expr_id(w, *guard_condition_expr)?;
                     }
                     w.write_str(" -> ")?;
-                    self.display_expr_id(*expression, w)?;
+                    self.display_expr_id(w, *expression)?;
                     w.write_str(",\n")?;
                 }
                 w.write_str(" }")
             }
             ParsedExpr::AsCast(cast) => {
-                self.display_expr_id(cast.base_expr, w)?;
+                self.display_expr_id(w, cast.base_expr)?;
                 w.write_str(" as ")?;
                 self.display_type_expr_id(cast.dest_type, w)
             }
@@ -4231,12 +4262,12 @@ impl ParsedProgram {
                     }
                 }
                 w.write_str(" -> ")?;
-                self.display_expr_id(lambda.body, w)?;
+                self.display_expr_id(w, lambda.body)?;
                 Ok(())
             }
             ParsedExpr::Static(stat) => {
                 w.write_str("#static ")?;
-                self.display_expr_id(stat.base_expr, w)?;
+                self.display_expr_id(w, stat.base_expr)?;
                 Ok(())
             }
             ParsedExpr::Emit(emit) => {
@@ -4248,7 +4279,7 @@ impl ParsedProgram {
                     }
                     ParsedEmitKind::String(parsed_expr_id) => {
                         w.write_str("(string) \"")?;
-                        self.display_expr_id(parsed_expr_id, w)?;
+                        self.display_expr_id(w, parsed_expr_id)?;
                         w.write_char('"')?;
                     }
                 }
@@ -4274,79 +4305,79 @@ impl ParsedProgram {
     pub fn display_type_expr_id(
         &self,
         ty_expr_id: ParsedTypeExprId,
-        f: &mut impl Write,
+        w: &mut impl Write,
     ) -> std::fmt::Result {
         match self.type_exprs.get(ty_expr_id) {
             ParsedTypeExpr::Struct(struct_type) => {
-                f.write_str("{ ")?;
+                w.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
-                    f.write_str(self.idents.get_name(field.name))?;
-                    f.write_str(": ")?;
-                    self.display_type_expr_id(ty_expr_id, f)?;
-                    f.write_str(", ")?;
+                    w.write_str(self.idents.get_name(field.name))?;
+                    w.write_str(": ")?;
+                    self.display_type_expr_id(ty_expr_id, w)?;
+                    w.write_str(", ")?;
                 }
-                f.write_str(" }")
+                w.write_str(" }")
             }
             ParsedTypeExpr::TypeApplication(tapp) => {
-                display_namespaced_identifier(f, &self.idents, &tapp.name, "::")?;
+                display_namespaced_identifier(w, &self.idents, &tapp.name, "::")?;
                 if !tapp.args.is_empty() {
-                    f.write_str("[")?;
+                    w.write_str("[")?;
                     for tparam in self.p_type_args.get_slice(tapp.args) {
-                        self.display_type_expr_id(tparam.type_expr, f)?;
-                        f.write_str(", ")?;
+                        self.display_type_expr_id(tparam.type_expr, w)?;
+                        w.write_str(", ")?;
                     }
-                    f.write_str("]")?;
+                    w.write_str("]")?;
                 }
                 Ok(())
             }
             ParsedTypeExpr::Optional(opt) => {
-                self.display_type_expr_id(opt.base, f)?;
-                f.write_str("?")
+                self.display_type_expr_id(opt.base, w)?;
+                w.write_str("?")
             }
             ParsedTypeExpr::Reference(refer) => {
-                self.display_type_expr_id(refer.base, f)?;
-                f.write_str("*")
+                self.display_type_expr_id(refer.base, w)?;
+                w.write_str("*")
             }
             ParsedTypeExpr::Enum(e) => {
-                f.write_str("enum ")?;
+                w.write_str("enum ")?;
                 for variant in &e.variants {
-                    f.write_str(self.idents.get_name(variant.tag_name))?;
+                    w.write_str(self.idents.get_name(variant.tag_name))?;
                     if let Some(payload) = &variant.payload_expression {
-                        f.write_str("(")?;
-                        self.display_type_expr_id(*payload, f)?;
-                        f.write_str(")")?;
+                        w.write_str("(")?;
+                        self.display_type_expr_id(*payload, w)?;
+                        w.write_str(")")?;
                     }
                 }
                 Ok(())
             }
             ParsedTypeExpr::DotMemberAccess(acc) => {
-                self.display_type_expr_id(acc.base, f)?;
-                f.write_char('.')?;
-                f.write_str(self.idents.get_name(acc.member_name))
+                self.display_type_expr_id(acc.base, w)?;
+                w.write_char('.')?;
+                w.write_str(self.idents.get_name(acc.member_name))
             }
-            ParsedTypeExpr::Builtin(_builtin) => f.write_str("builtin"),
+            ParsedTypeExpr::Builtin(_builtin) => w.write_str("builtin"),
             ParsedTypeExpr::Function(fun) => {
-                f.write_char('\\')?;
+                w.write_char('\\')?;
                 for (index, t) in fun.params.iter().enumerate() {
-                    self.display_type_expr_id(*t, f)?;
+                    self.display_type_expr_id(*t, w)?;
                     let last = index == fun.params.len() - 1;
                     if !last {
-                        f.write_str(", ")?;
+                        w.write_str(", ")?;
                     }
                 }
-                f.write_str(" -> ")?;
-                self.display_type_expr_id(fun.return_type, f)?;
+                w.write_str(" -> ")?;
+                self.display_type_expr_id(fun.return_type, w)?;
                 Ok(())
             }
             ParsedTypeExpr::TypeOf(tof) => {
-                f.write_str("typeOf(")?;
-                self.display_expr_id(tof.target_expr, f)?;
-                f.write_str(")")?;
+                w.write_str("typeOf(")?;
+                self.display_expr_id(w, tof.target_expr)?;
+                w.write_str(")")?;
                 Ok(())
             }
             ParsedTypeExpr::SomeQuant(quant) => {
-                f.write_str("some ")?;
-                self.display_type_expr_id(quant.inner, f)?;
+                w.write_str("some ")?;
+                self.display_type_expr_id(quant.inner, w)?;
                 Ok(())
             }
         }
@@ -4364,15 +4395,15 @@ impl ParsedProgram {
             }
             ParsedStmt::Require(require_stmt) => {
                 write!(w, "require ")?;
-                self.display_expr_id(require_stmt.condition_expr, w)?;
+                self.display_expr_id(w, require_stmt.condition_expr)?;
                 write!(w, " else ")?;
-                self.display_expr_id(require_stmt.else_body, w)?;
+                self.display_expr_id(w, require_stmt.else_body)?;
                 Ok(())
             }
             ParsedStmt::Assignment(_assignment) => todo!(),
             ParsedStmt::SetRef(_set_stmt) => todo!(),
             ParsedStmt::LoneExpression(parsed_expression_id) => {
-                self.display_expr_id(*parsed_expression_id, w)
+                self.display_expr_id(w, *parsed_expression_id)
             }
         }
     }
