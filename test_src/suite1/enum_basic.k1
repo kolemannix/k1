@@ -39,8 +39,8 @@ ns MyResult {
   }
   fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
     switch self {
-      .Ok(v) -> { "Ok: \{v}\n" },
-      .Err(e) -> { "Error: \{e}\n" }
+      .Ok(v) -> { "Ok: {v}\n" },
+      .Err(e) -> { "Error: {e}\n" }
     }
   }
 }
@@ -59,8 +59,8 @@ fn genericEnum(): unit {
     // Shows that we can talk about the payload type
     let b: MyResult[int, string].Ok.value = 42;
 
-    assert(x1.show() == "Ok: -3\n");
-    assert(x2.show() == "Error: Some error message\n");
+    assertEquals(x1.show(), "Ok: -3\n");
+    assertEquals(x2.show(), "Error: Some error message\n");
 
     assert(core/types/sizeOf[MyResult[int, string]]() == 24);
     assert(core/types/sizeOfStride[MyResult[int, string]]() == 24);

@@ -35,7 +35,7 @@ fn day2(): int {
       };
     };
   };
-  println("sum is \{sum}");
+  println("sum is {sum}");
   sum
 }
 
@@ -70,7 +70,7 @@ fn main(): i32 {
       };
     };
   };
-  println("sum is \{sum}");
+  println("sum is {sum}");
 
   day2();
   0

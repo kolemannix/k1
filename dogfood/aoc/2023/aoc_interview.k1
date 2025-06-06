@@ -26,6 +26,6 @@ fn solve(): int {
 
 fn main(): i32 {
   let a = solve();
-  println("Answer is \{a}");
+  println("Answer is {a}");
   0
 }

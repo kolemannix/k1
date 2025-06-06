@@ -6,7 +6,7 @@ fn main(): i32 {
       #emit if x % 2 == 0 println("buzz")
     }
   };
-  println("X is: \{x}");
+  println("X is: {x}");
   0
 }
 // > buzz

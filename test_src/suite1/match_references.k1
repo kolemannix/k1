@@ -3,7 +3,7 @@ ns match_references;
 fn test(): unit {
   let* x = some(42);
   while x.* is .Some(xx) {
-    println("\{xx}");
+    println("{xx}");
     if xx == 0 break()
     else { 
       x <- some(xx - 1);
@@ -12,12 +12,12 @@ fn test(): unit {
 
   let* point = { x: 5, y: 2 };
   if point is { x, y: 2 }* {
-    println("x is \{x}")
+    println("x is {x}")
   };
 
   x <- some(5);
   while x is .Some(xx)* {
-    println("\{xx}");
+    println("{xx}");
     if xx.* == 0 break()
     else { 
       xx <- xx.* - 1;

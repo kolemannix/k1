@@ -8,7 +8,7 @@ use crate::parse::FileId;
 use crate::pool::Pool;
 use crate::typer::BinaryOpKind;
 use TokenKind as K;
-use log::trace;
+use log::debug;
 
 pub const EOF_CHAR: char = '\0';
 pub const EOF_TOKEN: Token = Token { span: SpanId::NONE, kind: TokenKind::Eof, flags: 0 };
@@ -130,6 +130,10 @@ impl<'toks> TokenIter<'toks> {
 pub enum TokenKind {
     Ident,
     String,
+    /// Used in string interpolation; any not-fully-standalone string, for example:
+    /// Could be the initial segment, a connecting segment between 2 interpolations,
+    /// or the end.
+    StringUnterminated,
 
     Char,
 
@@ -296,8 +300,9 @@ impl TokenKind {
             K::SingleQuote => Some("'"),
 
             K::Ident => None,
-            K::String => Some("\"?\""),
-            K::Char => Some("'?'"),
+            K::String => Some("<string>"),
+            K::StringUnterminated => Some("<string start>"),
+            K::Char => Some("<char>"),
 
             K::Eof => Some("<EOF>"),
         }
@@ -551,6 +556,12 @@ pub struct Lexer<'a, 'spans> {
     tok_buf: String,
 }
 
+#[derive(Debug)]
+struct LexState {
+    is_string: bool,
+    interp_brace_depth_stack: Vec<u32>,
+}
+
 impl<'content, 'spans> Lexer<'content, 'spans> {
     pub fn make(
         input: &'content str,
@@ -572,26 +583,30 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         LexError { message, file_id: self.file_id, span }
     }
 
+    fn add_span(&mut self, start: u32, len: u32) -> SpanId {
+        self.spans.add(Span { start, len, file_id: self.file_id })
+    }
+
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
         let mut tok_buf = String::with_capacity(1024);
-        while let Some(tok) = self.eat_token(&mut tok_buf)? {
-            tokens.push(tok);
+
+        let mut state = LexState { is_string: false, interp_brace_depth_stack: vec![] };
+        while let Some(_) = self.eat_token(&mut tok_buf, tokens, &mut state)? {
             tok_buf.clear();
         }
         Ok(())
     }
 
-    fn add_span(&mut self, start: u32, len: u32) -> SpanId {
-        self.spans.add(Span { start, len, file_id: self.file_id })
-    }
-
-    fn eat_token(&mut self, tok_buf: &mut String) -> LexResult<Option<Token>> {
+    fn eat_token(
+        &mut self,
+        tok_buf: &mut String,
+        tokens: &mut Vec<Token>,
+        state: &mut LexState,
+    ) -> LexResult<Option<()>> {
+        tok_buf.clear();
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
-        let mut is_string = false;
         let mut is_number = false;
-        let mut is_code = false;
-        let mut brace_depth: usize = 0;
         let peeked_whitespace = self.peek().is_whitespace();
         let make_token = |lex: &mut Lexer, kind: TokenKind, start: u32, len: u32| {
             let span = lex.add_span(start, len);
@@ -610,51 +625,32 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 make_token(lex, TokenKind::Ident, start, len)
             }
         };
-        trace!("lex starting new token with prev_skip=false");
-        let token = loop {
+        loop {
             let (c, n) = self.peek_with_pos();
-            trace!("LEX line={} char={} '{}' buf={}", self.line_index, n, c, &self.tok_buf);
+            debug!(
+                "LEX line={} char='{}' n={} buf={} state={:?}",
+                self.line_index, c, n, &self.tok_buf, state
+            );
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {
                     let len = n - line_comment_start - 1;
                     let comment_tok = make_token(self, K::LineComment, line_comment_start, len);
-                    break Some(comment_tok);
+                    tokens.push(comment_tok);
+                    return Ok(Some(()));
                 } else {
                     self.advance();
                     continue;
                 }
             }
-            if is_string {
-                if is_code {
-                    if c == '{' {
-                        tok_buf.push(c);
-                        brace_depth += 1;
-                        self.advance();
-                        eprintln!("[lex] new depth {brace_depth}");
-                    } else if c == '}' {
-                        // "abc{w.x.y}"
-                        // ^
-                        // |  |
-                        // SStart
-                        //     |     |
-                        //     Interp SEnd
-                        //
-                        tok_buf.push(c);
-                        brace_depth -= 1;
-                        if brace_depth == 0 {
-                            is_code = false;
-                            // Break with an Interp token.
-                            // Or, add metadata to String token
-                        }
-                        self.advance();
-                        eprintln!("[lex] new depth {brace_depth}");
-                    } else {
-                        tok_buf.push(c);
-                        self.advance();
-                    }
-                    continue;
-                }
+            if state.is_string {
                 let (_, next) = self.peek_two();
+                if c == EOF_CHAR {
+                    return Err(self.make_error(
+                        "Encountered EOF inside string".to_string(),
+                        n - tok_buf.len() as u32,
+                        tok_buf.len() as u32 + 1,
+                    ));
+                }
                 if c == '\\' && STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
                     tok_buf.push(c);
                     tok_buf.push(next);
@@ -677,18 +673,22 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         self.advance();
                         tok_buf.push('{');
                         tok_buf.push('{');
+                        continue;
                     } else {
-                        tok_buf.push('{');
                         self.advance();
                         // Track brace depth and done when == 0
-                        brace_depth = 1;
-                        eprintln!("[lex] starting code");
-                        is_code = true;
+                        eprintln!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
+                        state.interp_brace_depth_stack.push(1);
+                        state.is_string = false;
+                        tokens.push(make_buffered_token(self, K::StringUnterminated, tok_buf, n));
+                        tokens.push(make_token(self, K::OpenBrace, n, 1));
+                        return Ok(Some(()));
                     }
-                    continue;
                 } else if c == '"' {
                     self.advance();
-                    break Some(make_buffered_token(self, K::String, tok_buf, n));
+                    state.is_string = false;
+                    tokens.push(make_buffered_token(self, K::String, tok_buf, n));
+                    return Ok(Some(()));
                 } else if c == '\n' {
                     let string_start_quote = n - tok_buf.len() as u32 - 1;
                     return Err(self.make_error(
@@ -703,22 +703,23 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 }
             }
             if c == '"' {
-                is_string = true;
+                state.is_string = true;
                 self.advance();
                 continue;
             }
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
-                    break Some(make_keyword_or_ident(self, tok_buf, n));
+                    tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                    return Ok(Some(()));
                 } else {
-                    break None;
+                    return Ok(None);
                 }
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
                 let (_, next) = self.peek_two();
                 if !tok_buf.is_empty() {
-                    // Break without advancing; we'll have a clear buffer next time
-                    // and will advance
+                    // Return without advancing; basically just 'save the buffered token'.
+                    // We'll have a clear buffer next time and will advance.
 
                     // Dot is a token, but not inside a 'number', where:
                     // If followed by a digit, its just part of the Ident stream
@@ -732,10 +733,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             // Fall through, continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
-                            break Some(make_keyword_or_ident(self, tok_buf, n));
+                            tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                            return Ok(Some(()));
                         }
                     } else {
-                        break Some(make_keyword_or_ident(self, tok_buf, n));
+                        tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                        return Ok(Some(()));
                     }
                 } else if single_char_tok == K::SingleQuote {
                     // Eat opening '
@@ -754,7 +757,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 "Expected closing ' for char literal at {q}"
                             ));
                         }
-                        break Some(make_token(self, TokenKind::Char, n, 4));
+                        tokens.push(make_token(self, TokenKind::Char, n, 4));
+                        return Ok(Some(()));
                     } else {
                         // Eat Closing ''
                         let q = self.next();
@@ -766,7 +770,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             ));
                         }
                         // `n` is the index of the opening quote
-                        break Some(make_token(self, TokenKind::Char, n, 3));
+                        tokens.push(make_token(self, TokenKind::Char, n, 3));
+                        return Ok(Some(()));
                     }
                 // Handle all of our 2-char but-also-1-char-prefixed tokens!
                 } else if let Some(double_tok) =
@@ -782,16 +787,32 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         other => {
                             self.advance();
                             self.advance();
-                            break Some(make_token(self, other, n, 2));
+                            tokens.push(make_token(self, other, n, 2));
+                            return Ok(Some(()));
                         }
                     }
                 } else {
+                    if (c == '{' || c == '}') && state.interp_brace_depth_stack.last().is_some() {
+                        let interp_brace_depth = state.interp_brace_depth_stack.last_mut().unwrap();
+                        if c == '{' {
+                            *interp_brace_depth += 1;
+                        } else {
+                            *interp_brace_depth -= 1;
+                            if *interp_brace_depth == 0 {
+                                eprintln!("[lex] *pop* code end");
+                                state.interp_brace_depth_stack.pop();
+                                state.is_string = true;
+                            }
+                        }
+                    }
                     self.advance();
-                    break Some(make_token(self, single_char_tok, n, 1));
+                    tokens.push(make_token(self, single_char_tok, n, 1));
+                    return Ok(Some(()));
                 }
             }
             if c.is_whitespace() && !tok_buf.is_empty() {
-                break Some(make_keyword_or_ident(self, tok_buf, n));
+                tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                return Ok(Some(()));
             }
             if tok_buf.is_empty() && is_ident_or_num_start(c) {
                 // case: Start an ident
@@ -814,11 +835,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             // We can possibly remove this check; it would be handled next loop
             } else if let Some(tok) = TokenKind::token_from_str(tok_buf) {
                 // Do not eat c so the next eat_token call can see it.
-                break Some(make_buffered_token(self, tok, tok_buf, n));
+                tokens.push(make_buffered_token(self, tok, tok_buf, n));
+                return Ok(Some(()));
             }
             self.advance();
-        };
-        Ok(token)
+        }
     }
 
     fn next(&mut self) -> char {
@@ -934,23 +955,6 @@ mod test {
     }
 
     #[test]
-    fn literal_string() -> anyhow::Result<()> {
-        let input = "let x = println(\"foobear\")";
-        expect_token_kinds(
-            input,
-            vec![
-                K::KeywordLet,
-                K::Ident,
-                K::Equals,
-                K::Ident,
-                K::OpenParen,
-                K::String,
-                K::CloseParen,
-            ],
-        )
-    }
-
-    #[test]
     fn ending_ident() -> anyhow::Result<()> {
         let input = "let x = a + b";
         expect_token_kinds(
@@ -997,9 +1001,114 @@ mod test {
     #[test]
     fn extern_fn_name() -> anyhow::Result<()> {
         let input = r#"extern(printf)"#;
-        let (_spans, tokens) = set_up(input)?;
-        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen,], kinds);
-        Ok(())
+        expect_token_kinds(input, vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen])
+    }
+
+    #[test]
+    fn literal_string() -> anyhow::Result<()> {
+        let input = "let x = println(\"foobear\")";
+        expect_token_kinds(
+            input,
+            vec![
+                K::KeywordLet,
+                K::Ident,
+                K::Equals,
+                K::Ident,
+                K::OpenParen,
+                K::String,
+                K::CloseParen,
+            ],
+        )
+    }
+
+    #[test]
+    fn interpolation_1() -> anyhow::Result<()> {
+        let input = r#""Hello, {world}""#;
+        expect_token_kinds(
+            input,
+            vec![K::StringUnterminated, K::OpenBrace, K::Ident, K::CloseBrace, K::String],
+        )
+    }
+
+    #[test]
+    fn interpolation_start_end() -> anyhow::Result<()> {
+        let input = r#""{foo()}, {world}""#;
+        expect_token_kinds(
+            input,
+            vec![
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::Ident,
+                K::OpenParen,
+                K::CloseParen,
+                K::CloseBrace,
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::Ident,
+                K::CloseBrace,
+                K::String,
+            ],
+        )
+    }
+
+    #[test]
+    fn interpolation_string() -> anyhow::Result<()> {
+        let input = r#""{"hello"}""#;
+        expect_token_kinds(
+            input,
+            vec![K::StringUnterminated, K::OpenBrace, K::String, K::CloseBrace, K::String],
+        )
+    }
+
+    #[test]
+    fn interpolation_nested() -> anyhow::Result<()> {
+        let input = r#""{"hello {var}"}""#;
+        expect_token_kinds(
+            input,
+            vec![
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::Ident,
+                K::CloseBrace,
+                K::String,
+                K::CloseBrace,
+                K::String,
+            ],
+        )
+    }
+
+    #[test]
+    fn interpolation_escape_doublebrace() -> anyhow::Result<()> {
+        let input = "\"Method 'sum' does not exist on type: '{{ x: iword, y: iword }'\"";
+        expect_token_kinds(input, vec![K::String])
+    }
+
+    #[test]
+    fn interpolation_nested_with_braces() -> anyhow::Result<()> {
+        let input = r#""{"hello {({ x: 42 }).x}"}""#;
+        expect_token_kinds(
+            input,
+            vec![
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::StringUnterminated,
+                K::OpenBrace,
+                K::OpenParen,
+                K::OpenBrace,
+                K::Ident,
+                K::Colon,
+                K::Ident,
+                K::CloseBrace,
+                K::CloseParen,
+                K::Dot,
+                K::Ident, // .x
+                K::CloseBrace,
+                K::String,
+                K::CloseBrace,
+                K::String,
+            ],
+        )
     }
 }

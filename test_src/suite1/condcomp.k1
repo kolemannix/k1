@@ -14,7 +14,7 @@ fn test(): unit {
   #if MY_VALUE_NEG {
     crash("does not happen")
   } else {
-    println("hello from MY_VALUE_NEG=\{MY_VALUE_NEG}")
+    println("hello from MY_VALUE_NEG={MY_VALUE_NEG}")
   };
 
   let comptimeCheck = #if false "foo" else "bar";

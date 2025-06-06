@@ -86,7 +86,7 @@ impl Show for { rank: int, payload: string } {
   fn show(self: Self): string {
     let rank = self.rank;
     let payload = self.payload;
-    "Payload: \{payload} (rank=\{rank})"
+    "Payload: {payload} (rank={rank})"
   }
 }
 

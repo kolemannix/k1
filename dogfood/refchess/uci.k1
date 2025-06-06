@@ -11,7 +11,7 @@ deftype Command = either
   Perft({ depth: u32 })
 
 fn parseCommand(cmd: string): Result[Command, string] {
-  println("[debug] received: \{cmd}");
+  println("[debug] received: {cmd}");
   
   switch cmd {
     // Initial handshake: GUI sends "uci", engine responds with id and options
@@ -31,7 +31,7 @@ fn parseCommand(cmd: string): Result[Command, string] {
       if cmd.startsWith("perft ") {
          let parsedDepth = cmd.drop(6).toInt();
          if parsedDepth is .Some(depth) { .Ok(.Perft({ depth: depth as u32 })) }
-         else .Err("Invalid perft command: \{cmd}")
+         else .Err("Invalid perft command: {cmd}")
       } else if cmd.startsWith("position ") {
         // "position" command sets up a position to analyze:
         //   "position startpos" - start from initial position
@@ -65,7 +65,7 @@ fn parseCommand(cmd: string): Result[Command, string] {
         //   "go movetime 1000" - search for exactly 1 second
         
         .Ok(.Go(cmd.substring(2, cmd.len())))
-      } else .Err("Unsupported command: \{cmd}")
+      } else .Err("Unsupported command: {cmd}")
     }
   }
 }
