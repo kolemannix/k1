@@ -10162,6 +10162,7 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> TyperResult<NamedTypeSlice> {
         debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
+        self.write_location(&mut stderr(), span);
 
         self.inference_context.origin_stack.push(span);
         let mut self_ = scopeguard::guard(self, |self_| {
@@ -10230,7 +10231,7 @@ impl TypedProgram {
                 }
             };
             argument_types.push(argument_type);
-            debug!(
+            eprintln!(
                 "unify {} =:= {}",
                 self_.type_id_to_string(argument_type),
                 self_.type_id_to_string(expected_type_so_far),
@@ -10250,7 +10251,7 @@ impl TypedProgram {
                     );
                 }
             };
-            debug!(
+            eprintln!(
                 "subst\n\t{}",
                 self_.pretty_print_type_substitutions(&self_.inference_context.constraints, "\n\t"),
             );
@@ -10294,7 +10295,7 @@ impl TypedProgram {
                     .join("\n")
             );
         }
-        debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
+        eprintln!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
         let solutions_handle = self_.named_types.add_slice_from_copy_slice(&solutions);
         Ok(solutions_handle)
     }
@@ -10628,7 +10629,7 @@ impl TypedProgram {
             }
         }
         for p in final_pairs.iter() {
-            debug!(
+            eprintln!(
                 "final_pair {} -> {}",
                 self.type_id_to_string(*p.0),
                 self.type_id_to_string(*p.1)
