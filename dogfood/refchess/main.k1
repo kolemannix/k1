@@ -221,11 +221,11 @@ fn handleCommand(context eng: Engine)(command: uci/Command): string? {
       sys/exit(0)
     },
     .Position(s) -> {
-      debugLog("Setting position: \{s}");
+      debugLog("Setting position: {s}");
       none()
     },
     .Perft({ depth }) -> {
-      debugLog("Handling perft depth \{depth}");
+      debugLog("Handling perft depth {depth}");
       eng.game.genMoves();
       none()
     }
@@ -240,7 +240,7 @@ ns Engine {
 
 fn debugLog(context eng: Engine)(s: string): unit {
   if eng.inDebugMode() {
-    println("[debug] \{s}");
+    println("[debug] {s}");
   }
 }
 
@@ -250,7 +250,7 @@ fn run(args: Buffer[string]): Result[i32, string] {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/readLine(2048).try; 
     switch uci/parseCommand(cmd) {
-      .Err(msg) -> eprintln("[debug] \{msg}"),
+      .Err(msg) -> eprintln("[debug] {msg}"),
       .Ok(cmd) -> {
         let response = handleCommand(cmd);
         // If a command produces output, it goes to stdout with a newline added

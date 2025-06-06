@@ -99,7 +99,7 @@ ns List {
 
   fn slice[T](self: List[T], start: uword, end: uword): Buffer[T] {
     if self.len == 0 return(Buffer/empty[T]());
-    if end > self.len { crash("List slice end out of bounds: \{end}") };
+    if end > self.len { crash("List slice end out of bounds: {end}") };
     self.buffer.slice(start, end)
   }
 

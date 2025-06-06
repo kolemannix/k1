@@ -71,10 +71,10 @@ ns Buffer {
 
   fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: uword): unit {
     if count > source.len {
-      crash("Buffer copy source index out of bounds: \{count}")
+      crash("Buffer copy source index out of bounds: {count}")
     };
     if count > dest.len {
-      crash("Buffer copy dest index out of bounds: \{count}")
+      crash("Buffer copy dest index out of bounds: {count}")
     };
     let numBytes = bufferSizeBytes[T](count);
     mem/copy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
@@ -113,7 +113,7 @@ ns Buffer {
     };
     if start >= self.len or start < 0 {
       let len = self.len;
-      crash("slice start index out of bounds: \{start}. length is: \{len}")
+      crash("slice start index out of bounds: {start}. length is: {len}")
     };
     let end = if end > self.len self.len else end;
     let newLen = end - start;

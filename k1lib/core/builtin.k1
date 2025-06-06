@@ -352,7 +352,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     let filename = locn.filename;
     let line = locn.line;
     sys/printBacktrace();
-    let s = "\{msg} at \{filename}:\{line}\n";
+    let s = "{msg} at {filename}:{line}\n";
     eprint(s);
     sys/exit(1)
   }

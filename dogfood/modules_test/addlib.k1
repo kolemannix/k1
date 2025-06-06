@@ -9,6 +9,6 @@ fn module(): k1/Module {
 
 fn main(): i32 {
   let i = subsy/sub(30, 1);
-  println("Hello, modules! \{i}");
+  println("Hello, modules! {i}");
   0
 }

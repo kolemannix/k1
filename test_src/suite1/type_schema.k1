@@ -15,7 +15,7 @@ ns type_schema {
     require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
     let name = typeName(id);
-    sb.putString("Struct \{name} {\n");
+    sb.putString("Struct {name} {{\n");
     for field in fields do {
       sb.putString("  ");
       sb.putString(field.name);

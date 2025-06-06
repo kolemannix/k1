@@ -1,10 +1,6 @@
 fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
   if a != b {
-    let aShow = a.show();
-    let bShow = b.show();
-    println(aShow);
-    println(bShow);
-    crash("ASSERT FAILED: \{aShow} != \{bShow}")
+    crash("ASSERT FAILED: {a} != {b}")
   }
 }
 
@@ -175,7 +171,7 @@ ns files {
 
 fn assertMsg(context locn: compiler/SourceLocation)(msg: string, value: bool): unit {
   if not value {
-    crash("ASSERT FAILED: \{msg}")
+    crash("ASSERT FAILED: {msg}")
   };
 }
 

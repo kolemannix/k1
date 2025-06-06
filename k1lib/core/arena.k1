@@ -22,7 +22,7 @@ ns Arena {
     let sum = baseAddress + mask;
     let aligned = Bitwise/bitAnd(sum, Bitwise/bitNot(mask));
     #if k1/DEBUG if aligned != baseAddress {
-      println("Aligned \{baseAddress} to \{aligned}!")
+      println("Aligned {baseAddress} to {aligned}!")
     };
     aligned
   }
@@ -47,7 +47,7 @@ ns Arena {
     let dataStart = alignTo(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
-      crash("Arena is out of space to allocate \{size} bytes.")
+      crash("Arena is out of space to allocate {size} bytes.")
     };
 
     self.curAddr* <- newEnd;
@@ -64,7 +64,7 @@ ns Arena {
 
   fn freeAll(self: Arena*): unit {
     let size = self.regionSizeBytes();
-    println("[arena] Freeing \{size}");
+    println("[arena] Freeing {size}");
     self.curAddr* <- (self.basePtr as uword);
   }
 }

@@ -9,7 +9,7 @@ fn useless(): unit {
     { x, y: .Some(false) } -> x,
     { x, y: .None } -> x + 2
   });
-  assert(result is .Some("Useless pattern: { x: x, y: Some(false) }"));
+  assert(result is .Some("Useless pattern: {{ x: x, y: Some(false) }"));
 }
 
 deftype Blub = { x: int, y: bool? }
@@ -19,7 +19,7 @@ fn unhandled(): unit {
     { x, y: .Some(true) } -> x,
     { x, y: .None } -> x + 2
   });
-  assert(result is .Some("Unhandled pattern: { x: <int>, y: Some(false) }"));
+  assert(result is .Some("Unhandled pattern: {{ x: <int>, y: Some(false) }"));
 }
 
 fn test(): unit {

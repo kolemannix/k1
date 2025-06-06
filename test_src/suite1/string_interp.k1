@@ -4,11 +4,20 @@ impl Show for { name: string, weight: int } {
   fn show(self: Self): string { 
     let name = self.name;
     let weight = self.weight;
-    "\{name}: \{weight}"
+    "{name}: {weight}"
   }
 }
 
 fn test(): unit {
   let user = { name: "Bob", weight: 199 };
-  assert("Hello, '\{user}'!" == "Hello, 'Bob: 199'!");
+  assertEquals("Hello, '{user}'!", "Hello, 'Bob: 199'!");
+
+  let p = { outer: { inner: true } };
+  assertEquals("{not p.outer.inner}", "false");
+
+  let withBraces = "{42.show()} + {20} = {({ value: 62}.value)}";
+  assertEquals(withBraces, "42 + 20 = 62");
+
+  let nested = "{"String has {10 + 10} in"} it";
+  assertEquals(nested, "String has 20 in it");
 }

@@ -172,8 +172,8 @@ ns HashMap {
   fn dump[V](self: HashMap[V]): unit where V: Show {
     let capacity = self.entries.len;
     let size = self.size;
-    println("Capacity: \{capacity}");
-    println("Size: \{size}");
+    println("Capacity: {capacity}");
+    println("Size: {size}");
     println("");
     for self.entries do {
       printIt(itIndex);
@@ -181,8 +181,7 @@ ns HashMap {
       switch it {
         , .None -> println("empty")
         , .Some({ key, value, deleted }) -> {
-            let v = Show/show(value);
-            println("\{key} -> \{value} (d=\{deleted})");
+            println("{key} -> {value} (d={deleted})");
         }
       }
     }
@@ -205,9 +204,9 @@ fn test(size: int): unit {
   while i < size {
     let result = myMap.get(i.show());
     if i % 5 == 0 {
-      assertMsg("\{i} should be empty", result is .None);
+      assertMsg("{i} should be empty", result is .None);
     } else {
-      if result is .Some(v) { assert (v == i) } else { crash("Missing value \{i}") }
+      if result is .Some(v) { assert (v == i) } else { crash("Missing value {i}") }
     };
     i = i + 1;
   };

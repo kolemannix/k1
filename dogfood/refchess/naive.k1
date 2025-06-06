@@ -40,7 +40,7 @@ ns Square {
        'f' or 'F' -> 5,
        'g' or 'G' -> 6,
        'h' or 'H' -> 7,
-       _ -> crash("bad tile name: \{s}")
+       _ -> crash("bad tile name: {s}")
     };
     let rank = (s.get(1).toDigitValue().! - 1);
     fromRankFile(file, rank)
@@ -61,7 +61,7 @@ impl Show for Square {
       _ -> crash("Bad file")
     };
     let rank = self.rank + 1;
-    "\{file}\{rank}"
+    "{file}{rank}"
   }
 }
 

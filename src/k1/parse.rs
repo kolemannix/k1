@@ -2422,118 +2422,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ))
                 }
             }
-            (K::String, _) => {
-                trace!("parse_literal string");
-                self.advance();
-                // Accessing the tok_chars this way achieves a partial borrow of self
-                let text = Parser::tok_chars(
-                    &self.ast.spans,
-                    self.ast.sources.get_source(self.file_id),
-                    first,
-                )
-                // nocommit Avoid new clone? we need mut self to parse :(
-                .to_string();
-                //
-                // nocommit reuse buf
-                let mut buf = String::with_capacity(text.len());
-                let mut chars = text.chars();
-                enum Mode {
-                    Base,
-                    Interp(String),
-                }
-                let mut mode = Mode::Base;
-                let mut parts: Vec<InterpolatedStringPart> = Vec::new();
-                while let Some(c) = chars.next() {
-                    match &mut mode {
-                        Mode::Interp(ident_str) => {
-                            if crate::lex::is_ident_char(c) {
-                                ident_str.push(c)
-                            } else if c == '}' {
-                                let buf = std::mem::take(ident_str);
-                                let ident = self.ast.idents.intern(buf);
-                                parts.push(InterpolatedStringPart::Identifier(ident));
-                                mode = Mode::Base;
-                            } else {
-                                return Err(error(
-                                    format!(
-                                        "Unexpected character inside interpolated identifier: {c}, expected more or '}}'"
-                                    ),
-                                    first,
-                                ));
-                            }
-                        }
-                        Mode::Base => {
-                            if c == '{' {
-                                let Some(next) = chars.next() else {
-                                    return Err(error("String ended with '{'", first));
-                                };
-                                if next == '{' {
-                                    buf.push('{');
-                                } else {
-                                    if !buf.is_empty() {
-                                        let string_id = self.ast.strings.intern(&buf);
-                                        buf.clear();
-                                        parts.push(InterpolatedStringPart::String(string_id));
-                                    }
-                                    let expr = self.expect_expression()?;
-                                    if chars.next() != Some('}') {
-                                        return Err(error_expected("'}'", self.peek()));
-                                    }
-                                    parts.push(InterpolatedStringPart::Expr(expr));
-                                    mode = Mode::Base;
-                                }
-                            }
-                            if c == '\\' {
-                                let Some(next) = chars.next() else {
-                                    return Err(error("String ended with '\\'", first));
-                                };
-                                if next == '{' {
-                                    let string_id = self.ast.strings.intern(&buf);
-                                    buf.clear();
-                                    parts.push(InterpolatedStringPart::String(string_id));
-                                    mode = Mode::Interp(String::with_capacity(16));
-                                } else if let Some(c) =
-                                    STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
-                                {
-                                    buf.push(c.output as char)
-                                } else {
-                                    return Err(error(
-                                        format!("Invalid escape sequence: '\\{next}'"),
-                                        first,
-                                    ));
-                                };
-                            } else {
-                                buf.push(c)
-                            }
-                        }
-                    }
-                }
-                match mode {
-                    Mode::Base => {
-                        if parts.is_empty() || !buf.is_empty() {
-                            let string_id = self.ast.strings.intern(&buf);
-                            parts.push(InterpolatedStringPart::String(string_id))
-                        }
-                    }
-                    Mode::Interp(s) => {
-                        return Err(error(
-                            format!("Unterminated interpolated identifier: {s}"),
-                            first,
-                        ));
-                    }
-                }
-                if parts.len() == 1 {
-                    let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap()
-                    else {
-                        panic!()
-                    };
-                    let literal = Literal::String(s, first.span);
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(literal))))
-                } else {
-                    let string_interp = ParsedInterpolatedString { parts, span: first.span };
-                    Ok(Some(self.add_expression(ParsedExpr::InterpolatedString(string_interp))))
-                }
-            }
+            (K::String | K::StringUnterminated, _) => Ok(Some(self.expect_string()?)),
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
                 let text = self.token_chars(second);
                 if text.chars().next().unwrap().is_numeric() {
@@ -2574,6 +2463,95 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             _ => Ok(None),
+        }
+    }
+
+    fn expect_string(&mut self) -> ParseResult<ParsedExprId> {
+        let first = self.tokens.peek();
+        trace!("expect_string");
+
+        // nocommit reuse buf
+        let mut buf = String::with_capacity(256);
+        let mut parts: Vec<InterpolatedStringPart> = Vec::new();
+        loop {
+            let current_token = self.tokens.next();
+            eprintln!("Parsing a string token; kind = {}", current_token.kind);
+            eprintln!(
+                "    Full content: `{}`",
+                Parser::tok_chars(
+                    &self.ast.spans,
+                    self.ast.sources.get_source(self.file_id),
+                    current_token,
+                )
+            );
+            match current_token.kind {
+                // Interpolation case
+                K::OpenBrace => {
+                    let expr_id = self.expect_expression()?;
+                    parts.push(InterpolatedStringPart::Expr(expr_id));
+                    self.expect_eat_token(K::CloseBrace)?;
+                }
+                K::StringUnterminated | K::String => {
+                    // Accessing the tok_chars this way achieves a partial borrow of self
+                    let text = Parser::tok_chars(
+                        &self.ast.spans,
+                        self.ast.sources.get_source(self.file_id),
+                        current_token,
+                    );
+
+                    buf.clear();
+                    let mut chars = text.chars();
+                    while let Some(c) = chars.next() {
+                        if c == '{' {
+                            let Some(next) = chars.next() else {
+                                return Err(error("String ended with '{'", first));
+                            };
+                            if next == '{' {
+                                buf.push('{');
+                            } else {
+                                return Err(error("ICE: contains non-escaped '{'", first));
+                            }
+                        } else if c == '\\' {
+                            let Some(next) = chars.next() else {
+                                return Err(error("String ended with '\\'", first));
+                            };
+                            if let Some(c) =
+                                STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
+                            {
+                                buf.push(c.output as char)
+                            } else {
+                                return Err(error(
+                                    format!("Invalid escape sequence: '\\{next}'"),
+                                    first,
+                                ));
+                            };
+                        } else {
+                            buf.push(c)
+                        }
+                    }
+                    let string_id = self.ast.strings.intern(&buf);
+
+                    parts.push(InterpolatedStringPart::String(string_id));
+                    // StringUnterminated means there are more segments
+                    // String means we're done;
+                    if current_token.kind == K::String {
+                        break;
+                    }
+                }
+                k => {
+                    return Err(error("Unexpected token kind in string sequence", current_token));
+                }
+            }
+        }
+        if parts.len() == 1 {
+            let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap() else {
+                panic!()
+            };
+            let literal = Literal::String(s, first.span);
+            Ok(self.add_expression(ParsedExpr::Literal(literal)))
+        } else {
+            let string_interp = ParsedInterpolatedString { parts, span: first.span };
+            Ok(self.add_expression(ParsedExpr::InterpolatedString(string_interp)))
         }
     }
 

@@ -9,11 +9,11 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
       for f in s.fields do {
         let fName = f.name;
 
-        let fieldLetName = "_\{name}\{fName}";
+        let fieldLetName = "_{name}{fName}";
 
-        #emitstring "let \{fieldLetName} = \{name}.\{fName}";
+        #emitstring "let {fieldLetName} = {name}.{fName}";
         #emit w.writeChar('"');
-        #emitstring "w.writeString(\"\{fName}\")";
+        #emitstring "w.writeString(\"{fName}\")";
         #emit w.writeString("\":");
         
         _writeJsonFromSchema(fieldLetName, f.typeId);
@@ -26,12 +26,12 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
     },
     .Unit -> #emit w.writeString("\"unit\""),
     .Bool -> {
-      #emitstring "w.writeString(if \{name} \"true\" else \"false\")" 
+      #emitstring "w.writeString(if {name} \"true\" else \"false\")" 
     },
-    .Word(_) or .Int(_) -> #emitstring "\{name}.printTo(w)",
+    .Word(_) or .Int(_) -> #emitstring "{name}.printTo(w)",
     .Either(_) -> { 
       let tName = types/typeName(typeId);
-      crash("Cannot yet create a JSON writer for either: \{tName}")
+      crash("Cannot yet create a JSON writer for either: {tName}")
     },
     _ -> {
       #emit w.writeString("\"other\"")
@@ -51,7 +51,7 @@ fn toJson[T](t: T): string {
   let* w = List/empty[char]();
   writeJson(context w)(t);
   let s = string/wrapList(w);
-  println("Json: `\{s}`");
+  println("Json: `{s}`");
   s
 }
 

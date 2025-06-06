@@ -1,6 +1,6 @@
 fn main(): i32 {
   let w = "World";
-  println("woof");
-  println("{w}");
+  assertEquals("Ok: 3", "Ok: {3}");
   0
+
 }
