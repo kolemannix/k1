@@ -163,6 +163,11 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         &self.vec[index]
     }
 
+    pub fn get_opt(&self, index: Index) -> Option<&T> {
+        let index = Self::id_to_actual_index(index);
+        self.vec.get(index)
+    }
+
     pub fn get_mut(&mut self, index: Index) -> &mut T {
         let index = Self::id_to_actual_index(index);
         &mut self.vec[index]

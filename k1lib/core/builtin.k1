@@ -17,7 +17,11 @@ deftype iword = builtin
 deftype unit    = builtin
 deftype char    = builtin
 deftype bool    = builtin
+
+/// An uninhabited type representing that code with this type never returns
+/// Used to signal termination and enables control flow analysis
 deftype never   = builtin
+
 deftype Pointer = builtin
 
 deftype f32 = builtin
@@ -95,6 +99,12 @@ ns types {
     value: Pointer
   }
 
+}
+
+ns meta {
+  intern fn emitLine(code: string): unit
+  intern fn emitVariable[T](name: string, value: T): unit
+  intern fn _getStaticValueById[T](id: u64): T
 }
 
 ////////////////////////////////
@@ -225,6 +235,7 @@ ns mem {
 // Compiler builtins
 ns k1 {
   // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
+  // nocommit: fix globals to be either 'let mut' or just 'let' for static
   let static IS_STATIC: bool = builtin;
 
   let static TEST: bool = builtin;

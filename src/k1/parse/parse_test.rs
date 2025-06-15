@@ -73,13 +73,13 @@ fn basic_fn() -> Result<(), ParseError> {
 
 #[test]
 fn string_literal() -> ParseResult<()> {
-    let (module, result) = test_single_expr(r#""hello world""#)?;
+    let (module, result) = test_single_expr(r#""Hello, World!""#)?;
     let ParsedExpr::Literal(Literal::String(s, span_id)) = result else { panic!() };
     let span = module.spans.get(span_id);
-    assert_eq!(module.get_string(s), "hello world");
-    assert_eq!(span.start, 1);
-    assert_eq!(span.len, 11);
-    assert_eq!(span.end(), 12);
+    assert_eq!(module.get_string(s), "Hello, World!");
+    assert_eq!(span.start, 0);
+    assert_eq!(span.len, 13 + 2);
+    assert_eq!(span.end(), 15);
     Ok(())
 }
 

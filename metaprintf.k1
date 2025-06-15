@@ -1,0 +1,38 @@
+use core/meta
+fn sprintf[Args](fmtString: string, args: Args): string { 
+  let* result: List[char]* = List/empty();
+  #meta {
+    let fmtString = "My values are ? and ?";
+    let schema = types/typeSchema(types/typeId[Args]());
+    if schema is .Other("param") { meta/emitLine(#code ""); return(()) };
+    require schema is .Struct({ fields }) else { crash("Struct!") };
+    
+    for field in fields do {
+      meta/emitLine("let f{itIndex} = args.{field.name}")
+    };
+    let mut fmtIndex = 0;
+
+    let parts = fmtString.splitByChar('?');
+    meta/emitVariable("parts", parts);
+
+    if parts.len != fields.len {
+      crash("Mismatching format arg count")
+    };
+
+    for part in parts do {
+      meta/emitLine("parts.get({fmtIndex}).printTo(result)");
+      meta/emitLine("f{fmtIndex}.printTo(result)");
+      fmtIndex = fmtIndex + 1;
+    };
+    meta/emitLine(#code string/wrapList(result))
+  }
+}
+
+fn main(): i32 {
+  let s1 = sprintf("My value is: ?", {a: 42, b: true});
+  println(s1);
+  //let s3 = sprintf("My values are: ?, ?", {a: "asdf", b: true});
+  //println(s3);
+
+  0
+}

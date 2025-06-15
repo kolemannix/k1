@@ -746,20 +746,6 @@ impl TypedProgram {
                 self.display_static_value(w, *id)?;
                 Ok(())
             }
-            TypedExpr::Emit(e) => {
-                w.write_str("#emit ")?;
-                match &e.to_emit {
-                    ToEmit::Parsed(stmt_id) => {
-                        self.ast.display_stmt_id(w, *stmt_id)?;
-                    }
-                    ToEmit::String(typed_expr) => {
-                        w.write_char('"')?;
-                        self.display_expr_id(*typed_expr, w, indentation)?;
-                        w.write_char('"')?;
-                    }
-                }
-                Ok(())
-            }
         }
     }
 

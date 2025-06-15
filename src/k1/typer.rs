@@ -32,8 +32,9 @@ use crate::parse::{
     NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
     ParsedBlockKind, ParsedCallArg, ParsedDirective, ParsedExprId, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedStmtId, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
-    ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources, StringId, StructValueField,
+    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
+    StringId, StructValueField,
 };
 use crate::parse::{
     Identifier, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
@@ -73,6 +74,12 @@ macro_rules! nz_u32_id {
 
             pub const fn from_nzu32(value: NonZeroU32) -> Self {
                 $name(value)
+            }
+            pub const fn from_u32(value: u32) -> Option<Self> {
+                match NonZeroU32::new(value) {
+                    None => None,
+                    Some(nz_u32) => Some($name(nz_u32)),
+                }
             }
             pub const ONE: Self = $name(NonZeroU32::new(1).unwrap());
             pub const PENDING: Self = $name(NonZeroU32::MAX);
@@ -164,7 +171,11 @@ pub struct InferenceContext {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StaticExecContext {
-    allow_emit: bool,
+    is_metaprogram: bool,
+    /// If a `return` is used, what type is expected
+    /// This is needed because `return` usually looks at the
+    /// enclosing function, but for #static blocks it shouldn't
+    expected_return_type: Option<TypeId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1581,6 +1592,7 @@ pub enum CastType {
     FloatToInteger,
     IntegerToFloat,
     LambdaToLambdaObject,
+    ToNever,
 }
 
 impl Display for CastType {
@@ -1601,6 +1613,7 @@ impl Display for CastType {
             CastType::FloatToInteger => write!(f, "ftoint"),
             CastType::IntegerToFloat => write!(f, "inttof"),
             CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
+            CastType::ToNever => write!(f, "never"),
         }
     }
 }
@@ -1707,12 +1720,9 @@ pub enum ToEmit {
     Parsed(ParsedStmtId),
     /// Expression evaluating to a string, to be parsed, if executed at compile-time
     String(TypedExprId),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct TypedEmit {
-    pub to_emit: ToEmit,
-    pub span: SpanId,
+    Variable {
+        typed_let_stmt: TypedStmtId,
+    },
 }
 
 // TODO(perf): TypedExpr is very big
@@ -1770,7 +1780,6 @@ pub enum TypedExpr {
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
     StaticValue(StaticValueId, TypeId, SpanId),
-    Emit(TypedEmit),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1810,7 +1819,6 @@ impl TypedExpr {
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
             TypedExpr::StaticValue(_, type_id, _) => *type_id,
-            TypedExpr::Emit(_) => UNIT_TYPE_ID,
         }
     }
 
@@ -1844,7 +1852,6 @@ impl TypedExpr {
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
             TypedExpr::StaticValue(_, _, span) => *span,
-            TypedExpr::Emit(e) => e.span,
         }
     }
 
@@ -1981,7 +1988,7 @@ pub struct TypedGlobal {
     pub initial_value: Option<StaticValueId>,
     pub ty: TypeId,
     pub span: SpanId,
-    pub is_static: bool,
+    pub is_constant: bool,
     pub is_referencing: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
@@ -2064,6 +2071,7 @@ pub enum IntrinsicBitwiseBinopKind {
     ShiftRight,
 }
 
+// nocommit(2) split this enum up by handle: FrontendIntrinsicOperation vs BackendIntrinsicOperation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicOperation {
     SizeOf,
@@ -2091,7 +2099,10 @@ pub enum IntrinsicOperation {
     MemEquals,
     Exit,
     // Static-only
-    EmitCompilerMessage,
+    CompilerMessage,
+    EmitStringStatement,
+    EmitVariable,
+    StaticValueById,
 }
 
 impl IntrinsicOperation {
@@ -2101,14 +2112,15 @@ impl IntrinsicOperation {
             IntrinsicOperation::SizeOfStride => true,
             IntrinsicOperation::AlignOf => true,
             IntrinsicOperation::TypeId => true,
-            //
             IntrinsicOperation::CompilerSourceLocation => true,
+            IntrinsicOperation::StaticValueById => true,
+            //
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
             IntrinsicOperation::BitNot => false,
             IntrinsicOperation::BitwiseBinop(_) => false,
             IntrinsicOperation::PointerIndex => false,
-            IntrinsicOperation::EmitCompilerMessage => false,
+            IntrinsicOperation::CompilerMessage => false,
             IntrinsicOperation::Allocate => false,
             IntrinsicOperation::AllocateZeroed => false,
             IntrinsicOperation::Reallocate => false,
@@ -2119,9 +2131,14 @@ impl IntrinsicOperation {
             IntrinsicOperation::Exit => false,
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
+            IntrinsicOperation::EmitStringStatement => false,
+            IntrinsicOperation::EmitVariable => false,
         }
     }
 
+    // nocommit Rename is_inlined to is_physical_function
+    //          Or just document where this is used or what it truly
+    //          means better
     pub fn is_inlined(self) -> bool {
         match self {
             IntrinsicOperation::SizeOf => true,
@@ -2134,7 +2151,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::BitwiseBinop(_) => true,
             IntrinsicOperation::PointerIndex => true,
             IntrinsicOperation::CompilerSourceLocation => true,
-            IntrinsicOperation::EmitCompilerMessage => true,
+            IntrinsicOperation::CompilerMessage => true,
             // System-level
             IntrinsicOperation::Allocate => false,
             IntrinsicOperation::AllocateZeroed => false,
@@ -2147,6 +2164,10 @@ impl IntrinsicOperation {
             // Runtime switch on typeId, likely inlined
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
+            // Metaprogramming
+            IntrinsicOperation::EmitStringStatement => true,
+            IntrinsicOperation::EmitVariable => true,
+            IntrinsicOperation::StaticValueById => true,
         }
     }
 }
@@ -2401,6 +2422,8 @@ pub struct TypedModuleBuffers {
 pub enum CodeEmission {
     Parsed(crate::parse::ParsedStmtId),
     String(StringId),
+    // Eventually, variable modifiers
+    Variable { name: Identifier, value: StaticValueId },
 }
 
 pub struct VmExecuteResult {
@@ -3356,6 +3379,26 @@ impl TypedProgram {
                 let ty = self.exprs.get(expr);
                 Ok(ty.get_type())
             }
+            ParsedTypeExpr::TypeFromId(type_from_id) => {
+                let type_from_id = *type_from_id;
+                let id_expr_id = self.eval_expr(
+                    type_from_id.id_expr,
+                    EvalExprContext::make(scope_id).with_expected_type(Some(U64_TYPE_ID)),
+                )?;
+                let TypedExpr::Integer(typed_int) = self.exprs.get(id_expr_id) else {
+                    self.ice_with_span(
+                        "Expected an integer expression for TypeFromId",
+                        type_from_id.span,
+                    );
+                };
+                let TypedIntValue::U64(u64_value) = typed_int.value else {
+                    self.ice_with_span("Expected a u64 value for TypeFromId", type_from_id.span);
+                };
+                let Some(type_id) = TypeId::from_u32(u64_value as u32) else {
+                    return failf!(type_from_id.span, "Type ID {} is out of bounds", u64_value);
+                };
+                Ok(type_id)
+            }
             ParsedTypeExpr::SomeQuant(quant) => {
                 if !context.is_direct_function_parameter {
                     return failf!(
@@ -3790,7 +3833,8 @@ impl TypedProgram {
             | Type::Integer(_)
             | Type::Float(_)
             | Type::Bool
-            | Type::Pointer => type_id,
+            | Type::Pointer
+            | Type::Never => type_id,
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
@@ -3928,9 +3972,6 @@ impl TypedProgram {
                     type_id
                 }
             }
-            Type::Never => {
-                unreachable!("substitute_in_type is not expected to be called on never")
-            }
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
@@ -3969,7 +4010,7 @@ impl TypedProgram {
             None,
             false,
             false,
-            StaticExecContext { allow_emit: false },
+            StaticExecContext { is_metaprogram: false, expected_return_type: None },
         )?;
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
@@ -4431,8 +4472,8 @@ impl TypedProgram {
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
-                self.type_id_to_string_ext(expected, true),
-                self.type_id_to_string_ext(actual, true),
+                self.type_id_to_string_ext(expected, false),
+                self.type_id_to_string_ext(actual, false),
             )),
         }
     }
@@ -4499,38 +4540,42 @@ impl TypedProgram {
             global_defn_name: global_name,
         };
 
-        let expr = self.eval_expr(parsed_expr, eval_ctx)?;
-        //eprintln!(
-        //    "executed '{}' with vm and eval_ctx.static: {:?}",
-        //    self.expr_to_string(expr),
-        //    &eval_ctx.static_ctx
-        //);
-        let type_id = self.exprs.get(expr).get_type();
+        let expr_original = self.eval_expr(parsed_expr, eval_ctx)?;
+        let span = self.exprs.get(expr_original).get_span();
+        let expr = if static_ctx.is_metaprogram {
+            // We cast to Never because a value of this type will never be seen;
+            // for #meta blocks we do not use the result value, only the emitted code
+            // This avoids us failing typechecking;
+            // Philosophical note: Never here is not even a hack, since its 'true' purpose
+            // is to represent the types of expressions that never yield a value, and code
+            // whose value we never insert into the program fits that description perfectly,
+            // better than Unit
+            self.synth_cast(expr_original, NEVER_TYPE_ID, CastType::ToNever)
+        } else {
+            expr_original
+        };
+        let required_type_id = self.exprs.get(expr_original).get_type();
+        let output_type_id =
+            if static_ctx.is_metaprogram { NEVER_TYPE_ID } else { required_type_id };
 
         if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, scope_id)? {
             return Ok(VmExecuteResult {
-                type_id,
+                type_id: required_type_id,
                 static_value_id: shortcut_value_id,
                 emits: vec![],
             });
         }
 
+        eprintln!("vm emits at start: {}", vm.emits.len());
         let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
+        eprintln!("vm emits at end: {}", vm.emits.len());
 
-        let span = self.exprs.get(expr).get_span();
         if cfg!(debug_assertions) {
-            if type_id != value.get_type() {
-                return failf!(
-                    span,
-                    "static value type mismatch {}: {} vs {}",
-                    self.expr_to_string(expr),
-                    self.type_id_to_string(type_id),
-                    self.type_id_to_string(value.get_type())
-                );
+            if let Err(msg) = self.check_types(required_type_id, value.get_type(), scope_id) {
+                return failf!(span, "static value type mismatch: {msg}");
             }
         }
 
-        // Horrible borrow hack again
         let static_value_id = vm::vm_value_to_static_value(self, vm, value, span)?;
 
         let emits = vm.emits.clone();
@@ -4538,7 +4583,7 @@ impl TypedProgram {
         if !no_reset {
             vm.reset();
         }
-        Ok(VmExecuteResult { type_id, static_value_id, emits })
+        Ok(VmExecuteResult { type_id: output_type_id, static_value_id, emits })
     }
 
     fn execute_static_expr(
@@ -4610,7 +4655,7 @@ impl TypedProgram {
             None,
             ctx.is_inference,
             false,
-            StaticExecContext { allow_emit: false },
+            StaticExecContext { is_metaprogram: false, expected_return_type: Some(BOOL_TYPE_ID) },
         )?;
         let StaticValue::Boolean(condition_bool) =
             self.static_values.get(vm_cond_result.static_value_id)
@@ -4652,7 +4697,7 @@ impl TypedProgram {
             ty: type_id,
             span: global_span,
             is_referencing,
-            is_static,
+            is_constant: is_static,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -4699,7 +4744,10 @@ impl TypedProgram {
                 Some(global_name),
                 false,
                 false,
-                StaticExecContext { allow_emit: false },
+                StaticExecContext {
+                    is_metaprogram: false,
+                    expected_return_type: Some(type_to_check),
+                },
             ),
             Some(vm) => self.execute_static_expr_with_vm(
                 vm,
@@ -4709,7 +4757,10 @@ impl TypedProgram {
                 Some(global_name),
                 false,
                 true,
-                StaticExecContext { allow_emit: false },
+                StaticExecContext {
+                    is_metaprogram: false,
+                    expected_return_type: Some(type_to_check),
+                },
             ),
         }?;
 
@@ -5712,7 +5763,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         let scope_id = ctx.scope_id;
-        let block_return_type = self.get_expected_return_type(scope_id, span)?;
+        let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
         let block_try_impl = self.expect_ability_implementation(
                     block_return_type,
                     TRY_ABILITY_ID,
@@ -6314,106 +6365,119 @@ impl TypedProgram {
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
-            ParsedExpr::Static(stat) => {
-                let span = stat.span;
-                let base_expr = stat.base_expr;
+            ParsedExpr::Static(stat) => self.eval_static_expr(expr_id, *stat, ctx),
+            ParsedExpr::Code(code) => {
+                let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
+                let span_content =
+                    self.ast.sources.get_span_content(self.ast.spans.get(parsed_stmt_span));
+                let string_id = self.ast.strings.intern(span_content);
+                eprintln!("content for #code is exactly: `{span_content}`");
+                let parsed_code_string = TypedExpr::String(string_id, code.span);
+                let id = self.exprs.add(parsed_code_string);
+                Ok(id)
+            }
+        }
+    }
 
-                let expected_type_id = ctx.expected_type_id;
-                let vm_result = self.execute_static_expr(
-                    base_expr,
-                    expected_type_id,
-                    ctx.scope_id,
-                    None,
-                    ctx.is_inference,
-                    false,
-                    StaticExecContext { allow_emit: true },
-                )?;
+    fn eval_static_expr(
+        &mut self,
+        expr_id: ParsedExprId,
+        stat: ParsedStaticExpr,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let span = stat.span;
+        let base_expr = stat.base_expr;
 
+        let kind = stat.kind;
+        let expected_type_id = match kind {
+            ParsedStaticBlockKind::Value => ctx.expected_type_id,
+            ParsedStaticBlockKind::Metaprogram => Some(UNIT_TYPE_ID),
+        };
+        let allow_emit = match kind {
+            ParsedStaticBlockKind::Value => false,
+            ParsedStaticBlockKind::Metaprogram => true,
+        };
+        let vm_result = self.execute_static_expr(
+            base_expr,
+            expected_type_id,
+            ctx.scope_id,
+            None,
+            ctx.is_inference,
+            false,
+            StaticExecContext {
+                is_metaprogram: allow_emit,
+                expected_return_type: expected_type_id,
+            },
+        )?;
+
+        match kind {
+            ParsedStaticBlockKind::Metaprogram => {
+                if vm_result.emits.is_empty() {
+                    return failf!(span, "`meta` expression did not emit any code");
+                };
+                // First, we write the emitted code to a text buffer, parsed or string alike
+                //
+                // Then we parse the code anew (so that we have cohesive spans and a source
+                // containing the full code)
+                //
+                // Then we typecheck the code and emit a block in place of this #meta
+                // invocation
+                let mut content = std::mem::take(&mut self.buffers.emitted_code);
+                content.push_str("{\n");
+                for emit in vm_result.emits.iter() {
+                    match emit {
+                        CodeEmission::Parsed(parsed_stmt_id) => {
+                            let parsed_stmt_span = self.ast.get_stmt_span(*parsed_stmt_id);
+                            let span_content = self.ast.get_span_content(parsed_stmt_span);
+                            eprintln!("span_content is exactly: `{span_content}`");
+                            content.push_str(span_content)
+                        }
+                        CodeEmission::String(string_id) => {
+                            content.push_str(self.ast.strings.get_string(*string_id));
+                        }
+                        CodeEmission::Variable { name, value } => {
+                            use std::fmt::Write;
+                            let type_id = self.static_values.get(*value).get_type();
+                            write!(
+                                &mut content,
+                                "let {}: typeFromId({})  = core/meta/_getStaticValueById({})",
+                                self.ident_str(*name),
+                                type_id.as_u32(),
+                                value.as_u32()
+                            )
+                            .unwrap();
+                        }
+                    }
+                    content.push_str(";\n");
+                }
+                content.push('}');
+                eprintln!("Emitted content after {} emits:\n{content}", vm_result.emits.len());
+                let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
+                let origin_file = self.ast.spans.get(span).file_id;
+                let origin_source = self.ast.sources.get_source(origin_file);
+                let source_for_emission = self.ast.sources.add_source(crate::parse::Source::make(
+                    0,
+                    origin_source.directory.clone(),
+                    generated_filename,
+                    content.clone(),
+                ));
+
+                let parsed_block_result = self.parse_ad_hoc_block(source_for_emission, &content);
+                content.clear();
+                self.buffers.emitted_code = content;
+                let parsed_block = parsed_block_result?;
+                let typed_block = self.eval_block(&parsed_block, ctx, false)?;
+                eprintln!("Emitted compiled block:\n{}", self.block_to_string(&typed_block));
+
+                Ok(self.exprs.add(TypedExpr::Block(typed_block)))
+            }
+            ParsedStaticBlockKind::Value => {
                 let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
                     vm_result.static_value_id,
                     vm_result.type_id,
                     span,
                 ));
-                if !vm_result.emits.is_empty() {
-                    // First, we write the emitted code to a text buffer, parsed or string
-                    let mut content = std::mem::take(&mut self.buffers.emitted_code);
-                    content.push_str("{\n");
-                    for emit in vm_result.emits.iter() {
-                        match emit {
-                            CodeEmission::Parsed(parsed_stmt_id) => {
-                                let parsed_stmt_span = self.ast.get_stmt_span(*parsed_stmt_id);
-                                let span_content = self.ast.get_span_content(parsed_stmt_span);
-                                eprintln!("content of parsed span is: {}", span_content);
-                                content.push_str(span_content)
-                            }
-                            CodeEmission::String(string_id) => {
-                                content.push_str(self.ast.strings.get_string(*string_id));
-                            }
-                        }
-                        content.push_str(";\n");
-                    }
-                    content.push('}');
-                    eprintln!("Emitted content:\n{content}");
-                    let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
-                    let origin_file = self.ast.spans.get(span).file_id;
-                    let origin_source = self.ast.sources.get_source(origin_file);
-                    let source_for_emission =
-                        self.ast.sources.add_source(crate::parse::Source::make(
-                            0,
-                            origin_source.directory.clone(),
-                            generated_filename,
-                            content.clone(),
-                        ));
-
-                    let parsed_block_result =
-                        self.parse_ad_hoc_block(source_for_emission, &content);
-                    content.clear();
-                    self.buffers.emitted_code = content;
-                    let parsed_block = parsed_block_result?;
-                    let mut typed_block = self.eval_block(&parsed_block, ctx, false)?;
-                    eprintln!("Emitted compiled block:\n{}", self.block_to_string(&typed_block));
-                    self.add_expr_id_to_block(&mut typed_block, static_value_expr);
-
-                    Ok(self.exprs.add(TypedExpr::Block(typed_block)))
-                } else {
-                    Ok(static_value_expr)
-                }
-            }
-            ParsedExpr::Emit(emit) => {
-                if ctx.static_ctx.is_some_and(|sctx| !sctx.allow_emit) {
-                    return failf!(
-                        emit.span,
-                        "#emit can only be used from explicit `#static` blocks"
-                    );
-                }
-                // Emit is a special expression that, when invoked statically from
-                // a location L, causes the emitted code to be placed at L upon
-                // static execution completion.
-                // At runtime, the #emit expressions simply produce a unit value.
-                let span = emit.span;
-
-                // nocommit: Better syntax than #emitstring!
-                // - Raw string syntax: backticks?
-                // - Improved string interpolation syntax: ditch the \, require escaping '{' like rust instead
-                // - ??? Allow expressions inside interpolations, not just variables. Big lexer
-                //       and parser change
-                // -
-                // - Emitting non-statements? Definitions.
-                let to_emit = match emit.emitted {
-                    parse::ParsedEmitKind::String(parsed_expr_id) => {
-                        let expr = self.eval_expr(parsed_expr_id, ctx)?;
-                        if let Err(msg) = self.check_types(
-                            STRING_TYPE_ID,
-                            self.exprs.get(expr).get_type(),
-                            ctx.scope_id,
-                        ) {
-                            return failf!(span, "Emission must be string: {msg}");
-                        }
-                        ToEmit::String(expr)
-                    }
-                    parse::ParsedEmitKind::Code(parsed_stmt_id) => ToEmit::Parsed(parsed_stmt_id),
-                };
-                Ok(self.exprs.add(TypedExpr::Emit(TypedEmit { to_emit, span })))
+                Ok(static_value_expr)
             }
         }
     }
@@ -6976,7 +7040,6 @@ impl TypedProgram {
             TypedExpr::FunctionToLambdaObject(_) => {}
             TypedExpr::PendingCapture(_) => {}
             TypedExpr::StaticValue(_, _, _) => {}
-            TypedExpr::Emit(_) => {}
         };
         None
     }
@@ -8922,7 +8985,7 @@ impl TypedProgram {
         }
     }
 
-    fn get_expected_return_type(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
+    fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
         if let Some(enclosing_lambda) = self.scopes.nearest_parent_lambda(scope_id) {
             let Some(expected_return_type) =
                 self.scopes.get_lambda_info(enclosing_lambda).expected_return_type
@@ -8948,9 +9011,15 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
-        let expected_return_type = self.get_expected_return_type(ctx.scope_id, span)?;
+        let expected_return_type = if ctx.is_static() {
+            // When _typechecking_, not executing, inside #static blocks
+            // The expected return type should just be the expected type of the static block
+            ctx.static_ctx.unwrap().expected_return_type
+        } else {
+            Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
+        };
         let return_value =
-            self.eval_expr(parsed_expr, ctx.with_expected_type(Some(expected_return_type)))?;
+            self.eval_expr(parsed_expr, ctx.with_expected_type(expected_return_type))?;
         let return_value_type = self.exprs.get(return_value).get_type();
         if return_value_type == NEVER_TYPE_ID {
             return failf!(
@@ -8958,8 +9027,12 @@ impl TypedProgram {
                 "return is dead since returned expression is divergent; remove the return"
             );
         }
-        if let Err(msg) = self.check_types(expected_return_type, return_value_type, ctx.scope_id) {
-            return failf!(span, "Returned wrong type: {msg}");
+        if let Some(expected_return_type) = expected_return_type {
+            if let Err(msg) =
+                self.check_types(expected_return_type, return_value_type, ctx.scope_id)
+            {
+                return failf!(span, "Returned wrong type: {msg}");
+            }
         }
         Ok(self.exprs.add(TypedExpr::Return(TypedReturn { value: return_value, span })))
     }
@@ -10088,7 +10161,7 @@ impl TypedProgram {
             .and_then(|id| self.get_function(id).intrinsic_type)
             .filter(|op| op.is_typer_phase())
         {
-            self.handle_intrinsic(&call, intrinsic_type)
+            self.handle_intrinsic(call, intrinsic_type, ctx)
         } else {
             Ok(self.exprs.add(TypedExpr::Call(call)))
         }
@@ -10096,11 +10169,49 @@ impl TypedProgram {
 
     fn handle_intrinsic(
         &mut self,
-        call: &Call,
+        call: Call,
         intrinsic: IntrinsicOperation,
+        ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = call.span;
+        // Emit stuff
         match intrinsic {
+            IntrinsicOperation::EmitStringStatement | IntrinsicOperation::EmitVariable => {
+                if ctx.static_ctx.is_some_and(|sctx| !sctx.is_metaprogram) {
+                    return failf!(span, "#emit can only be used from explicit `#meta` blocks");
+                }
+                // Emit is a special expression that, when invoked statically from
+                // inside a #meta block at location L, causes the emitted code to be placed at L upon
+                // static execution completion.
+                // At runtime, the #emit expressions simply produce a unit value.
+
+                // nocommit(1): Multiline strings to improve emitString usage
+                // - A raw string syntax to reduce escaping burden: backticks? [[ ]]?
+                // - nocommit(2) Emitting Definitions.
+
+                // For now we just do some checks and output the call as-is
+                Ok(self.exprs.add(TypedExpr::Call(call)))
+            }
+            IntrinsicOperation::StaticValueById => {
+                let static_value_id_arg = self.exprs.get(call.args[0]);
+                // For now, require a literal. We could relax this and evaluate it
+                // if that's useful
+                let TypedExpr::Integer(int_expr) = static_value_id_arg else {
+                    return failf!(span, "Argument must be an integer literal");
+                };
+                let TypedIntValue::U64(u64_value) = int_expr.value else {
+                    return failf!(span, "Argument must be a u64 literal");
+                };
+                let Some(static_value_id) = StaticValueId::from_u32(u64_value as u32) else {
+                    return failf!(span, "Invalid static value id: {}. Must be a u32", u64_value);
+                };
+                let Some(value) = self.static_values.get_opt(static_value_id) else {
+                    return failf!(span, "No static value with id {}", static_value_id);
+                };
+                let static_value_expr =
+                    TypedExpr::StaticValue(static_value_id, value.get_type(), span);
+                Ok(self.exprs.add(static_value_expr))
+            }
             IntrinsicOperation::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
@@ -11405,7 +11516,7 @@ impl TypedProgram {
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression",);
         }
-        let mut statements: EcoVec<TypedStmtId> = EcoVec::with_capacity(block.stmts.len());
+        let mut stmts: EcoVec<TypedStmtId> = EcoVec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -11432,7 +11543,7 @@ impl TypedProgram {
             if is_last && needs_terminator {
                 if last_stmt_is_divergent {
                     // No action needed; terminator exists
-                    statements.push(stmt_id);
+                    stmts.push(stmt_id);
                 } else {
                     match stmt {
                         TypedStmt::Expr(expr, _expr_type_id) => {
@@ -11444,7 +11555,7 @@ impl TypedProgram {
                             }));
                             let return_stmt =
                                 self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-                            statements.push(return_stmt);
+                            stmts.push(return_stmt);
                         }
                         TypedStmt::Assignment(_) | TypedStmt::Let(_) | TypedStmt::Require(_) => {
                             let unit = self.exprs.add(TypedExpr::Unit(stmt_span));
@@ -11454,20 +11565,20 @@ impl TypedProgram {
                             }));
                             let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
                             let return_unit_id = self.stmts.add(return_unit);
-                            statements.push(stmt_id);
-                            statements.push(return_unit_id);
+                            stmts.push(stmt_id);
+                            stmts.push(return_unit_id);
                         }
                     };
                 }
             } else {
-                statements.push(stmt_id);
+                stmts.push(stmt_id);
             }
         }
 
         let typed_block = TypedBlock {
             expr_type: last_expr_type,
             scope_id: ctx.scope_id,
-            statements,
+            statements: stmts,
             span: block.span,
         };
         Ok(typed_block)
@@ -11557,8 +11668,14 @@ impl TypedProgram {
                     "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
                     _ => None,
                 },
+                Some("meta") => match fn_name_str {
+                    "emitLine" => Some(IntrinsicOperation::EmitStringStatement),
+                    "emitVariable" => Some(IntrinsicOperation::EmitVariable),
+                    "_getStaticValueById" => Some(IntrinsicOperation::StaticValueById),
+                    _ => None,
+                },
                 Some("k1") => match fn_name_str {
-                    "emitCompilerMessage" => Some(IntrinsicOperation::EmitCompilerMessage),
+                    "emitCompilerMessage" => Some(IntrinsicOperation::CompilerMessage),
                     _ => None,
                 },
                 Some(_) => None,

@@ -783,21 +783,32 @@ pub struct ParsedInterpolatedString {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+pub enum ParsedStaticBlockKind {
+    /// Kind: Value. The statically executed code is intended to produce a value
+    /// Its main purpose is the value it produces
+    Value,
+    /// Kind: Metaprogram. The statically executed code is intended to emit code
+    /// and be replaced by the emitted code. The main purpose is
+    /// code-generating metaprograms, like derivations of pretty-printers
+    /// or codecs
+    Metaprogram,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
+    pub kind: ParsedStaticBlockKind,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub enum ParsedEmitKind {
-    Code(ParsedStmtId),
-    String(ParsedExprId),
-}
-
-#[derive(Debug, Clone)]
-pub struct ParsedEmit {
-    pub emitted: ParsedEmitKind,
+/// While ParsedCode is an expression type, it can hold
+/// any `statement`, since you may want to metaprogram with
+/// statements; the value it contains is independent from the
+/// AST node type used to create it
+pub struct ParsedCode {
+    pub parsed_stmt: ParsedStmtId,
     pub span: SpanId,
 }
 
@@ -883,7 +894,7 @@ pub enum ParsedExpr {
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
-    Emit(ParsedEmit),
+    Code(ParsedCode),
 }
 
 impl ParsedExpr {
@@ -920,7 +931,7 @@ impl ParsedExpr {
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
             Self::Static(s) => s.span,
-            Self::Emit(e) => e.span,
+            Self::Code(c) => c.span,
         }
     }
 
@@ -1201,13 +1212,19 @@ pub struct ParsedFunctionType {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedTypeOf {
     pub target_expr: ParsedExprId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedTypeFromId {
+    pub id_expr: ParsedExprId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct SomeQuantifier {
     pub inner: ParsedTypeExprId,
     pub span: SpanId,
@@ -1225,6 +1242,8 @@ pub enum ParsedTypeExpr {
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
     SomeQuant(SomeQuantifier),
+    /// Used only by compiler-generated code, currently
+    TypeFromId(ParsedTypeFromId),
 }
 
 impl ParsedTypeExpr {
@@ -1241,6 +1260,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::Function(f) => f.span,
             ParsedTypeExpr::TypeOf(tof) => tof.span,
             ParsedTypeExpr::SomeQuant(q) => q.span,
+            ParsedTypeExpr::TypeFromId(tfi) => tfi.span,
         }
     }
 }
@@ -2048,6 +2068,7 @@ pub struct Parser<'toks, 'module> {
     pub ast: &'module mut ParsedProgram,
     tokens: TokenIter<'toks>,
     file_id: FileId,
+    string_buffer: String,
 }
 
 impl<'toks, 'ast> Parser<'toks, 'ast> {
@@ -2058,7 +2079,14 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         tokens: &'toks [Token],
         file_id: FileId,
     ) -> Parser<'toks, 'ast> {
-        Parser { module_name, module_namespace_id, ast, tokens: TokenIter::make(tokens), file_id }
+        Parser {
+            module_name,
+            module_namespace_id,
+            ast,
+            tokens: TokenIter::make(tokens),
+            file_id,
+            string_buffer: String::with_capacity(1024),
+        }
     }
     pub fn parse_file(&mut self) {
         let mut new_definitions: Vec<ParsedId> = vec![];
@@ -2470,20 +2498,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let first = self.tokens.peek();
         trace!("expect_string");
 
-        // nocommit reuse buf
-        let mut buf = String::with_capacity(256);
+        let mut buf = std::mem::take(&mut self.string_buffer);
         let mut parts: Vec<InterpolatedStringPart> = Vec::new();
+        let mut first_segment = true;
         loop {
             let current_token = self.tokens.next();
-            eprintln!("Parsing a string token; kind = {}", current_token.kind);
-            eprintln!(
-                "    Full content: `{}`",
-                Parser::tok_chars(
-                    &self.ast.spans,
-                    self.ast.sources.get_source(self.file_id),
-                    current_token,
-                )
-            );
             match current_token.kind {
                 // Interpolation case
                 K::OpenBrace => {
@@ -2500,7 +2519,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     );
 
                     buf.clear();
-                    let mut chars = text.chars();
+                    let mut chars = text.chars().peekable();
+                    if first_segment {
+                        // Skip opening `"`
+                        // Probably need more info here, imagine if we do [[ ]] strings
+                        // how do we know where the content starts. Maybe its just in the token
+                        // kind...
+                        if chars.next() != Some('"') {
+                            return Err(error("Internal Error: should start with `\"``", first));
+                        }
+                        first_segment = false;
+                    }
                     while let Some(c) = chars.next() {
                         if c == '{' {
                             let Some(next) = chars.next() else {
@@ -2525,6 +2554,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     first,
                                 ));
                             };
+                        } else if c == '"' {
+                            // Skip closing double-quotes of terminated string tokens
+                            if chars.peek().is_none() && current_token.kind == K::String {
+                            } else {
+                                buf.push(c)
+                            }
                         } else {
                             buf.push(c)
                         }
@@ -2538,21 +2573,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         break;
                     }
                 }
-                k => {
+                _k => {
                     return Err(error("Unexpected token kind in string sequence", current_token));
                 }
             }
         }
-        if parts.len() == 1 {
+        let result = if parts.len() == 1 {
             let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap() else {
                 panic!()
             };
             let literal = Literal::String(s, first.span);
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
-            let string_interp = ParsedInterpolatedString { parts, span: first.span };
+            let span = self.extend_to_here(first.span);
+            let string_interp = ParsedInterpolatedString { parts, span };
             Ok(self.add_expression(ParsedExpr::InterpolatedString(string_interp)))
-        }
+        };
+        self.string_buffer = buf;
+        result
     }
 
     fn parse_struct_type_field(&mut self) -> ParseResult<Option<StructTypeField>> {
@@ -2652,6 +2690,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_token_span(first, end);
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
                 Ok(Some(self.ast.type_exprs.add(type_of)))
+            } else if ident_chars == "typeFromId" {
+                self.advance();
+                self.expect_eat_token(K::OpenParen)?;
+                let target_expr = self.expect_expression()?;
+                let end = self.expect_eat_token(K::CloseParen)?;
+                let span = self.extend_token_span(first, end);
+                let type_from_id =
+                    ParsedTypeExpr::TypeFromId(ParsedTypeFromId { id_expr: target_expr, span });
+                Ok(Some(self.ast.type_exprs.add(type_from_id)))
             } else if ident_chars == "some" {
                 self.advance();
                 let inner_expr = self.expect_type_expression()?;
@@ -3274,29 +3321,33 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     let base_expr = self.expect_expression()?;
                     let span = self.get_expression_span(base_expr);
-                    Ok(Some(
-                        self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
-                            base_expr,
-                            span,
-                        })),
-                    ))
+                    Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+                        base_expr,
+                        kind: ParsedStaticBlockKind::Value,
+                        span,
+                    }))))
                 }
                 K::Ident if !maybe_directive.is_whitespace_preceeded() => {
                     let chars = self.token_chars(maybe_directive);
                     match chars {
-                        "emit" | "emitstring" => {
-                            let emit_kind = if chars == "emit" {
-                                self.advance();
-                                let emitted_statement = self.expect_statement()?;
-                                ParsedEmitKind::Code(emitted_statement)
-                            } else {
-                                self.advance();
-                                let string_expr = self.expect_expression()?;
-                                ParsedEmitKind::String(string_expr)
-                            };
-                            let span = self.extend_to_here(first.span);
-                            Ok(Some(self.add_expression(ParsedExpr::Emit(ParsedEmit {
-                                emitted: emit_kind,
+                        "meta" | "meat" => {
+                            self.advance();
+                            let base_expr = self.expect_expression()?;
+                            let expr_span = self.get_expression_span(base_expr);
+                            let span = self.extend_span(first.span, expr_span);
+                            Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+                                base_expr,
+                                kind: ParsedStaticBlockKind::Metaprogram,
+                                span,
+                            }))))
+                        }
+                        "code" => {
+                            self.advance();
+                            let parsed_stmt = self.expect_statement()?;
+                            let stmt_span = self.ast.get_stmt_span(parsed_stmt);
+                            let span = self.extend_span(first.span, stmt_span);
+                            Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
+                                parsed_stmt,
                                 span,
                             }))))
                         }
@@ -4141,7 +4192,7 @@ impl ParsedProgram {
                         }
                         InterpolatedStringPart::Expr(expr_id) => {
                             w.write_char('{')?;
-                            self.display_expr_id(w, *expr_id);
+                            self.display_expr_id(w, *expr_id)?;
                             w.write_char('{')?;
                         }
                     }
@@ -4248,19 +4299,9 @@ impl ParsedProgram {
                 self.display_expr_id(w, stat.base_expr)?;
                 Ok(())
             }
-            ParsedExpr::Emit(emit) => {
-                w.write_str("#emit")?;
-                match emit.emitted {
-                    ParsedEmitKind::Code(parsed_stmt_id) => {
-                        w.write_str("(code) ")?;
-                        self.display_stmt_id(w, parsed_stmt_id)?;
-                    }
-                    ParsedEmitKind::String(parsed_expr_id) => {
-                        w.write_str("(string) \"")?;
-                        self.display_expr_id(w, parsed_expr_id)?;
-                        w.write_char('"')?;
-                    }
-                }
+            ParsedExpr::Code(code) => {
+                w.write_str("#code ")?;
+                self.display_stmt_id(w, code.parsed_stmt)?;
                 Ok(())
             }
         }
@@ -4358,6 +4399,12 @@ impl ParsedProgram {
                 self.display_type_expr_id(quant.inner, w)?;
                 Ok(())
             }
+            ParsedTypeExpr::TypeFromId(tfi) => {
+                w.write_str("typeFromId(")?;
+                self.display_expr_id(w, tfi.id_expr)?;
+                w.write_str(")")?;
+                Ok(())
+            }
         }
     }
 
@@ -4367,9 +4414,17 @@ impl ParsedProgram {
                 write!(w, "use ")?;
                 todo!()
             }
-            ParsedStmt::Let(_let_stmt) => {
-                write!(w, "let ")?;
-                todo!()
+            ParsedStmt::Let(let_stmt) => {
+                write!(
+                    w,
+                    "let{}{}{} {} = ",
+                    if let_stmt.is_mutable() { "mut " } else { " " },
+                    if let_stmt.is_referencing() { "* " } else { " " },
+                    if let_stmt.is_context() { "context " } else { " " },
+                    self.idents.get_name(let_stmt.name)
+                )?;
+                self.display_expr_id(w, let_stmt.value)?;
+                Ok(())
             }
             ParsedStmt::Require(require_stmt) => {
                 write!(w, "require ")?;
