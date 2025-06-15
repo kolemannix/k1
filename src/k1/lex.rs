@@ -603,6 +603,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         tokens: &mut Vec<Token>,
         state: &mut LexState,
     ) -> LexResult<Option<()>> {
+        // nocommit: tok_buf is only used for its length; its a nice debugging tool but it could/should just be a number
         tok_buf.clear();
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
@@ -657,16 +658,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     self.advance();
                     self.advance();
                     continue;
-                } else if c == '\\' && next == '{' {
-                    // nocommit remove this \{ handler
-                    // One day we'll handle these differently than regular escaped chars
-                    // If we support either a subset of the language or the full language inside
-                    // interpolated strings
-                    tok_buf.push(c);
-                    tok_buf.push(next);
-                    self.advance();
-                    self.advance();
-                    continue;
                 } else if c == '{' {
                     if next == '{' {
                         self.advance();
@@ -677,7 +668,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     } else {
                         self.advance();
                         // Track brace depth and done when == 0
-                        eprintln!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
+                        debug!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
                         state.interp_brace_depth_stack.push(1);
                         state.is_string = false;
                         tokens.push(make_buffered_token(self, K::StringUnterminated, tok_buf, n));
@@ -685,9 +676,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         return Ok(Some(()));
                     }
                 } else if c == '"' {
+                    tok_buf.push('"');
                     self.advance();
                     state.is_string = false;
-                    tokens.push(make_buffered_token(self, K::String, tok_buf, n));
+                    tokens.push(make_buffered_token(self, K::String, tok_buf, n + 1));
                     return Ok(Some(()));
                 } else if c == '\n' {
                     let string_start_quote = n - tok_buf.len() as u32 - 1;
@@ -704,6 +696,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             if c == '"' {
                 state.is_string = true;
+                tok_buf.push('"');
                 self.advance();
                 continue;
             }
@@ -799,7 +792,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         } else {
                             *interp_brace_depth -= 1;
                             if *interp_brace_depth == 0 {
-                                eprintln!("[lex] *pop* code end");
+                                debug!("[lex] *pop* code end");
                                 state.interp_brace_depth_stack.pop();
                                 state.is_string = true;
                             }
@@ -879,7 +872,7 @@ fn is_ident_or_num_start(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexer, Span, TokenKind};
+    use crate::lex::{Lexer, Span, SpanId, TokenKind};
     use crate::lex::{Spans, TokenKind as K};
 
     use super::Token;
@@ -898,6 +891,20 @@ mod test {
         let kinds: Vec<TokenKind> = token_vec.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, expected);
         Ok(())
+    }
+
+    fn assert_token(
+        spans: &Spans,
+        tokens: &[Token],
+        index: usize,
+        kind: TokenKind,
+        start: u32,
+        len: u32,
+    ) {
+        let span = spans.get(SpanId::from_u32(index as u32 + 2).unwrap());
+        assert_eq!(tokens[index].kind, kind);
+        assert_eq!(span.start, start);
+        assert_eq!(span.len, len);
     }
 
     #[test]
@@ -1005,20 +1012,23 @@ mod test {
     }
 
     #[test]
-    fn literal_string() -> anyhow::Result<()> {
-        let input = "let x = println(\"foobear\")";
-        expect_token_kinds(
-            input,
-            vec![
-                K::KeywordLet,
-                K::Ident,
-                K::Equals,
-                K::Ident,
-                K::OpenParen,
-                K::String,
-                K::CloseParen,
-            ],
-        )
+    fn literal_string_simple() -> anyhow::Result<()> {
+        let (spans, tokens) = set_up("\"foobear\"")?;
+        assert_token(&spans, &tokens, 0, K::String, 0, 9);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_string_in_call() -> anyhow::Result<()> {
+        let (spans, tokens) = set_up("let x = println(\"foobear\")")?;
+        assert_token(&spans, &tokens, 0, K::KeywordLet, 0, 3);
+        assert_token(&spans, &tokens, 1, K::Ident, 4, 1);
+        assert_token(&spans, &tokens, 2, K::Equals, 6, 1);
+        assert_token(&spans, &tokens, 3, K::Ident, 8, 7);
+        assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1);
+        assert_token(&spans, &tokens, 5, K::String, 16, 9);
+        assert_token(&spans, &tokens, 6, K::CloseParen, 25, 1);
+        Ok(())
     }
 
     #[test]

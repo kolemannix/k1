@@ -3,45 +3,47 @@ use types/TypeSchema
 use types/typeSchema
 
 fn _writeJsonFromSchema(name: string, typeId: u64): unit {
+  use core/meta/emitLine;
   switch typeSchema(typeId) {
     .Struct(s) -> {
-      #emit w.writeChar('{');
+      emitLine(#code w.writeChar('{'));
       for f in s.fields do {
-        let fName = f.name;
 
-        let fieldLetName = "_{name}{fName}";
+        let fieldLetName = "_{name}{f.name}";
 
-        #emitstring "let {fieldLetName} = {name}.{fName}";
-        #emit w.writeChar('"');
-        #emitstring "w.writeString(\"{fName}\")";
-        #emit w.writeString("\":");
+        emitLine("let {fieldLetName} = {name}.{f.name}");
+        emitLine(#code w.writeChar('"'));
+        emitLine("w.writeString(\"{f.name}\")");
+        emitLine(#code w.writeString("\":"));
         
         _writeJsonFromSchema(fieldLetName, f.typeId);
         let last = itIndex == s.fields.len - 1;
         if not last {
-          #emit w.writeString(",");
+          emitLine(#code w.writeString(","));
         }
       };
-      #emit w.writeChar('}');
+      emitLine(#code w.writeChar('}'));
     },
-    .Unit -> #emit w.writeString("\"unit\""),
+    .Unit -> emitLine(#code w.writeString("\"unit\"")),
     .Bool -> {
-      #emitstring "w.writeString(if {name} \"true\" else \"false\")" 
+      emitLine("w.writeString(if {name} \"true\" else \"false\")") 
+      // #emitstring `w.writeString(if {name} "true" else "false")`
     },
-    .Word(_) or .Int(_) -> #emitstring "{name}.printTo(w)",
+    .Word(_) or .Int(_) -> emitLine("{name}.printTo(w)"),
     .Either(_) -> { 
       let tName = types/typeName(typeId);
       crash("Cannot yet create a JSON writer for either: {tName}")
     },
     _ -> {
-      #emit w.writeString("\"other\"")
+      emitLine(#code w.writeString("\"other\""))
     }
   }
 }
 
 fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
   // To say dont even typecheck this function generically: "template fn"
-  #static {
+  // Or just the if below... But I think it'll be a common issue
+  #meta {
     let typeId = types/typeId[T]();
     _writeJsonFromSchema("t", typeId);
   }
@@ -59,7 +61,7 @@ fn main(): i32 {
   let* w = List/empty[char]();
 
   toJson({ x: 1, y: 2 });
-  toJson(some(1337));
+  //toJson(some(1337));
   toJson(true);
 
   0

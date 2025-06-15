@@ -18,18 +18,19 @@ use crate::{
     failf, int_binop,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, StringId},
+    parse::{Identifier, ParsedStmtId, StringId},
     pool::SliceHandle,
     typer::{
         self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
         MatchingCondition, MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum,
-        StaticStruct, StaticValue, StaticValueId, ToEmit, TypedExpr, TypedExprId, TypedFloatValue,
+        StaticStruct, StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue,
         TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult,
         VariableExpr, VariableId, make_fail_span,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, FloatType, I32_TYPE_ID,
-            I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeId,
-            TypedEnumVariant, Types, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
+            I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
+            STRING_TYPE_ID, Type, TypeId, TypedEnumVariant, Types, U32_TYPE_ID, U64_TYPE_ID,
+            UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
     },
 };
@@ -426,6 +427,7 @@ pub fn execute_single_expr_with_vm(
     expr: TypedExprId,
     vm: &mut Vm,
 ) -> TyperResult<Value> {
+    eprintln!("execute_single_expr_with_vm emits={}", vm.emits.len());
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
     // in an interpreted context
@@ -454,13 +456,7 @@ pub fn execute_single_expr_with_vm(
         Ok(VmResult::Exit(exit)) => {
             failf!(span, "Static execution exited with code: {}", exit.code)
         }
-        Ok(VmResult::Return(_value)) => {
-            failf!(
-                span,
-                "Return result from top-level expression. This might become the norm: {}",
-                m.expr_to_string(expr)
-            )
-        }
+        Ok(VmResult::Return(value)) => Ok(value),
         Ok(VmResult::Break(_)) => unreachable!("Break result from top-level expression"),
     };
     if cfg!(debug_assertions) {
@@ -508,9 +504,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
     });
     let vm = &mut vm;
 
-    //eprint!("{}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize));
-    // let mut s = String::new();
-    // std::io::stdin().read_line(&mut s).unwrap();
+    //print!("{}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize));
+    //let mut s = String::new();
+    //std::io::stdin().read_line(&mut s).unwrap();
 
     let result: TyperResult<VmResult> = match m.exprs.get(expr) {
         TypedExpr::Unit(_) => Ok(Value::Unit.into()),
@@ -902,6 +898,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     lambda_object.set_type_id(lambda_object_type);
                     Ok(lambda_object.into())
                 }
+                CastType::ToNever => Ok(VmResult::Value(base_value)),
             }
         }
         TypedExpr::Return(typed_return) => {
@@ -963,36 +960,29 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, *value_id)?;
             Ok(vm_value.into())
         }
-        TypedExpr::Emit(e) => match e.to_emit {
-            ToEmit::Parsed(parsed_expr_id) => {
-                vm.emits.push(CodeEmission::Parsed(parsed_expr_id));
-                Ok(VmResult::UNIT)
-            }
-            ToEmit::String(typed_string_expr) => {
-                let string_value = execute_expr_return_exit!(vm, m, typed_string_expr)?;
-                let string_id = value_to_string_id(m, string_value);
-                vm.emits.push(CodeEmission::String(string_id));
-                Ok(VmResult::UNIT)
-            }
-        },
     };
     if cfg!(debug_assertions) {
         if let Ok(VmResult::Value(v)) = result {
-            // We use root scope because we don't expected to need to resolve any type
-            // variables in VM code; it should all be concrete, and that's all the
-            // scope is used for in check_types
-            if let Err(msg) = m.check_types(
-                m.exprs.get(expr).get_type(),
-                v.get_type(),
-                m.scopes.get_root_scope_id(),
-            ) {
-                eprintln!("{}", vm.dump_current_frame(m));
-                return failf!(
-                    vm.eval_span,
-                    "vm eval type mismatch after executing '{}'\n{}",
-                    m.expr_to_string_with_type(expr),
-                    msg,
-                );
+            let expected_type = m.exprs.get(expr).get_type();
+            let is_metaprogram_special_case =
+                expected_type == NEVER_TYPE_ID && v.get_type() == UNIT_TYPE_ID;
+            if !is_metaprogram_special_case {
+                if let Err(msg) = m.check_types(
+                    m.exprs.get(expr).get_type(),
+                    v.get_type(),
+                    // We use root scope because we don't expected to need to resolve any type
+                    // variables in VM code; it should all be concrete, and that's all the
+                    // scope is used for in check_types
+                    m.scopes.get_root_scope_id(),
+                ) {
+                    eprintln!("{}", vm.dump_current_frame(m));
+                    return failf!(
+                        vm.eval_span,
+                        "vm eval type mismatch after executing '{}'\n{}",
+                        m.expr_to_string_with_type(expr),
+                        msg,
+                    );
+                }
             }
         }
     }
@@ -1427,7 +1417,8 @@ fn execute_intrinsic(
     match intrinsic_type {
         IntrinsicOperation::SizeOf
         | IntrinsicOperation::SizeOfStride
-        | IntrinsicOperation::AlignOf => {
+        | IntrinsicOperation::AlignOf
+        | IntrinsicOperation::StaticValueById => {
             unreachable!("Handled by typer phase")
         }
         IntrinsicOperation::Zeroed => {
@@ -1614,7 +1605,7 @@ fn execute_intrinsic(
             };
             Ok(VmResult::Exit(VmExit { span: vm.eval_span, code }))
         }
-        IntrinsicOperation::EmitCompilerMessage => {
+        IntrinsicOperation::CompilerMessage => {
             let location_arg = execute_expr_return_exit!(vm, m, args[0])?;
             let level_arg = execute_expr_return_exit!(vm, m, args[1])?.expect_agg();
             let message_arg = execute_expr_return_exit!(vm, m, args[2])?;
@@ -1639,6 +1630,23 @@ fn execute_intrinsic(
                 level_str,
                 m.get_string(message).color(color)
             );
+            Ok(VmResult::UNIT)
+        }
+        IntrinsicOperation::EmitStringStatement => {
+            // intern fn emitLine(code: string): unit
+            let string_value = execute_expr_return_exit!(vm, m, args[0])?;
+            let string_id = value_to_string_id(m, string_value);
+            vm.emits.push(CodeEmission::String(string_id));
+            Ok(VmResult::UNIT)
+        }
+        IntrinsicOperation::EmitVariable => {
+            // intern fn emitVariable[T](name: string, value: T): unit
+            let name_value = execute_expr_return_exit!(vm, m, args[0])?;
+            // TODO: Eventually, validate the emitted identifier
+            let name_ident = value_to_ident(m, name_value);
+            let value_value = execute_expr_return_exit!(vm, m, args[1])?;
+            let value_id = vm_value_to_static_value(m, vm, value_value, vm.eval_span)?;
+            vm.emits.push(CodeEmission::Variable { name: name_ident, value: value_id });
             Ok(VmResult::UNIT)
         }
     }
@@ -2261,6 +2269,11 @@ pub fn value_to_rust_str(value: Value) -> &'static str {
 pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> StringId {
     let rust_str = value_to_rust_str(value);
     m.ast.strings.intern(rust_str)
+}
+
+pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Identifier {
+    let rust_str = value_to_rust_str(value);
+    m.ast.idents.intern(rust_str)
 }
 
 pub fn string_id_to_value(

@@ -1,12 +1,19 @@
+use core/meta
+
+//macro addSyntactic(a: Code, b: Code) {
+//  meta/emitLine("{a} + {b}")
+//}
+
 fn main(): i32 {
   let mut x = 10;
-  #static {
+  #meta {
     for core/IntRange/upTo(5) do {
-      #emit x = x + 1;
-      #emit if x % 2 == 0 println("buzz")
+      meta/emitLine(#code x = x + 1);
+      meta/emitLine(#code if x % 2 == 0 println("buzz"))
     }
   };
-  println("X is: {x}");
+  assertEquals(x, 15);
+
   0
 }
 // > buzz

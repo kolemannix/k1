@@ -1332,10 +1332,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 panic!("Cannot codegen a naked Function type")
             }
             Type::Unresolved(_) => {
-                panic!("Cannot codegen a Unresolved; something went wrong in typecheck")
+                panic!("Cannot codegen type for Unresolved; something went wrong in typecheck")
             }
             Type::Generic(_) => {
-                panic!("Cannot codegen a Generic; something went wrong in typecheck")
+                panic!("Cannot codegen type for Generic; something went wrong in typecheck")
             }
         }?;
         if !no_cache {
@@ -2385,7 +2385,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let static_value = self.codegen_static_value_as_code(*value_id)?;
                 Ok(static_value.into())
             }
-            TypedExpr::Emit(_) => Ok(self.builtin_types.unit_basic().into()),
             e @ TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {e:?}")
             }
@@ -2541,6 +2540,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(lam_obj_ptr, lam_obj).unwrap();
 
                 Ok(lam_obj_ptr.as_basic_value_enum().into())
+            }
+            CastType::ToNever => {
+                self.k1.ice_with_span("Cast ToNever unsupported by codegen", cast.span)
             }
         }
     }
@@ -3139,7 +3141,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(result_pointer.as_basic_value_enum().into())
             }
-            IntrinsicOperation::EmitCompilerMessage => Ok(self.builtin_types.unit_basic().into()),
+            IntrinsicOperation::CompilerMessage => Ok(self.builtin_types.unit_basic().into()),
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
@@ -3817,7 +3819,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Some(AddressSpace::default()),
                 &name,
             );
-            llvm_global.set_constant(global.is_static);
+            llvm_global.set_constant(global.is_constant);
             llvm_global.set_initializer(&initialized_basic_value);
             llvm_global.set_unnamed_addr(true);
             let variable_value = if is_reference_type {
@@ -3831,7 +3833,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             };
             self.variable_to_value.insert(global.variable_id, variable_value);
         } else {
-            if !global.is_static {
+            if !global.is_constant {
                 return failf!(
                     global.span,
                     "Value is too complex to use as initializer for a mutable global, because I'll never run any code at startup behind your back: {}",
