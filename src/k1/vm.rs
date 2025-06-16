@@ -18,7 +18,7 @@ use crate::{
     failf, int_binop,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, ParsedStmtId, StringId},
+    parse::{Identifier, StringId},
     pool::SliceHandle,
     typer::{
         self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
@@ -427,7 +427,6 @@ pub fn execute_single_expr_with_vm(
     expr: TypedExprId,
     vm: &mut Vm,
 ) -> TyperResult<Value> {
-    eprintln!("execute_single_expr_with_vm emits={}", vm.emits.len());
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
     // in an interpreted context

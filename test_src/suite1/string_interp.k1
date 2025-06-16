@@ -8,6 +8,13 @@ impl Show for { name: string, weight: int } {
   }
 }
 
+fn testRawStrings(): unit {
+  let s1 = `Hello,
+
+  "world"`;
+  assertEquals(s1, "Hello,\n\n\"\"")
+}
+
 fn test(): unit {
   let user = { name: "Bob", weight: 199 };
   assertEquals("Hello, '{user}'!", "Hello, 'Bob: 199'!");

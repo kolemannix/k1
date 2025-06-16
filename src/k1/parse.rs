@@ -2450,7 +2450,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ))
                 }
             }
-            (K::String | K::StringUnterminated, _) => Ok(Some(self.expect_string()?)),
+            (K::String { .. } | K::StringUnterminated { .. }, _) => Ok(Some(self.expect_string()?)),
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
                 let text = self.token_chars(second);
                 if text.chars().next().unwrap().is_numeric() {
@@ -2510,7 +2510,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     parts.push(InterpolatedStringPart::Expr(expr_id));
                     self.expect_eat_token(K::CloseBrace)?;
                 }
-                K::StringUnterminated | K::String => {
+                K::StringUnterminated { delim } | K::String { delim } => {
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
@@ -2521,15 +2521,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     buf.clear();
                     let mut chars = text.chars().peekable();
                     if first_segment {
-                        // Skip opening `"`
-                        // Probably need more info here, imagine if we do [[ ]] strings
-                        // how do we know where the content starts. Maybe its just in the token
-                        // kind...
-                        if chars.next() != Some('"') {
-                            return Err(error("Internal Error: should start with `\"``", first));
+                        // Skip opening " or `
+                        let c = chars.next();
+                        if c != Some('"') && c != Some('`') {
+                            return Err(error(
+                                "Internal Error: should start with a \" or a `",
+                                first,
+                            ));
                         }
                         first_segment = false;
                     }
+                    let is_terminated = matches!(current_token.kind, K::String { .. });
                     while let Some(c) = chars.next() {
                         if c == '{' {
                             let Some(next) = chars.next() else {
@@ -2545,18 +2547,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 return Err(error("String ended with '\\'", first));
                             };
                             if let Some(c) =
-                                STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
+                                SHARED_STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
                             {
                                 buf.push(c.output as char)
+                            } else if next == delim.char() {
+                                // Escaped closing delimiter ` or "
+                                buf.push(delim.char())
                             } else {
                                 return Err(error(
                                     format!("Invalid escape sequence: '\\{next}'"),
                                     first,
                                 ));
                             };
-                        } else if c == '"' {
-                            // Skip closing double-quotes of terminated string tokens
-                            if chars.peek().is_none() && current_token.kind == K::String {
+                        } else if c == delim.char() {
+                            // Skip closing delimiters of terminated string tokens
+                            if chars.peek().is_none() && is_terminated {
                             } else {
                                 buf.push(c)
                             }
@@ -2569,7 +2574,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     parts.push(InterpolatedStringPart::String(string_id));
                     // StringUnterminated means there are more segments
                     // String means we're done;
-                    if current_token.kind == K::String {
+                    if is_terminated {
                         break;
                     }
                 }

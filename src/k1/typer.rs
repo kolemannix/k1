@@ -4566,9 +4566,7 @@ impl TypedProgram {
             });
         }
 
-        eprintln!("vm emits at start: {}", vm.emits.len());
         let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
-        eprintln!("vm emits at end: {}", vm.emits.len());
 
         if cfg!(debug_assertions) {
             if let Err(msg) = self.check_types(required_type_id, value.get_type(), scope_id) {

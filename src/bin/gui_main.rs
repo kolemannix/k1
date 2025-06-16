@@ -1,6 +1,6 @@
 use std::{
     ffi::{CStr, CString},
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
 };
 
 use crate::typer::{FunctionId, TypedModule};
