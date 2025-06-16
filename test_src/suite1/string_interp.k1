@@ -12,7 +12,7 @@ fn testRawStrings(): unit {
   let s1 = `Hello,
 
   "world"`;
-  assertEquals(s1, "Hello,\n\n\"\"")
+  assertEquals(s1, "Hello,\n\n  \"world\"")
 }
 
 fn test(): unit {
@@ -27,4 +27,6 @@ fn test(): unit {
 
   let nested = "{"String has {10 + 10} in"} it";
   assertEquals(nested, "String has 20 in it");
+
+  testRawStrings();
 }

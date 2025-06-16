@@ -801,7 +801,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             } else {
                                 let string_start_quote = n - tok_buf.len() as u32 - 1;
                                 return Err(self.make_error(
-                                    "Encountered newline inside string".to_string(),
+                                    "Encountered newline inside string; Try a backtick string (`) instead".to_string(),
                                     string_start_quote,
                                     tok_buf.len() as u32 + 1,
                                 ));
@@ -1259,7 +1259,9 @@ mod test {
     #[test]
     fn backtick_interpolation_mixed() -> anyhow::Result<()> {
         // Tests mode stack by mixing string types
-        let input = r#"`{"hello {var}"}`"#;
+        let input = r#"`
+        {"hello {var}"}
+        `"#;
         expect_token_kinds(
             input,
             vec![
