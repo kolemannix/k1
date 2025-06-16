@@ -1,12 +1,12 @@
 use std::{
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
@@ -196,8 +196,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                                     } = &expectation
                                     {
                                         match last_stderr_line {
-                                            None =>
-                                            bail!(
+                                            None => bail!(
                                                 "{name} Expected abortmsg {expected_abort_message} but got abort with no output",
                                             ),
                                             Some(abort_msg) => {
@@ -222,18 +221,17 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                             }
                             if let Some(expected_exit_message) = expectation.expected_message() {
                                 match last_stderr_line {
-                                            None =>
+                                    None => bail!(
+                                        "{name} Expected exit message {expected_exit_message} but got exit with no output",
+                                    ),
+                                    Some(exit_msg) => {
+                                        if !exit_msg.contains(expected_exit_message) {
                                             bail!(
-                                                "{name} Expected exit message {expected_exit_message} but got exit with no output",
-                                            ),
-                                            Some(exit_msg) => {
-                                                if !exit_msg.contains(expected_exit_message) {
-                                                    bail!(
-                                                        "{name} exit message '{exit_msg}' did not match expected message: {expected_exit_message}"
-                                                    )
-                                                }
-                                            }
+                                                "{name} exit message '{exit_msg}' did not match expected message: {expected_exit_message}"
+                                            )
                                         }
+                                    }
+                                }
                             }
                         }
                     }

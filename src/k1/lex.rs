@@ -125,15 +125,33 @@ impl<'toks> TokenIter<'toks> {
     }
 }
 
-#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringDelimKind {
+    Backtick,
+    DoubleQuote,
+}
+
+impl StringDelimKind {
+    pub fn char(&self) -> char {
+        match self {
+            StringDelimKind::Backtick => '`',
+            StringDelimKind::DoubleQuote => '"',
+        }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum TokenKind {
     Ident,
-    String,
+    String {
+        delim: StringDelimKind,
+    },
     /// Used in string interpolation; any not-fully-standalone string, for example:
     /// Could be the initial segment, a connecting segment between 2 interpolations,
     /// or the end.
-    StringUnterminated,
+    StringUnterminated {
+        delim: StringDelimKind,
+    },
 
     Char,
 
@@ -226,6 +244,13 @@ impl AsRef<str> for TokenKind {
 }
 
 impl TokenKind {
+    pub const STRING_DQ: TokenKind = TokenKind::String { delim: StringDelimKind::DoubleQuote };
+    pub const STRING_BT: TokenKind = TokenKind::String { delim: StringDelimKind::Backtick };
+    pub const STRING_UNTERM_DQ: TokenKind =
+        TokenKind::StringUnterminated { delim: StringDelimKind::DoubleQuote };
+    pub const STRING_UNTERM_BT: TokenKind =
+        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick };
+
     pub fn get_repr(&self) -> Option<&'static str> {
         match self {
             K::KeywordFn => Some("fn"),
@@ -297,11 +322,13 @@ impl TokenKind {
             K::RThinArrow => Some("->"),
 
             K::DoubleQuote => Some("\""),
-            K::SingleQuote => Some("'"),
+            K::SingleQuote => Some("singleq"),
 
             K::Ident => None,
-            K::String => Some("<string>"),
-            K::StringUnterminated => Some("<string start>"),
+            K::String { delim: StringDelimKind::Backtick } => Some("<`string`>"),
+            K::String { delim: StringDelimKind::DoubleQuote } => Some("<\"string\">"),
+            K::StringUnterminated { delim: StringDelimKind::Backtick } => Some("<`string...>"),
+            K::StringUnterminated { delim: StringDelimKind::DoubleQuote } => Some("<\"string...>"),
             K::Char => Some("<char>"),
 
             K::Eof => Some("<EOF>"),
@@ -498,14 +525,19 @@ pub struct EscapedChar {
     pub sentinel: char,
     pub output: u8,
 }
-pub const STRING_ESCAPED_CHARS: [EscapedChar; 6] = [
+pub const SHARED_STRING_ESCAPED_CHARS: [EscapedChar; 5] = [
     EscapedChar { sentinel: 'n', output: b'\n' },
     EscapedChar { sentinel: '0', output: b'\0' },
     EscapedChar { sentinel: 't', output: b'\t' },
     EscapedChar { sentinel: 'r', output: b'\r' },
-    EscapedChar { sentinel: '"', output: b'\"' },
     EscapedChar { sentinel: '\\', output: b'\\' },
 ];
+
+pub const DOUBLE_QUOTE_STRING_ESCAPED_CHARS: [EscapedChar; 1] =
+    [EscapedChar { sentinel: '"', output: b'\"' }];
+
+pub const BACKTICK_STRING_ESCAPED_CHARS: [EscapedChar; 1] =
+    [EscapedChar { sentinel: '`', output: b'`' }];
 
 pub const CHAR_ESCAPED_CHARS: [EscapedChar; 6] = [
     EscapedChar { sentinel: 'n', output: b'\n' },
@@ -556,10 +588,34 @@ pub struct Lexer<'a, 'spans> {
     tok_buf: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexMode {
+    /// The standard mode; we're lexing code
+    Tokens,
+    /// We're lexing code inside a string; we track brace depth to know which
+    /// closing delimiter is the final one, this takes advantage of the fact
+    /// (and requires!) that the language grammar has matched bracing
+    Interp { brace_depth: u32 },
+    /// A double-quote string. Escape patterns are different
+    DoubleQuoteString,
+    /// A backtick string; only backticks must be escaped
+    BacktickString,
+}
+
+impl LexMode {
+    pub fn string_delim_kind(&self) -> Option<StringDelimKind> {
+        match self {
+            LexMode::DoubleQuoteString => Some(StringDelimKind::DoubleQuote),
+            LexMode::BacktickString => Some(StringDelimKind::Backtick),
+            LexMode::Tokens => None,
+            LexMode::Interp { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LexState {
-    is_string: bool,
-    interp_brace_depth_stack: Vec<u32>,
+    mode_stack: Vec<LexMode>,
 }
 
 impl<'content, 'spans> Lexer<'content, 'spans> {
@@ -590,8 +646,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
         let mut tok_buf = String::with_capacity(1024);
 
-        let mut state = LexState { is_string: false, interp_brace_depth_stack: vec![] };
-        while let Some(_) = self.eat_token(&mut tok_buf, tokens, &mut state)? {
+        let mut state = LexState { mode_stack: vec![LexMode::Tokens] };
+        while self.eat_token(&mut tok_buf, tokens, &mut state)?.is_some() {
             tok_buf.clear();
         }
         Ok(())
@@ -643,63 +699,125 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     continue;
                 }
             }
-            if state.is_string {
-                let (_, next) = self.peek_two();
-                if c == EOF_CHAR {
-                    return Err(self.make_error(
-                        "Encountered EOF inside string".to_string(),
-                        n - tok_buf.len() as u32,
-                        tok_buf.len() as u32 + 1,
-                    ));
-                }
-                if c == '\\' && STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
-                    tok_buf.push(c);
-                    tok_buf.push(next);
-                    self.advance();
-                    self.advance();
+            let lex_mode = state.mode_stack.last_mut().unwrap();
+            match lex_mode {
+                LexMode::DoubleQuoteString | LexMode::BacktickString => {
+                    let (_, next) = self.peek_two();
+                    match c {
+                        EOF_CHAR => {
+                            return Err(self.make_error(
+                                "Encountered EOF inside string".to_string(),
+                                n - tok_buf.len() as u32,
+                                tok_buf.len() as u32 + 1,
+                            ));
+                        }
+                        '\\' =>
+                        {
+                            #[allow(clippy::if_same_then_else)]
+                            if SHARED_STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
+                                tok_buf.push(c);
+                                tok_buf.push(next);
+                                self.advance();
+                                self.advance();
+                            } else if *lex_mode == LexMode::DoubleQuoteString && next == '"' {
+                                tok_buf.push(c);
+                                tok_buf.push(next);
+                                self.advance();
+                                self.advance();
+                            } else if *lex_mode == LexMode::BacktickString && next == '`' {
+                                tok_buf.push(c);
+                                tok_buf.push(next);
+                                self.advance();
+                                self.advance();
+                            } else {
+                                tok_buf.push(c);
+                                self.advance();
+                            }
+                        }
+                        '{' => {
+                            if next == '{' {
+                                self.advance();
+                                self.advance();
+                                tok_buf.push('{');
+                                tok_buf.push('{');
+                            } else {
+                                self.advance();
+                                // Track brace depth and done when == 0
+                                debug!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
+                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                                state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
+                                tokens.push(make_buffered_token(
+                                    self,
+                                    K::StringUnterminated { delim: string_delim_kind },
+                                    tok_buf,
+                                    n,
+                                ));
+                                tokens.push(make_token(self, K::OpenBrace, n, 1));
+                                return Ok(Some(()));
+                            }
+                        }
+                        '"' => {
+                            // Terminates a double-quoted string
+                            if *lex_mode == LexMode::DoubleQuoteString {
+                                tok_buf.push('"');
+                                self.advance();
+                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                                state.mode_stack.pop();
+                                tokens.push(make_buffered_token(
+                                    self,
+                                    K::String { delim: string_delim_kind },
+                                    tok_buf,
+                                    n + 1,
+                                ));
+                                return Ok(Some(()));
+                            } else {
+                                tok_buf.push('"');
+                                self.advance();
+                            }
+                        }
+                        '`' => {
+                            // Terminates a backtick string
+                            if *lex_mode == LexMode::BacktickString {
+                                tok_buf.push('`');
+                                self.advance();
+                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                                state.mode_stack.pop();
+                                tokens.push(make_buffered_token(
+                                    self,
+                                    K::String { delim: string_delim_kind },
+                                    tok_buf,
+                                    n + 1,
+                                ));
+                                return Ok(Some(()));
+                            } else {
+                                tok_buf.push('`');
+                                self.advance();
+                            }
+                        }
+                        '\n' => {
+                            if *lex_mode == LexMode::BacktickString {
+                                tok_buf.push('\n');
+                                self.advance();
+                            } else {
+                                let string_start_quote = n - tok_buf.len() as u32 - 1;
+                                return Err(self.make_error(
+                                    "Encountered newline inside string".to_string(),
+                                    string_start_quote,
+                                    tok_buf.len() as u32 + 1,
+                                ));
+                            }
+                        }
+                        _ => {
+                            tok_buf.push(c);
+                            self.advance();
+                        }
+                    };
                     continue;
-                } else if c == '{' {
-                    if next == '{' {
-                        self.advance();
-                        self.advance();
-                        tok_buf.push('{');
-                        tok_buf.push('{');
-                        continue;
-                    } else {
-                        self.advance();
-                        // Track brace depth and done when == 0
-                        debug!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
-                        state.interp_brace_depth_stack.push(1);
-                        state.is_string = false;
-                        tokens.push(make_buffered_token(self, K::StringUnterminated, tok_buf, n));
-                        tokens.push(make_token(self, K::OpenBrace, n, 1));
-                        return Ok(Some(()));
-                    }
-                } else if c == '"' {
-                    tok_buf.push('"');
-                    self.advance();
-                    state.is_string = false;
-                    tokens.push(make_buffered_token(self, K::String, tok_buf, n + 1));
-                    return Ok(Some(()));
-                } else if c == '\n' {
-                    let string_start_quote = n - tok_buf.len() as u32 - 1;
-                    return Err(self.make_error(
-                        "Encountered newline inside string".to_string(),
-                        string_start_quote,
-                        tok_buf.len() as u32 + 1,
-                    ));
-                } else {
-                    tok_buf.push(c);
-                    self.advance();
-                    continue;
                 }
-            }
-            if c == '"' {
-                state.is_string = true;
-                tok_buf.push('"');
-                self.advance();
-                continue;
-            }
+                _ => {}
+            };
+
+            debug_assert!(lex_mode.string_delim_kind().is_none());
             if c == EOF_CHAR {
                 if !tok_buf.is_empty() {
                     tokens.push(make_keyword_or_ident(self, tok_buf, n));
@@ -707,6 +825,17 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 } else {
                     return Ok(None);
                 }
+            }
+            if c == '"' {
+                state.mode_stack.push(LexMode::DoubleQuoteString);
+                tok_buf.push('"');
+                self.advance();
+                continue;
+            } else if c == '`' {
+                state.mode_stack.push(LexMode::BacktickString);
+                tok_buf.push('"');
+                self.advance();
+                continue;
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
                 let (_, next) = self.peek_two();
@@ -785,16 +914,25 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         }
                     }
                 } else {
-                    if (c == '{' || c == '}') && state.interp_brace_depth_stack.last().is_some() {
-                        let interp_brace_depth = state.interp_brace_depth_stack.last_mut().unwrap();
+                    let interp_brace_depth = match lex_mode {
+                        LexMode::Interp { brace_depth } => Some(brace_depth),
+                        _ => None,
+                    };
+                    if (c == '{' || c == '}') && interp_brace_depth.is_some() {
+                        let interp_brace_depth = interp_brace_depth.unwrap();
                         if c == '{' {
                             *interp_brace_depth += 1;
                         } else {
                             *interp_brace_depth -= 1;
                             if *interp_brace_depth == 0 {
                                 debug!("[lex] *pop* code end");
-                                state.interp_brace_depth_stack.pop();
-                                state.is_string = true;
+                                state.mode_stack.pop();
+
+                                // Should always be in a string state after finishing an
+                                // expression interpolation
+                                debug_assert!(
+                                    state.mode_stack.last().unwrap().string_delim_kind().is_some()
+                                );
                             }
                         }
                     }
@@ -872,10 +1010,7 @@ fn is_ident_or_num_start(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexer, Span, SpanId, TokenKind};
-    use crate::lex::{Spans, TokenKind as K};
-
-    use super::Token;
+    use crate::lex::{Lexer, Span, SpanId, Spans, Token, TokenKind as K};
 
     fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
         let mut spans = Spans::new();
@@ -884,23 +1019,16 @@ mod test {
         Ok((spans, token_vec))
     }
 
-    fn expect_token_kinds(input: &str, expected: Vec<TokenKind>) -> anyhow::Result<()> {
+    fn expect_token_kinds(input: &str, expected: Vec<K>) -> anyhow::Result<()> {
         let mut spans = Spans::new();
         let mut token_vec = vec![];
         Lexer::make(input, &mut spans, 0).run(&mut token_vec)?;
-        let kinds: Vec<TokenKind> = token_vec.iter().map(|t| t.kind).collect();
+        let kinds: Vec<K> = token_vec.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, expected);
         Ok(())
     }
 
-    fn assert_token(
-        spans: &Spans,
-        tokens: &[Token],
-        index: usize,
-        kind: TokenKind,
-        start: u32,
-        len: u32,
-    ) {
+    fn assert_token(spans: &Spans, tokens: &[Token], index: usize, kind: K, start: u32, len: u32) {
         let span = spans.get(SpanId::from_u32(index as u32 + 2).unwrap());
         assert_eq!(tokens[index].kind, kind);
         assert_eq!(span.start, start);
@@ -928,7 +1056,7 @@ mod test {
     fn signed_int() -> anyhow::Result<()> {
         let input = "-43";
         let (spans, tokens) = set_up(input)?;
-        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
@@ -946,7 +1074,7 @@ mod test {
     fn minus_int() -> anyhow::Result<()> {
         let input = "- 43";
         let (spans, tokens) = set_up(input)?;
-        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, vec![K::Minus, K::Ident]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
@@ -984,7 +1112,7 @@ mod test {
         //
         "#;
         let (spans, tokens) = set_up(input)?;
-        let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
+        let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(spans.get(tokens[0].span), Span { start: 0, len: 14, file_id: 0 });
         assert_eq!(&input[0..5], "// He");
         assert_eq!(
@@ -1014,7 +1142,7 @@ mod test {
     #[test]
     fn literal_string_simple() -> anyhow::Result<()> {
         let (spans, tokens) = set_up("\"foobear\"")?;
-        assert_token(&spans, &tokens, 0, K::String, 0, 9);
+        assert_token(&spans, &tokens, 0, K::STRING_DQ, 0, 9);
         Ok(())
     }
 
@@ -1026,7 +1154,7 @@ mod test {
         assert_token(&spans, &tokens, 2, K::Equals, 6, 1);
         assert_token(&spans, &tokens, 3, K::Ident, 8, 7);
         assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1);
-        assert_token(&spans, &tokens, 5, K::String, 16, 9);
+        assert_token(&spans, &tokens, 5, K::STRING_DQ, 16, 9);
         assert_token(&spans, &tokens, 6, K::CloseParen, 25, 1);
         Ok(())
     }
@@ -1036,7 +1164,7 @@ mod test {
         let input = r#""Hello, {world}""#;
         expect_token_kinds(
             input,
-            vec![K::StringUnterminated, K::OpenBrace, K::Ident, K::CloseBrace, K::String],
+            vec![K::STRING_UNTERM_DQ, K::OpenBrace, K::Ident, K::CloseBrace, K::STRING_DQ],
         )
     }
 
@@ -1046,17 +1174,17 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
                 K::Ident,
                 K::OpenParen,
                 K::CloseParen,
                 K::CloseBrace,
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::String,
+                K::STRING_DQ,
             ],
         )
     }
@@ -1066,7 +1194,7 @@ mod test {
         let input = r#""{"hello"}""#;
         expect_token_kinds(
             input,
-            vec![K::StringUnterminated, K::OpenBrace, K::String, K::CloseBrace, K::String],
+            vec![K::STRING_UNTERM_DQ, K::OpenBrace, K::STRING_DQ, K::CloseBrace, K::STRING_DQ],
         )
     }
 
@@ -1076,15 +1204,15 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::String,
+                K::STRING_DQ,
                 K::CloseBrace,
-                K::String,
+                K::STRING_DQ,
             ],
         )
     }
@@ -1092,7 +1220,7 @@ mod test {
     #[test]
     fn interpolation_escape_doublebrace() -> anyhow::Result<()> {
         let input = "\"Method 'sum' does not exist on type: '{{ x: iword, y: iword }'\"";
-        expect_token_kinds(input, vec![K::String])
+        expect_token_kinds(input, vec![K::STRING_DQ])
     }
 
     #[test]
@@ -1101,9 +1229,9 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
-                K::StringUnterminated,
+                K::STRING_UNTERM_DQ,
                 K::OpenBrace,
                 K::OpenParen,
                 K::OpenBrace,
@@ -1115,9 +1243,35 @@ mod test {
                 K::Dot,
                 K::Ident, // .x
                 K::CloseBrace,
-                K::String,
+                K::STRING_DQ,
                 K::CloseBrace,
-                K::String,
+                K::STRING_DQ,
+            ],
+        )
+    }
+
+    #[test]
+    fn backtick_string_1() -> anyhow::Result<()> {
+        let input = "`Method 'sum' does not exist on type: '{{ x: iword, y: iword }'`";
+        expect_token_kinds(input, vec![K::STRING_BT])
+    }
+
+    #[test]
+    fn backtick_interpolation_mixed() -> anyhow::Result<()> {
+        // Tests mode stack by mixing string types
+        let input = r#"`{"hello {var}"}`"#;
+        expect_token_kinds(
+            input,
+            vec![
+                K::STRING_UNTERM_BT,
+                K::OpenBrace,
+                K::STRING_UNTERM_DQ,
+                K::OpenBrace,
+                K::Ident,
+                K::CloseBrace,
+                K::STRING_DQ,
+                K::CloseBrace,
+                K::STRING_BT,
             ],
         )
     }
