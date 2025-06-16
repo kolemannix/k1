@@ -6421,6 +6421,11 @@ impl TypedProgram {
                 // Then we typecheck the code and emit a block in place of this #meta
                 // invocation
                 let mut content = std::mem::take(&mut self.buffers.emitted_code);
+
+                // nocommit(0): Do not push the braces and newlines and semicolons here
+                //              Just make the metaprogram do that if it wants a block
+                //              and provide simple string-based helpers to do it.
+                //              For example, meta/emitBlock(statements: Buffer[string])
                 content.push_str("{\n");
                 for emit in vm_result.emits.iter() {
                     match emit {
@@ -6438,7 +6443,7 @@ impl TypedProgram {
                             let type_id = self.static_values.get(*value).get_type();
                             write!(
                                 &mut content,
-                                "let {}: typeFromId({})  = core/meta/_getStaticValueById({})",
+                                "let {}: typeFromId({}) = core/meta/_getStaticValueById({})",
                                 self.ident_str(*name),
                                 type_id.as_u32(),
                                 value.as_u32()
