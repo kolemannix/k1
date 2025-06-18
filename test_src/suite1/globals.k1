@@ -1,8 +1,8 @@
 ns test_globals;
 
 let globalInt: int = 0;
-let* globalIntRef: int* = 10;
-let static staticInt: int = 2;
+let* mut globalIntRef: int* = 10;
+let staticInt: int = 2;
 
 fn test(): unit {
 

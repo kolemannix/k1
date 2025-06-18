@@ -7,7 +7,7 @@ ns List {
 
   // TODO: List will store its allocator,
   // UnmanagedList will accept one at call sites
-  let static ALLOC_MODE: mem/AllocMode = { kind: .Current };
+  let ALLOC_MODE: mem/AllocMode = { kind: .Current };
 
   ///////////////////////////
   // Construction functions

@@ -98,7 +98,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [ ] A clone ability
-      `sealed abstract class Range(let start: Int, let end: Int, let step: Int)`
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Mark types as trivially copyable or not
@@ -143,16 +142,24 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
+## Project: Mutable and non-mutable reference types
+- [ ] Determine syntax
+- [ ] Prevent writes to non-mutable references
+- [ ] Update stdlib
+
 ## Project: static reflection
-- [ ] functions taking only a single type could be invoked with
-      a nice syntax like `type.sizeOf`
 - [x] Runtime type info story
 - [x] typeOf, typeId
 - [x] TypeSchema for all types
 - [ ] Test 'Any' type
+- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] (static only?) 'Type predicate' functions as type bounds
 
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
+- [x] #meta First working version
+- [x] Multiline string literals,
+- [x] #code directive
+- [ ] 
 
 ## Project: Array types
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
@@ -165,6 +172,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
       ability Equals { syntax(2, "==") fn }
       This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
+
+## Project: aarch64 ABI
+## Project: x86-64 ABI
 
 ## Introduce Warnings
 - [ ] Unused var
@@ -194,10 +204,11 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] German/Umbra strings
 
 ## Compiler
-- [ ] LLVM: avoid loading aggregate values directly
+- [x] LLVM: avoid loading aggregate values directly
 - [x] Convert NamedType to a trait
-- [ ] Use smallvec
-- [ ] UTF8
+- [x] Use smallvec
+- [x] UTF8
+- [ ] Test UTF8
 - [ ] Intern ParsedBlock and ParsedStatement
 
 ## Error story
@@ -215,7 +226,6 @@ New tagline? "C with typeclasses and tagged unions"
 
 # Major fix
 - [x] Unmatched closing delim in namespace causes silent failure to parse rest of sources
-- [ ] Replace IdentifierId with global 'Symbol' where its a bug not to
 - [x] Parsing bug where first expr of block is namespaced with ::
 - [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())

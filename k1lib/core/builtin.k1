@@ -236,15 +236,15 @@ ns mem {
 ns k1 {
   // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
   // nocommit: fix globals to be either 'let mut' or just 'let' for static
-  let static IS_STATIC: bool = builtin;
+  let IS_STATIC: bool = builtin;
 
-  let static TEST: bool = builtin;
-  let static NO_STD: bool = builtin;
-  let static DEBUG: bool = builtin;
+  let TEST: bool = builtin;
+  let NO_STD: bool = builtin;
+  let DEBUG: bool = builtin;
 
-  let static OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-  let static OS_MACOS: bool = OS == "macos";
-  let static OS_POSIX: bool = OS == "macos" or OS == "linux";
+  let OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+  let OS_MACOS: bool = OS == "macos";
+  let OS_POSIX: bool = OS == "macos" or OS == "linux";
 
   intern fn emitCompilerMessage(
     locn: compiler/SourceLocation,
@@ -312,9 +312,9 @@ fn discard[T](t: T): unit { () }
 
 // TODO: #if(K1_LIBC?) ?
 ns libc {
-  let static STDIN: i32 = 0;
-  let static STDOUT: i32 = 1;
-  let static STDERR: i32 = 2;
+  let STDIN: i32 = 0;
+  let STDOUT: i32 = 1;
+  let STDERR: i32 = 2;
 
   extern(exit) fn exit(code: i32): never
 

@@ -19,8 +19,8 @@ ns raylib {
 // TODO: We need a good 'void' return because if you try to access the unit
 //       I think it won't be a unit since there's no return value at all
 
-let static RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
-let static GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
+let RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
+let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
 
 fn main(): i32 {
     let context allocMode = core/mem/AllocMode/TEMP;

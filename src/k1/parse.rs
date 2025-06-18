@@ -1350,7 +1350,7 @@ pub struct ParsedGlobal {
     pub value_expr: ParsedExprId,
     pub span: SpanId,
     pub id: ParsedGlobalId,
-    pub is_static: bool,
+    pub is_mutable: bool,
     pub is_referencing: bool,
 }
 
@@ -3505,7 +3505,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let is_static = self.maybe_consume_next(K::KeywordStatic).is_some();
+        let is_mutable = self.maybe_consume_next(K::KeywordMut).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
@@ -3519,7 +3519,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
-            is_static,
+            is_mutable,
             is_referencing,
         });
         Ok(Some(constant_id))

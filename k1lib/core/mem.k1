@@ -7,13 +7,13 @@ ns mem {
     realloc: (\(Pointer, uword, uword, uword) -> Pointer)*,
     free:    (\(Pointer, uword, uword) -> unit)*,
   }
-  
-  deftype AllocMode = { 
-    kind: (either 
-      Current, 
-      SystemHeap, 
-      CustomHeap(Allocator*), 
-      TempBump, 
+
+  deftype AllocMode = {
+    kind: (either
+      Current,
+      SystemHeap,
+      CustomHeap(Allocator*),
+      TempBump,
       Bump(Arena*),
       Gc
     )
@@ -21,9 +21,9 @@ ns mem {
 
   ns AllocMode {
 
-    let static SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
-    let static CURRENT: AllocMode = { kind: .Current };
-    let static TEMP: AllocMode = { kind: .TempBump };
+    let SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
+    let CURRENT: AllocMode = { kind: .Current };
+    let TEMP: AllocMode = { kind: .TempBump };
 
     fn supportsRealloc(self: AllocMode): bool { switch self.kind {
       .Current -> crash("unreachable"),

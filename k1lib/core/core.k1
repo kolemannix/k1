@@ -5,7 +5,7 @@ fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T,
 }
 
 ns Pointer {
-  let static NULL: Pointer = 0: uword as Pointer;
+  let NULL: Pointer = 0: uword as Pointer;
 
   fn isNull(self: Pointer): bool {
     self as uword == 0
@@ -59,11 +59,11 @@ fn eprintln(s: string): unit {
   eprint("\n");
 }
 
-#if k1/OS_POSIX 
+#if k1/OS_POSIX
 ns io {
   deftype OutStream = { fileNo: i32 }
-  let* static STDOUT: OutStream* = { fileNo: libc/STDOUT };
-  let* static STDERR: OutStream* = { fileNo: libc/STDERR };
+  let* STDOUT: OutStream* = { fileNo: libc/STDOUT };
+  let* STDERR: OutStream* = { fileNo: libc/STDERR };
 
   impl Writer for OutStream {
     fn writeChar(self: Self*, value: char): unit {
@@ -120,19 +120,19 @@ ns sys {
   fn readLine(maxLengthBytes: uword): Result[string, string] {
     let* buffer = Buffer/_allocate[byte](maxLengthBytes);
     let bytesRead = libc/read(0, buffer.data as Pointer, buffer.len);
-    
+
     if bytesRead < 0 {
       return(.Err("Failed to read line"));
     };
 
     let length = bytesRead as uword - 1;
-    
+
     // Remove trailing newline if present
     if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
       buffer.set(length, 0);
       buffer.len* <- length;
     };
-    
+
     let result = string/wrapBytes(buffer);
     .Ok(result)
   }
@@ -141,8 +141,8 @@ ns sys {
 
 ns files {
   ns unix {
-    let static SEEK_END: i32 = 2;
-    let static SEEK_SET: i32 = 0;
+    let SEEK_END: i32 = 2;
+    let SEEK_SET: i32 = 0;
     extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
     extern(fseek)  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
     extern(fread)  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
@@ -152,12 +152,12 @@ ns files {
 
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
     let filenameCString = path.toCString();
-  
+
     let file = files/unix/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     files/unix/fseek(file, 0, unix/SEEK_END);
     let fileSizeBytes = files/unix/ftell(file) as uword;
     let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
-  
+
     files/unix/fseek(file, 0, unix/SEEK_SET);
     files/unix/fread(buf, fileSizeBytes, 1, file);
     let string = string/wrapBuffer(Buffer/fromRawParts(fileSizeBytes, buf));
