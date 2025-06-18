@@ -9,13 +9,13 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
       emitLine(#code w.writeChar('{'));
       for f in s.fields do {
 
-        let fieldLetName = "_{name}{f.name}";
+        let fieldLetName = `_{name}{f.name}`;
 
-        emitLine("let {fieldLetName} = {name}.{f.name}");
+        emitLine(`let {fieldLetName} = {name}.{f.name}`);
         emitLine(#code w.writeChar('"'));
-        emitLine("w.writeString(\"{f.name}\")");
-        emitLine(#code w.writeString("\":"));
-        
+        emitLine(`w.writeString("{f.name}")`);
+        emitLine(#code w.writeString(`":`));
+
         _writeJsonFromSchema(fieldLetName, f.typeId);
         let last = itIndex == s.fields.len - 1;
         if not last {
@@ -26,16 +26,15 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
     },
     .Unit -> emitLine(#code w.writeString("\"unit\"")),
     .Bool -> {
-      emitLine("w.writeString(if {name} \"true\" else \"false\")") 
-      // #emitstring `w.writeString(if {name} "true" else "false")`
+      emitLine(`w.writeString(if {name} "true" else "false")`)
     },
-    .Word(_) or .Int(_) -> emitLine("{name}.printTo(w)"),
-    .Either(_) -> { 
+    .Word(_) or .Int(_) -> emitLine(`{name}.printTo(w)`),
+    .Either(_) -> {
       let tName = types/typeName(typeId);
       crash("Cannot yet create a JSON writer for either: {tName}")
     },
     _ -> {
-      emitLine(#code w.writeString("\"other\""))
+      emitLine(#code w.writeString(`"other"`))
     }
   }
 }

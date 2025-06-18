@@ -8,7 +8,7 @@
 // - String handling
 // - Builds on List which is implemented in k1
 
-let static MODULE_INFO: core/k1/ModuleManifest = {
+let MODULE_INFO: core/k1/ModuleManifest = {
     kind: .Library,
     deps: "",
 };

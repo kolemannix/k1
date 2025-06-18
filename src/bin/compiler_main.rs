@@ -39,11 +39,6 @@ fn run() -> anyhow::Result<ExitCode> {
     let out_dir = ".k1-out";
     std::fs::create_dir_all(out_dir)?;
 
-    // let mut i = 0;
-    // while i < 1000 {
-    //     compiler::compile_module(&args);
-    //     i += 1;
-    // }
     let Ok(program) = compiler::compile_module(&args) else { return Ok(ExitCode::FAILURE) };
     let program_name = program.program_name();
     info!("done waiting on compile thread");

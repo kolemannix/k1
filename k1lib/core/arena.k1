@@ -8,8 +8,8 @@ deftype Arena = {
   maxAddr: uword
 }
 ns Arena {
-  let static mb: uword = 0x100000;
-  let static gb: uword = 0x40000000;
+  let mb: uword = 0x100000;
+  let gb: uword = 0x40000000;
 
   fn regionSizeBytes(self: Arena): uword {
     self.maxAddr - (self.basePtr as uword)
@@ -32,7 +32,7 @@ ns Arena {
     // We zero the memory because we don't make arenas that often
     // so it's worth it
     let basePtr = mem/allocZeroed(
-      size = capacity, 
+      size = capacity,
       align = 8
     );
     if basePtr.isNull() crash("calloc for Arena failed");

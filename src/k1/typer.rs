@@ -2071,7 +2071,6 @@ pub enum IntrinsicBitwiseBinopKind {
     ShiftRight,
 }
 
-// nocommit(2) split this enum up by handle: FrontendIntrinsicOperation vs BackendIntrinsicOperation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicOperation {
     SizeOf,
@@ -2136,9 +2135,8 @@ impl IntrinsicOperation {
         }
     }
 
-    // nocommit Rename is_inlined to is_physical_function
-    //          Or just document where this is used or what it truly
-    //          means better
+    /// Determines whether a physical function should be generated for this
+    /// operation; currently used by the LLVM backend
     pub fn is_inlined(self) -> bool {
         match self {
             IntrinsicOperation::SizeOf => true,
@@ -4676,7 +4674,7 @@ impl TypedProgram {
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
-        let is_static = parsed_global.is_static;
+        let is_mutable = parsed_global.is_mutable;
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
@@ -4695,7 +4693,7 @@ impl TypedProgram {
             ty: type_id,
             span: global_span,
             is_referencing,
-            is_constant: is_static,
+            is_constant: !is_mutable,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
