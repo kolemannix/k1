@@ -66,9 +66,9 @@ ns types {
     Pointer,
     Reference({ innerTypeId: u64 }),
     Struct({
-      fields: Buffer[{ 
-        name: string, 
-        typeId: u64, 
+      fields: Buffer[{
+        name: string,
+        typeId: u64,
         offset: uword
       }],
     }),
@@ -102,9 +102,15 @@ ns types {
 }
 
 ns meta {
-  intern fn emitLine(code: string): unit
-  intern fn emitVariable[T](name: string, value: T): unit
-  intern fn _getStaticValueById[T](id: u64): T
+  intern fn emit(code: string): unit
+
+  /////// Static value ferrying across the runtime/comptime border:
+  /////// Likely marked internal eventually
+  intern fn bakeStaticValue[T](value: T): u64
+  // Must be provided an integer literal.
+  // Can only be called by generated code
+  intern fn getStaticValue[T](id: u64): T
+
 }
 
 ////////////////////////////////
@@ -235,7 +241,6 @@ ns mem {
 // Compiler builtins
 ns k1 {
   // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
-  // nocommit: fix globals to be either 'let mut' or just 'let' for static
   let IS_STATIC: bool = builtin;
 
   let TEST: bool = builtin;
@@ -289,7 +294,7 @@ impl Equals for bool {
   }
 }
 
-// nocommit: Metaprogramming for definitions.
+// nocommit(2): Metaprogramming for definitions.
 // #meta {
 //   for t in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] do {
 //     meta/emitString `impl Equals for {t} { fn equals(self: {t}, other: {t}): bool { self == other } } `
@@ -310,16 +315,22 @@ impl Equals for iword { fn equals(self: Self, other: Self): bool { self == other
 
 fn discard[T](t: T): unit { () }
 
-// TODO: #if(K1_LIBC?) ?
-ns libc {
+#if k1/OS_POSIX
+ns posix {
+
   let STDIN: i32 = 0;
   let STDOUT: i32 = 1;
   let STDERR: i32 = 2;
 
-  extern(exit) fn exit(code: i32): never
-
   extern(read) fn read(fileNo: i32, buffer: Pointer, count: uword): iword
   extern(write) fn write(fileNo: i32, data: Pointer, count: uword): iword
+
+}
+
+// Eventually: #if k1/C_RUNTIME
+ns libc {
+
+  extern(exit) fn exit(code: i32): never
 
   extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
 
@@ -328,7 +339,6 @@ ns libc {
   extern(free) fn free(ptr: Pointer): unit
   extern(realloc) fn realloc(ptr: Pointer, size: uword): Pointer
 
-  // extern(abort) fn abort(): never
 }
 
 fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
@@ -336,25 +346,25 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
 }
 
 fn assertdbg(context locn: compiler/SourceLocation)(value: bool): unit {
-  #if k1/DEBUG 
+  #if k1/DEBUG
     if not value { crash("ASSERT FAILED") };
 }
 
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   if k1/NO_STD {
     let s = "exiting (nostd)\n\0";
-    libc/write(
-      fileNo = 1, 
-      data = s.buffer.data as Pointer, 
+    posix/write(
+      fileNo = 1,
+      data = s.buffer.data as Pointer,
       count = s.buffer.len - 1,
     );
     sys/exit(1)
   } else if k1/IS_STATIC {
     //let s = "exiting static\n\0";
-    //libc/write(
-    //  fileNo = 1, 
-    //  data = s.buffer.data as Pointer, 
-    //  count = s.buffer.len - 1, 
+    //posix/write(
+    //  fileNo = 1,
+    //  data = s.buffer.data as Pointer,
+    //  count = s.buffer.len - 1,
     //  offset = 0
     //);
     k1/emitCompilerMessage(locn, .Error, msg);

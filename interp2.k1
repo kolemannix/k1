@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let w = "World";
-  assertEquals("Ok: 3", "Ok: {3}");
-  0
-
-}

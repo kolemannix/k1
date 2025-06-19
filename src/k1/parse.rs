@@ -2554,10 +2554,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 // Escaped closing delimiter ` or "
                                 buf.push(delim.char())
                             } else {
-                                return Err(error(
-                                    format!("Invalid escape sequence: '\\{next}'"),
-                                    first,
-                                ));
+                                // Push both; not an escape sequence
+                                buf.push('\\');
+                                buf.push(next);
                             };
                         } else if c == delim.char() {
                             // Skip closing delimiters of terminated string tokens
