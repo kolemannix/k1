@@ -16,11 +16,45 @@ fn hasId[T](): bool {
 }
 
 // template-style min
-//macro min(a, b) { if a <= b a else b }
-//->
-//expand fn min(t1: code, t2: code): code {
-//  #code if t1 <= t2 t1 else t2
-//}
+macro min(a, b) { if a <= b a else b }
+->
+expand fn min(t1: code, t2: code): code {
+  #code if t1 <= t2 t1 else t2
+}
+
+fn debugPrinter[T](t: T): string {
+  #static {
+    let info = typeInfo(t.typeId);
+    require info is .Struct(s) else { crash("Only structs are supported") };
+    #insert let* sb = StringBuilder/new();
+    #insert sb.putString("** [");
+    #static for field in s.fields {
+      let fieldName = field.name;
+      switch typeInfo(field.typeId) {
+        .Struct(s) -> #insert sb.putString("\{fieldName}: {}"),
+        .Bool(b) -> #insert "sb.putString(t.\{fieldName}.show())",
+      }
+    };
+    #insert sb.putString("** ]");
+    #insert sb.build()
+  }
+
+
+  let static info = typeInfo(t.typeId);
+  require info is .Struct(s) else { crash("Only structs are supported") };
+  #insert let* sb = StringBuilder/new();
+  #insert sb.putString("** [");
+  #static for field in s.fields {
+    let fieldName = field.name;
+    switch typeInfo(field.typeId) {
+      .String(s) -> #insert sb.putString("\"\{s}\""),
+      .Struct(s) -> #insert sb.putString("\{fieldName}: {}"),
+      .Bool(b) -> #insert "sb.putString(t.\{fieldName}.show())",
+    }
+  };
+  #insert sb.putString("** ]");
+  #insert sb.build()
+}
 
 fn main(): i32 {
   let todo1 = {};

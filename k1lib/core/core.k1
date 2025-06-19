@@ -62,26 +62,26 @@ fn eprintln(s: string): unit {
 #if k1/OS_POSIX
 ns io {
   deftype OutStream = { fileNo: i32 }
-  let* STDOUT: OutStream* = { fileNo: libc/STDOUT };
-  let* STDERR: OutStream* = { fileNo: libc/STDERR };
+  let* STDOUT: OutStream* = { fileNo: posix/STDOUT };
+  let* STDERR: OutStream* = { fileNo: posix/STDERR };
 
   impl Writer for OutStream {
     fn writeChar(self: Self*, value: char): unit {
       let* valueRef: char* = value;
-      libc/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
+      posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
       ()
     }
     fn writeByte(self: Self*, value: u8): unit {
       let* valueRef: u8* = value;
-      libc/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
+      posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
       ()
     }
     fn writeString(self: Self*, s: string): unit {
-      libc/write(fileNo = self.fileNo, data = s.buffer.data as Pointer, count = s.len());
+      posix/write(fileNo = self.fileNo, data = s.buffer.data as Pointer, count = s.len());
       ()
     }
     fn writeBytes(self: Self*, buffer: Buffer[byte]): unit {
-      libc/write(fileNo = self.fileNo, data = buffer.data as Pointer, count = buffer.len);
+      posix/write(fileNo = self.fileNo, data = buffer.data as Pointer, count = buffer.len);
       ()
     }
   }
@@ -119,7 +119,7 @@ ns sys {
 
   fn readLine(maxLengthBytes: uword): Result[string, string] {
     let* buffer = Buffer/_allocate[byte](maxLengthBytes);
-    let bytesRead = libc/read(0, buffer.data as Pointer, buffer.len);
+    let bytesRead = posix/read(0, buffer.data as Pointer, buffer.len);
 
     if bytesRead < 0 {
       return(.Err("Failed to read line"));

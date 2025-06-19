@@ -1,0 +1,86 @@
+ns test_meta;
+
+use core/meta/emitLine
+use core/meta/emit
+
+fn simpleIncrement(): i32 {
+  let mut x = 10;
+  #meta {
+    for core/IntRange/upTo(5) do {
+      emitLine(#code x = x + 1);
+    }
+  };
+  assertEquals(x, 15);
+
+  0
+}
+
+use core/Writer
+use types/TypeSchema
+use types/typeSchema
+
+fn _writeJsonFromSchema(name: string, typeId: u64): unit {
+  switch typeSchema(typeId) {
+    .Struct(s) -> {
+      emitLine(#code w.writeChar('{'));
+      for f in s.fields do {
+
+        let fieldLetName = `_{name}{f.name}`;
+
+        core/meta/emit(
+         `let {fieldLetName} = {name}.{f.name};
+          w.writeString("\"{f.name}\":");`
+       ); //" fix quote
+
+        _writeJsonFromSchema(fieldLetName, f.typeId);
+        let last = itIndex == s.fields.len - 1;
+        if not last {
+          emitLine(#code w.writeString(","));
+        }
+      };
+      emitLine(#code w.writeChar('}'));
+    },
+    .Unit -> emitLine(#code w.writeString(`"unit"`)),
+    .Bool -> {
+      emitLine(`w.writeString(if {name} "true" else "false")`)
+    },
+    .Word(_) or .Int(_) -> emitLine(`{name}.printTo(w)`),
+    .Either(_) -> {
+      let tName = types/typeName(typeId);
+      crash("Cannot yet create a JSON writer for either: {tName}")
+    },
+    _ -> {
+      emitLine(#code w.writeString(`"other"`))
+    }
+  };
+}
+
+fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
+  #meta {
+    let typeId = types/typeId[T]();
+    _writeJsonFromSchema("t", typeId);
+  }
+}
+
+fn toJson[T](t: T): string {
+  let* w = List/empty[char]();
+  writeJson(context w)(t);
+  let s = string/wrapList(w);
+  s
+}
+
+fn testToJson(): unit {
+  let* w = List/empty[char]();
+
+  assertEquals(toJson(true), "true");
+  let json1 = toJson({ x: 1, y: 2, z: (), d: false });
+  assertEquals(json1, `{{"x":1,"y":2,"z":"unit","d":false}`);
+
+  ()
+}
+
+
+fn test(): unit {
+  simpleIncrement();
+  testToJson()
+}

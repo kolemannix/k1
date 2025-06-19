@@ -103,6 +103,7 @@ pub struct Vm {
     eval_span: SpanId,
 
     pub emits: Vec<CodeEmission>,
+    pub allow_emits: bool,
 }
 
 impl Vm {
@@ -127,6 +128,7 @@ impl Vm {
             eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
             emits: Vec::with_capacity(128),
+            allow_emits: false,
         }
     }
 
@@ -1417,7 +1419,7 @@ fn execute_intrinsic(
         IntrinsicOperation::SizeOf
         | IntrinsicOperation::SizeOfStride
         | IntrinsicOperation::AlignOf
-        | IntrinsicOperation::StaticValueById => {
+        | IntrinsicOperation::GetStaticValue => {
             unreachable!("Handled by typer phase")
         }
         IntrinsicOperation::Zeroed => {
@@ -1631,22 +1633,24 @@ fn execute_intrinsic(
             );
             Ok(VmResult::UNIT)
         }
-        IntrinsicOperation::EmitStringStatement => {
-            // intern fn emitLine(code: string): unit
+        IntrinsicOperation::EmitString => {
+            // intern fn emit(code: string): unit
+            if !vm.allow_emits {
+                return failf!(
+                    vm.eval_span,
+                    "emit() called in a context that does not allow emits"
+                );
+            }
             let string_value = execute_expr_return_exit!(vm, m, args[0])?;
             let string_id = value_to_string_id(m, string_value);
             vm.emits.push(CodeEmission::String(string_id));
             Ok(VmResult::UNIT)
         }
-        IntrinsicOperation::EmitVariable => {
-            // intern fn emitVariable[T](name: string, value: T): unit
-            let name_value = execute_expr_return_exit!(vm, m, args[0])?;
-            // TODO: Eventually, validate the emitted identifier
-            let name_ident = value_to_ident(m, name_value);
-            let value_value = execute_expr_return_exit!(vm, m, args[1])?;
+        IntrinsicOperation::BakeStaticValue => {
+            // intern fn bakeStaticValue[T](value: T): u64
+            let value_value = execute_expr_return_exit!(vm, m, args[0])?;
             let value_id = vm_value_to_static_value(m, vm, value_value, vm.eval_span)?;
-            vm.emits.push(CodeEmission::Variable { name: name_ident, value: value_id });
-            Ok(VmResult::UNIT)
+            Ok(VmResult::Value(Value::Int(TypedIntValue::U64(value_id.as_u32() as u64))))
         }
     }
 }

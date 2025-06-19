@@ -9,7 +9,6 @@ fn main(): i32 {
   #meta {
     for core/IntRange/upTo(5) do {
       meta/emitLine(#code x = x + 1);
-      meta/emitLine(#code if x % 2 == 0 println("buzz"))
     }
   };
   assertEquals(x, 15);

@@ -659,7 +659,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         tokens: &mut Vec<Token>,
         state: &mut LexState,
     ) -> LexResult<Option<()>> {
-        // nocommit: tok_buf is only used for its length; its a nice debugging tool but it could/should just be a number
+        // Note: tok_buf is only used for its length; we don't use the chars in it.
+        //       Its a nice debugging tool though.
         tok_buf.clear();
         let mut is_line_comment = false;
         let mut line_comment_start = 0;

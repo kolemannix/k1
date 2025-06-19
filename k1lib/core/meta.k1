@@ -1,0 +1,29 @@
+ns meta {
+
+  fn emitLine(code: string): unit {
+    emit(code);
+    emit(";\n")
+  }
+
+  fn bakedValueExpr[T](value: T): string {
+    let valueId = bakeStaticValue[T](value);
+    `core/meta/getStaticValue({valueId})`
+  }
+
+  fn bakedVariable[T](name: string, value: T): string {
+    let bakedValueExpr: string = bakedValueExpr[T](value);
+    let typeId = types/typeId[T]();
+    `let {name}: typeFromId({typeId}) = {bakedValueExpr};\n`
+  }
+
+  fn emitVariable[T](name: string, value: T): unit {
+    emit(bakedVariable[T](name, value))
+  }
+
+  fn emitLines[Iter: Iterator[Item = string]](lines: Iter): unit {
+    for l in lines do {
+      emitLine(l)
+    }
+  }
+
+}

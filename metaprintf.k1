@@ -1,12 +1,12 @@
 use core/meta
-fn sprintf[Args](fmtString: string, args: Args): string { 
+fn sprintf[Args](fmtString: string, args: Args): string {
   let* result: List[char]* = List/empty();
   #meta {
     let fmtString = "My values are ? and ?";
     let schema = types/typeSchema(types/typeId[Args]());
-    if schema is .Other("param") { meta/emitLine(#code ""); return(()) };
+    if schema is .Other("param") { meta/emitLine(`""`); return(()) };
     require schema is .Struct({ fields }) else { crash("Struct!") };
-    
+
     for field in fields do {
       meta/emitLine("let f{itIndex} = args.{field.name}")
     };
@@ -24,7 +24,7 @@ fn sprintf[Args](fmtString: string, args: Args): string {
       meta/emitLine("f{fmtIndex}.printTo(result)");
       fmtIndex = fmtIndex + 1;
     };
-    meta/emitLine(#code string/wrapList(result))
+    meta/emitLine(#code string/wrapList(result));
   }
 }
 

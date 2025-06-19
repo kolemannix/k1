@@ -2099,9 +2099,9 @@ pub enum IntrinsicOperation {
     Exit,
     // Static-only
     CompilerMessage,
-    EmitStringStatement,
-    EmitVariable,
-    StaticValueById,
+    EmitString,
+    BakeStaticValue,
+    GetStaticValue,
 }
 
 impl IntrinsicOperation {
@@ -2112,7 +2112,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::AlignOf => true,
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::CompilerSourceLocation => true,
-            IntrinsicOperation::StaticValueById => true,
+            IntrinsicOperation::GetStaticValue => true,
             //
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
@@ -2130,8 +2130,8 @@ impl IntrinsicOperation {
             IntrinsicOperation::Exit => false,
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
-            IntrinsicOperation::EmitStringStatement => false,
-            IntrinsicOperation::EmitVariable => false,
+            IntrinsicOperation::EmitString => false,
+            IntrinsicOperation::BakeStaticValue => false,
         }
     }
 
@@ -2163,9 +2163,9 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
             // Metaprogramming
-            IntrinsicOperation::EmitStringStatement => true,
-            IntrinsicOperation::EmitVariable => true,
-            IntrinsicOperation::StaticValueById => true,
+            IntrinsicOperation::EmitString => true,
+            IntrinsicOperation::GetStaticValue => true,
+            IntrinsicOperation::BakeStaticValue => true,
         }
     }
 }
@@ -2418,7 +2418,6 @@ pub struct TypedModuleBuffers {
 
 #[derive(Clone, Copy)]
 pub enum CodeEmission {
-    Parsed(crate::parse::ParsedStmtId),
     String(StringId),
     // Eventually, variable modifiers
     Variable { name: Identifier, value: StaticValueId },
@@ -4564,6 +4563,7 @@ impl TypedProgram {
             });
         }
 
+        vm.allow_emits = static_ctx.is_metaprogram;
         let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
 
         if cfg!(debug_assertions) {
@@ -6420,28 +6420,18 @@ impl TypedProgram {
                 // invocation
                 let mut content = std::mem::take(&mut self.buffers.emitted_code);
 
-                // nocommit(0): Do not push the braces and newlines and semicolons here
-                //              Just make the metaprogram do that if it wants a block
-                //              and provide simple string-based helpers to do it.
-                //              For example, meta/emitBlock(statements: Buffer[string])
-                content.push_str("{\n");
+                content.push('{');
                 for emit in vm_result.emits.iter() {
                     match emit {
-                        CodeEmission::Parsed(parsed_stmt_id) => {
-                            let parsed_stmt_span = self.ast.get_stmt_span(*parsed_stmt_id);
-                            let span_content = self.ast.get_span_content(parsed_stmt_span);
-                            eprintln!("span_content is exactly: `{span_content}`");
-                            content.push_str(span_content)
-                        }
                         CodeEmission::String(string_id) => {
                             content.push_str(self.ast.strings.get_string(*string_id));
                         }
                         CodeEmission::Variable { name, value } => {
                             use std::fmt::Write;
                             let type_id = self.static_values.get(*value).get_type();
-                            write!(
+                            writeln!(
                                 &mut content,
-                                "let {}: typeFromId({}) = core/meta/_getStaticValueById({})",
+                                "let {}: typeFromId({}) = core/meta/_getStaticValueById({});",
                                 self.ident_str(*name),
                                 type_id.as_u32(),
                                 value.as_u32()
@@ -6449,7 +6439,6 @@ impl TypedProgram {
                             .unwrap();
                         }
                     }
-                    content.push_str(";\n");
                 }
                 content.push('}');
                 eprintln!("Emitted content after {} emits:\n{content}", vm_result.emits.len());
@@ -6463,14 +6452,14 @@ impl TypedProgram {
                     content.clone(),
                 ));
 
-                let parsed_block_result = self.parse_ad_hoc_block(source_for_emission, &content);
+                let parsed_expr_result = self.parse_ad_hoc_expr(source_for_emission, &content);
                 content.clear();
                 self.buffers.emitted_code = content;
-                let parsed_block = parsed_block_result?;
-                let typed_block = self.eval_block(&parsed_block, ctx, false)?;
-                eprintln!("Emitted compiled block:\n{}", self.block_to_string(&typed_block));
+                let parsed_expr = parsed_expr_result?;
+                let typed_expr = self.eval_expr(parsed_expr, ctx)?;
+                eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_expr));
 
-                Ok(self.exprs.add(TypedExpr::Block(typed_block)))
+                Ok(typed_expr)
             }
             ParsedStaticBlockKind::Value => {
                 let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
@@ -6483,11 +6472,11 @@ impl TypedProgram {
         }
     }
 
-    fn parse_ad_hoc_block(&mut self, file_id: FileId, code_str: &str) -> TyperResult<ParsedBlock> {
+    fn parse_ad_hoc_expr(&mut self, file_id: FileId, code_str: &str) -> TyperResult<ParsedExprId> {
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
-        // nocommit: Make a file for each static emission, that way debugger can see
+        // nocommit(2): Write out a file for each static emission, that way debugger can see
         // Maybe in .k1-out?
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
         let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
@@ -6506,7 +6495,7 @@ impl TypedProgram {
             file_id,
         );
 
-        let result = match p.expect_block(ParsedBlockKind::LexicalBlock) {
+        let result = match p.expect_expression() {
             Err(e) => {
                 failf!(e.span(), "Failed to parse your emitted code: {}", e)
             }
@@ -10172,28 +10161,11 @@ impl TypedProgram {
         &mut self,
         call: Call,
         intrinsic: IntrinsicOperation,
-        ctx: EvalExprContext,
+        _ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = call.span;
-        // Emit stuff
         match intrinsic {
-            IntrinsicOperation::EmitStringStatement | IntrinsicOperation::EmitVariable => {
-                if ctx.static_ctx.is_some_and(|sctx| !sctx.is_metaprogram) {
-                    return failf!(span, "#emit can only be used from explicit `#meta` blocks");
-                }
-                // Emit is a special expression that, when invoked statically from
-                // inside a #meta block at location L, causes the emitted code to be placed at L upon
-                // static execution completion.
-                // At runtime, the #emit expressions simply produce a unit value.
-
-                // nocommit(1): Multiline strings to improve emitString usage
-                // - A raw string syntax to reduce escaping burden: backticks? [[ ]]?
-                // - nocommit(2) Emitting Definitions.
-
-                // For now we just do some checks and output the call as-is
-                Ok(self.exprs.add(TypedExpr::Call(call)))
-            }
-            IntrinsicOperation::StaticValueById => {
+            IntrinsicOperation::GetStaticValue => {
                 let static_value_id_arg = self.exprs.get(call.args[0]);
                 // For now, require a literal. We could relax this and evaluate it
                 // if that's useful
@@ -11670,9 +11642,9 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
-                    "emitLine" => Some(IntrinsicOperation::EmitStringStatement),
-                    "emitVariable" => Some(IntrinsicOperation::EmitVariable),
-                    "_getStaticValueById" => Some(IntrinsicOperation::StaticValueById),
+                    "emit" => Some(IntrinsicOperation::EmitString),
+                    "bakeStaticValue" => Some(IntrinsicOperation::BakeStaticValue),
+                    "getStaticValue" => Some(IntrinsicOperation::GetStaticValue),
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
@@ -13284,7 +13256,9 @@ impl TypedProgram {
         match defn_id {
             ParsedId::Use(_use_id) => Ok(()),
             ParsedId::Namespace(namespace_id) => {
-                self.eval_namespace_declaration_phase(namespace_id)?;
+                if let Err(e) = self.eval_namespace_declaration_phase(namespace_id) {
+                    self.report_error(e);
+                }
                 Ok(())
             }
             ParsedId::Global(constant_id) => {
@@ -13293,7 +13267,11 @@ impl TypedProgram {
                 Ok(())
             }
             ParsedId::Function(parsed_function_id) => {
-                self.eval_function_declaration(parsed_function_id, scope_id, None, namespace_id)?;
+                if let Err(e) =
+                    self.eval_function_declaration(parsed_function_id, scope_id, None, namespace_id)
+                {
+                    self.report_error(e);
+                }
                 Ok(())
             }
             ParsedId::TypeDefn(_type_defn_id) => {
@@ -14482,6 +14460,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.ast.exprs.get_span(caller);
+        // nocommit(2): Use printTo in builtin string building not Show
         let call_id =
             self.synth_parsed_function_call(qident!(self, span, ["Show"], "show"), &[], &[caller]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
@@ -14495,7 +14474,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let span = self.exprs.get(to_show).get_span();
         let type_id = self.exprs.get(to_show).get_type();
-        // nocommit: Use printTo
+        // nocommit(2): Use printTo in builtin string building not Show
         self.synth_typed_function_call(
             qident!(self, span, ["Show"], "show"),
             &[type_id],
