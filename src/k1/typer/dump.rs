@@ -335,6 +335,18 @@ impl TypedProgram {
                 w.write_str(")")?;
                 Ok(())
             }
+            Type::Static(stat) => {
+                w.write_str("static[")?;
+                self.display_type_id(stat.inner_type_id, expand, w)?;
+                w.write_str(", ")?;
+                if let Some(value_id) = stat.value_id {
+                    self.display_static_value(w, value_id)?;
+                } else {
+                    w.write_str("<no value>")?;
+                }
+                w.write_str("]")?;
+                Ok(())
+            }
             Type::Unresolved(_u) => w.write_str("<unresolved>"),
             Type::RecursiveReference(rr) => {
                 w.write_str("recurse~>(")?;

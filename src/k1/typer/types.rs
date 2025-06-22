@@ -358,6 +358,12 @@ pub struct LambdaObjectType {
 }
 
 #[derive(Debug, Clone)]
+pub struct StaticType {
+    pub inner_type_id: TypeId,
+    pub value_id: Option<StaticValueId>,
+}
+
+#[derive(Debug, Clone)]
 pub struct FunctionValue {
     pub function_id: FunctionId,
     pub function_type: TypeId,
@@ -391,6 +397,8 @@ pub enum Type {
     Function(FunctionType),
     Lambda(LambdaType),
     LambdaObject(LambdaObjectType),
+
+    Static(StaticType),
 
     // Not-so-physical types
     Generic(GenericType),
@@ -480,6 +488,7 @@ impl PartialEq for Type {
                 c1.function_type == c2.function_type && c1.parsed_id == c2.parsed_id
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
+            (Type::Static(stat1), Type::Static(stat2)) => stat1.value_id == stat2.value_id,
             (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
                 rr1.root_type_id == rr2.root_type_id
             }
@@ -593,6 +602,11 @@ impl std::hash::Hash for Type {
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
+            Type::Static(stat) => {
+                "stat".hash(state);
+                stat.inner_type_id.hash(state);
+                stat.value_id.hash(state)
+            }
             Type::Unresolved(id) => {
                 "unresolved".hash(state);
                 id.hash(state);
@@ -626,6 +640,7 @@ impl Type {
             Type::Function(_) => "function",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
+            Type::Static(_) => "static",
             Type::Unresolved(_) => "unresolved",
             Type::RecursiveReference(_) => "recurse",
         }
@@ -1084,6 +1099,14 @@ impl Types {
         self.add_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
+    pub fn add_static_type(
+        &mut self,
+        inner_type_id: TypeId,
+        value_id: Option<StaticValueId>,
+    ) -> TypeId {
+        self.add_anon(Type::Static(StaticType { inner_type_id, value_id }))
+    }
+
     pub fn add(&mut self, typ: Type, defn_id: Option<TypeDefnId>) -> TypeId {
         let type_id = self.add_type(typ);
         if let Some(defn_id) = defn_id {
@@ -1109,9 +1132,23 @@ impl Types {
     }
 
     #[inline]
+    pub fn get_no_follow_static(&self, type_id: TypeId) -> &Type {
+        match self.get_no_follow(type_id) {
+            Type::RecursiveReference(rr) => self.get_no_follow_static(rr.root_type_id),
+            t => t,
+        }
+    }
+
+    #[inline]
+    /// Its important to understand that this basic 'get type' follows
+    /// redirects for both recursives and statics. This is because 99% of
+    /// code wants to treat them as their contained type
+    /// And the other 1% is the code that explicitly is checking for Static or RecursiveReference,
+    /// and will be forced to call get_no_follow in order to achieve its goal anyway
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
+            Type::Static(stat) => self.get(stat.inner_type_id),
             t => t,
         }
     }
@@ -1145,6 +1182,7 @@ impl Types {
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
             Type::Struct(s) => s.generic_instance_info.as_ref(),
+            Type::Static(stat) => self.get_generic_instance_info(stat.inner_type_id),
             Type::Unit => None,
             Type::Char => None,
             Type::Integer(_) => None,
@@ -1366,6 +1404,7 @@ impl Types {
                 .add(self.count_type_variables(lambda.env_type)),
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => self.count_type_variables(co.function_type),
+            Type::Static(stat) => self.count_type_variables(stat.inner_type_id),
             Type::Unresolved(_) => EMPTY,
             Type::RecursiveReference(rr) => {
                 if let Type::Generic(generic) = self.get(rr.root_type_id) {
@@ -1454,6 +1493,8 @@ impl Types {
             Type::LambdaObject(lambda_object_type) => {
                 self.compute_type_layout(lambda_object_type.struct_representation)
             }
+            // nocommit(2): Eventually treat statics as ZSTs as an optimization; the value contains no information
+            Type::Static(stat) => self.compute_type_layout(stat.inner_type_id),
             Type::Generic(_) => Z,
             Type::TypeParameter(_) => Z,
             Type::FunctionTypeParameter(_) => Z,
@@ -1490,6 +1531,7 @@ impl Types {
             Type::EnumVariant(_) => true,
             Type::Lambda(_) => true,
             Type::LambdaObject(_) => true,
+            Type::Static(stat) => self.is_aggregate_repr(stat.inner_type_id),
             Type::Unit => false,
             Type::Char => false,
             Type::Integer(_) => false,

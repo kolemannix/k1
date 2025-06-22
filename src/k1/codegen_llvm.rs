@@ -1328,6 +1328,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     size: struct_type.layout,
                 }))
             }
+            Type::Static(stat) => self.codegen_type(stat.inner_type_id),
             Type::Function(_function_type) => {
                 panic!("Cannot codegen a naked Function type")
             }
@@ -2397,7 +2398,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | CastType::VariantToEnum
             | CastType::ReferenceToReference
             | CastType::IntegerCast(IntegerCastDirection::NoOp)
-            | CastType::Integer8ToChar => {
+            | CastType::Integer8ToChar
+            | CastType::StaticErase => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 Ok(value.into())
             }
