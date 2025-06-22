@@ -28,8 +28,9 @@ fn sprintf[Args](fmtString: string, args: Args): string {
   }
 }
 
-fn main(): i32 {
-  let s1 = sprintf("My value is: ?", {a: 42, b: true});
+fn main(args: Buffer[string]): i32 {
+  let s1 = sprintf("My value is: ?a ?a", {a: 42, b: true});
+  let s1 = sprintf(args.get(1), {a: 42, b: true});
   println(s1);
   //let s3 = sprintf("My values are: ?, ?", {a: "asdf", b: true});
   //println(s3);

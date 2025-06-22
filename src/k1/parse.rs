@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use crate::compiler::CompilerConfig;
 use crate::pool::{Pool, SliceHandle};
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
-use crate::{SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
+use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
 use fxhash::FxHashMap;
@@ -747,14 +747,14 @@ pub struct ParsedMatchExpression {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParsedAsCast {
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedCast {
     pub base_expr: ParsedExprId,
     pub dest_type: ParsedTypeExprId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct LambdaArgDefn {
     pub binding: Identifier,
     pub ty: Option<ParsedTypeExprId>,
@@ -799,6 +799,7 @@ pub enum ParsedStaticBlockKind {
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
+    pub parameter_names: SliceHandle<IdentSliceId>,
     pub span: SpanId,
 }
 
@@ -890,7 +891,7 @@ pub enum ParsedExpr {
     /// ```md
     /// x as u64, y as .Color
     /// ```
-    AsCast(ParsedAsCast),
+    Cast(ParsedCast),
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
@@ -927,7 +928,7 @@ impl ParsedExpr {
             Self::AnonEnumConstructor(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
-            Self::AsCast(as_cast) => as_cast.span,
+            Self::Cast(as_cast) => as_cast.span,
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
             Self::Static(s) => s.span,
@@ -939,9 +940,9 @@ impl ParsedExpr {
         if let Self::Match(v) = self { Some(v) } else { None }
     }
 
-    pub fn expect_cast(&self) -> &ParsedAsCast {
+    pub fn expect_cast(&self) -> &ParsedCast {
         match self {
-            ParsedExpr::AsCast(as_cast) => as_cast,
+            ParsedExpr::Cast(as_cast) => as_cast,
             _ => panic!("expected cast expression"),
         }
     }
@@ -1226,7 +1227,13 @@ pub struct ParsedTypeFromId {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SomeQuantifier {
-    pub inner: ParsedTypeExprId,
+    pub inner_type_expr: ParsedTypeExprId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedStaticTypeExpr {
+    pub inner_type_expr: ParsedTypeExprId,
     pub span: SpanId,
 }
 
@@ -1242,6 +1249,7 @@ pub enum ParsedTypeExpr {
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
     SomeQuant(SomeQuantifier),
+    Static(ParsedStaticTypeExpr),
     /// Used only by compiler-generated code, currently
     TypeFromId(ParsedTypeFromId),
 }
@@ -1260,6 +1268,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::Function(f) => f.span,
             ParsedTypeExpr::TypeOf(tof) => tof.span,
             ParsedTypeExpr::SomeQuant(q) => q.span,
+            ParsedTypeExpr::Static(s) => s.span,
             ParsedTypeExpr::TypeFromId(tfi) => tfi.span,
         }
     }
@@ -1316,7 +1325,7 @@ impl ParsedFunction {}
 #[derive(Debug, Clone)]
 pub struct FnArgDef {
     pub name: Identifier,
-    pub ty: ParsedTypeExprId,
+    pub type_expr: ParsedTypeExprId,
     pub span: SpanId,
     pub modifiers: FnArgDefModifiers,
 }
@@ -1583,6 +1592,8 @@ impl Sources {
     }
 }
 
+nz_u32_id!(IdentSliceId);
+
 pub struct ParsedProgram {
     pub name: String,
     pub name_id: Identifier,
@@ -1606,6 +1617,7 @@ pub struct ParsedProgram {
     // p_ prefix means 'pool'; used to delineate secondary pools from primary language concepts
     pub p_type_args: Pool<NamedTypeArg, NamedTypeArgId>,
     pub p_call_args: Pool<ParsedCallArg, CallArgId>,
+    pub p_idents: Pool<Identifier, IdentSliceId>,
 }
 
 impl ParsedProgram {
@@ -1634,6 +1646,7 @@ impl ParsedProgram {
             errors: Vec::new(),
             p_type_args: Pool::with_capacity("parsed_named_type_args", 8192),
             p_call_args: Pool::with_capacity("parsed_call_args", 8192),
+            p_idents: Pool::with_capacity("ident_slices", 8192),
         }
     }
 
@@ -1911,7 +1924,13 @@ pub fn write_source_location(
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let line_start = line.line_index as i32 - context_lines as i32 / 2;
     let line_end = line_start + context_lines as i32;
-    let red_arrow = "->".red();
+    let color = match level {
+        ErrorLevel::Error => Color::Red,
+        ErrorLevel::Warn => Color::Yellow,
+        ErrorLevel::Info => Color::Yellow,
+        ErrorLevel::Hint => Color::Yellow,
+    };
+    let red_arrow = "->".color(color);
     for line_index in line_start..line_end {
         if line_index >= 0 {
             if let Some(this_line) = source.get_line(line_index as usize) {
@@ -1928,15 +1947,17 @@ pub fn write_source_location(
             }
         }
     }
+    let level_name = match level {
+        ErrorLevel::Error => "Error",
+        ErrorLevel::Warn => "Warning",
+        ErrorLevel::Info => "Info",
+        ErrorLevel::Hint => "Hint",
+    }
+    .color(color);
     writeln!(
         w,
         "\n  {} at {}/{}:{}",
-        match level {
-            ErrorLevel::Error => "Error".red(),
-            ErrorLevel::Warn => "Warning".yellow(),
-            ErrorLevel::Info => "Info".yellow(),
-            ErrorLevel::Hint => "Hint".yellow(),
-        },
+        level_name,
         source.directory,
         source.filename,
         line.line_index + 1,
@@ -2684,6 +2705,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
             Ok(Some(builtin_id))
+        } else if first.kind == K::KeywordStatic {
+            self.advance();
+            let inner_type_expr = self.expect_type_expression()?;
+            let span = self.extend_to_here(first.span);
+            let static_expr =
+                ParsedTypeExpr::Static(ParsedStaticTypeExpr { inner_type_expr, span });
+            Ok(Some(self.ast.type_exprs.add(static_expr)))
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
             if ident_chars == "typeOf" {
@@ -2708,7 +2736,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let inner_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
                 let quantifier =
-                    ParsedTypeExpr::SomeQuant(SomeQuantifier { inner: inner_expr, span });
+                    ParsedTypeExpr::SomeQuant(SomeQuantifier { inner_type_expr: inner_expr, span });
                 Ok(Some(self.ast.type_exprs.add(quantifier)))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
@@ -2882,7 +2910,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.get_expression_span(result),
                     self.ast.get_type_expr_span(type_expr_id),
                 );
-                Some(self.add_expression(ParsedExpr::AsCast(ParsedAsCast {
+                Some(self.add_expression(ParsedExpr::Cast(ParsedCast {
                     base_expr: result,
                     dest_type: type_expr_id,
                     span,
@@ -3323,11 +3351,29 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match maybe_directive.kind {
                 K::KeywordStatic => {
                     self.advance();
+                    // nocommit dry up static and meta
+                    let mut parameter_names: SV4<Identifier> = smallvec![];
+                    if let Some(_open_token) = self.maybe_consume_next(K::OpenParen) {
+                        self.eat_delimited_ext(
+                            "params",
+                            &mut parameter_names,
+                            K::Comma,
+                            &[K::CloseParen],
+                            |p| {
+                                Parser::expect_ident_ext(p, false, false)
+                                    .map(|(_token, ident)| ident)
+                            },
+                        )?;
+                    }
+                    let parameter_names_handle =
+                        self.ast.p_idents.add_slice_from_copy_slice(&parameter_names);
+
                     let base_expr = self.expect_expression()?;
                     let span = self.get_expression_span(base_expr);
                     Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
                         base_expr,
                         kind: ParsedStaticBlockKind::Value,
+                        parameter_names: parameter_names_handle,
                         span,
                     }))))
                 }
@@ -3336,12 +3382,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     match chars {
                         "meta" | "meat" => {
                             self.advance();
+                            let mut parameter_names: SV4<Identifier> = smallvec![];
+                            if let Some(_open_token) = self.maybe_consume_next(K::OpenParen) {
+                                self.eat_delimited_ext(
+                                    "params",
+                                    &mut parameter_names,
+                                    K::Comma,
+                                    &[K::CloseParen],
+                                    |p| {
+                                        Parser::expect_ident_ext(p, false, false)
+                                            .map(|(token, ident)| ident)
+                                    },
+                                )?;
+                            }
+                            let parameter_names_handle =
+                                self.ast.p_idents.add_slice_from_copy_slice(&parameter_names);
                             let base_expr = self.expect_expression()?;
                             let expr_span = self.get_expression_span(base_expr);
                             let span = self.extend_span(first.span, expr_span);
                             Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
                                 base_expr,
                                 kind: ParsedStaticBlockKind::Metaprogram,
+                                parameter_names: parameter_names_handle,
                                 span,
                             }))))
                         }
@@ -3545,7 +3607,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         let span = self.extend_span(name_token.span, self.ast.type_exprs.get(typ).get_span());
         let modifiers = FnArgDefModifiers::new(is_context);
-        Ok(FnArgDef { name: self.intern_ident_token(name_token), ty: typ, span, modifiers })
+        Ok(FnArgDef { name: self.intern_ident_token(name_token), type_expr: typ, span, modifiers })
     }
 
     fn eat_fn_params(&mut self) -> ParseResult<(SV8<FnArgDef>, SpanId)> {
@@ -3937,7 +3999,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Err(error("This name must be capitalized", token));
         }
         if lower && !tok_chars.chars().next().unwrap().is_lowercase() {
-            return Err(error("This name must be capitalized", token));
+            return Err(error("This name must not be capitalized", token));
         }
         Ok((token, self.ast.idents.intern(tok_chars)))
     }
@@ -4276,7 +4338,7 @@ impl ParsedProgram {
                 }
                 w.write_str(" }")
             }
-            ParsedExpr::AsCast(cast) => {
+            ParsedExpr::Cast(cast) => {
                 self.display_expr_id(w, cast.base_expr)?;
                 w.write_str(" as ")?;
                 self.display_type_expr_id(cast.dest_type, w)
@@ -4400,7 +4462,12 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::SomeQuant(quant) => {
                 w.write_str("some ")?;
-                self.display_type_expr_id(quant.inner, w)?;
+                self.display_type_expr_id(quant.inner_type_expr, w)?;
+                Ok(())
+            }
+            ParsedTypeExpr::Static(s) => {
+                w.write_str("static ")?;
+                self.display_type_expr_id(s.inner_type_expr, w)?;
                 Ok(())
             }
             ParsedTypeExpr::TypeFromId(tfi) => {

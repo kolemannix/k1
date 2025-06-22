@@ -1,0 +1,17 @@
+fn main(): int {
+  //let statStr: string = "(?,?)";
+  let statStr: static string = #static "(?,?,?)";
+  (statStr as string).splitByChar('?');
+
+  format(statStr, {});
+
+  0
+}
+
+fn format[Args](fmtString: static string, args: Args): unit {
+  #meta(fmtString, a, b, c) {
+    let parts = (fmtString as string).splitByChar('?');
+    let c = parts.len;
+    core/meta/emit(`println("fmtString has {c} parts")`);
+  }
+}

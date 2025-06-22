@@ -30,7 +30,7 @@ use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, FileId, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId,
     NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
-    ParsedBlockKind, ParsedCallArg, ParsedDirective, ParsedExprId, ParsedFunctionId,
+    ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedDirective, ParsedExprId, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
     ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId, ParsedTypeDefnId,
     ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
@@ -175,6 +175,7 @@ pub struct StaticExecContext {
     /// If a `return` is used, what type is expected
     /// This is needed because `return` usually looks at the
     /// enclosing function, but for #static blocks it shouldn't
+    /// So this type can be different than the usual ctx.expected_type
     expected_return_type: Option<TypeId>,
 }
 
@@ -185,6 +186,9 @@ pub struct EvalExprContext {
     is_inference: bool,
     static_ctx: Option<StaticExecContext>,
     global_defn_name: Option<Identifier>,
+    /// Indicates whether we are typechecking generic code
+    /// Most commonly, the body of a generic function
+    is_generic_pass: bool,
 }
 impl EvalExprContext {
     fn make(scope_id: ScopeId) -> EvalExprContext {
@@ -194,6 +198,7 @@ impl EvalExprContext {
             is_inference: false,
             static_ctx: None,
             global_defn_name: None,
+            is_generic_pass: false,
         }
     }
 
@@ -202,23 +207,15 @@ impl EvalExprContext {
     }
 
     pub fn with_expected_type(&self, expected_element_type: Option<TypeId>) -> EvalExprContext {
-        EvalExprContext {
-            scope_id: self.scope_id,
-            expected_type_id: expected_element_type,
-            is_inference: self.is_inference,
-            static_ctx: self.static_ctx,
-            global_defn_name: None,
-        }
+        EvalExprContext { expected_type_id: expected_element_type, ..*self }
     }
 
     pub fn with_no_expected_type(&self) -> EvalExprContext {
-        EvalExprContext {
-            scope_id: self.scope_id,
-            expected_type_id: None,
-            is_inference: self.is_inference,
-            static_ctx: self.static_ctx,
-            global_defn_name: None,
-        }
+        EvalExprContext { expected_type_id: None, ..*self }
+    }
+
+    pub fn with_static_ctx(&self, static_ctx: Option<StaticExecContext>) -> EvalExprContext {
+        EvalExprContext { static_ctx, ..*self }
     }
 
     fn with_inference(&self, is_inference: bool) -> EvalExprContext {
@@ -227,6 +224,10 @@ impl EvalExprContext {
 
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
+    }
+
+    pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
+        EvalExprContext { is_generic_pass, ..*self }
     }
 }
 
@@ -777,7 +778,8 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub param_variables: EcoVec<VariableId>,
     pub type_params: NamedTypeSlice,
-    pub function_type_params: SliceHandle<FunctionTypeParamId>,
+    pub function_type_params: SliceHandle<ExistentialTypeParamId>,
+    pub static_type_params: SliceHandle<ExistentialTypeParamId>,
     pub body_block: Option<TypedExprId>,
     pub intrinsic_type: Option<IntrinsicOperation>,
     pub linkage: Linkage,
@@ -800,39 +802,57 @@ impl TypedFunction {
     }
 }
 
-nz_u32_id!(FunctionTypeParamId);
+nz_u32_id!(ExistentialTypeParamId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExistentialTypeParamKind {
+    Function,
+    Static,
+}
+#[derive(Debug, Clone, Copy)]
+/// When a function takes a special type parameter, either a 'function_like'
+/// or a 'static'. This ties the type parameter to its value param, which
+/// is always a 1-1 relationship. As in:
+/// fn example(knownInt: static int, some thunk: () -> ())
+///            ^ existential type param 1, a static
+///                                  ^ existential type param 2, a function type param
+pub struct ExistentialTypeParam {
+    pub name: Identifier,
+    pub type_id: TypeId,
+    pub value_param_index: u32,
+    pub span: SpanId,
+    pub kind: ExistentialTypeParamKind,
+}
 
 #[derive(Debug, Clone)]
-/// When a function takes a type parameter that is a 'generic' function
-/// We represent this first-class instead of using a special trait. Since
-/// the trait would be so special, I think this is better.
-/// Even though a dyn fn object has tons in common with dyn trait objects!
-pub struct FunctionTypeParam {
+/// Used when a function takes a static parameter.
+/// We represent this as a type-constraint in the function declaration
+pub struct StaticTypeParam {
     pub name: Identifier,
     pub type_id: TypeId,
     pub value_param_index: u32,
     pub span: SpanId,
 }
 
-impl HasName for &FunctionTypeParam {
+impl HasName for &ExistentialTypeParam {
     fn name(&self) -> Identifier {
         self.name
     }
 }
 
-impl HasTypeId for &FunctionTypeParam {
+impl HasTypeId for &ExistentialTypeParam {
     fn type_id(&self) -> TypeId {
         self.type_id
     }
 }
 
-impl HasName for FunctionTypeParam {
+impl HasName for ExistentialTypeParam {
     fn name(&self) -> Identifier {
         self.name
     }
 }
 
-impl HasTypeId for FunctionTypeParam {
+impl HasTypeId for ExistentialTypeParam {
     fn type_id(&self) -> TypeId {
         self.type_id
     }
@@ -1593,6 +1613,7 @@ pub enum CastType {
     IntegerToFloat,
     LambdaToLambdaObject,
     ToNever,
+    StaticErase,
 }
 
 impl Display for CastType {
@@ -1614,6 +1635,7 @@ impl Display for CastType {
             CastType::IntegerToFloat => write!(f, "inttof"),
             CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
             CastType::ToNever => write!(f, "never"),
+            CastType::StaticErase => write!(f, "staticerase"),
         }
     }
 }
@@ -2419,8 +2441,6 @@ pub struct TypedModuleBuffers {
 #[derive(Clone, Copy)]
 pub enum CodeEmission {
     String(StringId),
-    // Eventually, variable modifiers
-    Variable { name: Identifier, value: StaticValueId },
 }
 
 pub struct VmExecuteResult {
@@ -2501,7 +2521,7 @@ pub struct TypedProgram {
     buffers: TypedModuleBuffers,
 
     pub named_types: Pool<NameAndType, NameAndTypeId>,
-    pub function_type_params: Pool<FunctionTypeParam, FunctionTypeParamId>,
+    pub existential_type_params: Pool<ExistentialTypeParam, ExistentialTypeParamId>,
 
     // Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
@@ -2600,7 +2620,7 @@ impl TypedProgram {
                 emit_lexer_tokens: Vec::new(),
             },
             named_types: Pool::with_capacity("named_types", 8192),
-            function_type_params: Pool::with_capacity("function_type_params", 4096),
+            existential_type_params: Pool::with_capacity("function_type_params", 4096),
             vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vms: vec![
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
@@ -3404,7 +3424,7 @@ impl TypedProgram {
                     );
                 }
                 let span = quant.span;
-                let inner = self.eval_type_expr(quant.inner, scope_id)?;
+                let inner = self.eval_type_expr(quant.inner_type_expr, scope_id)?;
                 let Type::Function(_function_type) = self.types.get(inner) else {
                     return failf!(span, "Expected a function type following 'some'");
                 };
@@ -3417,6 +3437,28 @@ impl TypedProgram {
                         function_type: inner,
                     });
                 Ok(function_type_variable)
+            }
+            ParsedTypeExpr::Static(parsed_static) => {
+                // nocommit(0): Disallow type parameters anywhere inside these (for now at least, you cannot say "static T" where T is a type param)
+                // nocommit(0): Disallow this expression anywhere appropriate
+                // - Allowed in bindings
+                // - Allowed in function signatures
+                // - Allowed in type constraints
+                // - Disallowed (unadorned) in type definitions
+                // - Maybe we whitelist... but we don't have an enum for
+                //   these locations at all... we just have like one flag
+                //   in our context at this point
+                let parsed_static = *parsed_static;
+                let inner_type_id = self.eval_type_expr(parsed_static.inner_type_expr, scope_id)?;
+                if let Type::Static(_) = self.types.get_no_follow_static(inner_type_id) {
+                    return failf!(
+                        parsed_static.span,
+                        "Static type cannot be nested inside another static type"
+                    );
+                };
+                let static_type = StaticType { inner_type_id, value_id: None };
+                let static_type_id = self.types.add_anon(Type::Static(static_type));
+                Ok(static_type_id)
             }
         }?;
         Ok(base)
@@ -3969,6 +4011,9 @@ impl TypedProgram {
                     type_id
                 }
             }
+            Type::Static(_stat) => {
+                todo!("nocommit substitute_in_type for static")
+            }
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
@@ -4002,12 +4047,18 @@ impl TypedProgram {
         let type_id = self.eval_type_expr(manifest_global.ty, Scopes::ROOT_SCOPE_ID)?;
         let manifest_result = self.execute_static_expr(
             manifest_global.value_expr,
-            Some(type_id),
-            Scopes::ROOT_SCOPE_ID,
-            None,
+            EvalExprContext {
+                scope_id: Scopes::ROOT_SCOPE_ID,
+                expected_type_id: Some(type_id),
+                is_inference: false,
+                static_ctx: Some(StaticExecContext {
+                    is_metaprogram: false,
+                    expected_return_type: None,
+                }),
+                global_defn_name: None,
+                is_generic_pass: false,
+            },
             false,
-            false,
-            StaticExecContext { is_metaprogram: false, expected_return_type: None },
         )?;
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
@@ -4379,7 +4430,7 @@ impl TypedProgram {
             return Ok(());
         }
 
-        match (self.types.get(expected), self.types.get(actual)) {
+        match (self.types.get_no_follow_static(expected), self.types.get_no_follow_static(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
             (Type::Reference(o1), Type::Reference(o2)) => {
@@ -4425,6 +4476,39 @@ impl TypedProgram {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
+            (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
+                // nocommit(1): We may not need this value-based comparison, but we very well
+                // might and the idea is really beautiful to me
+                if exp_static_type.inner_type_id == act_static_type.inner_type_id {
+                    match (exp_static_type.value_id, act_static_type.value_id) {
+                        (None, None) => Ok(()),    // Both unresolved
+                        (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
+                        (Some(exp_value_id), Some(act_value_id)) => {
+                            // TODO: Write equality comparison fn over static values
+                            if exp_value_id == act_value_id {
+                                Ok(())
+                            } else {
+                                Err(format!(
+                                    "Different static values of same type: {} vs {}",
+                                    self.static_value_to_string(exp_value_id),
+                                    self.static_value_to_string(act_value_id)
+                                ))
+                            }
+                        }
+                        (Some(_), None) => Err(format!(
+                            "Expected a specific static but got an unresolved one: {} vs {}",
+                            self.type_id_to_string_ext(expected, false),
+                            self.type_id_to_string_ext(actual, false),
+                        )),
+                    }
+                } else {
+                    Err(format!(
+                        "Expected static {} but got static {}",
+                        self.type_id_to_string(expected),
+                        self.type_id_to_string(actual)
+                    ))
+                }
+            }
             (Type::FunctionTypeParameter(expected_abstract_function), act) => {
                 let expected_function_type = expected_abstract_function.function_type;
                 let actual_function_type = self.extract_function_type_from_functionlike(act);
@@ -4512,32 +4596,24 @@ impl TypedProgram {
         }
     }
 
+    /// no_reset: Do not wipe the VM on completion; this is passed when the global is evaluated
+    /// from an existing static execution already
     fn execute_static_expr_with_vm(
         &mut self,
         vm: &mut vm::Vm,
         parsed_expr: ParsedExprId,
-        expected_type_id: Option<TypeId>,
-        scope_id: ScopeId,
-        global_name: Option<Identifier>,
-        is_inference: bool,
+        ctx: EvalExprContext,
         no_reset: bool,
-        static_ctx: StaticExecContext,
     ) -> TyperResult<VmExecuteResult> {
-        if is_inference {
+        if ctx.is_inference {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
                 "#static cannot be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
             );
         }
-        let eval_ctx = EvalExprContext {
-            scope_id,
-            expected_type_id,
-            is_inference,
-            static_ctx: Some(static_ctx),
-            global_defn_name: global_name,
-        };
+        let static_ctx = ctx.static_ctx.unwrap();
 
-        let expr_original = self.eval_expr(parsed_expr, eval_ctx)?;
+        let expr_original = self.eval_expr(parsed_expr, ctx)?;
         let span = self.exprs.get(expr_original).get_span();
         let expr = if static_ctx.is_metaprogram {
             // We cast to Never because a value of this type will never be seen;
@@ -4555,7 +4631,7 @@ impl TypedProgram {
         let output_type_id =
             if static_ctx.is_metaprogram { NEVER_TYPE_ID } else { required_type_id };
 
-        if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, scope_id)? {
+        if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, ctx.scope_id)? {
             return Ok(VmExecuteResult {
                 type_id: required_type_id,
                 static_value_id: shortcut_value_id,
@@ -4567,7 +4643,7 @@ impl TypedProgram {
         let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
 
         if cfg!(debug_assertions) {
-            if let Err(msg) = self.check_types(required_type_id, value.get_type(), scope_id) {
+            if let Err(msg) = self.check_types(required_type_id, value.get_type(), ctx.scope_id) {
                 return failf!(span, "static value type mismatch: {msg}");
             }
         }
@@ -4585,12 +4661,8 @@ impl TypedProgram {
     fn execute_static_expr(
         &mut self,
         parsed_expr: ParsedExprId,
-        expected_type_id: Option<TypeId>,
-        scope_id: ScopeId,
-        global_name: Option<Identifier>,
-        is_inference: bool,
+        ctx: EvalExprContext,
         no_reset: bool,
-        static_ctx: StaticExecContext,
     ) -> TyperResult<VmExecuteResult> {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
@@ -4620,16 +4692,7 @@ impl TypedProgram {
             }
             Some(vm) => (vm, false),
         };
-        let res = self.execute_static_expr_with_vm(
-            &mut vm,
-            parsed_expr,
-            expected_type_id,
-            scope_id,
-            global_name,
-            is_inference,
-            no_reset,
-            static_ctx,
-        );
+        let res = self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, no_reset);
         if !used_alt {
             *self.vm = Some(vm);
         } else {
@@ -4646,12 +4709,11 @@ impl TypedProgram {
     ) -> TyperResult<bool> {
         let vm_cond_result = self.execute_static_expr(
             cond,
-            Some(BOOL_TYPE_ID),
-            ctx.scope_id,
-            None,
-            ctx.is_inference,
+            ctx.with_expected_type(Some(BOOL_TYPE_ID)).with_static_ctx(Some(StaticExecContext {
+                is_metaprogram: false,
+                expected_return_type: Some(BOOL_TYPE_ID),
+            })),
             false,
-            StaticExecContext { is_metaprogram: false, expected_return_type: Some(BOOL_TYPE_ID) },
         )?;
         let StaticValue::Boolean(condition_bool) =
             self.static_values.get(vm_cond_result.static_value_id)
@@ -4704,8 +4766,6 @@ impl TypedProgram {
         Ok(variable_id)
     }
 
-    /// no_vm_reset: Do not wipe the VM on completion; this is passed when the global is evaluated
-    /// from an existing static execution already
     pub fn eval_global_body(
         &mut self,
         parsed_global_id: ParsedGlobalId,
@@ -4732,32 +4792,23 @@ impl TypedProgram {
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
 
+        let ctx = EvalExprContext {
+            scope_id,
+            expected_type_id: Some(type_to_check),
+            is_inference: false,
+            static_ctx: Some(StaticExecContext {
+                is_metaprogram: false,
+                expected_return_type: Some(type_to_check),
+            }),
+            global_defn_name: Some(global_name),
+            is_generic_pass: false,
+        };
         let vm_result = match vm_to_use {
-            None => self.execute_static_expr(
-                value_expr_id,
-                Some(type_to_check),
-                scope_id,
-                Some(global_name),
-                false,
-                false,
-                StaticExecContext {
-                    is_metaprogram: false,
-                    expected_return_type: Some(type_to_check),
-                },
-            ),
-            Some(vm) => self.execute_static_expr_with_vm(
-                vm,
-                value_expr_id,
-                Some(type_to_check),
-                scope_id,
-                Some(global_name),
-                false,
-                true,
-                StaticExecContext {
-                    is_metaprogram: false,
-                    expected_return_type: Some(type_to_check),
-                },
-            ),
+            None => self.execute_static_expr(value_expr_id, ctx, false),
+            Some(vm) => {
+                let no_reset = true;
+                self.execute_static_expr_with_vm(vm, value_expr_id, ctx, no_reset)
+            }
         }?;
 
         if let Err(msg) = self.check_types(
@@ -6325,7 +6376,7 @@ impl TypedProgram {
                 let allow_bindings = true;
                 self.eval_match_expr(expr_id, ctx, partial_match, allow_bindings)
             }
-            ParsedExpr::AsCast(_cast) => self.eval_cast(expr_id, ctx),
+            ParsedExpr::Cast(cast) => self.eval_cast(expr_id, *cast, ctx),
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, ctx)?;
@@ -6375,6 +6426,7 @@ impl TypedProgram {
         }
     }
 
+    /// Compiles `#static <expr>` and `#meta <expr>` the constructs
     fn eval_static_expr(
         &mut self,
         expr_id: ParsedExprId,
@@ -6382,28 +6434,61 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = stat.span;
+        self.write_location(&mut stderr(), span);
+        eprintln!("Compiling static and is_generic_pass={}", ctx.is_generic_pass);
+        eprintln!("Compiling static with n parsed parameters: {}", stat.parameter_names.len());
         let base_expr = stat.base_expr;
+        // We don't execute statics during the generic pass, since there's no point
+        // since we don't know the real types or values
+        if ctx.is_generic_pass {
+            let typed_expr = match ctx.expected_type_id {
+                None => TypedExpr::Unit(span),
+                // Just spit out a bogus value of the expected type so that the rest of the user's
+                // function can be typechecked
+                // It's ok that the value isn't 'typesafe' since this code will never run
+                Some(expected_type_id) => {
+                    let unit_expr = self.exprs.add(TypedExpr::Unit(span));
+                    TypedExpr::Cast(TypedCast {
+                        cast_type: CastType::ToNever,
+                        base_expr: unit_expr,
+                        target_type_id: expected_type_id,
+                        span,
+                    })
+                }
+            };
+            return Ok(self.exprs.add(typed_expr));
+        }
 
         let kind = stat.kind;
-        let expected_type_id = match kind {
-            ParsedStaticBlockKind::Value => ctx.expected_type_id,
+        let expected_type_for_execution = match kind {
+            ParsedStaticBlockKind::Value => match ctx.expected_type_id {
+                None => None,
+                Some(expected_type_id) => match self.types.get_no_follow_static(expected_type_id) {
+                    Type::Static(s) => Some(s.inner_type_id),
+                    _ => {
+                        return failf!(
+                            span,
+                            "#static blocks always return a `static` type, but here we expect a {}",
+                            self.type_id_to_string(expected_type_id)
+                        );
+                    }
+                },
+            },
             ParsedStaticBlockKind::Metaprogram => Some(UNIT_TYPE_ID),
         };
-        let allow_emit = match kind {
+        let is_metaprogram = match kind {
             ParsedStaticBlockKind::Value => false,
             ParsedStaticBlockKind::Metaprogram => true,
         };
         let vm_result = self.execute_static_expr(
             base_expr,
-            expected_type_id,
-            ctx.scope_id,
-            None,
-            ctx.is_inference,
+            ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
+                StaticExecContext {
+                    is_metaprogram,
+                    expected_return_type: expected_type_for_execution,
+                },
+            )),
             false,
-            StaticExecContext {
-                is_metaprogram: allow_emit,
-                expected_return_type: expected_type_id,
-            },
         )?;
 
         match kind {
@@ -6411,7 +6496,7 @@ impl TypedProgram {
                 if vm_result.emits.is_empty() {
                     return failf!(span, "`meta` expression did not emit any code");
                 };
-                // First, we write the emitted code to a text buffer, parsed or string alike
+                // First, we write the emitted code to a text buffer
                 //
                 // Then we parse the code anew (so that we have cohesive spans and a source
                 // containing the full code)
@@ -6425,18 +6510,6 @@ impl TypedProgram {
                     match emit {
                         CodeEmission::String(string_id) => {
                             content.push_str(self.ast.strings.get_string(*string_id));
-                        }
-                        CodeEmission::Variable { name, value } => {
-                            use std::fmt::Write;
-                            let type_id = self.static_values.get(*value).get_type();
-                            writeln!(
-                                &mut content,
-                                "let {}: typeFromId({}) = core/meta/_getStaticValueById({});",
-                                self.ident_str(*name),
-                                type_id.as_u32(),
-                                value.as_u32()
-                            )
-                            .unwrap();
                         }
                     }
                 }
@@ -6452,19 +6525,22 @@ impl TypedProgram {
                     content.clone(),
                 ));
 
-                let parsed_expr_result = self.parse_ad_hoc_expr(source_for_emission, &content);
+                let parsed_metaprogram_result =
+                    self.parse_ad_hoc_expr(source_for_emission, &content);
                 content.clear();
                 self.buffers.emitted_code = content;
-                let parsed_expr = parsed_expr_result?;
-                let typed_expr = self.eval_expr(parsed_expr, ctx)?;
-                eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_expr));
+                let parsed_metaprogram = parsed_metaprogram_result?;
+                let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
+                eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
 
-                Ok(typed_expr)
+                Ok(typed_metaprogram)
             }
             ParsedStaticBlockKind::Value => {
+                let static_type_id =
+                    self.types.add_static_type(vm_result.type_id, Some(vm_result.static_value_id));
                 let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
                     vm_result.static_value_id,
-                    vm_result.type_id,
+                    static_type_id,
                     span,
                 ));
                 Ok(static_value_expr)
@@ -7217,6 +7293,7 @@ impl TypedProgram {
                 param_variables,
                 type_params: SliceHandle::Empty,
                 function_type_params: SliceHandle::Empty,
+                static_type_params: SliceHandle::Empty,
                 body_block: Some(body_expr_id),
                 intrinsic_type: None,
                 linkage: Linkage::Standard,
@@ -7343,6 +7420,7 @@ impl TypedProgram {
             param_variables,
             type_params: SliceHandle::Empty,
             function_type_params: SliceHandle::Empty,
+            static_type_params: SliceHandle::Empty,
             body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
@@ -7868,18 +7946,17 @@ impl TypedProgram {
 
     fn eval_cast(
         &mut self,
-        expr_id: ParsedExprId,
+        _expr_id: ParsedExprId,
+        cast: ParsedCast,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let cast = self.ast.exprs.get(expr_id).expect_cast();
-        let cast = cast.clone();
         let base_expr = self.eval_expr(cast.base_expr, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get(base_expr).get_type();
         let target_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
         if base_expr_type == target_type {
             return failf!(cast.span, "Useless cast");
         }
-        let cast_type = match self.types.get(base_expr_type) {
+        let cast_type = match self.types.get_no_follow_static(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
                     let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
@@ -7976,6 +8053,22 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
+            Type::Static(stat) => {
+                // nocommit(2) I think a better syntax for downcasting statics is good
+                // because this one requires that the user spell the target type which
+                // might not be easy or nice.
+                // e.g., Instead of staticString as string, `staticString.erased()`
+                if target_type == stat.inner_type_id {
+                    Ok(CastType::StaticErase)
+                } else {
+                    failf!(
+                        cast.span,
+                        "Cannot cast static '{}' to '{}'",
+                        self.type_id_to_string(base_expr_type).blue(),
+                        self.type_id_to_string(target_type).blue()
+                    )
+                }
+            }
             _ => failf!(
                 cast.span,
                 "Cannot cast '{}' to '{}'",
@@ -9223,15 +9316,6 @@ impl TypedProgram {
             }
         };
 
-        let method_not_found = || {
-            failf!(
-                call_span,
-                "Method '{}' does not exist on type: '{}'",
-                self.ident_str(fn_call.name.name),
-                self.type_id_to_string(base_expr_type),
-            )
-        };
-
         let abilities_in_scope = self.scopes.find_abilities_in_scope(ctx.scope_id);
         debug!(
             "abilities_in_scope: {:?}",
@@ -9248,7 +9332,12 @@ impl TypedProgram {
             .iter()
             .find_map(|ability_id| self.get_ability(*ability_id).find_function_by_name(fn_name))
         else {
-            return method_not_found();
+            return failf!(
+                call_span,
+                "Method '{}' does not exist on type: '{}'",
+                self.ident_str(fn_call.name.name),
+                self.type_id_to_string(base_expr_type),
+            );
         };
         let ability_id = ability_function_ref.ability_id;
         let ability_impl_fn = self.resolve_ability_call(
@@ -10073,9 +10162,16 @@ impl TypedProgram {
                     ctx,
                 )?;
 
+                let static_type_args = self.determine_static_type_args_for_call(
+                    original_function_id,
+                    &original_args_and_params,
+                    ctx,
+                )?;
+
                 let specialized_function_type = self.substitute_in_function_signature(
                     type_args,
                     function_type_args,
+                    static_type_args,
                     function_id,
                 );
                 let is_abstract = self
@@ -10092,6 +10188,7 @@ impl TypedProgram {
                     let function_id = self.specialize_function_signature(
                         type_args,
                         function_type_args,
+                        static_type_args,
                         function_id,
                     )?;
 
@@ -10522,16 +10619,16 @@ impl TypedProgram {
         // This method is risk-free in terms of 'leaking' inference types out
         let mut function_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
         let original_function = self.get_function(original_function_id);
-        let subst_pairs: SmallVec<[_; 8]> = self
-            .named_types
-            .get_slice(original_function.type_params)
-            .iter()
-            .zip(self.named_types.get_slice(type_args).iter())
-            .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
-            .collect();
         if !original_function.function_type_params.is_empty() {
+            let subst_pairs: SmallVec<[_; 8]> = self
+                .named_types
+                .get_slice(original_function.type_params)
+                .iter()
+                .zip(self.named_types.get_slice(type_args).iter())
+                .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
+                .collect();
             for function_type_param in self
-                .function_type_params
+                .existential_type_params
                 .get_slice_to_smallvec::<4>(original_function.function_type_params)
                 .iter()
             {
@@ -10628,6 +10725,67 @@ impl TypedProgram {
         let function_type_args_handle =
             self.named_types.add_slice_from_copy_slice(&function_type_args);
         Ok(function_type_args_handle)
+    }
+
+    fn determine_static_type_args_for_call(
+        &mut self,
+        original_function_id: FunctionId,
+        args_and_params: &ArgsAndParams,
+        ctx: EvalExprContext,
+    ) -> TyperResult<NamedTypeSlice> {
+        let mut static_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
+        let original_function = self.get_function(original_function_id);
+        if !original_function.static_type_params.is_empty() {
+            for static_type_param in self
+                .existential_type_params
+                .get_slice_to_smallvec::<4>(original_function.static_type_params)
+                .iter()
+            {
+                let (corresponding_arg, corresponding_value_param) =
+                    args_and_params.get(static_type_param.value_param_index as usize);
+                debug!(
+                    "The param for static_type_param {} {} is {} and passed: {:?}",
+                    static_type_param.type_id,
+                    self.ident_str(static_type_param.name),
+                    self.ident_str(corresponding_value_param.name),
+                    corresponding_arg
+                );
+
+                let final_parameter_type = match corresponding_arg {
+                    MaybeTypedExpr::Typed(_) => todo!(
+                        "nocommit decide if synthesizing calls with static type params is supported"
+                    ),
+                    MaybeTypedExpr::Parsed(p) => {
+                        // CTX is _not_ inference...
+                        let expr_id = self.eval_expr(
+                            *p,
+                            ctx.with_expected_type(Some(static_type_param.type_id)),
+                        )?;
+                        let expr_type_id = self.exprs.get(expr_id).get_type();
+                        let Type::Static(_passed_static_type) =
+                            self.types.get_no_follow_static(expr_type_id)
+                        else {
+                            unreachable!(
+                                "Expected a static type for a static type param. nocommit Ensure a good error"
+                            )
+                        };
+                        expr_type_id
+                    }
+                };
+                static_type_args.push(NameAndType {
+                    name: static_type_param.name,
+                    type_id: final_parameter_type,
+                });
+            }
+        }
+        if !static_type_args.is_empty() {
+            debug!(
+                "We're passing function_type_args! {}",
+                self.pretty_print_named_types(&static_type_args, ", ")
+            );
+        }
+        let static_type_args_handle = self.named_types.add_slice_from_copy_slice(&static_type_args);
+        Ok(static_type_args_handle)
     }
 
     fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
@@ -11020,6 +11178,8 @@ impl TypedProgram {
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
         function_type_arguments: NamedTypeSlice,
+        // Must 'zip' up with each static type param
+        static_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
     ) -> TypeId {
         let generic_function = self.get_function(generic_function_id);
@@ -11028,8 +11188,10 @@ impl TypedProgram {
             generic_function.function_type_params.len() + generic_function.type_params.len(),
         );
 
+        // Here, we're substituting **the entire function type params** for the function types we
+        // have. The pairs look like "some T -> T" -> "(int -> int)*"
         for (function_type_param, function_type_arg) in self
-            .function_type_params
+            .existential_type_params
             .get_slice(generic_function.function_type_params)
             .iter()
             .zip(self.named_types.get_slice(function_type_arguments))
@@ -11039,7 +11201,24 @@ impl TypedProgram {
                 to: function_type_arg.type_id,
             })
         }
-        // Transform the signature of the generic function by substituting
+        // Here, we add substitution pairs for each static type param.
+        // Examples:
+        // static string -> static[string, "Hello, World"];
+        // static int -> static[int, 42]
+        for (static_type_param, static_type_arg) in self
+            .existential_type_params
+            .get_slice(generic_function.static_type_params)
+            .iter()
+            .zip(self.named_types.get_slice(static_type_arguments))
+        {
+            subst_pairs.push(TypeSubstitutionPair {
+                from: static_type_param.type_id,
+                to: static_type_arg.type_id,
+            })
+        }
+
+        // Here, we're substituting the actual 'normal' type params as well,
+        // such as T, U in fn makePair[T, U](t: T, u: U)
         subst_pairs.extend(
             self.named_types
                 .get_slice(generic_function.type_params)
@@ -11052,10 +11231,13 @@ impl TypedProgram {
         );
         let specialized_function_type_id =
             self.substitute_in_type(generic_function_type_id, &subst_pairs);
-        debug!(
-            "specialized function type: {}",
-            self.type_id_to_string(specialized_function_type_id)
-        );
+        if !static_type_arguments.is_empty() {
+            // nocommit logging level
+            eprintln!(
+                "specialized function type: {}",
+                self.type_id_to_string(specialized_function_type_id)
+            );
+        }
         specialized_function_type_id
     }
 
@@ -11065,6 +11247,8 @@ impl TypedProgram {
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
         function_type_arguments: NamedTypeSlice,
+        // Must 'zip' up with each static type param
+        static_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
@@ -11096,37 +11280,39 @@ impl TypedProgram {
             }
         }
 
-        let generic_function_type_id = generic_function.type_id;
+        //let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
+        //    generic_function.function_type_params.len() + generic_function.type_params.len(),
+        //);
 
-        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-            generic_function.function_type_params.len() + generic_function.type_params.len(),
+        //for (function_type_param, function_type_arg) in self
+        //    .existential_type_params
+        //    .get_slice(generic_function.function_type_params)
+        //    .iter()
+        //    .zip(self.named_types.get_slice(function_type_arguments))
+        //{
+        //    subst_pairs.push(TypeSubstitutionPair {
+        //        from: function_type_param.type_id,
+        //        to: function_type_arg.type_id,
+        //    })
+        //}
+        //// Transform the signature of the generic function by substituting
+        //subst_pairs.extend(
+        //    self.named_types
+        //        .get_slice(generic_function.type_params)
+        //        .iter()
+        //        .zip(self.named_types.get_slice(type_arguments))
+        //        .map(|(gen_param, type_arg)| TypeSubstitutionPair {
+        //            from: gen_param.type_id,
+        //            to: type_arg.type_id,
+        //        }),
+        //);
+        let specialized_function_type_id = self.substitute_in_function_signature(
+            type_arguments,
+            function_type_arguments,
+            static_type_arguments,
+            generic_function_id,
         );
-
-        for (function_type_param, function_type_arg) in self
-            .function_type_params
-            .get_slice(generic_function.function_type_params)
-            .iter()
-            .zip(self.named_types.get_slice(function_type_arguments))
-        {
-            subst_pairs.push(TypeSubstitutionPair {
-                from: function_type_param.type_id,
-                to: function_type_arg.type_id,
-            })
-        }
-        // Transform the signature of the generic function by substituting
-        subst_pairs.extend(
-            self.named_types
-                .get_slice(generic_function.type_params)
-                .iter()
-                .zip(self.named_types.get_slice(type_arguments))
-                .map(|(gen_param, type_arg)| TypeSubstitutionPair {
-                    from: gen_param.type_id,
-                    to: type_arg.type_id,
-                }),
-        );
-        let specialized_function_type_id =
-            self.substitute_in_type(generic_function_type_id, &subst_pairs);
-        debug!(
+        eprintln!(
             "specialized function type: {}",
             self.type_id_to_string(specialized_function_type_id)
         );
@@ -11203,6 +11389,8 @@ impl TypedProgram {
             type_params: SliceHandle::Empty,
             // Must be empty for correctness; a specialized function has no function type parameters!
             function_type_params: SliceHandle::Empty,
+            // Must be empty for correctness; a specialized function has no static type parameters!
+            static_type_params: SliceHandle::Empty,
             body_block: None,
             intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
@@ -11344,6 +11532,21 @@ impl TypedProgram {
                 let actual_type = self.exprs.get(value_expr).get_type();
 
                 if let Some(expected_type) = expected_rhs_type {
+                    //nocommit(0): this cannot stay
+                    // if let Type::Static(expected_static) =
+                    //     self.types.get_no_follow_static(expected_type)
+                    // {
+                    //     if let Type::Static(actual_static) =
+                    //         self.types.get_no_follow_static(actual_type)
+                    //     {
+                    //         if expected_static.inner_type_id == actual_static.inner_type_id
+                    //             && actual_static.value_id.is_some()
+                    //             && expected_static.value_id.is_none()
+                    //         {
+                    //             skip_check = true
+                    //         }
+                    //     }
+                    // }
                     if let Err(msg) = self.check_types(expected_type, actual_type, ctx.scope_id) {
                         return failf!(parsed_let.span, "Local variable type mismatch: {}", msg,);
                     }
@@ -12100,7 +12303,7 @@ impl TypedProgram {
         let parsed_function_span = parsed_function.span;
         let parsed_function_params = &parsed_function.params;
         let parsed_function_context_params = &parsed_function.context_params;
-        let parsed_function_type_params = &parsed_function.type_params;
+        let parsed_type_params = &parsed_function.type_params;
 
         let is_ability_decl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_none());
         let is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
@@ -12144,8 +12347,9 @@ impl TypedProgram {
 
         // Instantiate type arguments.
         let mut type_params: SmallVec<[NameAndType; 8]> =
-            SmallVec::with_capacity(parsed_function_type_params.len());
-        let mut function_params: SmallVec<[FunctionTypeParam; 4]> = SmallVec::new();
+            SmallVec::with_capacity(parsed_type_params.len());
+        let mut function_type_params: SmallVec<[ExistentialTypeParam; 4]> = SmallVec::new();
+        let mut static_type_params: SmallVec<[ExistentialTypeParam; 4]> = SmallVec::new();
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
@@ -12155,7 +12359,7 @@ impl TypedProgram {
                 type_id: self_type_id,
             })
         }
-        for type_parameter in parsed_function_type_params.iter() {
+        for type_parameter in parsed_type_params.iter() {
             let mut ability_constraints = SmallVec::new();
             for parsed_constraint in type_parameter.constraints.iter() {
                 let ability_sig = match parsed_constraint {
@@ -12202,7 +12406,7 @@ impl TypedProgram {
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
             let type_id = self_.eval_type_expr_ext(
-                fn_param.ty,
+                fn_param.type_expr,
                 fn_scope_id,
                 EvalTypeExprContext {
                     unresolved_target_type: None,
@@ -12210,17 +12414,35 @@ impl TypedProgram {
                 },
             )?;
 
-            // If its a some ... function type parameter, inject the type parameter into the
-            // function
-            if let Type::FunctionTypeParameter(ftp) = self_.types.get(type_id) {
-                function_params.push(FunctionTypeParam {
-                    name: ftp.name,
-                    type_id,
-                    value_param_index: idx as u32,
-                    span: ftp.span,
-                });
-                // There's actually no way to refer to these types by name,
-                // so we don't need to add a name to the scope
+            // Handle 'existential' type parameters. These are value parameters that
+            // introduce a type parameter 'for free' inline.
+            // - `some ty` function type parameter, inject the type parameter into the
+            // - or a `static ty`
+            match self_.types.get_no_follow_static(type_id) {
+                Type::Static(_stat) => {
+                    let type_expr_span = self_.ast.get_type_expr_span(fn_param.type_expr);
+                    static_type_params.push(ExistentialTypeParam {
+                        name: fn_param.name,
+                        type_id,
+                        value_param_index: idx as u32,
+                        span: type_expr_span,
+                        kind: ExistentialTypeParamKind::Static,
+                    });
+                    // There's actually no way to refer to these types by name,
+                    // so we don't need to add a name to the scope
+                }
+                Type::FunctionTypeParameter(ftp) => {
+                    function_type_params.push(ExistentialTypeParam {
+                        name: ftp.name,
+                        type_id,
+                        value_param_index: idx as u32,
+                        span: ftp.span,
+                        kind: ExistentialTypeParamKind::Function,
+                    });
+                    // There's actually no way to refer to these types by name,
+                    // so we don't need to add a name to the scope
+                }
+                _ => {}
             }
 
             // First arg Self shenanigans
@@ -12412,13 +12634,16 @@ impl TypedProgram {
 
         let type_params_handle = self_.named_types.add_slice_from_copy_slice(&type_params);
         let function_type_params_handle =
-            self_.function_type_params.add_slice_from_slice(&function_params);
+            self_.existential_type_params.add_slice_from_slice(&function_type_params);
+        let static_type_params_handle =
+            self_.existential_type_params.add_slice_from_slice(&static_type_params);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
             param_variables,
             type_params: type_params_handle,
             function_type_params: function_type_params_handle,
+            static_type_params: static_type_params_handle,
             body_block: None,
             intrinsic_type,
             linkage: parsed_function_linkage,
@@ -12486,6 +12711,7 @@ impl TypedProgram {
         let function_signature_span = parsed_function.signature_span;
 
         let is_abstract = is_intrinsic || is_extern || is_ability_defn;
+        let is_generic = function.is_generic();
 
         let body_block = match parsed_function.block.as_ref() {
             None if is_abstract => None,
@@ -12503,7 +12729,12 @@ impl TypedProgram {
                 };
                 let block = self.eval_expr(
                     *block_ast,
-                    EvalExprContext::make(fn_scope_id).with_expected_type(Some(return_type)),
+                    EvalExprContext::make(fn_scope_id)
+                        .with_expected_type(Some(return_type))
+                        // Why do we care to indicate if the function is generic?
+                        // Currently, its because we want to avoid running #static and #meta blocks
+                        // until the types and static values are provided
+                        .with_is_generic_pass(is_generic),
                 )?;
                 if let Err(msg) =
                     self.check_types(return_type, self.exprs.get(block).get_type(), fn_scope_id)
@@ -12523,9 +12754,6 @@ impl TypedProgram {
         // Add the body now
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
-        }
-        if self.ident_str(function_name) == "slice_spec_enum Char(char) | String(string)_3" {
-            eprintln!("{}", self.scope_id_to_string(fn_scope_id));
         }
         if is_debug {
             eprintln!("DEBUG\n{}", self.function_id_to_string(declaration_id, true));
@@ -13906,7 +14134,8 @@ impl TypedProgram {
             };
             int_kind_enum_value
         };
-        let typ = self.types.get_no_follow(type_id);
+        // .get will follow statics and recursives
+        let typ = self.types.get(type_id);
         let static_enum = match typ {
             Type::Unit => make_variant(get_ident!(self, "Unit"), None),
             Type::Char => make_variant(get_ident!(self, "Char"), None),
@@ -14117,10 +14346,16 @@ impl TypedProgram {
             Type::Generic(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
-            | Type::Unresolved(_)
-            | Type::RecursiveReference(_) => {
+            | Type::Unresolved(_) => {
                 self.ice_with_span(format!("TypeSchema on {}", typ.kind_name()), span)
             }
+            Type::RecursiveReference(_) | Type::Static(_) => self.ice_with_span(
+                format!(
+                    "TypeSchema on recursive or static type should be unreachable {}",
+                    typ.kind_name()
+                ),
+                span,
+            ),
         };
 
         let static_value_id = self.static_values.add(StaticValue::Enum(static_enum));

@@ -159,12 +159,12 @@ impl Vm {
         self.insert_local(self.stack.current_frame(), variable_id, value)
     }
 
-    pub fn get_current_local(&self, variable_id: VariableId) -> Option<Value> {
+    pub fn get_current_local(&mut self, variable_id: VariableId) -> Option<Value> {
         self.get_local(self.stack.current_frame(), variable_id)
     }
 
-    pub fn get_local(&self, frame_index: u32, variable_id: VariableId) -> Option<Value> {
-        let frame_locals = self.stack.locals.get(&frame_index).unwrap();
+    pub fn get_local(&mut self, frame_index: u32, variable_id: VariableId) -> Option<Value> {
+        let frame_locals = self.stack.locals.entry(frame_index).or_default();
         frame_locals.get(&variable_id).copied()
     }
 
@@ -900,6 +900,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     Ok(lambda_object.into())
                 }
                 CastType::ToNever => Ok(VmResult::Value(base_value)),
+                CastType::StaticErase => Ok(VmResult::Value(base_value)),
             }
         }
         TypedExpr::Return(typed_return) => {
@@ -967,7 +968,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let expected_type = m.exprs.get(expr).get_type();
             let is_metaprogram_special_case =
                 expected_type == NEVER_TYPE_ID && v.get_type() == UNIT_TYPE_ID;
-            if !is_metaprogram_special_case {
+            let is_static_expected =
+                matches!(m.types.get_no_follow_static(expected_type), Type::Static(_));
+            if !is_metaprogram_special_case && !is_static_expected {
                 if let Err(msg) = m.check_types(
                     m.exprs.get(expr).get_type(),
                     v.get_type(),
@@ -1174,16 +1177,6 @@ pub fn execute_stmt(
                 };
                 Value::Reference { type_id: reference_type, ptr: value_ptr }
             } else {
-                if let_stmt.variable_type != v.get_type() {
-                    m.ice_with_span(
-                        format!(
-                            "VM let type mismatch: expected {} got {}",
-                            m.type_id_to_string(let_stmt.variable_type),
-                            m.type_id_to_string(v.get_type())
-                        ),
-                        let_stmt.span,
-                    );
-                }
                 v
             };
             vm.insert_current_local(let_stmt.variable_id, to_store);
@@ -1425,6 +1418,12 @@ fn execute_intrinsic(
         IntrinsicOperation::Zeroed => {
             let type_id = m.named_types.get_nth(type_args, 0).type_id;
             let value = match m.types.get(type_id) {
+                Type::Static(_) => {
+                    return failf!(
+                        vm.eval_span,
+                        "zeroed() for statically known values currently unsupported",
+                    );
+                }
                 Type::Unit => Value::Unit,
                 Type::Char => Value::Char(0),
                 Type::Bool => Value::Bool(false),
@@ -1568,7 +1567,6 @@ fn execute_intrinsic(
 
             let layout =
                 std::alloc::Layout::from_size_align(size as usize, align as usize).unwrap();
-            eprintln!("FREEING SOMETHING: {:?}", ptr);
             unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
             Ok(VmResult::UNIT)
         }
@@ -1786,6 +1784,7 @@ pub fn load_value(
     };
     debug!("load of '{}' from {:?} {:?}", m.type_id_to_string(type_id), ptr, layout);
     match m.types.get(type_id) {
+        Type::Static(stat) => load_value(vm, m, stat.inner_type_id, ptr, copy_aggregates),
         Type::Unit => Ok(Value::UNIT),
         Type::Char => {
             let byte = unsafe { ptr.read() };
