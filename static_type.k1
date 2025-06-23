@@ -9,7 +9,7 @@ fn main(): int {
 }
 
 fn format[Args](fmtString: static string, args: Args): unit {
-  #meta(fmtString, a, b, c) {
+  #meta(fmtString) {
     let parts = (fmtString as string).splitByChar('?');
     let c = parts.len;
     core/meta/emit(`println("fmtString has {c} parts")`);

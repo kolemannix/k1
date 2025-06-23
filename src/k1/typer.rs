@@ -33,8 +33,8 @@ use crate::parse::{
     ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedDirective, ParsedExprId, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
     ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedWhileExpr, Sources,
-    StringId, StructValueField,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
+    ParsedWhileExpr, Sources, StringId, StructValueField,
 };
 use crate::parse::{
     Identifier, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
@@ -2259,12 +2259,12 @@ macro_rules! get_ident {
 
 /// Make a qualified, `NamespacedIdentifier` from components
 macro_rules! qident {
-    ($self:ident, $span:expr, $namespaces:expr, $name:literal $(,)?) => {{
+    ($self:ident, $span:expr, $namespaces:expr, $name:expr $(,)?) => {{
         let idents: EcoVec<Identifier> =
             ($namespaces).iter().map(|n| get_ident!($self, n)).collect();
         NamespacedIdentifier { namespaces: idents, name: get_ident!($self, $name), span: $span }
     }};
-    ($self:ident, $span:expr, $name:literal) => {{ NamespacedIdentifier { namespaces: eco_vec![], name: get_ident!($self, $name), span: $span } }};
+    ($self:ident, $span:expr, $name:expr) => {{ NamespacedIdentifier { namespaces: eco_vec![], name: get_ident!($self, $name), span: $span } }};
 }
 
 fn make_fail_ast_id<A, T: AsRef<str>>(
@@ -4059,6 +4059,7 @@ impl TypedProgram {
                 is_generic_pass: false,
             },
             false,
+            &[],
         )?;
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
@@ -4604,6 +4605,7 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         no_reset: bool,
+        input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
         if ctx.is_inference {
             return failf!(
@@ -4640,7 +4642,8 @@ impl TypedProgram {
         }
 
         vm.allow_emits = static_ctx.is_metaprogram;
-        let value = vm::execute_single_expr_with_vm(self, expr, vm)?;
+
+        let value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters)?;
 
         if cfg!(debug_assertions) {
             if let Err(msg) = self.check_types(required_type_id, value.get_type(), ctx.scope_id) {
@@ -4663,6 +4666,7 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         no_reset: bool,
+        input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
@@ -4692,7 +4696,8 @@ impl TypedProgram {
             }
             Some(vm) => (vm, false),
         };
-        let res = self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, no_reset);
+        let res =
+            self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, no_reset, input_parameters);
         if !used_alt {
             *self.vm = Some(vm);
         } else {
@@ -4714,6 +4719,7 @@ impl TypedProgram {
                 expected_return_type: Some(BOOL_TYPE_ID),
             })),
             false,
+            &[],
         )?;
         let StaticValue::Boolean(condition_bool) =
             self.static_values.get(vm_cond_result.static_value_id)
@@ -4804,10 +4810,10 @@ impl TypedProgram {
             is_generic_pass: false,
         };
         let vm_result = match vm_to_use {
-            None => self.execute_static_expr(value_expr_id, ctx, false),
+            None => self.execute_static_expr(value_expr_id, ctx, false, &[]),
             Some(vm) => {
                 let no_reset = true;
-                self.execute_static_expr_with_vm(vm, value_expr_id, ctx, no_reset)
+                self.execute_static_expr_with_vm(vm, value_expr_id, ctx, no_reset, &[])
             }
         }?;
 
@@ -5468,7 +5474,7 @@ impl TypedProgram {
         variable_expr_id: ParsedExprId,
         scope_id: ScopeId,
         is_assignment_lhs: bool,
-    ) -> TyperResult<TypedExprId> {
+    ) -> TyperResult<(VariableId, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
         let variable_id = self.scopes.find_variable_namespaced(
@@ -5527,14 +5533,14 @@ impl TypedProgram {
                         variable_id,
                         fixup_expr_id,
                     );
-                    Ok(fixup_expr_id)
+                    Ok((variable_id, fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
                         type_id: v.type_id,
                         variable_id,
                         span: variable_name_span,
                     }));
-                    Ok(expr)
+                    Ok((variable_id, expr))
                 }
             }
         }
@@ -6282,7 +6288,9 @@ impl TypedProgram {
                 let expr = TypedExpr::String(*s, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpr::Variable(_variable) => self.eval_variable(expr_id, ctx.scope_id, false),
+            ParsedExpr::Variable(_variable) => {
+                Ok(self.eval_variable(expr_id, ctx.scope_id, false)?.1)
+            }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
                 self.eval_field_access(&field_access, ctx, false)
@@ -6443,15 +6451,12 @@ impl TypedProgram {
         if ctx.is_generic_pass {
             let typed_expr = match ctx.expected_type_id {
                 None => TypedExpr::Unit(span),
-                // Just spit out a bogus value of the expected type so that the rest of the user's
-                // function can be typechecked
-                // It's ok that the value isn't 'typesafe' since this code will never run
-                Some(expected_type_id) => {
+                Some(_) => {
                     let unit_expr = self.exprs.add(TypedExpr::Unit(span));
                     TypedExpr::Cast(TypedCast {
                         cast_type: CastType::ToNever,
                         base_expr: unit_expr,
-                        target_type_id: expected_type_id,
+                        target_type_id: NEVER_TYPE_ID,
                         span,
                     })
                 }
@@ -6480,6 +6485,40 @@ impl TypedProgram {
             ParsedStaticBlockKind::Value => false,
             ParsedStaticBlockKind::Metaprogram => true,
         };
+        let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
+        for param in self.ast.p_idents.get_slice_to_smallvec_copy::<4>(stat.parameter_names) {
+            let variable_expr =
+                self.ast.exprs.add_expression(ParsedExpr::Variable(ParsedVariable {
+                    name: NamespacedIdentifier::naked(param, span),
+                }));
+            let (variable_id, variable_expr) =
+                self.eval_variable(variable_expr, ctx.scope_id, false)?;
+            let variable_type = self.exprs.get(variable_expr).get_type();
+            if let Type::Static(stat) = self.types.get_no_follow_static(variable_type) {
+                if let Some(value_id) = stat.value_id {
+                    static_parameters.push((variable_id, value_id));
+                } else {
+                    return failf!(
+                        span,
+                        "Static parameter `{}` is unresolved",
+                        self.ident_str(param)
+                    );
+                }
+            } else {
+                return failf!(
+                    span,
+                    "Non-static parameters aren't supported yet: {}",
+                    self.ident_str(param)
+                );
+            }
+        }
+        for s in &static_parameters {
+            eprintln!(
+                "Variable {} := `{}` will be passed in to static execution",
+                self.ident_str(self.variables.get(s.0).name),
+                self.static_value_to_string(s.1)
+            );
+        }
         let vm_result = self.execute_static_expr(
             base_expr,
             ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
@@ -6489,6 +6528,7 @@ impl TypedProgram {
                 },
             )),
             false,
+            &static_parameters,
         )?;
 
         match kind {
@@ -11633,7 +11673,7 @@ impl TypedProgram {
                         "Value assignment destination must be a variable"
                     );
                 };
-                let lhs = self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                let (_, lhs) = self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
                 let lhs_type = self.exprs.get(lhs).get_type();
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get(rhs).get_type();

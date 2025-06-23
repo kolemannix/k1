@@ -1988,6 +1988,7 @@ pub struct Source {
     pub content: String,
     /// This is an inefficient copy but we need the lines cached because utf8
     /// Eventually it can be references not copies
+    /// nocommit(0): Just store offsets here in `Source.lines`
     pub lines: Vec<Line>,
 }
 
@@ -2017,6 +2018,15 @@ impl Source {
             } else {
                 line_buffer.push(c);
             }
+        }
+        if !line_buffer.is_empty() {
+            // Push the last line
+            let start: u32 = (content.len() - line_buffer.len()) as u32;
+            lines.push(Line {
+                start_char: start,
+                line_index: lines.len() as u32,
+                content: line_buffer,
+            });
         }
         Source { file_id, directory, filename, content, lines }
     }
@@ -3391,7 +3401,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     &[K::CloseParen],
                                     |p| {
                                         Parser::expect_ident_ext(p, false, false)
-                                            .map(|(token, ident)| ident)
+                                            .map(|(_token, ident)| ident)
                                     },
                                 )?;
                             }
