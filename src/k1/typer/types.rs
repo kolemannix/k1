@@ -698,11 +698,19 @@ impl Type {
             _ => None,
         }
     }
+
     #[track_caller]
     pub fn expect_reference(&self) -> &ReferenceType {
         match self {
             Type::Reference(r) => r,
             _ => panic!("expect_reference called on: {:?}", self),
+        }
+    }
+
+    pub fn as_static(&self) -> Option<&StaticType> {
+        match self {
+            Type::Static(s) => Some(s),
+            _ => None,
         }
     }
 

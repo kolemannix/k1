@@ -721,6 +721,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
+        eprintln!("{:?}", span);
+        // pretty-debug print the lines
+        eprintln!("{:?}", self.k1.ast.sources.get_source(14).lines);
         let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
         let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(

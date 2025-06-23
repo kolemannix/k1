@@ -428,6 +428,7 @@ pub fn execute_single_expr_with_vm(
     m: &mut TypedProgram,
     expr: TypedExprId,
     vm: &mut Vm,
+    input_parameters: &[(VariableId, StaticValueId)],
 ) -> TyperResult<Value> {
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
@@ -448,6 +449,16 @@ pub fn execute_single_expr_with_vm(
 
     let span = m.exprs.get(expr).get_span();
     vm.stack.push_new_frame(None, Some(span));
+
+    // Bind a local variable in the VM for each input_parameter
+    for (variable_id, static_value_id) in input_parameters {
+        let vm_value =
+            static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, *static_value_id)?;
+        vm.insert_current_local(*variable_id, vm_value);
+    }
+
+    eprintln!("{}", vm.dump_current_frame(m));
+
     let res = match execute_expr(vm, m, expr) {
         Err(e) => {
             m.write_error(&mut stderr(), &e).unwrap();
