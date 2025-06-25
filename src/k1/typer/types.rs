@@ -5,8 +5,7 @@ use fxhash::FxHashMap;
 
 use crate::typer::scopes::*;
 
-use crate::parse::Identifier;
-use crate::parse::{ParsedId, ParsedTypeDefnId};
+use crate::parse::{Ident, ParsedId, ParsedTypeDefnId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -14,7 +13,7 @@ nz_u32_id!(TypeId);
 
 #[derive(Debug, Clone)]
 pub struct StructTypeField {
-    pub name: Identifier,
+    pub name: Ident,
     pub type_id: TypeId,
     pub private: bool,
 }
@@ -42,7 +41,7 @@ nz_u32_id!(TypeDefnId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDefnInfo {
-    pub name: Identifier,
+    pub name: Ident,
     pub scope: ScopeId,
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
@@ -70,7 +69,7 @@ impl StructType {
     pub fn is_anon(&self) -> bool {
         self.defn_id.is_none()
     }
-    pub fn find_field(&self, field_name: Identifier) -> Option<(usize, &StructTypeField)> {
+    pub fn find_field(&self, field_name: Ident) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
@@ -111,7 +110,7 @@ pub struct ListType {
 
 #[derive(Debug, Clone)]
 pub struct TypeParameter {
-    pub name: Identifier,
+    pub name: Ident,
     pub scope_id: ScopeId,
     pub span: SpanId,
 }
@@ -119,7 +118,7 @@ impl_copy_if_small!(12, TypeParameter);
 
 #[derive(Debug, Clone)]
 pub struct FunctionTypeParameter {
-    pub name: Identifier,
+    pub name: Ident,
     pub scope_id: ScopeId,
     pub span: SpanId,
     pub function_type: TypeId,
@@ -144,7 +143,7 @@ pub struct ReferenceType {
 pub struct TypedEnumVariant {
     pub enum_type_id: TypeId,
     pub my_type_id: TypeId,
-    pub name: Identifier,
+    pub name: Ident,
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
@@ -167,7 +166,7 @@ impl TypedEnum {
     pub fn has_payloads(&self) -> bool {
         self.variants.iter().any(|v| v.payload.is_some())
     }
-    pub fn variant_by_name(&self, name: Identifier) -> Option<&TypedEnumVariant> {
+    pub fn variant_by_name(&self, name: Ident) -> Option<&TypedEnumVariant> {
         self.variants.iter().find(|v| v.name == name)
     }
     pub fn variant_by_index(&self, index: u32) -> &TypedEnumVariant {
@@ -304,7 +303,7 @@ impl FloatType {
 pub struct FnParamType {
     // FIXME: Determine if param names are truly 'part' of the function type.
     // For now, keeping them to fix some bugs
-    pub name: Identifier,
+    pub name: Ident,
     pub type_id: TypeId,
     pub is_context: bool,
     pub is_lambda_env: bool,
@@ -1190,7 +1189,7 @@ impl Types {
             Type::Enum(e) => e.generic_instance_info.as_ref(),
             Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
             Type::Struct(s) => s.generic_instance_info.as_ref(),
-            Type::Static(stat) => self.get_generic_instance_info(stat.inner_type_id),
+            Type::Static(_stat) => None,
             Type::Unit => None,
             Type::Char => None,
             Type::Integer(_) => None,

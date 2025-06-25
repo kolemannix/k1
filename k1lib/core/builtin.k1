@@ -52,6 +52,9 @@ ns types {
   intern fn typeSchema(id: u64): TypeSchema
   intern fn typeName(id: u64): string
 
+  fn getTypeName[T](): string { typeName(typeId[T]()) }
+  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
+
   deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
 
   deftype Layout = { size: uword, align: uword }

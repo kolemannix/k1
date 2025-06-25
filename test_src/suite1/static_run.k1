@@ -19,7 +19,7 @@ fn test(): unit {
   assert(#static true);
   assert(not (#static false));
   assert(not (#static true == false));
-  // nocommit we could disambiguate this with whitespace check
+  // nocommit we could disambiguate this with whitespace check, even still without the keyword
   assert(#static() () == ());
   assert(#static 'a' == 'a');
   assert(not #static 'A' == 'a');
@@ -32,7 +32,7 @@ fn test(): unit {
   assertEquals[i64](#static getPoint().z, -222);
 
   // Variable assign
-  let goodbye: string = #static {
+  let goodbye: static string = #static {
     let mut msg = "Hello, World";
     msg = "Goodbye, World!";
     msg
@@ -44,8 +44,8 @@ fn test(): unit {
     i = 10;
     i
   };
-  assertEquals(letAssign, 10);
-  
+  assertEquals[int](letAssign, 10);
+
   let padded = #static {
     let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
     padded
@@ -63,7 +63,7 @@ fn test(): unit {
     i <- core/identity(i.*);
     i.*
   };
-  assertEquals(letRef, 10);
+  assertEquals[int](letRef, 10);
 
   assertEquals(core/k1/IS_STATIC, false);
   #static assert(core/k1/IS_STATIC);
@@ -73,13 +73,13 @@ fn test(): unit {
     let y = if x is .Some(x) x else crash("");
     y
   };
-  assertEquals(enum1, 42);
+  assertEquals[int](enum1, 42);
 
-  let fieldPtrTest = #static {
+  let fieldPtrTest: int = (#static {
     let* x = 21;
     let s = { ptr: x };
     s.ptr.*
-  };
+  }).fromStatic();
   assertEquals(fieldPtrTest, 21);
 
 
@@ -88,7 +88,7 @@ fn test(): unit {
     let* f = { asdf: b };
     f.asdf.*
   };
-  assertEquals(ptrInStructs, 10);
+  assertEquals[u8](ptrInStructs, 10);
 
   //// Loops
   #if false assertEquals(#static {
@@ -118,7 +118,7 @@ fn test(): unit {
     };
     inced.last()
   };
-  assertEquals(listLast, some(6));
+  assertEquals[int?](listLast, some(6));
 
   assertEquals[int](#static loop {
     switch 42 {
@@ -135,7 +135,7 @@ fn test(): unit {
   }, "Hello");
 
   assertEquals[string?](
-    testCompile( #static assert(false) ), 
+    testCompile( #static assert(false) ),
     some("Static execution exited with code: 111")
   );
 
@@ -145,18 +145,18 @@ fn test(): unit {
   #static bar(2);
 
   // Buffer
-  let buf: Buffer[int] = #static {
+  let buf = #static {
     let xs = [1,2,3,4,5];
     xs.toBuffer()
   };
-  assert(buf == [1,2,3,4,5].toBuffer());
+  assert(buf.fromStatic() == [1,2,3,4,5].toBuffer());
   let bufFromStatic = #static {
     let* l = List/wrapBuffer(INT_BUFFER.cloned());
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));
   };
-  
+
 
   // Simple lambda
   assertEquals[int](#static {
@@ -164,7 +164,15 @@ fn test(): unit {
     lam(1)
   }, 2);
 
-  // TODO: Buffer of buffers!
+  // Buffer of buffers!
+  let bob = #static [[1,2,3].toBuffer(), [4,5,6].toBuffer()].toBuffer();
+  assertEquals(bob.len, 2);
+  assertEquals(bob.get(0).get(0), 1);
+  assertEquals(bob.get(0).get(1), 2);
+  assertEquals(bob.get(0).get(2), 3);
+  assertEquals(bob.get(1).get(0), 4);
+  assertEquals(bob.get(1).get(1), 5);
+  assertEquals(bob.get(1).get(2), 6);
 
   ()
 }

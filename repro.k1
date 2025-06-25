@@ -1,8 +1,6 @@
 fn main(): i32 {
-  let a = none[int]();
-  if a is Opt.None {
-    ()
-  };
+  let a = #static some(42);
+  a.get();
   0
 }
 

@@ -883,7 +883,7 @@ impl TypedProgram {
             PatternConstructor::BoolTrue => writ.write_str("true"),
             PatternConstructor::BoolFalse => writ.write_str("false"),
             PatternConstructor::Char => writ.write_str("'<char>'"),
-            PatternConstructor::String => writ.write_str("\"<string>\""),
+            PatternConstructor::String => writ.write_str("<string>"),
             PatternConstructor::Int => writ.write_str("<int>"),
             PatternConstructor::Float => writ.write_str("<float>"),
             PatternConstructor::Pointer => writ.write_str("<ptr>"),
@@ -1112,7 +1112,7 @@ impl TypedProgram {
         s
     }
 
-    pub fn write_ident(&self, w: &mut impl Write, ident: Identifier) -> std::fmt::Result {
+    pub fn write_ident(&self, w: &mut impl Write, ident: Ident) -> std::fmt::Result {
         w.write_str(self.ident_str(ident))
     }
 
