@@ -2,8 +2,8 @@
 mod stack_tests {
     use ecow::eco_vec;
 
-    use crate::parse::Identifier;
-    use crate::typer::types::{StructType, StructTypeField, U32_TYPE_ID, U8_TYPE_ID};
+    use crate::parse::Ident;
+    use crate::typer::types::{StructType, StructTypeField, U8_TYPE_ID, U32_TYPE_ID};
     use crate::typer::*;
     use crate::vm::*;
 
@@ -153,12 +153,8 @@ mod stack_tests {
         let mut stack = test_stack();
         let struct_type = types.add_anon(Type::Struct(StructType {
             fields: eco_vec![
-                StructTypeField { name: Identifier::forged(), type_id: U8_TYPE_ID, private: false },
-                StructTypeField {
-                    name: Identifier::forged(),
-                    type_id: U32_TYPE_ID,
-                    private: false,
-                }
+                StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID, private: false },
+                StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID, private: false }
             ],
             defn_id: None,
             generic_instance_info: None,

@@ -2,14 +2,14 @@ ns type_schema {
   deftype Point3[T] = {
     x: T, y: T, z: T
   }
-  
+
   use core/types/TypeSchema
   use core/types/typeSchema
   use core/types/typeId
   use core/types/typeName
 
   fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
-  
+
   fn printStructShape[T](): string {
     let id = typeId[T]();
     require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
@@ -26,9 +26,9 @@ ns type_schema {
     sb.putString("}");
     sb.build()
   }
-  
+
   fn test(): unit {
-  
+
     assert(getTypeSchema[unit]() is TypeSchema.Unit);
     assert(getTypeSchema[unit]() is .Unit);
     assert(getTypeSchema[u8]()   is .Int(.U8));
@@ -54,9 +54,9 @@ ns type_schema {
 
     assert(getTypeSchema[either Yes]() is .Either(_));
 
-    require getTypeSchema[either Yes, No, MaybeSo(string)]() 
-      is .Either({ variants }) 
-      and variants.len == 3 
+    require getTypeSchema[either Yes, No, MaybeSo(string)]()
+      is .Either({ variants })
+      and variants.len == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"
@@ -76,7 +76,7 @@ ns type_schema {
     println(printStructShape[Point3[u8]]());
     println(printStructShape[TypeSchema.Struct.value]());
     println(printStructShape[TypeSchema.Either]());
-  
+
     ()
   }
 }

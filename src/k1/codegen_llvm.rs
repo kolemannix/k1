@@ -37,7 +37,7 @@ use smallvec::smallvec;
 use crate::SV8;
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
-use crate::parse::{FileId, Identifier, StringId};
+use crate::parse::{FileId, Ident, StringId};
 use crate::pool::Pool;
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
@@ -190,7 +190,7 @@ struct LlvmValueType<'ctx> {
 
 #[derive(Debug, Clone)]
 struct EnumVariantType<'ctx> {
-    name: Identifier,
+    name: Ident,
     envelope_type: ArrayType<'ctx>,
     variant_struct_type: StructType<'ctx>,
     payload_type: Option<K1LlvmType<'ctx>>,
@@ -721,9 +721,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
-        eprintln!("{:?}", span);
-        // pretty-debug print the lines
-        eprintln!("{:?}", self.k1.ast.sources.get_source(14).lines);
         let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
         let column = span.start - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
@@ -745,7 +742,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.get_current_debug_location().unwrap()
     }
 
-    fn get_ident_name(&self, id: Identifier) -> &str {
+    fn get_ident_name(&self, id: Ident) -> &str {
         self.k1.ast.idents.get_name(id)
     }
 

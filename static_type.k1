@@ -2,13 +2,14 @@ fn main(): int {
   //let statStr: string = "(?,?)";
   let statStr: static string = #static "(?,?,?)";
   (statStr as string).splitByChar('?');
+  format(statStr);
 
-  format(statStr, {});
+  format("(?,?)");
 
   0
 }
 
-fn format[Args](fmtString: static string, args: Args): unit {
+fn format(fmtString: static string): unit {
   #meta(fmtString) {
     let parts = (fmtString as string).splitByChar('?');
     let c = parts.len;

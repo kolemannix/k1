@@ -1,27 +1,62 @@
 use core/meta
+fn emitWriteSingleValue(): unit {
+  meta/emitLine("parts.get(0).printTo(result)");
+  meta/emitLine("result.writeString(args)");
+  meta/emitLine("parts.get(1).printTo(result)");
+}
 fn sprintf[Args](fmtString: static string, args: Args): string {
   let* result: List[char]* = List/empty();
   #meta(fmtString) {
-    let schema = types/typeSchema(types/typeId[Args]());
-    if schema is .Other("param") { meta/emitLine(`""`); return(()) };
-    require schema is .Struct({ fields }) else { crash("Struct!") };
-
-    for field in fields do {
-      meta/emitLine("let f{itIndex} = args.{field.name}")
-    };
-    let mut fmtIndex = 0;
-
+    let argsTypeId = types/typeId[Args]();
+    let schema = types/typeSchema(argsTypeId);
+    // Splitting doesn't work; we need to walk the format string
+    // emitting "string parts" or "arg specifiers"
+    // Then iterate that structure to produce the runtime
+    // code, which will need the baked string parts
     let parts = (fmtString as string).splitByChar('?');
     meta/emitVariable("parts", parts);
+    switch schema {
+      .Struct({fields}) -> {
 
-    if parts.len != fields.len {
-      crash("Mismatching format arg count")
-    };
+        // TODO: Make string a variant of TypeSchema
+        if argsTypeId == types/typeId[string]() {
+          if parts.len != 1 {
+            crash("Got 1 format argument (a string) but format string has {parts.len}")
+          };
+          meta/emitLine("its a string baby");
+          meta/emitLine("parts.get(0).printTo(result)");
+          meta/emitLine("result.writeString(args)");
+          meta/emitLine("parts.get(1).printTo(result)");
+          // nocommit(0): Early return not working?
+          return(42);
+        };
 
-    for part in parts do {
-      meta/emitLine("parts.get({fmtIndex}).printTo(result)");
-      meta/emitLine("f{fmtIndex}.printTo(result)");
-      fmtIndex = fmtIndex + 1;
+        if parts.len != fields.len {
+          crash("Mismatching format arg count")
+        };
+
+        for field in fields do {
+          meta/emitLine("let f{itIndex} = args.{field.name}")
+        };
+
+        for part in parts do {
+          meta/emitLine("parts.get({itIndex}).printTo(result)");
+          meta/emitLine("f{itIndex}.printTo(result)");
+        };
+
+      },
+      //.Bool -> {
+
+      //},
+      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]()}")
+      //.String(s) -> {
+      //  if parts.len != 1 {
+      //    crash("Got 1 format argument (a string) but format string has {parts.len}")
+      //  };
+      //  meta/emitLine("parts.get(0).printTo(result)");
+      //  meta/emitLine("result.writeString(args)");
+      //  meta/emitLine("parts.get(1).printTo(result)");
+      //}
     };
     meta/emitLine(#code string/wrapList(result));
   }
@@ -32,8 +67,14 @@ fn main(args: Buffer[string]): i32 {
   let s1 = sprintf(fmt, {a: 42, b: true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
   println(s1);
-  //let s3 = sprintf("My values are: ?, ?", {a: "asdf", b: true});
-  //println(s3);
+  let s3 = sprintf("My values are: ? and ?", {a: "asdf", b: true});
+  println(s3);
+
+  let s4 = sprintf("My string is ?", "Hello, World!");
+  println(s4);
+
+  //let s5 = sprintf("My whatever is ?", true);
+  //println(s5);
 
   0
 }

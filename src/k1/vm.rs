@@ -18,7 +18,7 @@ use crate::{
     failf, int_binop,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifier, StringId},
+    parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
         self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
@@ -457,7 +457,7 @@ pub fn execute_single_expr_with_vm(
         vm.insert_current_local(*variable_id, vm_value);
     }
 
-    eprintln!("{}", vm.dump_current_frame(m));
+    // eprintln!("{}", vm.dump_current_frame(m));
 
     let res = match execute_expr(vm, m, expr) {
         Err(e) => {
@@ -1999,7 +1999,7 @@ pub struct Stack {
 pub struct StackFrame {
     index: u32,
     base_ptr: *const u8,
-    debug_name: Option<Identifier>,
+    debug_name: Option<Ident>,
     call_span: Option<SpanId>,
 }
 
@@ -2007,7 +2007,7 @@ impl StackFrame {
     pub fn make(
         index: u32,
         base_ptr: *const u8,
-        debug_name: Option<Identifier>,
+        debug_name: Option<Ident>,
         call_span: Option<SpanId>,
     ) -> StackFrame {
         StackFrame { index, base_ptr, debug_name, call_span }
@@ -2036,11 +2036,7 @@ impl Stack {
         self.frames.clear();
     }
 
-    fn push_new_frame(
-        &mut self,
-        name: Option<Identifier>,
-        call_span: Option<SpanId>,
-    ) -> StackFrame {
+    fn push_new_frame(&mut self, name: Option<Ident>, call_span: Option<SpanId>) -> StackFrame {
         let index = self.frames.len() as u32;
         let base_ptr = self.cursor;
         let frame = StackFrame::make(index, base_ptr, name, call_span);
@@ -2284,7 +2280,7 @@ pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> StringId {
     m.ast.strings.intern(rust_str)
 }
 
-pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Identifier {
+pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Ident {
     let rust_str = value_to_rust_str(value);
     m.ast.idents.intern(rust_str)
 }
