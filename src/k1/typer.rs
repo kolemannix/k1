@@ -2317,8 +2317,7 @@ pub fn write_error(
     level: ErrorLevel,
     span: SpanId,
 ) -> std::io::Result<()> {
-    parse::write_source_location(w, spans, sources, span, level, 6)?;
-    writeln!(w, "    |\n    |->  {}\n", message.as_ref())?;
+    parse::write_source_location(w, spans, sources, span, level, 6, Some(message.as_ref()))?;
     Ok(())
 }
 
@@ -2418,23 +2417,47 @@ impl FunctionAbilityContextInfo {
 
 #[derive(Debug, Clone)]
 struct EvalTypeExprContext {
+    /// `direct_*` locations mean top-level of the thing they describe
     /// If this is a type definition, this is its type id (probably a Type::Unresolved)
     /// If set, we're supposed to store our result in this type_id
-    unresolved_target_type: Option<TypeId>,
-    /// We allow the construct `some <type expr>` only in this position
+    direct_unresolved_target_type: Option<TypeId>,
     is_direct_function_parameter: bool,
+    #[allow(unused)]
+    is_direct_variable_binding: bool,
+
+    /// `inside_*` locations mean anywhere inside of the thing they describe, including top-level
+    is_inside_type_definition_rhs: bool,
+    is_inside_static_type: bool,
 }
 impl_copy_if_small!(28, EvalTypeExprContext);
 
 impl EvalTypeExprContext {
-    pub fn no_unresolved_target_type(&self) -> EvalTypeExprContext {
-        let mut s = *self;
-        s.unresolved_target_type = None;
-        s
+    /// If we descend into a type, we can categorically clear all `direct_`
+    /// fields, by definition
+    pub fn descended(&self) -> EvalTypeExprContext {
+        EvalTypeExprContext {
+            direct_unresolved_target_type: None,
+            is_direct_function_parameter: false,
+            is_direct_variable_binding: false,
+            ..*self
+        }
     }
 
-    pub const EMPTY: Self =
-        EvalTypeExprContext { unresolved_target_type: None, is_direct_function_parameter: false };
+    pub const EMPTY: Self = EvalTypeExprContext {
+        direct_unresolved_target_type: None,
+        is_direct_function_parameter: false,
+        is_direct_variable_binding: false,
+        is_inside_type_definition_rhs: false,
+        is_inside_static_type: false,
+    };
+
+    pub const VARIABLE_BINDING: Self = EvalTypeExprContext {
+        direct_unresolved_target_type: None,
+        is_direct_function_parameter: false,
+        is_direct_variable_binding: true,
+        is_inside_type_definition_rhs: false,
+        is_inside_static_type: false,
+    };
 }
 
 // Not using this yet but probably need to be
@@ -2725,7 +2748,7 @@ impl TypedProgram {
             parser.parse_file();
         }
 
-        let parsing_elapsed = start_parse.duration_since(start_parse);
+        let parsing_elapsed = start_parse.elapsed();
         log::info!("parsing took {}ms", parsing_elapsed.as_millis());
 
         if !self.ast.errors.is_empty() {
@@ -3013,9 +3036,12 @@ impl TypedProgram {
 
         let type_eval_context = EvalTypeExprContext {
             // For generics, we want the RHS to be its own type, then we make a Generic wrapper
-            // that points to it, so we pass None
-            unresolved_target_type: if is_generic_defn { None } else { Some(my_type_id) },
+            // that points to it, so we pass None for `direct_unresolved_target_type`
+            direct_unresolved_target_type: if is_generic_defn { None } else { Some(my_type_id) },
+            is_inside_type_definition_rhs: true,
             is_direct_function_parameter: false,
+            is_direct_variable_binding: false,
+            is_inside_static_type: false,
         };
 
         // Actually compile the RHS
@@ -3085,15 +3111,15 @@ impl TypedProgram {
         &mut self,
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
-        // The context is mostly for when we are evaluating a type expression that is part of a type
-        // definition. It talks about self_name for recursive definitions, and the definition info
-        // like companion namespace, etc for a type definition.
+        // The context is mostly about 'where are are' - where this type expression is located -
+        // with respect to the source language. Is this a type definition? A function parameter
+        // type? etc.
         context: EvalTypeExprContext,
     ) -> TyperResult<TypeId> {
         let base = match self.ast.type_exprs.get(type_expr_id) {
             ParsedTypeExpr::Builtin(span) => {
                 let defn_type_id =
-                    context.unresolved_target_type.expect("required defn info for builtin");
+                    context.direct_unresolved_target_type.expect("required defn info for builtin");
                 let type_value = match defn_type_id {
                     UNIT_TYPE_ID => Type::Unit,
                     CHAR_TYPE_ID => Type::Char,
@@ -3135,11 +3161,8 @@ impl TypedProgram {
                             self.ident_str(existing_field.name)
                         );
                     }
-                    let ty = self.eval_type_expr_ext(
-                        ast_field.ty,
-                        scope_id,
-                        context.no_unresolved_target_type(),
-                    )?;
+                    let ty =
+                        self.eval_type_expr_ext(ast_field.ty, scope_id, context.descended())?;
                     // TODO(infinite recursive types): This is kinda how we'd prevent this
                     // Need to just put in the context "are we indirected or not"
                     // if let Type::RecursiveReference(rr) = self.types.get_no_follow(ty) {
@@ -3160,12 +3183,13 @@ impl TypedProgram {
                 }
 
                 let defn_id = context
-                    .unresolved_target_type
+                    .direct_unresolved_target_type
                     .and_then(|t| self.types.types_to_defns.get(&t))
                     .copied();
                 let struct_defn =
                     Type::Struct(StructType { fields, defn_id, generic_instance_info: None });
-                let type_id = self.add_or_resolve_type(context.unresolved_target_type, struct_defn);
+                let type_id =
+                    self.add_or_resolve_type(context.direct_unresolved_target_type, struct_defn);
                 Ok(type_id)
             }
             ParsedTypeExpr::TypeApplication(_ty_app) => {
@@ -3177,18 +3201,13 @@ impl TypedProgram {
                 }
             }
             ParsedTypeExpr::Optional(opt) => {
-                let inner_ty = self.eval_type_expr_ext(
-                    opt.base,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
+                let inner_ty = self.eval_type_expr_ext(opt.base, scope_id, context.descended())?;
                 let optional_type =
                     self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![inner_ty]);
                 Ok(optional_type)
             }
             ParsedTypeExpr::Reference(r) => {
-                let inner_ty =
-                    self.eval_type_expr_ext(r.base, scope_id, context.no_unresolved_target_type())?;
+                let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
                 let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
                 let type_id = self.types.add_anon(reference_type);
                 Ok(type_id)
@@ -3236,7 +3255,7 @@ impl TypedProgram {
                             let type_id = self.eval_type_expr_ext(
                                 *payload_type_expr,
                                 scope_id,
-                                context.no_unresolved_target_type(),
+                                context.descended(),
                             )?;
                             // TODO(infinite recursive types): This is kinda how we'd prevent infinite recursion
                             // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
@@ -3271,7 +3290,7 @@ impl TypedProgram {
                     variants.push(variant);
                 }
                 let defn_id = context
-                    .unresolved_target_type
+                    .direct_unresolved_target_type
                     .and_then(|t| self.types.types_to_defns.get(&t))
                     .copied();
                 let enum_type = Type::Enum(TypedEnum {
@@ -3282,16 +3301,13 @@ impl TypedProgram {
                     tag_type,
                 });
                 let enum_type_id =
-                    self.add_or_resolve_type(context.unresolved_target_type, enum_type);
+                    self.add_or_resolve_type(context.direct_unresolved_target_type, enum_type);
                 Ok(enum_type_id)
             }
             ParsedTypeExpr::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
-                let base_type = self.eval_type_expr_ext(
-                    dot_acc.base,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
+                let base_type =
+                    self.eval_type_expr_ext(dot_acc.base, scope_id, context.descended())?;
                 if let Some(spec_info) = self.types.get_generic_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     if let Some(matching_type_var_pos) = self
@@ -3471,17 +3487,24 @@ impl TypedProgram {
                 Ok(function_type_variable)
             }
             ParsedTypeExpr::Static(parsed_static) => {
-                // nocommit(0): Disallow type parameters anywhere inside these (for now at least, you cannot say "static T" where T is a type param)
-                // nocommit(0): Disallow this expression anywhere appropriate
-                // - Allowed in bindings
-                // - Allowed in function signatures
-                // - Allowed in type constraints
-                // - Disallowed (unadorned) in type definitions
-                // - Maybe we whitelist... but we don't have an enum for
-                //   these locations at all... we just have like one flag
-                //   in our context at this point
+                if context.is_inside_static_type {
+                    return failf!(
+                        parsed_static.span,
+                        "Static type cannot appear inside static type"
+                    );
+                }
+                if context.is_inside_type_definition_rhs {
+                    return failf!(
+                        parsed_static.span,
+                        "Static type cannot appear in type definitions"
+                    );
+                }
                 let parsed_static = *parsed_static;
-                let inner_type_id = self.eval_type_expr(parsed_static.inner_type_expr, scope_id)?;
+                let inner_type_id = self.eval_type_expr_ext(
+                    parsed_static.inner_type_expr,
+                    scope_id,
+                    EvalTypeExprContext { is_inside_static_type: true, ..context },
+                )?;
                 if let Type::Static(_) = self.types.get_no_follow_static(inner_type_id) {
                     return failf!(
                         parsed_static.span,
@@ -3530,11 +3553,8 @@ impl TypedProgram {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
                 let fn_type_expr_id = self.ast.p_type_args.get_nth(ty_app.args, 0).type_expr;
-                let inner = self.eval_type_expr_ext(
-                    fn_type_expr_id,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
+                let inner =
+                    self.eval_type_expr_ext(fn_type_expr_id, scope_id, context.descended())?;
                 let inner_span = self.ast.get_type_expr_span(fn_type_expr_id);
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
@@ -3558,16 +3578,8 @@ impl TypedProgram {
                 let args = self.ast.p_type_args.get_slice(ty_app.args);
                 let arg1_expr = args[0].type_expr;
                 let arg2_expr = args[1].type_expr;
-                let arg1 = self.eval_type_expr_ext(
-                    arg1_expr,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
-                let arg2 = self.eval_type_expr_ext(
-                    arg2_expr,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
+                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
+                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
 
                 let struct1 = self
                     .types
@@ -3598,7 +3610,7 @@ impl TypedProgram {
                 }
 
                 let defn_id = context
-                    .unresolved_target_type
+                    .direct_unresolved_target_type
                     .and_then(|t| self.types.types_to_defns.get(&t))
                     .copied();
                 let new_struct = Type::Struct(StructType {
@@ -3606,8 +3618,8 @@ impl TypedProgram {
                     defn_id,
                     generic_instance_info: None,
                 });
-                let type_id = self.add_or_resolve_type(context.unresolved_target_type, new_struct);
-                eprintln!("Combined struct: {}", self.type_id_to_string(type_id));
+                let type_id =
+                    self.add_or_resolve_type(context.direct_unresolved_target_type, new_struct);
 
                 Ok(Some(type_id))
             }
@@ -3618,16 +3630,8 @@ impl TypedProgram {
                 let args = self.ast.p_type_args.get_slice(ty_app.args);
                 let arg1_expr = args[0].type_expr;
                 let arg2_expr = args[1].type_expr;
-                let arg1 = self.eval_type_expr_ext(
-                    arg1_expr,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
-                let arg2 = self.eval_type_expr_ext(
-                    arg2_expr,
-                    scope_id,
-                    context.no_unresolved_target_type(),
-                )?;
+                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
+                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
 
                 let struct1 = self
                     .types
@@ -3643,7 +3647,7 @@ impl TypedProgram {
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
 
                 let defn_id = context
-                    .unresolved_target_type
+                    .direct_unresolved_target_type
                     .and_then(|t| self.types.types_to_defns.get(&t))
                     .copied();
                 let new_struct = Type::Struct(StructType {
@@ -3651,7 +3655,8 @@ impl TypedProgram {
                     defn_id,
                     generic_instance_info: None,
                 });
-                let type_id = self.add_or_resolve_type(context.unresolved_target_type, new_struct);
+                let type_id =
+                    self.add_or_resolve_type(context.direct_unresolved_target_type, new_struct);
                 Ok(Some(type_id))
             }
             _ => Ok(None),
@@ -3711,7 +3716,7 @@ impl TypedProgram {
                             let param_type_id = self.eval_type_expr_ext(
                                 parsed_param.type_expr,
                                 scope_id,
-                                context.no_unresolved_target_type(),
+                                context.descended(),
                             )?;
                             type_arguments.push(param_type_id);
                         }
@@ -4417,8 +4422,13 @@ impl TypedProgram {
         expr: TypedExprId,
         scope_id: ScopeId,
     ) -> CheckTypeResult {
-        // nocommit(1): Make check_types aware of the coercion cases rather than
-        //       unaware for performance and unity
+        //       nocommit make check_types aware of the coercion cases
+        //       Ugh, we should probably still do it, it could just detect
+        //       the possible cases, since it doesn't have the expr.
+        //       But then I fear we are doing a bit of duplication.
+        //       As long as it returns an enum outlining the coercion available to try,
+        //       I think its good
+
         let actual_type_id = self.exprs.get(expr).get_type();
         if let Err(msg) = self.check_types(expected, actual_type_id, scope_id) {
             let result = match (
@@ -4448,7 +4458,7 @@ impl TypedProgram {
                 _ => CheckTypeResult::Err(msg),
             };
             if let CheckTypeResult::Coerce(coerced_expr) = result {
-                eprintln!(
+                debug!(
                     "Coercing {} to {}",
                     self.expr_to_string(expr),
                     self.expr_to_string(coerced_expr),
@@ -4573,18 +4583,7 @@ impl TypedProgram {
                         (None, None) => Ok(()),    // Both unresolved
                         (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
                         (Some(exp_value_id), Some(act_value_id)) => {
-                            // nocommit(0): Extract static_value_eq out
-                            //
-                            let eq = match (
-                                self.static_values.get(exp_value_id),
-                                self.static_values.get(act_value_id),
-                            ) {
-                                (StaticValue::Char(c1), StaticValue::Char(c2)) => c1 == c2,
-                                (StaticValue::Boolean(b1), StaticValue::Boolean(b2)) => b1 == b2,
-                                (StaticValue::String(s1), StaticValue::String(s2)) => s1 == s2,
-                                _ => false,
-                            };
-                            if eq {
+                            if self.static_value_eq(exp_value_id, act_value_id) {
                                 Ok(())
                             } else {
                                 Err(format!(
@@ -4655,6 +4654,31 @@ impl TypedProgram {
                 self.type_id_to_string_ext(expected, false),
                 self.type_id_to_string_ext(actual, false),
             )),
+        }
+    }
+
+    fn static_value_eq(&self, va: StaticValueId, vb: StaticValueId) -> bool {
+        match (self.static_values.get(va), self.static_values.get(vb)) {
+            (StaticValue::Unit, StaticValue::Unit) => true,
+            (StaticValue::Boolean(b1), StaticValue::Boolean(b2)) => b1 == b2,
+            (StaticValue::Char(c1), StaticValue::Char(c2)) => c1 == c2,
+            (StaticValue::Integer(i1), StaticValue::Integer(i2)) => i1 == i2,
+            (StaticValue::Float(f1), StaticValue::Float(f2)) => f1 == f2,
+            (StaticValue::String(s1), StaticValue::String(s2)) => s1 == s2,
+            (StaticValue::NullPointer, StaticValue::NullPointer) => true,
+            (StaticValue::Struct(s1), StaticValue::Struct(s2)) => {
+                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
+                false
+            }
+            (StaticValue::Enum(e1), StaticValue::Enum(e2)) => {
+                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
+                false
+            }
+            (StaticValue::Buffer(b1), StaticValue::Buffer(b2)) => {
+                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
+                false
+            }
+            _ => self.ice("Comparing statics of different, or unhandled, kinds", None),
         }
     }
 
@@ -6623,49 +6647,53 @@ impl TypedProgram {
         match kind {
             ParsedStaticBlockKind::Metaprogram => {
                 if vm_result.emits.is_empty() {
-                    return failf!(span, "`meta` expression did not emit any code");
-                };
-                // First, we write the emitted code to a text buffer
-                //
-                // Then we parse the code anew (so that we have cohesive spans and a source
-                // containing the full code)
-                //
-                // Then we typecheck the code and emit a block in place of this #meta
-                // invocation
-                let mut content = std::mem::take(&mut self.buffers.emitted_code);
+                    Ok(self.exprs.add(TypedExpr::Unit(span)))
+                } else {
+                    // First, we write the emitted code to a text buffer
+                    //
+                    // Then we parse the code anew (so that we have cohesive spans and a source
+                    // containing the full code)
+                    //
+                    // Then we typecheck the code and emit a block in place of this #meta
+                    // invocation
+                    let mut content = std::mem::take(&mut self.buffers.emitted_code);
 
-                content.push('{');
-                for emit in vm_result.emits.iter() {
-                    match emit {
-                        CodeEmission::String(string_id) => {
-                            content.push_str(self.ast.strings.get_string(*string_id));
+                    content.push('{');
+                    for emit in vm_result.emits.iter() {
+                        match emit {
+                            CodeEmission::String(string_id) => {
+                                content.push_str(self.ast.strings.get_string(*string_id));
+                            }
                         }
                     }
+                    content.push('}');
+                    eprintln!(
+                        "Emitted raw content after {} emits:\n---\n{content}\n---",
+                        vm_result.emits.len()
+                    );
+                    let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
+                    let origin_file = self.ast.spans.get(span).file_id;
+                    let origin_source = self.ast.sources.get_source(origin_file);
+                    let source_for_emission =
+                        self.ast.sources.add_source(crate::parse::Source::make(
+                            0,
+                            origin_source.directory.clone(),
+                            generated_filename,
+                            content.clone(),
+                        ));
+
+                    let parsed_metaprogram_result =
+                        self.parse_ad_hoc_expr(source_for_emission, &content);
+                    content.clear();
+                    self.buffers.emitted_code = content;
+                    let parsed_metaprogram = parsed_metaprogram_result?;
+                    let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
+                    eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
+
+                    // Typecheck the metaprogram!
+
+                    Ok(typed_metaprogram)
                 }
-                content.push('}');
-                eprintln!(
-                    "Emitted raw content after {} emits:\n---\n{content}---",
-                    vm_result.emits.len()
-                );
-                let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
-                let origin_file = self.ast.spans.get(span).file_id;
-                let origin_source = self.ast.sources.get_source(origin_file);
-                let source_for_emission = self.ast.sources.add_source(crate::parse::Source::make(
-                    0,
-                    origin_source.directory.clone(),
-                    generated_filename,
-                    content.clone(),
-                ));
-
-                let parsed_metaprogram_result =
-                    self.parse_ad_hoc_expr(source_for_emission, &content);
-                content.clear();
-                self.buffers.emitted_code = content;
-                let parsed_metaprogram = parsed_metaprogram_result?;
-                let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
-                eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
-
-                Ok(typed_metaprogram)
             }
             ParsedStaticBlockKind::Value => {
                 //match ctx.expected_type_id {
@@ -6684,7 +6712,6 @@ impl TypedProgram {
                     static_type_id,
                     span,
                 ));
-                eprintln!("result of static is: {}", self.expr_to_string(static_value_expr));
                 Ok(static_value_expr)
             }
         }
@@ -9277,7 +9304,13 @@ impl TypedProgram {
         let calling_scope = ctx.scope_id;
         match self.ident_str(fn_call.name.name) {
             "return" => match fn_call.args.len() {
-                0 => Ok(Some(self.exprs.add(TypedExpr::Unit(call_span)))),
+                0 => {
+                    let unit_value_id = self.exprs.add(TypedExpr::Unit(call_span));
+                    Ok(Some(self.exprs.add(TypedExpr::Return(TypedReturn {
+                        value: unit_value_id,
+                        span: call_span,
+                    }))))
+                }
                 1 => {
                     let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
                     let return_result = self.eval_return(arg.value, ctx, call_span)?;
@@ -10299,14 +10332,7 @@ impl TypedProgram {
                     };
                     let checked_expr = match self.check_call_argument(param, expr, ctx.scope_id)? {
                         None => expr,
-                        Some(coerced_expr) => {
-                            eprintln!(
-                                "Coercing call argument {} to {}",
-                                self.expr_to_string(expr),
-                                self.expr_to_string(coerced_expr),
-                            );
-                            coerced_expr
-                        }
+                        Some(coerced_expr) => coerced_expr,
                     };
                     typechecked_args.push(checked_expr);
                 }
@@ -11689,6 +11715,8 @@ impl TypedProgram {
             return Ok(());
         }
         let specialized_return_type = self.get_function_type(function_id).return_type;
+        let specialized_function_type = specialized_function.type_id;
+        let specialized_function_scope_id = specialized_function.scope;
         let parent_function = specialized_function
             .specialization_info
             .as_ref()
@@ -11706,20 +11734,55 @@ impl TypedProgram {
         // Downside: cloning, extra work, etc
         // Upside: way way less code.
         // Have to bind type names that shouldn't exist, kinda
-        let block_ast = *self
+        let parsed_body = *self
             .ast
             .get_function(parent_function.parsed_id.as_function_id().unwrap())
             .block
             .as_ref()
             .unwrap();
-        let block = self.eval_expr(
-            block_ast,
-            EvalExprContext::make(specialized_function.scope)
+        let typed_body = self.eval_expr(
+            parsed_body,
+            EvalExprContext::make(specialized_function_scope_id)
                 .with_expected_type(Some(specialized_return_type)),
         )?;
 
-        self.get_function_mut(function_id).body_block = Some(block);
+        let body_type = self.exprs.get(typed_body).get_type();
+        if let Err(msg) =
+            self.check_types(specialized_return_type, body_type, specialized_function_scope_id)
+        {
+            return failf!(
+                self.get_span_for_expr_type(typed_body),
+                "Function body type mismatch: {}\n specialized signature is: {}",
+                msg,
+                self.type_id_to_string(specialized_function_type)
+            );
+        }
+
+        self.get_function_mut(function_id).body_block = Some(typed_body);
         Ok(())
+    }
+
+    /// Used to drill down to the span that is responsible for the type of the given expression
+    /// For example, the last statement of a block, rather than the entire span
+    pub fn get_span_for_expr_type(&self, typed_expr_id: TypedExprId) -> SpanId {
+        match self.exprs.get(typed_expr_id) {
+            TypedExpr::Block(typed_block) => match typed_block.statements.last() {
+                None => typed_block.span,
+                Some(stmt) => match self.stmts.get(*stmt) {
+                    TypedStmt::Expr(typed_expr_id, _) => {
+                        self.get_span_for_expr_type(*typed_expr_id)
+                    }
+                    TypedStmt::Let(let_stmt) => let_stmt.span,
+                    TypedStmt::Assignment(a) => a.span,
+                    TypedStmt::Require(r) => r.span,
+                },
+            },
+            TypedExpr::Match(typed_match_expr) => {
+                self.get_span_for_expr_type(typed_match_expr.arms.first().unwrap().consequent_expr)
+            }
+            TypedExpr::Return(r) => self.get_span_for_expr_type(r.value),
+            e => e.get_span(),
+        }
     }
 
     pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
@@ -11768,7 +11831,11 @@ impl TypedProgram {
                 let parsed_let = parsed_let.clone();
                 let provided_type = match parsed_let.type_expr.as_ref() {
                     None => None,
-                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, ctx.scope_id)?),
+                    Some(&type_expr) => Some(self.eval_type_expr_ext(
+                        type_expr,
+                        ctx.scope_id,
+                        EvalTypeExprContext::VARIABLE_BINDING,
+                    )?),
                 };
                 let expected_rhs_type = match provided_type {
                     Some(provided_type) => {
@@ -12657,8 +12724,8 @@ impl TypedProgram {
                 fn_param.type_expr,
                 fn_scope_id,
                 EvalTypeExprContext {
-                    unresolved_target_type: None,
                     is_direct_function_parameter: true,
+                    ..EvalTypeExprContext::EMPTY
                 },
             )?;
 
@@ -13177,7 +13244,7 @@ impl TypedProgram {
                     debug!(
                         "Recursing into pending ability {} from {}",
                         self.ident_str(ability_name.name),
-                        self.ast.get_lines_for_span_id(ability_name.span).unwrap().0.content
+                        self.ast.get_span_content(ability_name.span)
                     );
                     let ability_id = self.eval_ability(pending_ability, ability_scope)?;
                     Ok(ability_id)
@@ -15101,6 +15168,7 @@ impl TypedProgram {
             span,
             ErrorLevel::Info,
             6,
+            None,
         )
         .unwrap()
     }
@@ -15113,6 +15181,7 @@ impl TypedProgram {
             span,
             ErrorLevel::Error,
             6,
+            None,
         )
         .unwrap()
     }

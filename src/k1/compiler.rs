@@ -417,10 +417,10 @@ pub fn codegen_module<'ctx, 'module>(
             e.span,
             ErrorLevel::Error,
             6,
+            Some(&e.message),
         )
         .unwrap();
         write_program_dump(codegen.k1);
-        eprintln!("Codegen error: {}", e.message);
         anyhow::bail!(e)
     }
     if let Err(e) = codegen.optimize_verify(llvm_optimize) {

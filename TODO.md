@@ -102,7 +102,8 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable since it contains a Reference
-- [ ] Ability constraints on generics
+- [ ] Support ability constraints on generics
+- [ ] Make statics ZSTs instead of sharing a repr with their inner type
 - [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
            'skip and progress' style of pass for them
 
@@ -144,6 +145,7 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: Mutable and non-mutable reference types
 - [ ] Determine syntax
+- [ ] Convert all type syntax to prefix for better chaining
 - [ ] Prevent writes to non-mutable references
 - [ ] Update stdlib
 
@@ -159,7 +161,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] #meta First working version
 - [x] Multiline string literals,
 - [x] #code directive
-- [ ] 
+- [x] static type universe: `static T`
 
 ## Project: Array types
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`

@@ -118,8 +118,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
             match expectation {
                 TestExpectation::CompileErrorMessage { message } => {
                     // Check for message!
-                    if !err.to_string().contains(&message) {
-                        bail!("{filename}: Failed with unexpected message: {}", err.to_string())
+                    if !err.message.contains(&message) {
+                        bail!("{filename}: Failed with unexpected message: {}", err.message)
                     }
                 }
                 TestExpectation::CompileErrorLine { .. } => {
