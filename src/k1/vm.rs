@@ -655,6 +655,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::Call(_) => execute_call(vm, m, expr),
         TypedExpr::Match(match_expr) => {
             let match_expr = match_expr.clone();
+            //eprintln!("execute_match: {}", m.expr_to_string(expr));
             execute_match(vm, m, &match_expr)
         }
         TypedExpr::WhileLoop(while_expr) => {
@@ -1155,6 +1156,7 @@ pub fn execute_block(
     let stmts = typed_block.statements.clone();
     for stmt in stmts.iter() {
         last_stmt_result = execute_stmt(vm, m, *stmt)?;
+        //eprintln!("LAST STMT RESULT IS {}", debug_vm_result_to_string(vm, m, last_stmt_result));
         if last_stmt_result.is_terminating() {
             return Ok(last_stmt_result);
         }
@@ -2440,6 +2442,36 @@ pub fn get_buffer_element(
     let elem_offset = offset_at_index(&m.types, elem_type, index);
     let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
     load_value(vm, m, elem_type, elem_ptr, true)
+}
+
+#[allow(unused)]
+fn render_debug_vm_result(
+    w: &mut impl std::fmt::Write,
+    vm: &mut Vm,
+    m: &TypedProgram,
+    result: VmResult,
+) {
+    match result {
+        VmResult::Value(value) => {
+            w.write_str("VALUE ").unwrap();
+            render_debug_value(w, vm, m, value)
+        }
+        VmResult::Break(value) => {
+            w.write_str("BREAK ").unwrap();
+            render_debug_value(w, vm, m, value)
+        }
+        VmResult::Return(value) => {
+            w.write_str("RETURN ").unwrap();
+            render_debug_value(w, vm, m, value)
+        }
+        VmResult::Exit(vm_exit) => write!(w, "EXIT {}", vm_exit.code).unwrap(),
+    }
+}
+
+fn debug_vm_result_to_string(vm: &mut Vm, m: &TypedProgram, result: VmResult) -> String {
+    let mut s = String::new();
+    render_debug_vm_result(&mut s, vm, m, result);
+    s
 }
 
 fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, m: &TypedProgram, value: Value) {

@@ -1,9 +1,5 @@
 use core/meta
-fn emitWriteSingleValue(): unit {
-  meta/emitLine("parts.get(0).printTo(result)");
-  meta/emitLine("result.writeString(args)");
-  meta/emitLine("parts.get(1).printTo(result)");
-}
+
 fn sprintf[Args](fmtString: static string, args: Args): string {
   let* result: List[char]* = List/empty();
   #meta(fmtString) {
@@ -23,12 +19,10 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
           if parts.len != 1 {
             crash("Got 1 format argument (a string) but format string has {parts.len}")
           };
-          meta/emitLine("its a string baby");
+          //meta/emitLine("its a string baby");
           meta/emitLine("parts.get(0).printTo(result)");
           meta/emitLine("result.writeString(args)");
-          meta/emitLine("parts.get(1).printTo(result)");
-          // nocommit(0): Early return not working?
-          return(42);
+          return();
         };
 
         if parts.len != fields.len {

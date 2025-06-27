@@ -1874,9 +1874,9 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 lex_error.span,
                 ErrorLevel::Error,
                 6,
+                Some(&lex_error.message),
             )
             .unwrap();
-            eprintln!("{}", lex_error.message);
         }
         ParseError::Parse { message, token, cause } => {
             let span = parse_error.span();
@@ -1892,7 +1892,6 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 token.kind.to_string()
             };
 
-            eprintln!("{message} at '{}'\n", got_str);
             write_source_location(
                 &mut stderr,
                 &module.spans,
@@ -1900,6 +1899,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 span,
                 ErrorLevel::Error,
                 6,
+                Some(&format!("{message} at '{}'\n", got_str)),
             )
             .unwrap();
             eprintln!();
@@ -1914,6 +1914,7 @@ pub fn write_source_location(
     span_id: SpanId,
     level: ErrorLevel,
     context_lines: usize,
+    message: Option<&str>,
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
@@ -1923,36 +1924,12 @@ pub fn write_source_location(
     };
     use colored::*;
 
-    // If the span is longer than the line, just highlight the whole line
-    let highlight_length =
-        if span.len as usize > line.content.len() { line.content.len() } else { span.len as usize };
-    let thingies = "^".repeat(highlight_length);
-    let spaces = " ".repeat((span.start - line.start_char) as usize);
-    let line_start = line.line_index as i32 - context_lines as i32 / 2;
-    let line_end = line_start + context_lines as i32;
     let color = match level {
         ErrorLevel::Error => Color::Red,
         ErrorLevel::Warn => Color::Yellow,
         ErrorLevel::Info => Color::Yellow,
         ErrorLevel::Hint => Color::Yellow,
     };
-    let red_arrow = "->".color(color);
-    for line_index in line_start..line_end {
-        if line_index >= 0 {
-            if let Some(this_line) = source.get_line(line_index as usize) {
-                if line_index == line.line_index as i32 {
-                    writeln!(
-                        w,
-                        "  {red_arrow}{}\n  {red_arrow}{spaces}{thingies}",
-                        &this_line.content
-                    )
-                    .unwrap();
-                } else {
-                    writeln!(w, "    {}", &this_line.content).unwrap();
-                }
-            }
-        }
-    }
     let level_name = match level {
         ErrorLevel::Error => "Error",
         ErrorLevel::Warn => "Warning",
@@ -1960,21 +1937,53 @@ pub fn write_source_location(
         ErrorLevel::Hint => "Hint",
     }
     .color(color);
+
+    // If the span is longer than the line, just highlight the whole line
+    let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
+    let thingies = "^".repeat(highlight_length).red();
+    let spaces = " ".repeat((span.start - line.start_char) as usize);
+    let line_start = line.line_index as i32 - context_lines as i32 / 2;
+    let line_end = line_start + context_lines as i32;
+    let red_arrow = "->".color(color);
+    writeln!(w, "┌────────────────────────────────────────╴")?;
     writeln!(
         w,
-        "\n  {} at {}/{}:{}",
+        "│{} at {}/{}:{}",
         level_name,
         source.directory,
         source.filename,
         line.line_index + 1,
-    )
+    )?;
+    writeln!(w, "├─────")?;
+    for line_index in line_start..line_end {
+        if line_index >= 0 {
+            if let Some(this_line) = source.get_line(line_index as usize) {
+                let line_content = source.get_line_content(this_line);
+                if line_index == line.line_index as i32 {
+                    writeln!(w, "│ {red_arrow}{}\n│   {spaces}{thingies}", line_content).unwrap();
+                } else {
+                    writeln!(w, "│   {}", line_content).unwrap();
+                }
+            }
+        }
+    }
+    if message.is_some() {
+        writeln!(w, "├─────")?;
+    } else {
+        writeln!(w, "└─────")?;
+    }
+    if let Some(msg) = message {
+        writeln!(w, "│  {msg}")?;
+        writeln!(w, "└────────────────────────────────────────╴")?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
 pub struct Line {
     pub start_char: u32,
+    pub len: u32,
     pub line_index: u32,
-    pub content: String,
 }
 
 impl Line {
@@ -1982,7 +1991,7 @@ impl Line {
         self.line_index + 1
     }
     pub fn end_char(&self) -> u32 {
-        self.start_char + self.content.len() as u32
+        self.start_char + self.len
     }
 }
 
@@ -1992,9 +2001,6 @@ pub struct Source {
     pub directory: String,
     pub filename: String,
     pub content: String,
-    /// This is an inefficient copy but we need the lines cached because utf8
-    /// Eventually it can be references not copies
-    /// nocommit(0): Just store offsets here in `Source.lines`
     pub lines: Vec<Line>,
 }
 
@@ -2002,18 +2008,16 @@ impl Source {
     pub fn make(file_id: FileId, directory: String, filename: String, content: String) -> Source {
         let mut lines = Vec::with_capacity(128);
         let mut iter = content.chars().enumerate().peekable();
-        let mut line_buffer: String = String::with_capacity(content.len());
+        let mut line_len: usize = 0;
         // We compute lines ourselves because we need to know the start offset of each line
         // in chars
         while let Some((c_index, c)) = iter.next() {
             let mut push_line = || {
-                let start: u32 = (c_index - line_buffer.len()) as u32;
-                lines.push(Line {
-                    start_char: start,
-                    line_index: lines.len() as u32,
-                    content: line_buffer.clone(),
-                });
-                line_buffer.clear();
+                let start: u32 = (c_index - line_len) as u32;
+                let len = c_index as u32 - start;
+                debug_assert_eq!(len, line_len as u32);
+                lines.push(Line { start_char: start, len, line_index: lines.len() as u32 });
+                line_len = 0;
             };
             if c == '\n' {
                 push_line();
@@ -2022,16 +2026,16 @@ impl Source {
                 iter.next();
                 push_line();
             } else {
-                line_buffer.push(c);
+                line_len += 1;
             }
         }
-        if !line_buffer.is_empty() {
+        if line_len != 0 {
             // Push the last line
-            let start: u32 = (content.len() - line_buffer.len()) as u32;
+            let start: u32 = (content.len() - line_len) as u32;
             lines.push(Line {
                 start_char: start,
+                len: content.len() as u32 - start,
                 line_index: lines.len() as u32,
-                content: line_buffer,
             });
         }
         Source { file_id, directory, filename, content, lines }
@@ -2047,6 +2051,10 @@ impl Source {
 
     pub fn get_line(&self, line_index: usize) -> Option<&Line> {
         self.lines.get(line_index)
+    }
+
+    pub fn get_line_content(&self, line: &Line) -> &str {
+        self.get_content(line.start_char, line.len)
     }
 
     pub fn get_line_for_offset(&self, offset: u32) -> Option<&Line> {

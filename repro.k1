@@ -1,6 +1,10 @@
 fn main(): i32 {
-  let a = #static some(42);
-  a.get();
+  let parts = ["hello", "world"].toBuffer();
+  let* result = List/empty[char]();
+  parts.get(0).printTo(result);
+  result.writeString("Value");
+  parts.get(1).printTo(result);
+  let s = string/wrapList(result.*);
+  println(s);
   0
 }
-

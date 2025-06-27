@@ -1500,7 +1500,12 @@ impl Types {
             Type::LambdaObject(lambda_object_type) => {
                 self.compute_type_layout(lambda_object_type.struct_representation)
             }
-            // nocommit(2): Eventually treat statics as ZSTs as an optimization; the value contains no information
+            // Note: Eventually we will treat statics as ZSTs as an optimization;
+            //       the value contains no information
+            //       I am preparing for this by _NOT_ doing the lazy thing
+            //       and allowing static and their underlying types to be interchanged
+            //       But rather inserting explicit casts and conversions so that,
+            //       once the physical type is not the same, we are already correct
             Type::Static(stat) => self.compute_type_layout(stat.inner_type_id),
             Type::Generic(_) => Z,
             Type::TypeParameter(_) => Z,

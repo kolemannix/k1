@@ -2307,6 +2307,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     return Ok(return_result);
                 };
                 let codegened_function = self.get_insert_function();
+                let fn_id =
+                    self.llvm_function_to_k1.get(&codegened_function.function_value).unwrap();
+                //eprintln!(
+                //    "RETURNING FROM FUNCTION {}",
+                //    self.k1.function_id_to_string(*fn_id, true)
+                //);
                 match codegened_function.sret_pointer {
                     None => {
                         // Normal return
@@ -3874,7 +3880,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
             self.variable_to_value
                 .insert(global.variable_id, VariableValue::ByFunctionCall { function });
-            eprintln!("I built a static value maker function:\n{}", function);
+            debug!("I built a static value maker function:\n{}", function);
         }
         Ok(())
     }
