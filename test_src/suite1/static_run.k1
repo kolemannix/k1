@@ -19,8 +19,7 @@ fn test(): unit {
   assert(#static true);
   assert(not (#static false));
   assert(not (#static true == false));
-  // nocommit we could disambiguate this with whitespace check, even still without the keyword
-  assert(#static() () == ());
+  assert(#static () == ());
   assert(#static 'a' == 'a');
   assert(not #static 'A' == 'a');
   assert(not #static 123 == -123);

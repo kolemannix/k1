@@ -169,18 +169,17 @@ ns HashMap {
 
   }
 
-  fn dump[V](self: HashMap[V]): unit where V: Show {
+  fn dump[V](self: HashMap[V]): unit where V: Print {
     let capacity = self.entries.len;
     let size = self.size;
     println("Capacity: {capacity}");
     println("Size: {size}");
     println("");
     for self.entries do {
-      printIt(itIndex);
-      print(" ");
+      print("{itIndex} ");
       switch it {
-        , .None -> println("empty")
-        , .Some({ key, value, deleted }) -> {
+        .None -> println("empty"),
+        .Some({ key, value, deleted }) -> {
             println("{key} -> {value} (d={deleted})");
         }
       }

@@ -1,10 +1,5 @@
 New tagline? "C with typeclasses and tagged unions"
 
-'is' Bug 
-  ->      printIt(part is .Char(_));
-  ->              ^^^^^^^^^^^^^^^^
-	Match arm has wrong type. Expected T but got bool
-
 - [ ] Generic (co)recursive types do not work
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Related: Detect duplicate blanket impls?

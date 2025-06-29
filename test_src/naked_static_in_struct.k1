@@ -3,5 +3,5 @@ deftype Foo = { y: either Bar(Opt[static string]) }
 fn main(): i32 {
   0
 }
-//errmsg: Static type cannot be used in type definitions
+//errmsg: Static type cannot appear in type definitions
 

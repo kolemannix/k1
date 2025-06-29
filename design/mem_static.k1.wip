@@ -14,23 +14,24 @@ ns mem {
     // We'd want this type of function on abilities?
     // Or simply some static fn that supports just a few known
     // ability impls
-    static fn allocStyle(): AllocStyle
-  }
-  impl Allocator for mem/SystemHeap {
-    fn allocate(self: Self, size: u64, align: u64): Pointer { systemMalloc(size, align) }
-    static fn allocStyle(): AllocStyle { .Heap }
+    fn allocStyle(): AllocStyle
   }
 
-  static fn requiresFree[A: Allocator](): bool { 
-    static switch (Allocate for A)/allocStyle() {
+  impl Allocator for mem/SystemHeap {
+    fn allocate(self: Self, size: u64, align: u64): Pointer { systemMalloc(size, align) }
+    fn allocStyle(): AllocStyle { .Heap }
+  }
+
+  fn requiresFree[A: Allocator](): bool {
+    #static switch (Allocator for A)/allocStyle() {
       .Heap -> true,
       .Push -> false,
       .GcHeap -> false
     }
   }
 
-  static fn supportsRealloc[A: Allocator](): bool { 
-    static switch (Allocate for A)/allocStyle() {
+  static fn supportsRealloc[A: Allocator](): bool {
+    #static switch (Allocator for A)/allocStyle() {
       .Heap -> true,
       .Push -> false,
       .GcHeap -> false
@@ -40,7 +41,7 @@ ns mem {
   // The allocator _could_ end up being zero-sized, in which case
   // we should optimize out the function argument altogether!
   fn bufferGrowTo[T, A: Allocate](context a: A)(self: Buffer[T]*, newCount: u64): unit {
-    static if supportsRealloc[A] {
+    #if supportsRealloc[A] {
       let newSize = bufferSizeBytes[T](newCount);
       let realloc = a.realloc(self.dataPointer(), newSize);
       self <- { len: newCount, data: realloc }
