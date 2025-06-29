@@ -1,4 +1,4 @@
-fn assertEquals[T: Show and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
+fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T, b: T): unit {
   if a != b {
     crash("ASSERT FAILED: {a} != {b}")
   }
@@ -26,9 +26,8 @@ impl Equals for Pointer {
 
 fn identity[T](value: T): T { value }
 
-fn printIt[T: Show](value: T): unit {
-  let s = value.show();
-  print(s)
+fn printIt[T: Print](value: T): unit {
+  value.printTo(io/STDOUT)
 }
 
 fn print(s: string): unit {

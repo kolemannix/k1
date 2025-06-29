@@ -94,7 +94,7 @@ fn main(): i32 {
     if isGoodGame { goodGamesSum = goodGamesSum + id };
     // println(line);
   };
-  printIt(goodGamesSum);
+  println("{goodGamesSum}");
   0
 }
 ```

@@ -1922,7 +1922,7 @@ impl TypedExpr {
     }
 }
 
-enum CheckTypeResult {
+enum CheckExprTypeResult {
     Ok,
     Err(String),
     Coerce(TypedExprId),
@@ -4421,14 +4421,7 @@ impl TypedProgram {
         expected: TypeId,
         expr: TypedExprId,
         scope_id: ScopeId,
-    ) -> CheckTypeResult {
-        //       nocommit make check_types aware of the coercion cases
-        //       Ugh, we should probably still do it, it could just detect
-        //       the possible cases, since it doesn't have the expr.
-        //       But then I fear we are doing a bit of duplication.
-        //       As long as it returns an enum outlining the coercion available to try,
-        //       I think its good
-
+    ) -> CheckExprTypeResult {
         let actual_type_id = self.exprs.get(expr).get_type();
         if let Err(msg) = self.check_types(expected, actual_type_id, scope_id) {
             let result = match (
@@ -4436,28 +4429,24 @@ impl TypedProgram {
                 self.types.get_no_follow_static(actual_type_id),
             ) {
                 (_, Type::Static(actual_static)) if actual_static.inner_type_id == expected => {
-                    CheckTypeResult::Coerce(self.synth_cast(expr, expected, CastType::StaticErase))
+                    CheckExprTypeResult::Coerce(self.synth_cast(
+                        expr,
+                        expected,
+                        CastType::StaticErase,
+                    ))
                 }
-                (Type::Static(_expected_static), actual) if actual.as_static().is_none() => {
+                (Type::Static(expected_static), actual) if actual.as_static().is_none() => {
+                    if expected_static.inner_type_id == actual_type_id {}
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                        match self.check_types(
-                            expected,
-                            self.exprs.get(static_lifted).get_type(),
-                            scope_id,
-                        ) {
-                            Ok(_) => CheckTypeResult::Coerce(static_lifted),
-                            Err(new_msg) => CheckTypeResult::Err(format!(
-                                "Static lift failed. {new_msg}\nold msg: {msg}"
-                            )),
-                        }
+                        CheckExprTypeResult::Coerce(static_lifted)
                     } else {
                         eprintln!("lifted to faile");
-                        CheckTypeResult::Err(msg)
+                        CheckExprTypeResult::Err(msg)
                     }
                 }
-                _ => CheckTypeResult::Err(msg),
+                _ => CheckExprTypeResult::Err(msg),
             };
-            if let CheckTypeResult::Coerce(coerced_expr) = result {
+            if let CheckExprTypeResult::Coerce(coerced_expr) = result {
                 debug!(
                     "Coercing {} to {}",
                     self.expr_to_string(expr),
@@ -4466,7 +4455,7 @@ impl TypedProgram {
             }
             result
         } else {
-            CheckTypeResult::Ok
+            CheckExprTypeResult::Ok
         }
     }
 
@@ -4666,15 +4655,15 @@ impl TypedProgram {
             (StaticValue::Float(f1), StaticValue::Float(f2)) => f1 == f2,
             (StaticValue::String(s1), StaticValue::String(s2)) => s1 == s2,
             (StaticValue::NullPointer, StaticValue::NullPointer) => true,
-            (StaticValue::Struct(s1), StaticValue::Struct(s2)) => {
+            (StaticValue::Struct(_s1), StaticValue::Struct(_s2)) => {
                 eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
                 false
             }
-            (StaticValue::Enum(e1), StaticValue::Enum(e2)) => {
+            (StaticValue::Enum(_e1), StaticValue::Enum(_e2)) => {
                 eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
                 false
             }
-            (StaticValue::Buffer(b1), StaticValue::Buffer(b2)) => {
+            (StaticValue::Buffer(_b1), StaticValue::Buffer(_b2)) => {
                 eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
                 false
             }
@@ -7052,48 +7041,42 @@ impl TypedProgram {
                 return failf!(span, "Interpolated strings are not supported in no_std mode");
             }
             let new_string_builder = self.synth_typed_function_call(
-                qident!(self, span, ["core", "StringBuilder"], "withCapacity"),
-                &[],
+                qident!(self, span, ["core", "List"], "withCapacity"),
+                &[CHAR_TYPE_ID],
                 &[part_count_expr],
                 block_ctx,
             )?;
-            let string_builder_var = self.synth_variable_defn_simple(
+            let string_builder_var = self.synth_variable_defn(
                 get_ident!(self, "sb"),
                 new_string_builder,
+                false,
+                false,
+                true,
                 block.scope_id,
             );
             self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
             for part in interpolated_string.parts.into_iter() {
-                let string_expr = match part {
+                let print_expr = match part {
                     parse::InterpolatedStringPart::String(s) => {
-                        self.exprs.add(TypedExpr::String(s, span))
-                    }
-                    parse::InterpolatedStringPart::Identifier(ident) => {
-                        let variable_expr_id = self.ast.exprs.add_expression(ParsedExpr::Variable(
-                            parse::ParsedVariable {
-                                name: NamespacedIdentifier::naked(ident, span),
-                            },
-                        ));
-                        self.synth_show_ident_call(variable_expr_id, block_ctx)?
+                        let string_expr = self.exprs.add(TypedExpr::String(s, span));
+                        self.synth_printto_call(string_expr, string_builder_var.variable_expr, ctx)?
                     }
                     parse::InterpolatedStringPart::Expr(expr_id) => {
                         let typed_expr_to_stringify = self.eval_expr(expr_id, ctx)?;
-                        self.synth_show_call(typed_expr_to_stringify, ctx)?
+                        self.synth_printto_call(
+                            typed_expr_to_stringify,
+                            string_builder_var.variable_expr,
+                            ctx,
+                        )?
                     }
                 };
-                debug_assert!(self.exprs.get(string_expr).get_type() == STRING_TYPE_ID);
-                let push_call = self.synth_typed_function_call(
-                    qident!(self, span, ["core", "StringBuilder"], "putString"),
-                    &[],
-                    &[string_builder_var.variable_expr, string_expr],
-                    block_ctx,
-                )?;
-                self.add_expr_id_to_block(&mut block, push_call);
+                self.add_expr_id_to_block(&mut block, print_expr);
             }
+            let sb_deref = self.synth_dereference(string_builder_var.variable_expr);
             let build_call = self.synth_typed_function_call(
-                qident!(self, span, ["core", "StringBuilder"], "build"),
+                qident!(self, span, ["core", "string"], "wrapList"),
                 &[],
-                &[string_builder_var.variable_expr],
+                &[sb_deref],
                 block_ctx,
             )?;
             self.add_expr_id_to_block(&mut block, build_call);
@@ -10253,9 +10236,9 @@ impl TypedProgram {
         calling_scope: ScopeId,
     ) -> TyperResult<Option<TypedExprId>> {
         match self.check_expr_type(param.type_id, arg, calling_scope) {
-            CheckTypeResult::Coerce(new_expr_id) => Ok(Some(new_expr_id)),
-            CheckTypeResult::Ok => Ok(None),
-            CheckTypeResult::Err(msg) => failf!(
+            CheckExprTypeResult::Coerce(new_expr_id) => Ok(Some(new_expr_id)),
+            CheckExprTypeResult::Ok => Ok(None),
+            CheckExprTypeResult::Err(msg) => failf!(
                 self.exprs.get(arg).get_span(),
                 "Invalid type for parameter {}: {}",
                 self.ident_str(param.name),
@@ -10484,7 +10467,7 @@ impl TypedProgram {
 
         // We match on the node type, not its type, since the point is to hoist literals, not
         // follow variables around and implement a whole extra damn compiler
-        match self.exprs.get(expr_id) {
+        let result = match self.exprs.get(expr_id) {
             TypedExpr::Unit(span) => {
                 let static_value_id = self.static_values.add(StaticValue::Unit);
                 let static_type = self.types.add_static_type(UNIT_TYPE_ID, Some(static_value_id));
@@ -10532,7 +10515,18 @@ impl TypedProgram {
                     e.kind_str()
                 )
             }
+        };
+        if let Ok(result) = result {
+            debug_assert_eq!(
+                self.types
+                    .get_no_follow_static(self.exprs.get(result).get_type())
+                    .as_static()
+                    .unwrap()
+                    .inner_type_id,
+                self.exprs.get(expr_id).get_type()
+            );
         }
+        result
     }
 
     fn handle_intrinsic(
@@ -13515,7 +13509,13 @@ impl TypedProgram {
         parsed_ability_impl_id: ParsedAbilityImplId,
         _scope_id: ScopeId,
     ) -> TyperResult<()> {
-        let ability_impl_id = *self.ability_impl_ast_mappings.get(&parsed_ability_impl_id).unwrap();
+        let Some(&ability_impl_id) = self.ability_impl_ast_mappings.get(&parsed_ability_impl_id)
+        else {
+            // Missing mapping means, likely, we failed to compile the signature
+            // Just do nothing. TODO: flag when defns have failed compilation so we don't
+            // mask real bugs
+            return Ok(());
+        };
         let ability_impl = self.get_ability_impl(ability_impl_id);
 
         for impl_fn in ability_impl.functions.clone().iter() {
@@ -15004,31 +15004,19 @@ impl TypedProgram {
         self.synth_parsed_function_call(qident!(self, span, ["bool"], "negated"), &[], &[base])
     }
 
-    fn synth_show_ident_call(
+    fn synth_printto_call(
         &mut self,
-        caller: ParsedExprId,
+        to_print: TypedExprId,
+        writer: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let span = self.ast.exprs.get_span(caller);
-        // nocommit(2): Use printTo in builtin string building not Show
-        let call_id =
-            self.synth_parsed_function_call(qident!(self, span, ["Show"], "show"), &[], &[caller]);
-        let call = self.ast.exprs.get(call_id).expect_call().clone();
-        self.eval_function_call(&call, None, ctx)
-    }
-
-    fn synth_show_call(
-        &mut self,
-        to_show: TypedExprId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
-        let span = self.exprs.get(to_show).get_span();
-        let type_id = self.exprs.get(to_show).get_type();
-        // nocommit(2): Use printTo in builtin string building not Show
+        let span = self.exprs.get(to_print).get_span();
+        let writer_type_id_deref =
+            self.types.get_type_id_dereferenced(self.exprs.get(writer).get_type());
         self.synth_typed_function_call(
-            qident!(self, span, ["Show"], "show"),
-            &[type_id],
-            &[to_show],
+            qident!(self, span, ["core", "Print"], "printTo"),
+            &[writer_type_id_deref],
+            &[to_print, writer],
             ctx.with_no_expected_type(),
         )
     }

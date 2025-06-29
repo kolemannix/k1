@@ -2,12 +2,12 @@ ns matching_if;
 
 deftype alias ABC = either A, B, C
 
-impl Show for ABC {
-  fn show(self: ABC): string {
+impl Print for ABC {
+  fn printTo[W: Writer](self: ABC, w: W*): unit {
     switch self {
-      .A -> "A",
-      .B -> "B",
-      .C -> "C"
+      .A -> w.writeChar('A'),
+      .B -> w.writeChar('B'),
+      .C -> w.writeChar('C')
     }
   }
 }

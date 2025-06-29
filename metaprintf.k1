@@ -22,21 +22,20 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
           //meta/emitLine("its a string baby");
           meta/emitLine("parts.get(0).printTo(result)");
           meta/emitLine("result.writeString(args)");
-          return();
-        };
+        } else {
+          if parts.len != fields.len {
+            crash("Mismatching format arg count")
+          };
 
-        if parts.len != fields.len {
-          crash("Mismatching format arg count")
-        };
+          for field in fields do {
+            meta/emitLine("let f{itIndex} = args.{field.name}")
+          };
 
-        for field in fields do {
-          meta/emitLine("let f{itIndex} = args.{field.name}")
-        };
-
-        for part in parts do {
-          meta/emitLine("parts.get({itIndex}).printTo(result)");
-          meta/emitLine("f{itIndex}.printTo(result)");
-        };
+          for part in parts do {
+            meta/emitLine("parts.get({itIndex}).printTo(result)");
+            meta/emitLine("f{itIndex}.printTo(result)");
+          };
+        }
 
       },
       //.Bool -> {

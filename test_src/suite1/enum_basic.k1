@@ -37,7 +37,7 @@ ns MyResult {
   fn myUnwrap[T, E](self: MyResult[T, E]): T {
     self.asOk().!.value
   }
-  fn show[T: Show, E: Show](self: MyResult[T, E]): string { 
+  fn show[T: Print, E: Print](self: MyResult[T, E]): string {
     switch self {
       .Ok(v) -> { "Ok: {v}\n" },
       .Err(e) -> { "Error: {e}\n" }

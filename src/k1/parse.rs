@@ -779,7 +779,6 @@ pub struct ParsedLambda {
 pub enum InterpolatedStringPart {
     // TODO: Put spans on each string part
     String(StringId),
-    Identifier(Ident),
     Expr(ParsedExprId),
 }
 
@@ -3384,7 +3383,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             };
                             self.advance();
                             let mut parameter_names: SV4<Ident> = smallvec![];
-                            if let Some(_open_token) = self.maybe_consume_next(K::OpenParen) {
+                            if let Some(_open_token) =
+                                self.maybe_consume_next_no_whitespace(K::OpenParen)
+                            {
                                 self.eat_delimited_ext(
                                     "params",
                                     &mut parameter_names,
@@ -4251,12 +4252,6 @@ impl ParsedProgram {
                 for part in &is.parts {
                     match part {
                         InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
-                        InterpolatedStringPart::Identifier(ident) => {
-                            w.write_char('\\')?;
-                            w.write_char('{')?;
-                            w.write_str(self.idents.get_name(*ident))?;
-                            w.write_char('{')?;
-                        }
                         InterpolatedStringPart::Expr(expr_id) => {
                             w.write_char('{')?;
                             self.display_expr_id(w, *expr_id)?;
