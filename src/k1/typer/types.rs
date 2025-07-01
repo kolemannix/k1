@@ -890,6 +890,7 @@ pub struct BuiltinTypes {
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
+    pub types_int_value: Option<TypeId>,
 }
 
 pub struct TypesConfig {

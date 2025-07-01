@@ -1,10 +1,65 @@
+use core/BufferIterator
+
+//fn find[T, I: Iterator[Item = T]](iter: I, pred: some \T -> bool): T? {
+//  for i in iter do {
+//    if pred(i) return(.Some(i))
+//  };
+//  return(.None)
+//}
+
+// a1 =:= I
+// a2 =:= T
+// <I's iterator impl .Item> =:= T
+//fn position[T, I: Iterator[Item = T]](iter: I, needle: T): uword? {
+//  for iter do {
+//    if it == needle return(.Some(itIndex))
+//  };
+//  .None
+//}
+
+deftype Triple[A, B, C] = { a: A, b: B, c: C }
+ability AsTriple[A, B, C] {
+  fn getA(self: Self): A
+  fn getB(self: Self): B
+  fn getC(self: Self): C
+}
+
+//impl[A, B, C] AsTriple[A = A, B = B, C = C] for Triple[A, B, C] {
+//  fn getA(self: Triple[A, B, C]): A { self.a }
+//  fn getB(self: Triple[A, B, C]): B { self.b }
+//  fn getC(self: Triple[A, B, C]): C { self.c }
+//}
+impl AsTriple[A = int, B = bool, C = unit] for Triple[int, bool, unit] {
+  fn getA(self: Self): A { self.a }
+  fn getB(self: Self): B { self.b }
+  fn getC(self: Self): C { self.c }
+}
+
+fn getB[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): B {
+  t.getB()
+}
+
+fn getAB[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): { b: B, c: C } {
+  return({ b: t.getB(), c: t.getC() })
+}
+
+fn getNothin[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): unit {
+  ()
+}
+
 fn main(): i32 {
-  let parts = ["hello", "world"].toBuffer();
-  let* result = List/empty[char]();
-  parts.get(0).printTo(result);
-  result.writeString("Value");
-  parts.get(1).printTo(result);
-  let s = string/wrapList(result.*);
-  println(s);
+  // Phase 1
+  let myTriple: Triple[int, bool, unit] = { a: 10, b: true, c: () };
+  @debug getNothin(t = myTriple);
+  // getAB(myTriple);
+
+  // Phase 2
+  //position[int, BufferIterator[int]](x, y);
+
+  // Phase 3
+  //find[
+  //  int,
+  //  BufferIterator[int]
+  //](x, y);
   0
 }

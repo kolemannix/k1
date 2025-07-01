@@ -1717,7 +1717,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Char(byte) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
-            StaticValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
+            StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
                 let string_struct = self.codegen_string_id(*string_id).unwrap();
@@ -1856,7 +1856,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Char(byte) => {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
-            StaticValue::Integer(int_value) => self.codegen_integer_value(*int_value).unwrap(),
+            StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
                 let string_ptr = self.codegen_string_id(*string_id).unwrap();
@@ -2307,12 +2307,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     return Ok(return_result);
                 };
                 let codegened_function = self.get_insert_function();
-                let fn_id =
-                    self.llvm_function_to_k1.get(&codegened_function.function_value).unwrap();
-                //eprintln!(
-                //    "RETURNING FROM FUNCTION {}",
-                //    self.k1.function_id_to_string(*fn_id, true)
-                //);
                 match codegened_function.sret_pointer {
                     None => {
                         // Normal return
@@ -4076,7 +4070,7 @@ fn is_llvm_const_representable(
         StaticValue::Unit => true,
         StaticValue::Boolean(_) => true,
         StaticValue::Char(_) => true,
-        StaticValue::Integer(_) => true,
+        StaticValue::Int(_) => true,
         StaticValue::Float(_) => true,
         StaticValue::String(_) => true,
         StaticValue::NullPointer => true,

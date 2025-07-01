@@ -1,0 +1,45 @@
+use types/Any
+use types/TypeSchema
+use types/typeId
+
+fn makeAny[T](t: T*): Any {
+  { typeId: typeId[T](), value: t as Pointer }
+}
+
+fn kindOfAny(any: Any): string {
+  typeVariantName(any.typeId) ? "fail"
+}
+
+// nocommit(1) make find work
+fn find[T, I: Iterator[Item = T]](iter: I, pred: some \T -> bool): T? {
+  for i in iter do {
+    if pred(i) return(.Some(i))
+  };
+  return(.None)
+}
+
+deftype alias EnumVariant = TypeSchema.Either.value.variants.T
+
+fn typeVariantName(typeId: u64): string? {
+  let schema = types/typeSchema(typeId);
+  let schemaSchema = types/typeSchema(typeId[TypeSchema]());
+  require schemaSchema is .Either(e) else { return(.None) };
+  let it = e.variants.iterator();
+  let* variant = Opt.None[EnumVariant];
+  for v in e.variants do {
+    require v.tag is .U8(vTag) else { return(.None) };
+    if vTag == schema.tag { variant <- some(v) };
+  };
+  (variant.*)?.name
+}
+
+fn main(): i32 {
+  let* i: int* = 10;
+  //let x: Any = { typeId: typeId[typeOf(i)](), value: i };
+  let x2: Any = makeAny(i);
+  let str: Any = makeAny(core/mem/new({ x: 1, y: 100 }));
+  println("{x2.typeId}");
+  println("Variant name: {kindOfAny(x2)}");
+  println("Variant name: {kindOfAny(str)}");
+  0
+}
