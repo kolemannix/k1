@@ -772,7 +772,7 @@ impl TypedProgram {
             StaticValue::Unit => w.write_str("()"),
             StaticValue::Boolean(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
-            StaticValue::Integer(typed_integer_value) => {
+            StaticValue::Int(typed_integer_value) => {
                 write!(w, "{}", typed_integer_value)
             }
             StaticValue::Float(typed_float_value) => {
@@ -1041,7 +1041,15 @@ impl TypedProgram {
             w.write_str(" {\n")?;
             for ability_impl_fn in &i.functions {
                 w.write_str("\t\t")?;
-                self.display_function(self.get_function(*ability_impl_fn), w, false)?;
+                match *ability_impl_fn {
+                    AbilityImplFunction::FunctionId(ability_impl_fn) => {
+                        self.display_function(self.get_function(ability_impl_fn), w, false)?
+                    }
+                    AbilityImplFunction::Abstract(type_id) => {
+                        w.write_str("abstract ")?;
+                        self.display_type_id(type_id, false, w)?;
+                    }
+                };
                 writeln!(w)?;
             }
         }

@@ -365,6 +365,7 @@ pub struct BuiltinIdentifiers {
     pub types: Ident,
     pub TypeSchema: Ident,
     pub IntKind: Ident,
+    pub IntValue: Ident,
     pub Layout: Ident,
     pub param_0: Ident,
     pub param_1: Ident,
@@ -452,6 +453,7 @@ impl Default for Identifiers {
         let types = Ident(pool.get_or_intern_static("types"));
         let TypeSchema = Ident(pool.get_or_intern_static("TypeSchema"));
         let IntKind = Ident(pool.get_or_intern_static("IntKind"));
+        let IntValue = Ident(pool.get_or_intern_static("IntValue"));
         let Layout = Ident(pool.get_or_intern_static("Layout"));
 
         let param_0 = Ident(pool.get_or_intern_static("param_0"));
@@ -518,6 +520,7 @@ impl Default for Identifiers {
                 types,
                 TypeSchema,
                 IntKind,
+                IntValue,
                 Layout,
                 param_0,
                 param_1,

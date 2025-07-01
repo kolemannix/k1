@@ -55,7 +55,13 @@ ns types {
   fn getTypeName[T](): string { typeName(typeId[T]()) }
   fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
 
+  // DO NOT REORDER VARIANTS
   deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
+
+  // DO NOT REORDER VARIANTS
+  deftype IntValue = either
+    U8(u8), U16(u16), U32(u32), U64(u64),
+    I8(i8), I16(i16), I32(i32), I64(i64)
 
   deftype Layout = { size: uword, align: uword }
 
@@ -79,6 +85,7 @@ ns types {
       tagType: IntKind,
       variants: Buffer[{
         name: string,
+        tag: IntValue,
         payload: { typeId: u64, offset: uword }?
       }],
     }),

@@ -152,11 +152,17 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] (static only?) 'Type predicate' functions as type bounds
 
+## Zero-Sized Types
+- [ ] Treat Unit and empty Struct as ZSTs
+- [ ] Treat statics as ZSTs
+- [ ] Make Result[T, never] == T ?
+
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 - [x] #meta First working version
 - [x] Multiline string literals,
 - [x] #code directive
 - [x] static type universe: `static T`
+- [ ] Upgrade Allocator api in std/mem to use static and metaprogramming
 
 ## Project: Array types
 - [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`

@@ -1078,7 +1078,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Unit => Ok(Value::Unit),
         StaticValue::Boolean(bv) => Ok(Value::Bool(*bv)),
         StaticValue::Char(cb) => Ok(Value::Char(*cb)),
-        StaticValue::Integer(iv) => Ok(Value::Int(*iv)),
+        StaticValue::Int(iv) => Ok(Value::Int(*iv)),
         StaticValue::Float(fv) => Ok(Value::Float(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(vm, dst_stack, m, *string_id);
@@ -2327,7 +2327,7 @@ pub fn vm_value_to_static_value(
         Value::Unit => StaticValue::Unit,
         Value::Bool(b) => StaticValue::Boolean(b),
         Value::Char(c) => StaticValue::Char(c),
-        Value::Int(typed_integer_value) => StaticValue::Integer(typed_integer_value),
+        Value::Int(typed_integer_value) => StaticValue::Int(typed_integer_value),
         Value::Float(typed_float_value) => StaticValue::Float(typed_float_value),
         Value::Pointer(value) => {
             if value == 0 {
@@ -2468,6 +2468,7 @@ fn render_debug_vm_result(
     }
 }
 
+#[allow(unused)]
 fn debug_vm_result_to_string(vm: &mut Vm, m: &TypedProgram, result: VmResult) -> String {
     let mut s = String::new();
     render_debug_vm_result(&mut s, vm, m, result);

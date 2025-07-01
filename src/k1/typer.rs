@@ -153,6 +153,13 @@ pub struct TypeSubstitutionPair {
     to: TypeId,
 }
 
+// Allows syntax spair! { a -> b }
+macro_rules! spair {
+    ($from:expr => $to:expr) => {
+        TypeSubstitutionPair { from: $from, to: $to }
+    };
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct InferenceInputPair {
     arg: TypeOrParsedExpr,
@@ -288,7 +295,7 @@ pub enum StaticValue {
     Unit,
     Boolean(bool),
     Char(u8),
-    Integer(TypedIntValue),
+    Int(TypedIntValue),
     Float(TypedFloatValue),
     String(StringId),
     NullPointer,
@@ -303,7 +310,7 @@ impl StaticValue {
             StaticValue::Unit => "unit",
             StaticValue::Boolean(_) => "bool",
             StaticValue::Char(_) => "char",
-            StaticValue::Integer(i) => i.kind_name(),
+            StaticValue::Int(i) => i.kind_name(),
             StaticValue::Float(_) => "float",
             StaticValue::String(_) => "string",
             StaticValue::NullPointer => "nullptr",
@@ -318,7 +325,7 @@ impl StaticValue {
             StaticValue::Unit => UNIT_TYPE_ID,
             StaticValue::Boolean(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
-            StaticValue::Integer(typed_integer_value) => typed_integer_value.get_type(),
+            StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
             StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
             StaticValue::String(_) => STRING_TYPE_ID,
             StaticValue::NullPointer => POINTER_TYPE_ID,
@@ -1111,6 +1118,14 @@ impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
         Callee::StaticFunction(function_id)
     }
+
+    pub fn from_ability_impl_fn(ability_impl_fn: AbilityImplFunction) -> Callee {
+        match ability_impl_fn {
+            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
+            AbilityImplFunction::Abstract(type_id) => Callee::Abstract { function_type: type_id },
+        }
+    }
+
     pub fn maybe_function_id(&self) -> Option<FunctionId> {
         match self {
             Callee::StaticFunction(function_id) => Some(*function_id),
@@ -2354,6 +2369,12 @@ impl AbilityImplKind {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum AbilityImplFunction {
+    FunctionId(FunctionId),
+    Abstract(TypeId),
+}
+
 #[derive(Clone)]
 pub struct TypedAbilityImpl {
     pub kind: AbilityImplKind,
@@ -2366,7 +2387,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: EcoVec<FunctionId>,
+    pub functions: EcoVec<AbilityImplFunction>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2375,7 +2396,7 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(&self, index: usize) -> FunctionId {
+    pub fn function_at_index(&self, index: usize) -> AbilityImplFunction {
         self.functions[index]
     }
 }
@@ -2607,6 +2628,7 @@ impl TypedProgram {
                 types_layout: None,
                 types_type_schema: None,
                 types_int_kind: None,
+                types_int_value: None,
             },
             config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
         };
@@ -4436,11 +4458,14 @@ impl TypedProgram {
                     ))
                 }
                 (Type::Static(expected_static), actual) if actual.as_static().is_none() => {
-                    if expected_static.inner_type_id == actual_type_id {}
-                    if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                        CheckExprTypeResult::Coerce(static_lifted)
+                    if expected_static.inner_type_id == actual_type_id {
+                        if let Ok(static_lifted) = self.attempt_static_lift(expr) {
+                            CheckExprTypeResult::Coerce(static_lifted)
+                        } else {
+                            eprintln!("lifted to faile");
+                            CheckExprTypeResult::Err(msg)
+                        }
                     } else {
-                        eprintln!("lifted to faile");
                         CheckExprTypeResult::Err(msg)
                     }
                 }
@@ -4651,7 +4676,7 @@ impl TypedProgram {
             (StaticValue::Unit, StaticValue::Unit) => true,
             (StaticValue::Boolean(b1), StaticValue::Boolean(b2)) => b1 == b2,
             (StaticValue::Char(c1), StaticValue::Char(c2)) => c1 == c2,
-            (StaticValue::Integer(i1), StaticValue::Integer(i2)) => i1 == i2,
+            (StaticValue::Int(i1), StaticValue::Int(i2)) => i1 == i2,
             (StaticValue::Float(f1), StaticValue::Float(f2)) => f1 == f2,
             (StaticValue::String(s1), StaticValue::String(s2)) => s1 == s2,
             (StaticValue::NullPointer, StaticValue::NullPointer) => true,
@@ -4681,7 +4706,7 @@ impl TypedProgram {
             TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
             TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Boolean(*b)))),
             TypedExpr::Integer(typed_integer_expr) => {
-                Ok(Some(self.static_values.add(StaticValue::Integer(typed_integer_expr.value))))
+                Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
             }
             TypedExpr::Float(typed_float_expr) => {
                 Ok(Some(self.static_values.add(StaticValue::Float(typed_float_expr.value))))
@@ -4996,24 +5021,47 @@ impl TypedProgram {
         span: SpanId,
     ) -> AbilityImplId {
         let ability = self.get_ability(implemented_ability.ability_id);
+        let all_params = match ability.parent_ability_id() {
+            None => ability.parameters.clone(),
+            Some(parent) => self.get_ability(parent).parameters.clone(),
+        };
         let ability_args = self.named_types.get_slice(ability.kind.arguments());
+        let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         // Add Self
+        subst_pairs.push(spair! {ability.self_type_id => type_variable_id});
         let _ = self.scopes.add_type(scope_id, self.ast.idents.builtins.self_cap, type_variable_id);
         // Add ability params
-        for ability_arg in ability_args.iter() {
+        for (parent_ability_param, ability_arg) in
+            all_params.iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
+        {
+            subst_pairs.push(spair! {parent_ability_param.type_variable_id => ability_arg.type_id});
             let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
         }
         // Add impl params
-        for impl_arg in self.named_types.get_slice(implemented_ability.impl_arguments).iter() {
+        for (parent_impl_param, impl_arg) in all_params
+            .iter()
+            .filter(|p| p.is_impl_param)
+            .zip(self.named_types.get_slice(implemented_ability.impl_arguments).iter())
+        {
+            subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
+        eprintln!("subst pairs: {}", self.pretty_print_type_substitutions(&subst_pairs, ", "));
         let functions = self.get_ability(implemented_ability.ability_id).functions.clone();
         let impl_kind = AbilityImplKind::VariableConstraint;
         let functions = functions
             .iter()
             .map(|f| {
                 let generic_fn = self.get_function(f.function_id);
+                let generic_fn_type_id = generic_fn.type_id;
                 let parsed_fn = generic_fn.parsed_id.as_function_id().unwrap();
+                let specialized_function_type =
+                    self.substitute_in_type(generic_fn_type_id, &subst_pairs);
+                eprintln!(
+                    "Here's how the new code specialized {}: {}",
+                    self.type_id_to_string(generic_fn_type_id),
+                    self.type_id_to_string(specialized_function_type),
+                );
                 let specialized_function_id = self.eval_function_declaration(
                     parsed_fn,
                     scope_id,
@@ -5025,8 +5073,11 @@ impl TypedProgram {
                     )),
                     ROOT_NAMESPACE_ID,
                 );
-                specialized_function_id
-                    .map(|o| o.expect("an ability function cannot be conditionally compiled"))
+                specialized_function_id.map(|o| {
+                    AbilityImplFunction::FunctionId(
+                        o.expect("an ability function cannot be conditionally compiled"),
+                    )
+                })
             })
             .collect::<TyperResult<EcoVec<_>>>();
         let functions = functions.unwrap_or_else(|err| {
@@ -5385,30 +5436,35 @@ impl TypedProgram {
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_impl_function_id in &blanket_impl.functions {
+        for blanket_impl_function in &blanket_impl.functions {
             // If the functions are abstract, just the type ids
             // If concrete do the declaration thing
             //
-            let specialized_impl_function = {
-                let blanket_fn = self.get_function(*blanket_impl_function_id);
-                let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
-                let specialized_function_id = self
-                    .eval_function_declaration(
-                        parsed_fn,
-                        new_impl_scope,
-                        Some(FunctionAbilityContextInfo::ability_impl(
-                            concrete_ability_id,
-                            self_type_id,
-                            kind,
-                            Some(*blanket_impl_function_id),
-                        )),
-                        ROOT_NAMESPACE_ID,
-                    )?
-                    .unwrap();
-                self.functions_pending_body_specialization.push(specialized_function_id);
-                specialized_function_id
+            let specialized_function = match *blanket_impl_function {
+                AbilityImplFunction::FunctionId(blanket_impl_function_id) => {
+                    let blanket_fn = self.get_function(blanket_impl_function_id);
+                    let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
+                    let specialized_function_id = self
+                        .eval_function_declaration(
+                            parsed_fn,
+                            new_impl_scope,
+                            Some(FunctionAbilityContextInfo::ability_impl(
+                                concrete_ability_id,
+                                self_type_id,
+                                kind,
+                                Some(blanket_impl_function_id),
+                            )),
+                            ROOT_NAMESPACE_ID,
+                        )?
+                        .unwrap();
+                    self.functions_pending_body_specialization.push(specialized_function_id);
+                    AbilityImplFunction::FunctionId(specialized_function_id)
+                }
+                AbilityImplFunction::Abstract(function_type_id) => {
+                    todo!("abstract ability impl function in instantiate blanket impl")
+                }
             };
-            specialized_functions.push(specialized_impl_function);
+            specialized_functions.push(specialized_function);
         }
 
         let substituted_impl_arguments_handle =
@@ -6000,7 +6056,7 @@ impl TypedProgram {
             result_block_ctx,
         )?;
         let make_error_call = self.exprs.add(TypedExpr::Call(Call {
-            callee: Callee::StaticFunction(block_make_error_fn),
+            callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: smallvec![get_error_call],
             type_args: SliceHandle::Empty,
             return_type: block_return_type,
@@ -6857,7 +6913,7 @@ impl TypedProgram {
             if let Err(msg) = self.check_types(expected_field.type_id, expr_type, ctx.scope_id) {
                 return failf!(
                     passed_field.span,
-                    "Field {} has incorrect type: {msg}",
+                    "Field '{}' has incorrect type: {msg}",
                     self.ident_str(passed_field.name)
                 );
             }
@@ -9134,15 +9190,16 @@ impl TypedProgram {
                             .find_function_by_name(fn_call.name.name)
                             .unwrap()
                             .0;
+                        let function_type_id = self.get_function(function_id).type_id;
                         let ability_impl_function = self.resolve_ability_call(
-                            function_id,
+                            function_type_id,
                             function_ability_index,
                             function_ability_id,
                             fn_call,
                             known_args,
                             ctx,
                         )?;
-                        Ok(Either::Right(Callee::make_static(ability_impl_function)))
+                        Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_function)))
                     } else {
                         Ok(Either::Right(Callee::make_static(function_id)))
                     }
@@ -9521,9 +9578,8 @@ impl TypedProgram {
                 .collect::<Vec<_>>()
         );
 
-        // FIXME: ability call resolution is pretty expensive, to scan all in-scope abilities before we try regular
-        // functions. it may be worth maintaining an index of function names -> ability,
-        // then if we hit, just ensure its in scope.
+        // FIXME: ability call resolution is pretty expensive, it may be worth maintaining an index of function names -> ability,
+        //        then if we hit, just ensure its in scope.
         let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
             .iter()
             .find_map(|ability_id| self.get_ability(*ability_id).find_function_by_name(fn_name))
@@ -9536,15 +9592,16 @@ impl TypedProgram {
             );
         };
         let ability_id = ability_function_ref.ability_id;
+        let ability_function_type = self.get_function(ability_function_ref.function_id).type_id;
         let ability_impl_fn = self.resolve_ability_call(
-            ability_function_ref.function_id,
+            ability_function_type,
             ability_function_index,
             ability_id,
             fn_call,
             known_args,
             ctx,
         )?;
-        Ok(Either::Right(Callee::make_static(ability_impl_fn)))
+        Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_fn)))
     }
 
     pub fn function_to_reference(
@@ -9631,15 +9688,15 @@ impl TypedProgram {
 
     fn resolve_ability_call(
         &mut self,
-        function_id: FunctionId,
+        function_type_id: TypeId,
         function_ability_index: usize,
         ability_id: AbilityId,
         fn_call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<FunctionId> {
+    ) -> TyperResult<AbilityImplFunction> {
         let call_span = fn_call.span;
-        let ability_fn_signature = self.get_function_type(function_id);
+        let ability_fn_signature = self.types.get(function_type_id).as_function().unwrap();
         let ability_fn_return_type = ability_fn_signature.return_type;
         let ability_fn_params: Vec<FnParamType> = ability_fn_signature.logical_params().to_vec();
         let ability_params = self.get_ability(ability_id).parameters.clone();
@@ -9768,8 +9825,8 @@ impl TypedProgram {
         ) else {
             return failf!(
                 call_span,
-                "Call to {} with type Self = {} does not work, since it does not implement ability {}",
-                self.ident_str(self.get_function(function_id).name),
+                "Call to `{}` with type Self = {} does not work, since it does not implement ability {}",
+                self.type_id_to_string(function_type_id),
                 self.type_id_to_string(solved_self.type_id),
                 self.ability_signature_to_string(ability_id, SliceHandle::Empty),
             );
@@ -10484,7 +10541,7 @@ impl TypedProgram {
                 Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
             }
             TypedExpr::Integer(int_expr) => {
-                let static_value_id = self.static_values.add(StaticValue::Integer(int_expr.value));
+                let static_value_id = self.static_values.add(StaticValue::Int(int_expr.value));
                 let static_type =
                     self.types.add_static_type(int_expr.get_type(), Some(static_value_id));
                 Ok(self.exprs.add(TypedExpr::StaticValue(
@@ -10598,7 +10655,6 @@ impl TypedProgram {
         }
     }
 
-    /// A triple of (passed value, expected value, and whether a mismatch) is OK
     /// allow_mismatch is used to avoid reporting a mismatch on the return type,
     /// before we're able to learn more about the rest of the inference. We get a better
     /// error message if we wait to report the mismatch until the end
@@ -10668,7 +10724,6 @@ impl TypedProgram {
                 self_.type_id_to_string(*gen_param),
                 self_.type_id_to_string(instantiated_param_type)
             );
-            self_.calculate_inference_substitutions(span)?;
 
             let s = std::mem::take(&mut self_.inference_context.substitutions_vec);
             let expected_type_so_far = self_.substitute_in_type(instantiated_param_type, &s);
@@ -10710,10 +10765,74 @@ impl TypedProgram {
                 "subst\n\t{}",
                 self_.pretty_print_type_substitutions(&self_.inference_context.constraints, "\n\t"),
             );
+
+            self_.calculate_inference_substitutions(span)?;
+
+            // Each time we get a _concrete_ substitution for a param,
+            // if the param has constraints,
+            // we need to 'learn' from the constraints, adding a pair to the mix
+            // for each ability param and ability impl param in the constraint. PHEW
+            // Consider:
+            // fn find[T, I: Iterator[Item = T]]
+            // We need to learn T from the ability impl for Iterator for whatever I is
+            eprintln!("Checking for constraints of solved params...");
+            // nocommit clone
+            for pair in self_.inference_context.substitutions_vec.clone().iter() {
+                if self_.types.get_contained_type_variable_counts(pair.to).inference_variable_count
+                    == 0
+                {
+                    eprintln!("Searching set for {}", self_.type_id_to_string(pair.from));
+                    if let Some(instantiation_pair) =
+                        instantiation_set.iter().find(|p| p.to == pair.from)
+                    {
+                        eprintln!(
+                            "True solution for {}: {}",
+                            self_.type_id_to_string(instantiation_pair.from),
+                            self_.pretty_print_type_substitutions(&[*pair], ", ")
+                        );
+                        let type_param = self_
+                            .named_types
+                            .get_slice(all_type_params)
+                            .iter()
+                            .find(|nt| nt.type_id == instantiation_pair.from)
+                            .copied();
+                        if let Some(type_param) = type_param {
+                            eprintln!("> It is actually a param");
+                            let constraint_impls =
+                                self_.get_constrained_ability_impls_for_type(type_param.type_id);
+                            for constraint in &constraint_impls {
+                                let signature = TypedAbilitySignature {
+                                    ability_id: constraint.ability_id,
+                                    impl_arguments: self_
+                                        .get_ability_impl(constraint.full_impl_id)
+                                        .impl_arguments,
+                                };
+                                eprintln!("Specializing constraint");
+                                // self_.specialize_ability()
+                                // if let Ok(_) = self_.check_type_constraint(
+                                //     pair.to,
+                                //     signature,
+                                //     type_param.name,
+                                //     scope_id,
+                                //     span,
+                                // ) {
+                                //     eprintln!("What can I learn from this impl holding")
+                                // } else {
+                                //     eprintln!("NO IMPL")
+                                // }
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "No param for: {}",
+                            self_.pretty_print_type_substitutions(&[*pair], ", ")
+                        )
+                    }
+                }
+            }
         }
 
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
-        self_.calculate_inference_substitutions(span)?;
         let final_substitutions = &self_.inference_context.substitutions;
 
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
@@ -10804,6 +10923,7 @@ impl TypedProgram {
                 None => SmallVec::with_capacity(args_and_params.len()),
                 Some(expected) => {
                     let mut v = SmallVec::with_capacity(args_and_params.len() + 1);
+                    // One Inference Pair for the return type
                     v.push(InferenceInputPair {
                         arg: TypeOrParsedExpr::Type(expected),
                         param_type: generic_function_return_type,
@@ -10812,6 +10932,7 @@ impl TypedProgram {
                     v
                 }
             };
+            // An Inference Pair for each parameter/argument pair
             inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
                 let passed_type = match expr {
                     MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
@@ -10825,6 +10946,8 @@ impl TypedProgram {
                     allow_mismatch: false,
                 }
             }));
+
+            // Inference pairs for everything we learn from the constraints
 
             let solutions = self
                 .infer_types(
@@ -11561,33 +11684,6 @@ impl TypedProgram {
                 return Ok(existing_specialization.specialized_function_id);
             }
         }
-
-        //let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-        //    generic_function.function_type_params.len() + generic_function.type_params.len(),
-        //);
-
-        //for (function_type_param, function_type_arg) in self
-        //    .existential_type_params
-        //    .get_slice(generic_function.function_type_params)
-        //    .iter()
-        //    .zip(self.named_types.get_slice(function_type_arguments))
-        //{
-        //    subst_pairs.push(TypeSubstitutionPair {
-        //        from: function_type_param.type_id,
-        //        to: function_type_arg.type_id,
-        //    })
-        //}
-        //// Transform the signature of the generic function by substituting
-        //subst_pairs.extend(
-        //    self.named_types
-        //        .get_slice(generic_function.type_params)
-        //        .iter()
-        //        .zip(self.named_types.get_slice(type_arguments))
-        //        .map(|(gen_param, type_arg)| TypeSubstitutionPair {
-        //            from: gen_param.type_id,
-        //            to: type_arg.type_id,
-        //        }),
-        //);
         let specialized_function_type_id = self.substitute_in_function_signature(
             type_arguments,
             function_type_arguments,
@@ -12273,6 +12369,11 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
+        eprintln!(
+            "Checking constraint {}: {}",
+            self.type_id_to_string(target_type,),
+            self.ability_signature_to_string(signature.ability_id, signature.impl_arguments)
+        );
         if let Some(impl_handle) =
             self.find_ability_impl_for_type_or_generate(target_type, signature.ability_id, span)
         {
@@ -13476,7 +13577,7 @@ impl TypedProgram {
                     self.ast.idents.get_name(ability_name)
                 );
             }
-            typed_functions.push(impl_function_id);
+            typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
         let blanked_type_params_handle =
@@ -13519,7 +13620,10 @@ impl TypedProgram {
         let ability_impl = self.get_ability_impl(ability_impl_id);
 
         for impl_fn in ability_impl.functions.clone().iter() {
-            if let Err(e) = self.eval_function_body(*impl_fn) {
+            let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
+                self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
+            };
+            if let Err(e) = self.eval_function_body(impl_fn) {
                 self.get_ability_impl_mut(ability_impl_id).compile_errors.push(e.clone());
                 self.report_error(e);
             }
@@ -13713,6 +13817,8 @@ impl TypedProgram {
                             self.types.builtins.types_type_schema = Some(type_id);
                         } else if name == self.ast.idents.builtins.IntKind {
                             self.types.builtins.types_int_kind = Some(type_id);
+                        } else if name == self.ast.idents.builtins.IntValue {
+                            self.types.builtins.types_int_value = Some(type_id)
                         }
                     }
                 }
@@ -14413,7 +14519,8 @@ impl TypedProgram {
 
         let type_schema =
             self.types.get(self.types.builtins.types_type_schema.unwrap()).expect_enum().clone();
-        let int_kind = self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
+        let int_kind_enum =
+            self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
         let get_schema_variant = |ident| type_schema.variant_by_name(ident).unwrap();
         let word_enum = self
             .types
@@ -14428,27 +14535,7 @@ impl TypedProgram {
                 payload,
             }
         };
-        let make_int_kind = |integer_type: IntegerType| {
-            let int_kind_variant = match integer_type {
-                IntegerType::U8 => int_kind.variant_by_index(0),
-                IntegerType::U16 => int_kind.variant_by_index(1),
-                IntegerType::U32 => int_kind.variant_by_index(2),
-                IntegerType::U64 => int_kind.variant_by_index(3),
-                IntegerType::I8 => int_kind.variant_by_index(4),
-                IntegerType::I16 => int_kind.variant_by_index(5),
-                IntegerType::I32 => int_kind.variant_by_index(6),
-                IntegerType::I64 => int_kind.variant_by_index(7),
-                IntegerType::UWord(_) => word_enum.variant_by_index(0),
-                IntegerType::IWord(_) => word_enum.variant_by_index(1),
-            };
-            let int_kind_enum_value = StaticEnum {
-                variant_type_id: int_kind_variant.my_type_id,
-                variant_index: int_kind_variant.index,
-                typed_as_enum: true,
-                payload: None,
-            };
-            int_kind_enum_value
-        };
+
         // .get will follow statics and recursives
         let typ = self.types.get(type_id);
         let static_enum = match typ {
@@ -14457,7 +14544,8 @@ impl TypedProgram {
             Type::Bool => make_variant(get_ident!(self, "Bool"), None),
             Type::Pointer => make_variant(get_ident!(self, "Pointer"), None),
             Type::Integer(integer_type) => {
-                let int_kind_enum_value = make_int_kind(*integer_type);
+                let int_kind_enum_value =
+                    TypedProgram::make_int_kind(int_kind_enum, word_enum, *integer_type);
 
                 let payload_value_id =
                     self.static_values.add(StaticValue::Enum(int_kind_enum_value));
@@ -14498,11 +14586,11 @@ impl TypedProgram {
 
                     let type_id_value_id = self
                         .static_values
-                        .add(StaticValue::Integer(TypedIntValue::U64(type_id_u32 as u64)));
+                        .add(StaticValue::Int(TypedIntValue::U64(type_id_u32 as u64)));
                     let offset_u32 = struct_layout.field_offsets[index];
                     let offset_value_id = self
                         .static_values
-                        .add(StaticValue::Integer(TypedIntValue::UWord64(offset_u32 as u64)));
+                        .add(StaticValue::Int(TypedIntValue::UWord64(offset_u32 as u64)));
                     let field_struct = StaticValue::Struct(StaticStruct {
                         type_id: struct_schema_field_item_struct_type_id,
                         fields: eco_vec![
@@ -14530,7 +14618,7 @@ impl TypedProgram {
                 let reference_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Reference")).payload.unwrap();
                 // { innerTypeId: u64 }
-                let inner_type_id_value_id = self.static_values.add(StaticValue::Integer(
+                let inner_type_id_value_id = self.static_values.add(StaticValue::Int(
                     TypedIntValue::U64(reference_type.inner_type.as_u32() as u64),
                 ));
                 // We need to ensure that any and all typeIds that we share with the user
@@ -14552,15 +14640,27 @@ impl TypedProgram {
                     self.types.get(variants_buffer_type_id).as_buffer_instance().unwrap().type_args
                         [0];
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
-                let tag_type_value_id =
-                    self.static_values.add(StaticValue::Enum(make_int_kind(*tag_type)));
+                let tag_type_value_id = self.static_values.add(StaticValue::Enum(
+                    TypedProgram::make_int_kind(int_kind_enum, word_enum, *tag_type),
+                ));
                 let mut variant_values = EcoVec::with_capacity(typed_enum.variants.len());
                 for variant in typed_enum.variants.clone().iter() {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
                     let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
+
+                    let int_value_enum =
+                        self.types.get(self.types.builtins.types_int_value.unwrap()).expect_enum();
+                    let tag_value_enum_value = TypedProgram::make_int_value(
+                        &mut self.static_values,
+                        int_value_enum,
+                        variant.tag_value,
+                    );
+                    let tag_value_id =
+                        self.static_values.add(StaticValue::Enum(tag_value_enum_value));
+
                     let payload_info_opt_type_id =
-                        self.types.get(variant_struct_type_id).expect_struct().fields[1].type_id;
+                        self.types.get(variant_struct_type_id).expect_struct().fields[2].type_id;
                     let payload_info_struct_id = self
                         .types
                         .get(payload_info_opt_type_id)
@@ -14575,18 +14675,17 @@ impl TypedProgram {
                             None,
                         ),
                         Some(payload_type_id) => {
-                            let type_id_value_id = self.static_values.add(StaticValue::Integer(
+                            let type_id_value_id = self.static_values.add(StaticValue::Int(
                                 TypedIntValue::U64(payload_type_id.as_u32() as u64),
                             ));
                             // We need to ensure that any and all typeIds that we share with the user
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id, span);
 
-                            let payload_offset_value_id = self.static_values.add(
-                                StaticValue::Integer(TypedIntValue::UWord64(
+                            let payload_offset_value_id =
+                                self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(
                                     self.types.enum_variant_payload_offset_bytes(variant) as u64,
-                                )),
-                            );
+                                )));
                             let payload_info_struct_id =
                                 self.static_values.add(StaticValue::Struct(StaticStruct {
                                     type_id: payload_info_struct_id,
@@ -14606,6 +14705,8 @@ impl TypedProgram {
                         fields: eco_vec![
                             // name: string,
                             name_value_id,
+                            // tag: IntValue,
+                            tag_value_id,
                             // payload: { typeId: u64, offset: uword }?,
                             payload_info_value_id,
                         ],
@@ -14630,7 +14731,7 @@ impl TypedProgram {
                 let variant_payload_type_id =
                     get_schema_variant(get_ident!(self, "Variant")).payload.unwrap();
                 let variant_name = variant.name;
-                let enum_type_id_value_id = self.static_values.add(StaticValue::Integer(
+                let enum_type_id_value_id = self.static_values.add(StaticValue::Int(
                     TypedIntValue::U64(variant.enum_type_id.as_u32() as u64),
                 ));
 
@@ -14695,6 +14796,58 @@ impl TypedProgram {
         let _ = self.get_type_name(type_id);
     }
 
+    fn make_int_kind(
+        int_kind_enum: &TypedEnum,
+        word_enum: &TypedEnum,
+        integer_type: IntegerType,
+    ) -> StaticEnum {
+        let int_kind_variant = match integer_type {
+            IntegerType::U8 => int_kind_enum.variant_by_index(0),
+            IntegerType::U16 => int_kind_enum.variant_by_index(1),
+            IntegerType::U32 => int_kind_enum.variant_by_index(2),
+            IntegerType::U64 => int_kind_enum.variant_by_index(3),
+            IntegerType::I8 => int_kind_enum.variant_by_index(4),
+            IntegerType::I16 => int_kind_enum.variant_by_index(5),
+            IntegerType::I32 => int_kind_enum.variant_by_index(6),
+            IntegerType::I64 => int_kind_enum.variant_by_index(7),
+            IntegerType::UWord(_) => word_enum.variant_by_index(0),
+            IntegerType::IWord(_) => word_enum.variant_by_index(1),
+        };
+        StaticEnum {
+            variant_type_id: int_kind_variant.my_type_id,
+            variant_index: int_kind_variant.index,
+            typed_as_enum: true,
+            payload: None,
+        }
+    }
+
+    fn make_int_value(
+        static_values: &mut Pool<StaticValue, StaticValueId>,
+        int_value_enum: &TypedEnum,
+        integer_value: TypedIntValue,
+    ) -> StaticEnum {
+        let variant = match integer_value {
+            TypedIntValue::U8(_) => int_value_enum.variant_by_index(0),
+            TypedIntValue::U16(_) => int_value_enum.variant_by_index(1),
+            TypedIntValue::U32(_) => int_value_enum.variant_by_index(2),
+            TypedIntValue::U64(_) => int_value_enum.variant_by_index(3),
+            TypedIntValue::UWord32(_) => unreachable!(),
+            TypedIntValue::UWord64(_) => unreachable!(),
+            TypedIntValue::I8(_) => int_value_enum.variant_by_index(4),
+            TypedIntValue::I16(_) => int_value_enum.variant_by_index(5),
+            TypedIntValue::I32(_) => int_value_enum.variant_by_index(6),
+            TypedIntValue::I64(_) => int_value_enum.variant_by_index(7),
+            TypedIntValue::IWord32(_) => unreachable!(),
+            TypedIntValue::IWord64(_) => unreachable!(),
+        };
+        StaticEnum {
+            variant_type_id: variant.my_type_id,
+            variant_index: variant.index,
+            typed_as_enum: false,
+            payload: Some(static_values.add(StaticValue::Int(integer_value))),
+        }
+    }
+
     fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
         let value = match self.target_word_size() {
             WordSize::W32 => TypedIntValue::UWord32(value as u32),
@@ -14719,7 +14872,7 @@ impl TypedProgram {
             ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().0;
         let equals_implementation = implementation.function_at_index(equals_index);
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
-            callee: Callee::make_static(equals_implementation),
+            callee: Callee::from_ability_impl_fn(equals_implementation),
             args: smallvec![lhs, rhs],
             type_args: SliceHandle::Empty,
             return_type: BOOL_TYPE_ID,
