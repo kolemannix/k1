@@ -17,41 +17,52 @@ use core/BufferIterator
 //  .None
 //}
 
-deftype Triple[A, B, C] = { a: A, b: B, c: C }
-ability AsTriple[A, B, C] {
-  fn getA(self: Self): A
-  fn getB(self: Self): B
-  fn getC(self: Self): C
+deftype Pair[PA, PB] = { a: PA*, b: PB? }
+ability AsPair[AA, BB] {
+  fn getA(self: Self): AA*
+  fn getB(self: Self): BB?
 }
 
-//impl[A, B, C] AsTriple[A = A, B = B, C = C] for Triple[A, B, C] {
-//  fn getA(self: Triple[A, B, C]): A { self.a }
-//  fn getB(self: Triple[A, B, C]): B { self.b }
-//  fn getC(self: Triple[A, B, C]): C { self.c }
+impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B] {
+  fn getA(self: Pair[A, B]): A* { self.a }
+  fn getB(self: Pair[A, B]): B? { self.b }
+}
+//impl AsPair[AA = int, BB = bool] for Pair[int, bool, unit] {
+//  fn getA(self: Self): AA { self.a }
+//  fn getB(self: Self): BB { self.b }
 //}
-impl AsTriple[A = int, B = bool, C = unit] for Triple[int, bool, unit] {
-  fn getA(self: Self): A { self.a }
-  fn getB(self: Self): B { self.b }
-  fn getC(self: Self): C { self.c }
-}
 
-fn getB[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): B {
+fn unwrapB[
+  X,
+  Y,
+  T: AsPair[AA=X, BB=Y] and AsPair[AA=Y, BB=X]
+](t: T): Y? {
+  t.getB();
+  // -> AsPair/getB(t)
+  // t: T: Self
+  // <ret>: Opt[Y]
+  // -> find all impls of base AsPair for T
+  //   -> 1. AsPair[X, Y, Z]
+  //   -> 2. AsPair[Y, X, Z]
+  // Try impl 1:
+  //   getB(): Opt[Y]
+  // A :=
   t.getB()
 }
 
-fn getAB[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): { b: B, c: C } {
-  return({ b: t.getB(), c: t.getC() })
-}
+//fn getBoth[A, B, T: AsPair[AA=A, BB=B]](t: T): { a: A, b: B } {
+//  return({ a: *t.getA(), c: t.getB().! })
+//}
 
-fn getNothin[A, B, C, T: AsTriple[A=A, B=B, C=C]](t: T): unit {
+fn getNothin[A, B, T: AsPair[AA=A, BB=B]](t: T): unit {
   ()
 }
 
 fn main(): i32 {
   // Phase 1
-  let myTriple: Triple[int, bool, unit] = { a: 10, b: true, c: () };
-  @debug getNothin(t = myTriple);
-  // getAB(myTriple);
+  let myPair: Pair[int, bool] = { a: mem/new(10), b: some(true) };
+  getNothin(t = myPair);
+  @debug unwrapB(myPair);
 
   // Phase 2
   //position[int, BufferIterator[int]](x, y);
