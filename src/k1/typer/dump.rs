@@ -960,7 +960,7 @@ impl TypedProgram {
         ability_id: AbilityId,
         impl_arguments: &[NameAndType],
     ) -> std::fmt::Result {
-        let ability = self.get_ability(ability_id);
+        let ability = self.abilities.get(ability_id);
         self.write_ident(w, ability.name)?;
         if ability.parameters.is_empty() && ability.kind.arguments().is_empty() {
             return Ok(());

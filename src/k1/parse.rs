@@ -316,7 +316,7 @@ impl NamespacedIdentifier {
 pub struct BuiltinIdentifiers {
     pub main: Ident,
     pub self_: Ident,
-    pub self_cap: Ident,
+    pub Self_: Ident,
     pub it: Ident,
     pub unit: Ident,
     pub char: Ident,
@@ -471,7 +471,7 @@ impl Default for Identifiers {
             builtins: BuiltinIdentifiers {
                 main,
                 self_,
-                self_cap,
+                Self_: self_cap,
                 it,
                 unit,
                 char,
