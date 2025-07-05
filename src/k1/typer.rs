@@ -533,7 +533,7 @@ impl From<&TypedAbilityParam> for NameAndType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 /// An ability signature encompasses an ability's entire 'type' story:
 /// - Base type, generic type params, and impl-provided type params
 ///```md
@@ -778,6 +778,34 @@ impl TypedFunctionKind {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionSignature {
+    pub name: Option<Ident>,
+    pub function_type: TypeId,
+    pub type_params: NamedTypeSlice,
+    pub function_type_params: SliceHandle<ExistentialTypeParamId>,
+    pub static_type_params: SliceHandle<ExistentialTypeParamId>,
+}
+impl_copy_if_small!(32, FunctionSignature);
+
+impl FunctionSignature {
+    pub fn make_no_generics(name: Option<Ident>, function_type: TypeId) -> FunctionSignature {
+        FunctionSignature {
+            name,
+            function_type,
+            type_params: SliceHandle::Empty,
+            function_type_params: SliceHandle::Empty,
+            static_type_params: SliceHandle::Empty,
+        }
+    }
+
+    pub fn is_generic(&self) -> bool {
+        !self.type_params.is_empty()
+            || !self.function_type_params.is_empty()
+            || !self.static_type_params.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TypedFunction {
     pub name: Ident,
     pub scope: ScopeId,
@@ -800,11 +828,18 @@ pub struct TypedFunction {
 }
 
 impl TypedFunction {
+    fn signature(&self) -> FunctionSignature {
+        FunctionSignature {
+            name: Some(self.name),
+            function_type: self.type_id,
+            type_params: self.type_params,
+            function_type_params: self.function_type_params,
+            static_type_params: self.static_type_params,
+        }
+    }
+
     fn is_generic(&self) -> bool {
-        matches!(self.kind, TypedFunctionKind::AbilityDefn(_))
-            || !self.type_params.is_empty()
-            || !self.function_type_params.is_empty()
-            || !self.static_type_params.is_empty()
+        matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().is_generic()
     }
 }
 
@@ -1098,7 +1133,7 @@ pub enum Callee {
     /// it's far cheaper and simpler to just say "Abstract call of this function type" than
     /// to specialize a copy of a function over a bunch of type params
     Abstract {
-        function_type: TypeId,
+        function_sig: FunctionSignature,
     },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
@@ -1109,10 +1144,10 @@ pub enum Callee {
     /// Used by function type parameters
     DynamicAbstract {
         variable_id: VariableId,
-        function_type: TypeId,
+        function_sig: FunctionSignature,
     },
 }
-impl_copy_if_small!(16, Callee);
+impl_copy_if_small!(40, Callee);
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
@@ -1122,7 +1157,7 @@ impl Callee {
     pub fn from_ability_impl_fn(ability_impl_fn: AbilityImplFunction) -> Callee {
         match ability_impl_fn {
             AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
-            AbilityImplFunction::Abstract(type_id) => Callee::Abstract { function_type: type_id },
+            AbilityImplFunction::Abstract(sig) => Callee::Abstract { function_sig: sig },
         }
     }
 
@@ -1762,7 +1797,7 @@ pub enum ToEmit {
 }
 
 // TODO(perf): TypedExpr is very big
-static_assert_size!(TypedExpr, 88);
+static_assert_size!(TypedExpr, 104);
 #[derive(Debug, Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -2372,7 +2407,7 @@ impl AbilityImplKind {
 #[derive(Clone, Copy)]
 pub enum AbilityImplFunction {
     FunctionId(FunctionId),
-    Abstract(TypeId),
+    Abstract(FunctionSignature),
 }
 
 #[derive(Clone)]
@@ -2398,6 +2433,10 @@ pub struct TypedAbilityImpl {
 impl TypedAbilityImpl {
     pub fn function_at_index(&self, index: usize) -> AbilityImplFunction {
         self.functions[index]
+    }
+
+    pub fn signature(&self) -> TypedAbilitySignature {
+        TypedAbilitySignature { ability_id: self.ability_id, impl_arguments: self.impl_arguments }
     }
 }
 
@@ -2575,7 +2614,7 @@ pub struct TypedProgram {
     /// Key is 'self' type
     pub ability_impl_table: FxHashMap<TypeId, Vec<AbilityImplHandle>>,
     /// Key is base ability id
-    pub blanket_impls: FxHashMap<AbilityId, Vec<AbilityImplId>>,
+    pub blanket_impls: FxHashMap<AbilityId, EcoVec<AbilityImplId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
@@ -5021,6 +5060,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> AbilityImplId {
         let ability = self.get_ability(implemented_ability.ability_id);
+        let ability_self_type = ability.self_type_id;
         let all_params = match ability.parent_ability_id() {
             None => ability.parameters.clone(),
             Some(parent) => self.get_ability(parent).parameters.clone(),
@@ -5046,38 +5086,38 @@ impl TypedProgram {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
-        eprintln!("subst pairs: {}", self.pretty_print_type_substitutions(&subst_pairs, ", "));
         let functions = self.get_ability(implemented_ability.ability_id).functions.clone();
         let impl_kind = AbilityImplKind::VariableConstraint;
         let functions = functions
             .iter()
             .map(|f| {
                 let generic_fn = self.get_function(f.function_id);
+                let generic_sig = generic_fn.signature();
                 let generic_fn_type_id = generic_fn.type_id;
-                let parsed_fn = generic_fn.parsed_id.as_function_id().unwrap();
                 let specialized_function_type =
                     self.substitute_in_type(generic_fn_type_id, &subst_pairs);
-                eprintln!(
-                    "Here's how the new code specialized {}: {}",
-                    self.type_id_to_string(generic_fn_type_id),
-                    self.type_id_to_string(specialized_function_type),
+
+                // We have to directly remove 'Self' from the type parameters of the signature
+                // since it's the only one of the ability params that gets 'encoded' as a type
+                // parameter to the function
+                let type_params_minus_self = {
+                    let mut type_params_minus_self =
+                        self.named_types.get_slice_to_smallvec_copy::<4>(generic_sig.type_params);
+                    type_params_minus_self.retain(|tp| tp.type_id != ability_self_type);
+                    self.named_types.add_slice_from_copy_slice(&type_params_minus_self)
+                };
+                debug_assert_eq!(type_params_minus_self.len() + 1, generic_sig.type_params.len());
+                let specialized_signature = FunctionSignature {
+                    function_type: specialized_function_type,
+                    type_params: type_params_minus_self,
+                    ..generic_sig
+                };
+                debug!(
+                    "specialized constraint ability function signature {}: {}",
+                    self.function_signature_to_string(generic_sig),
+                    self.function_signature_to_string(specialized_signature),
                 );
-                let specialized_function_id = self.eval_function_declaration(
-                    parsed_fn,
-                    scope_id,
-                    Some(FunctionAbilityContextInfo::ability_impl(
-                        implemented_ability.ability_id,
-                        type_variable_id,
-                        impl_kind,
-                        None,
-                    )),
-                    ROOT_NAMESPACE_ID,
-                );
-                specialized_function_id.map(|o| {
-                    AbilityImplFunction::FunctionId(
-                        o.expect("an ability function cannot be conditionally compiled"),
-                    )
-                })
+                Ok(AbilityImplFunction::Abstract(specialized_signature))
             })
             .collect::<TyperResult<EcoVec<_>>>();
         let functions = functions.unwrap_or_else(|err| {
@@ -5188,9 +5228,27 @@ impl TypedProgram {
             return Some(concrete_impl);
         };
 
-        debug!("Blanket search for {}", self.ident_str(self.get_ability(target_ability_id).name));
         let target_base_ability_id = self.get_ability_base(target_ability_id);
+        debug!(
+            "Blanket search for {} for {} using base {}",
+            self.type_id_to_string(self_type_id),
+            self.ident_str(self.get_ability(target_ability_id).name),
+            self.ident_str(self.get_ability(target_base_ability_id).name)
+        );
+        let mut s = String::new();
+        use std::fmt::Write;
+        for (base_ab, impls) in self.blanket_impls.iter() {
+            writeln!(
+                &mut s,
+                "{:02} {}: {}",
+                base_ab.0,
+                self.ident_str(self.get_ability(*base_ab).name),
+                impls.len()
+            );
+        }
+        eprintln!("{s}");
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
+            eprintln!("there is >=1 blank impl for base");
             for blanket_impl_id in blanket_impls_for_base.clone() {
                 match self.try_apply_blanket_implementation(
                     blanket_impl_id,
@@ -5229,10 +5287,10 @@ impl TypedProgram {
         let AbilityImplKind::Blanket { parsed_id, .. } = blanket_impl.kind else {
             unreachable!("Expected a blanket impl")
         };
-        let target_base = target_ability.parent_ability_id().unwrap_or(target_ability_id);
+        let target_base = self_.get_ability_base(target_ability_id);
 
         let blanket_ability = self_.get_ability(blanket_impl.ability_id);
-        let blanket_base = blanket_ability.parent_ability_id().unwrap_or(blanket_impl.ability_id);
+        let blanket_base = self_.get_ability_base(blanket_impl.ability_id);
 
         if blanket_base != target_base {
             debug!("Wrong blanket base {}", self_.ident_str(blanket_ability.name));
@@ -5411,7 +5469,7 @@ impl TypedProgram {
             substituted_ability_args_handle,
             blanket_impl.span,
             blanket_impl.scope_id,
-        )?;
+        );
 
         let mut substituted_impl_arguments: SV8<NameAndType> =
             SmallVec::with_capacity(blanket_impl.impl_arguments.len());
@@ -5460,7 +5518,7 @@ impl TypedProgram {
                     self.functions_pending_body_specialization.push(specialized_function_id);
                     AbilityImplFunction::FunctionId(specialized_function_id)
                 }
-                AbilityImplFunction::Abstract(function_type_id) => {
+                AbilityImplFunction::Abstract(_function_type_id) => {
                     todo!("abstract ability impl function in instantiate blanket impl")
                 }
             };
@@ -8571,7 +8629,7 @@ impl TypedProgram {
                         .get(&type_id)
                         .unwrap_or(&vec![])
                         .iter()
-                        .map(|h| self.ability_signature_to_string(
+                        .map(|h| self.ability_impl_signature_to_string(
                             h.ability_id,
                             self.get_ability_impl(h.full_impl_id).impl_arguments
                         ))
@@ -9248,7 +9306,10 @@ impl TypedProgram {
                             }
                             Type::FunctionTypeParameter(ftp) => {
                                 let callee = Callee::DynamicAbstract {
-                                    function_type: ftp.function_type,
+                                    function_sig: FunctionSignature::make_no_generics(
+                                        Some(ftp.name),
+                                        ftp.function_type,
+                                    ),
                                     variable_id,
                                 };
                                 Ok(Either::Right(callee))
@@ -9812,7 +9873,7 @@ impl TypedProgram {
             )
         })?;
         let actual_ability_id =
-            self.specialize_ability(ability_id, solved_rest, call_span, ctx.scope_id)?;
+            self.specialize_ability(ability_id, solved_rest, call_span, ctx.scope_id);
 
         // 2) Find impl based on solved Self + Params
         // 2a) Generate auto impl if that's what we find, cache it at low prio
@@ -9828,7 +9889,7 @@ impl TypedProgram {
                 "Call to `{}` with type Self = {} does not work, since it does not implement ability {}",
                 self.type_id_to_string(function_type_id),
                 self.type_id_to_string(solved_self.type_id),
-                self.ability_signature_to_string(ability_id, SliceHandle::Empty),
+                self.ability_impl_signature_to_string(ability_id, SliceHandle::Empty),
             );
         };
         let impl_function = self
@@ -10304,12 +10365,42 @@ impl TypedProgram {
         }
     }
 
+    pub fn is_callee_generic(&self, callee: &Callee) -> bool {
+        match callee {
+            Callee::StaticFunction(function_id) => self.get_function(*function_id).is_generic(),
+            Callee::StaticLambda { .. } => false,
+            Callee::Abstract { function_sig, .. } => function_sig.is_generic(),
+            Callee::DynamicFunction { .. } => false,
+            Callee::DynamicLambda(_) => false,
+            // Should always be false...
+            Callee::DynamicAbstract { function_sig, .. } => function_sig.is_generic(),
+        }
+    }
+
+    pub fn get_callee_function_signature(&self, callee: &Callee) -> FunctionSignature {
+        match callee {
+            Callee::StaticFunction(function_id) => self.get_function(*function_id).signature(),
+            Callee::StaticLambda { function_id, .. } => self.get_function(*function_id).signature(),
+            Callee::Abstract { function_sig, .. } => *function_sig,
+            Callee::DynamicFunction { .. } => {
+                let function_type = self.get_callee_function_type(callee);
+                FunctionSignature::make_no_generics(None, function_type)
+            }
+            Callee::DynamicLambda(_) => {
+                let function_type = self.get_callee_function_type(callee);
+                FunctionSignature::make_no_generics(None, function_type)
+            }
+            // Should always be false...
+            Callee::DynamicAbstract { function_sig, .. } => *function_sig,
+        }
+    }
+
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
         match callee {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).type_id
             }
-            Callee::Abstract { function_type, .. } => *function_type,
+            Callee::Abstract { function_sig, .. } => function_sig.function_type,
             Callee::DynamicFunction { function_reference_expr } => {
                 let function_reference_type =
                     self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
@@ -10324,7 +10415,7 @@ impl TypedProgram {
                     )
                 }
             },
-            Callee::DynamicAbstract { function_type, .. } => *function_type,
+            Callee::DynamicAbstract { function_sig, .. } => function_sig.function_type,
         }
     }
 
@@ -10345,10 +10436,9 @@ impl TypedProgram {
         };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
-        let maybe_original_function_id = callee.maybe_function_id();
-        let maybe_original_function = maybe_original_function_id.map(|f| self.get_function(f));
         let callee_function_type_id = self.get_callee_function_type(&callee);
-        let is_generic = maybe_original_function.is_some_and(|f| f.is_generic());
+        let signature = self.get_callee_function_signature(&callee);
+        let is_generic = signature.is_generic();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
         let params = &original_function_type.logical_params().to_vec();
@@ -10388,9 +10478,7 @@ impl TypedProgram {
                 )?;
                 // If a function is generic, we have a function id. Lambdas and function pointer
                 // calls can't take type arguments
-                let original_function_id = maybe_original_function_id.unwrap();
-                let original_function = self.get_function(original_function_id);
-                let function_id = callee.maybe_function_id().unwrap();
+                // let function_id = callee.maybe_function_id().unwrap();
 
                 // We infer the type arguments, or just use them if the user has supplied them
                 let type_args = match &known_args {
@@ -10398,7 +10486,7 @@ impl TypedProgram {
                         // Need the name
                         let args: SV4<NameAndType> = type_args
                             .iter()
-                            .zip(self.named_types.get_slice(original_function.type_params).iter())
+                            .zip(self.named_types.get_slice(signature.type_params).iter())
                             .map(|(type_arg, type_param)| NameAndType {
                                 name: type_param.name,
                                 type_id: *type_arg,
@@ -10406,18 +10494,18 @@ impl TypedProgram {
                             .collect();
                         self.named_types.add_slice_from_copy_slice(&args)
                     }
-                    None => self.infer_and_constrain_call_type_args(fn_call, function_id, ctx)?,
+                    None => self.infer_and_constrain_call_type_args(fn_call, signature, ctx)?,
                 };
 
                 let function_type_args = self.determine_function_type_args_for_call(
-                    original_function_id,
+                    signature,
                     type_args,
                     &original_args_and_params,
                     ctx,
                 )?;
 
                 let static_type_args = self.determine_static_type_args_for_call(
-                    original_function_id,
+                    signature,
                     &original_args_and_params,
                     ctx,
                 )?;
@@ -10426,27 +10514,52 @@ impl TypedProgram {
                     type_args,
                     function_type_args,
                     static_type_args,
-                    function_id,
+                    signature,
                 );
                 let is_abstract = self
                     .types
                     .get_contained_type_variable_counts(specialized_function_type)
                     .is_abstract();
                 if is_abstract {
+                    // nocommit: Shouldn't we still typecheck these arguments even if the `Call`
+                    // doesnt need to contain them for codegen? Aren't we just constructing
+                    // a garbage call? I guess not if we say that's what 'Abstract' means, but
+                    // feels very wrong
                     (
-                        Callee::Abstract { function_type: specialized_function_type },
+                        Callee::Abstract {
+                            function_sig: FunctionSignature::make_no_generics(
+                                signature.name,
+                                specialized_function_type,
+                            ),
+                        },
                         smallvec![],
                         SliceHandle::Empty,
                     )
                 } else {
-                    let function_id = self.specialize_function_signature(
-                        type_args,
-                        function_type_args,
-                        static_type_args,
-                        function_id,
-                    )?;
+                    let final_callee = match callee {
+                        Callee::StaticFunction(function_id) => {
+                            let function_id = self.specialize_function_signature(
+                                type_args,
+                                function_type_args,
+                                static_type_args,
+                                function_id,
+                            )?;
+                            Callee::StaticFunction(function_id)
+                        }
+                        Callee::Abstract { function_sig } => Callee::Abstract {
+                            function_sig: FunctionSignature::make_no_generics(
+                                function_sig.name,
+                                specialized_function_type,
+                            ),
+                        },
+                        _ => self.ice(
+                            "Unexpected Callee type for a generic that required specialization",
+                            None,
+                        ),
+                    };
 
-                    let specialized_fn_type = self.get_function_type(function_id);
+                    let specialized_fn_type =
+                        self.types.get(specialized_function_type).as_function().unwrap();
                     let specialized_params = specialized_fn_type.physical_params.clone();
                     let args_and_params = self.align_call_arguments_with_parameters(
                         fn_call,
@@ -10473,7 +10586,7 @@ impl TypedProgram {
                         typechecked_args.push(checked_expr);
                     }
 
-                    (Callee::make_static(function_id), typechecked_args, type_args)
+                    (final_callee, typechecked_args, type_args)
                 }
             }
         };
@@ -10790,6 +10903,7 @@ impl TypedProgram {
                             self_.type_id_to_string(instantiation_pair.from),
                             self_.pretty_print_type_substitutions(&[*pair], ", ")
                         );
+                        let solution = pair.to;
                         let type_param = self_
                             .named_types
                             .get_slice(all_type_params)
@@ -10797,17 +10911,74 @@ impl TypedProgram {
                             .find(|nt| nt.type_id == instantiation_pair.from)
                             .copied();
                         if let Some(type_param) = type_param {
-                            eprintln!("> It is actually a param");
+                            // eprintln!("> It is actually a param");
                             let constraint_impls =
                                 self_.get_constrained_ability_impls_for_type(type_param.type_id);
                             for constraint in &constraint_impls {
-                                let signature = TypedAbilitySignature {
-                                    ability_id: constraint.ability_id,
-                                    impl_arguments: self_
-                                        .get_ability_impl(constraint.full_impl_id)
-                                        .impl_arguments,
+                                // nocommit: Does this need to be a throwaway scope? Or the
+                                // ability's scope
+                                let sig = self_.specialize_ability_constraint(
+                                    &instantiation_set,
+                                    *constraint,
+                                    scope_id,
+                                    span,
+                                );
+                                eprintln!(
+                                    "new sig to use for info: {}",
+                                    self_.ability_signature_to_string(sig)
+                                );
+                                match self_.find_ability_impl_for_type_or_generate(
+                                    solution,
+                                    sig.ability_id,
+                                    span,
+                                ) {
+                                    Some(impl_id) => {
+                                        let the_impl = self_.get_ability_impl(impl_id.full_impl_id);
+                                        //self_.add_substitution(set, pair);
+                                        eprintln!(
+                                            "Found an impl: {}",
+                                            self_.ability_signature_to_string(the_impl.signature()),
+                                        );
+                                        for (constraint, impl_) in self_
+                                            .named_types
+                                            .get_slice_to_smallvec_copy::<4>(
+                                                self_.get_ability(sig.ability_id).kind.arguments(),
+                                            )
+                                            .iter()
+                                            .zip(
+                                                self_.named_types.get_slice_to_smallvec_copy::<4>(
+                                                    self_
+                                                        .get_ability(the_impl.ability_id)
+                                                        .kind
+                                                        .arguments(),
+                                                ),
+                                            )
+                                        {
+                                            eprintln!(
+                                                "I will unify {} and {}",
+                                                self_.named_type_to_string(constraint),
+                                                self_.named_type_to_string(impl_)
+                                            );
+                                            match self_.unify_and_find_substitutions(
+                                                impl_.type_id,
+                                                constraint.type_id,
+                                            ) {
+                                                TypeUnificationResult::Matching => {
+                                                    eprintln!("HOORAY matched");
+                                                    self_
+                                                        .calculate_inference_substitutions(span)?;
+                                                }
+                                                TypeUnificationResult::NoHoles => todo!(),
+                                                TypeUnificationResult::NonMatching(_) => eprintln!(
+                                                    "did not match; likely we'll fail later"
+                                                ),
+                                            }
+                                            //self_.add_substitution(set, pair);
+                                        }
+                                        // nocommit: Iterate impl params too
+                                    }
+                                    None => {}
                                 };
-                                eprintln!("Specializing constraint");
                                 // self_.specialize_ability()
                                 // if let Ok(_) = self_.check_type_constraint(
                                 //     pair.to,
@@ -10861,8 +11032,8 @@ impl TypedProgram {
                     .map(|(passed_type, pair)| {
                         format!(
                             "{}: {}",
-                            self_.type_id_to_string(*passed_type),
-                            self_.type_id_to_string(pair.param_type),
+                            self_.type_id_to_string_ext(*passed_type, true),
+                            self_.type_id_to_string_ext(pair.param_type, true),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -10877,23 +11048,22 @@ impl TypedProgram {
     fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
-        generic_function_id: FunctionId,
+        generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
     ) -> TyperResult<NamedTypeSlice> {
-        let generic_function = self.get_function(generic_function_id);
-        let generic_type_params = generic_function.type_params;
-        let generic_function_type = self.get_function_type(generic_function_id);
-        debug_assert!(generic_function.is_generic());
+        let generic_function_type =
+            self.types.get(generic_function_sig.function_type).as_function().unwrap();
+        debug_assert!(generic_function_sig.is_generic());
         let generic_function_params = generic_function_type.logical_params().to_vec();
         let generic_function_return_type = generic_function_type.return_type;
         let passed_type_args = fn_call.type_args;
         let passed_type_args_count = passed_type_args.len();
         let solved_type_params = if !passed_type_args.is_empty() {
-            if passed_type_args_count != generic_type_params.len() {
+            if passed_type_args_count != generic_function_sig.type_params.len() {
                 return failf!(
                     fn_call.span,
                     "Expected {} type arguments but got {}",
-                    generic_type_params.len(),
+                    generic_function_sig.type_params.len(),
                     passed_type_args_count
                 );
             }
@@ -10903,7 +11073,7 @@ impl TypedProgram {
                 self.ast.p_type_args.get_slice_to_smallvec_copy::<4>(passed_type_args);
             for (type_param, type_arg) in self
                 .named_types
-                .get_slice_to_smallvec_copy::<4>(generic_type_params)
+                .get_slice_to_smallvec_copy::<4>(generic_function_sig.type_params)
                 .iter()
                 .zip(type_args_owned.iter())
             {
@@ -10951,8 +11121,8 @@ impl TypedProgram {
 
             let solutions = self
                 .infer_types(
-                    generic_type_params,
-                    generic_type_params,
+                    generic_function_sig.type_params,
+                    generic_function_sig.type_params,
                     &inference_pairs,
                     fn_call.span,
                     ctx.scope_id,
@@ -10961,7 +11131,7 @@ impl TypedProgram {
                     errf!(
                         e.span,
                         "Invalid call to {}.\n\t{}",
-                        self.function_to_string(self.get_function(generic_function_id), false),
+                        self.ident_str_opt(generic_function_sig.name),
                         e.message,
                     )
                 })?;
@@ -10975,7 +11145,9 @@ impl TypedProgram {
             .iter()
             .zip(
                 self.named_types
-                    .get_slice_to_smallvec_copy::<FUNC_TYPE_PARAM_IDEAL_COUNT>(generic_type_params)
+                    .get_slice_to_smallvec_copy::<FUNC_TYPE_PARAM_IDEAL_COUNT>(
+                        generic_function_sig.type_params,
+                    )
                     .iter(),
             )
         {
@@ -10999,9 +11171,64 @@ impl TypedProgram {
         Ok(solved_type_params)
     }
 
+    fn specialize_ability_constraint(
+        &mut self,
+        set: &[TypeSubstitutionPair],
+        // nocommit Consider taking in a signature, not an implhandle
+        constraint: AbilityImplHandle,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TypedAbilitySignature {
+        let old_impl = self.get_ability_impl(constraint.full_impl_id);
+        let old_impl_impl_arguments = old_impl.impl_arguments;
+        let impl_ability = self.get_ability(old_impl.ability_id);
+        let old_impl_ability_arguments = impl_ability.kind.arguments();
+        let base_ability_id = impl_ability.parent_ability_id().unwrap_or(old_impl.ability_id);
+        let base_ability = self.get_ability(base_ability_id);
+        let all_base_params = base_ability.parameters.clone();
+        if all_base_params.is_empty() {
+            // Special case if the ability has no params at all, e.g., Comparable
+            return old_impl.signature();
+        }
+        eprintln!(
+            "Specializing constraint sig: {} on set {}",
+            self.ability_impl_signature_to_string(constraint.ability_id, old_impl.impl_arguments),
+            self.pretty_print_type_substitutions(set, ", ")
+        );
+        let mut ability_args_new: SV8<NameAndType> = smallvec![];
+        let mut impl_args_new: SV4<NameAndType> = smallvec![];
+        for (index, ability_param) in
+            all_base_params.iter().filter(|p| !p.is_impl_param).enumerate()
+        {
+            let previous_value = self.named_types.get_nth(old_impl_ability_arguments, index);
+            let substituted = self.substitute_in_type(previous_value.type_id, set);
+            ability_args_new.push(NameAndType { name: ability_param.name, type_id: substituted });
+            eprintln!(
+                "> Did ability param {} -> {}",
+                self.type_id_to_string_ext(ability_param.type_variable_id, true),
+                self.type_id_to_string_ext(substituted, true)
+            );
+        }
+        for (index, impl_param) in all_base_params.iter().filter(|p| p.is_impl_param).enumerate() {
+            let previous_value = self.named_types.get_nth(old_impl_impl_arguments, index);
+            let substituted = self.substitute_in_type(previous_value.type_id, set);
+            impl_args_new.push(NameAndType { name: impl_param.name, type_id: substituted });
+            eprintln!(
+                "> Did impl param {} -> {}",
+                self.type_id_to_string_ext(impl_param.type_variable_id, true),
+                self.type_id_to_string_ext(substituted, true)
+            );
+        }
+        let ability_args_new_handle = self.named_types.add_slice_from_copy_slice(&ability_args_new);
+        let impl_args_new_handle = self.named_types.add_slice_from_copy_slice(&impl_args_new);
+        let specialized_base =
+            self.specialize_ability(base_ability_id, ability_args_new_handle, span, scope_id);
+        TypedAbilitySignature { ability_id: specialized_base, impl_arguments: impl_args_new_handle }
+    }
+
     fn determine_function_type_args_for_call(
         &mut self,
-        original_function_id: FunctionId,
+        original_function_sig: FunctionSignature,
         type_args: NamedTypeSlice,
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
@@ -11016,18 +11243,17 @@ impl TypedProgram {
         //
         // This method is risk-free in terms of 'leaking' inference types out
         let mut function_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
-        let original_function = self.get_function(original_function_id);
-        if !original_function.function_type_params.is_empty() {
+        if !original_function_sig.function_type_params.is_empty() {
             let subst_pairs: SmallVec<[_; 8]> = self
                 .named_types
-                .get_slice(original_function.type_params)
+                .get_slice(original_function_sig.type_params)
                 .iter()
                 .zip(self.named_types.get_slice(type_args).iter())
                 .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
                 .collect();
             for function_type_param in self
                 .existential_type_params
-                .get_slice_to_smallvec::<4>(original_function.function_type_params)
+                .get_slice_to_smallvec::<4>(original_function_sig.function_type_params)
                 .iter()
             {
                 let (corresponding_arg, corresponding_value_param) =
@@ -11127,16 +11353,15 @@ impl TypedProgram {
 
     fn determine_static_type_args_for_call(
         &mut self,
-        original_function_id: FunctionId,
+        original_function_sig: FunctionSignature,
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
     ) -> TyperResult<NamedTypeSlice> {
         let mut static_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
-        let original_function = self.get_function(original_function_id);
-        if !original_function.static_type_params.is_empty() {
+        if !original_function_sig.static_type_params.is_empty() {
             for static_type_param in self
                 .existential_type_params
-                .get_slice_to_smallvec::<4>(original_function.static_type_params)
+                .get_slice_to_smallvec::<4>(original_function_sig.static_type_params)
                 .iter()
             {
                 let (corresponding_arg, corresponding_value_param) =
@@ -11584,19 +11809,20 @@ impl TypedProgram {
         function_type_arguments: NamedTypeSlice,
         // Must 'zip' up with each static type param
         static_type_arguments: NamedTypeSlice,
-        generic_function_id: FunctionId,
+        generic_function_sig: FunctionSignature,
     ) -> TypeId {
-        let generic_function = self.get_function(generic_function_id);
-        let generic_function_type_id = generic_function.type_id;
+        //let generic_function = self.get_function(generic_function_id);
+        let generic_function_type_id = generic_function_sig.function_type;
         let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-            generic_function.function_type_params.len() + generic_function.type_params.len(),
+            generic_function_sig.function_type_params.len()
+                + generic_function_sig.type_params.len(),
         );
 
         // Here, we're substituting **the entire function type params** for the function types we
         // have. The pairs look like "some T -> T" -> "(int -> int)*"
         for (function_type_param, function_type_arg) in self
             .existential_type_params
-            .get_slice(generic_function.function_type_params)
+            .get_slice(generic_function_sig.function_type_params)
             .iter()
             .zip(self.named_types.get_slice(function_type_arguments))
         {
@@ -11611,7 +11837,7 @@ impl TypedProgram {
         // static int -> static[int, 42]
         for (static_type_param, static_type_arg) in self
             .existential_type_params
-            .get_slice(generic_function.static_type_params)
+            .get_slice(generic_function_sig.static_type_params)
             .iter()
             .zip(self.named_types.get_slice(static_type_arguments))
         {
@@ -11625,7 +11851,7 @@ impl TypedProgram {
         // such as T, U in fn makePair[T, U](t: T, u: U)
         subst_pairs.extend(
             self.named_types
-                .get_slice(generic_function.type_params)
+                .get_slice(generic_function_sig.type_params)
                 .iter()
                 .zip(self.named_types.get_slice(type_arguments))
                 .map(|(gen_param, type_arg)| TypeSubstitutionPair {
@@ -11688,7 +11914,7 @@ impl TypedProgram {
             type_arguments,
             function_type_arguments,
             static_type_arguments,
-            generic_function_id,
+            generic_function.signature(),
         );
         debug!(
             "specialized function type: {}",
@@ -12372,7 +12598,7 @@ impl TypedProgram {
         eprintln!(
             "Checking constraint {}: {}",
             self.type_id_to_string(target_type,),
-            self.ability_signature_to_string(signature.ability_id, signature.impl_arguments)
+            self.ability_impl_signature_to_string(signature.ability_id, signature.impl_arguments)
         );
         if let Some(impl_handle) =
             self.find_ability_impl_for_type_or_generate(target_type, signature.ability_id, span)
@@ -12497,10 +12723,10 @@ impl TypedProgram {
         arguments: NamedTypeSlice,
         span: SpanId,
         parent_scope_id: ScopeId,
-    ) -> TyperResult<AbilityId> {
+    ) -> AbilityId {
         let ability = self.get_ability(ability_id);
         if ability.kind.is_concrete() {
-            return Ok(ability_id);
+            return ability_id;
         }
         let generic_ability_id = ability_id;
         let ability_ast_id = ability.ast_id;
@@ -12519,7 +12745,7 @@ impl TypedProgram {
                 "Using cached ability specialization for {}",
                 self.ident_str(self.get_ability(cached_specialization.specialized_child).name)
             );
-            return Ok(cached_specialization.specialized_child);
+            return cached_specialization.specialized_child;
         };
 
         let specialized_ability_name = {
@@ -12602,13 +12828,16 @@ impl TypedProgram {
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = EcoVec::with_capacity(parsed_ability.functions.len());
         for parsed_fn in parsed_ability.functions.clone().iter() {
-            let Some(function_id) = self.eval_function_declaration(
+            let result = self.eval_function_declaration(
                 *parsed_fn,
                 specialized_ability_scope,
                 Some(FunctionAbilityContextInfo::ability_id_only(specialized_ability_id)),
                 ability_namespace_id,
-            )?
-            else {
+            );
+            if let Err(e) = result {
+                self.ice("Failed while specializing ability", Some(&e))
+            }
+            let Ok(Some(function_id)) = result else {
                 continue;
             };
             let function_name = self.get_function(function_id).name;
@@ -12633,7 +12862,7 @@ impl TypedProgram {
             ScopeOwnerId::Ability(specialized_ability_id),
         );
 
-        Ok(specialized_ability_id)
+        specialized_ability_id
     }
 
     fn check_ability_expr(
@@ -12674,7 +12903,7 @@ impl TypedProgram {
             ability_arguments,
             ability_expr.span,
             scope_id,
-        )?;
+        );
         Ok(TypedAbilitySignature { ability_id: new_ability_id, impl_arguments })
     }
 

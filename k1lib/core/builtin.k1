@@ -131,7 +131,6 @@ ability Equals {
   fn equals(self: Self, other: Self): bool
 }
 
-// TODO(dogfood): use writer ability for string interpolation
 // TODO(dogfood): Enhance with an `impl Error` type parameter
 // TODO(dogfood): Allow Error = never for infallible writes
 ability Writer {

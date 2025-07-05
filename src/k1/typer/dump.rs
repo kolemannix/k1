@@ -31,14 +31,7 @@ impl Display for TypedProgram {
             f.write_str("\n")?;
         }
         f.write_str("--- Ability Impls ---\n")?;
-        for (self_type_id, impls) in self.ability_impl_table.iter() {
-            writeln!(f, "impls for {}", self.type_id_to_string_ext(*self_type_id, true))?;
-            for impl_handle in impls {
-                f.write_str("\t")?;
-                self.display_ability_impl(f, impl_handle.full_impl_id, true)?;
-                f.write_str("\n")?;
-            }
-        }
+        self.dump_ability_impls(f)?;
         f.write_str("--- Scopes ---\n")?;
         for (id, scope) in self.scopes.iter() {
             write!(f, "scope {:02} ", id)?;
@@ -409,30 +402,7 @@ impl TypedProgram {
         }
 
         w.write_str("fn ")?;
-        w.write_str(self.ident_str(function.name))?;
-        if !function.type_params.is_empty() {
-            w.write_char('[')?;
-            for (idx, tp) in self.named_types.get_slice(function.type_params).iter().enumerate() {
-                if idx > 0 {
-                    w.write_str(", ")?;
-                }
-                self.write_ident(w, tp.name)?;
-            }
-            w.write_char(']')?;
-        }
-        w.write_char('(')?;
-        let function_type = self.types.get(function.type_id).as_function().unwrap();
-        for (idx, param) in function_type.physical_params.iter().enumerate() {
-            if idx > 0 {
-                w.write_str(", ")?;
-            }
-            w.write_str(self.ident_str(param.name))?;
-            w.write_str(": ")?;
-            self.display_type_id(param.type_id, false, w)?;
-        }
-        w.write_str(")")?;
-        w.write_str(": ")?;
-        self.display_type_id(function_type.return_type, false, w)?;
+        self.display_function_signature(w, function.signature())?;
         if display_block {
             w.write_str(" ")?;
             if let Some(block) = &function.body_block {
@@ -990,18 +960,37 @@ impl TypedProgram {
         ability_id: AbilityId,
         impl_arguments: &[NameAndType],
     ) -> std::fmt::Result {
-        self.write_ident(w, self.get_ability(ability_id).name)?;
-        if !impl_arguments.is_empty() {
-            write!(w, "[impl ")?;
-            for impl_arg in impl_arguments {
-                self.display_named_type(w, impl_arg)?;
-            }
-            write!(w, "]")?;
+        let ability = self.get_ability(ability_id);
+        self.write_ident(w, ability.name)?;
+        if ability.parameters.is_empty() && ability.kind.arguments().is_empty() {
+            return Ok(());
         }
+        write!(w, "[")?;
+        for arg in self.named_types.get_slice(ability.kind.arguments()) {
+            self.display_named_type(w, arg)?;
+            w.write_str(", ")?;
+        }
+        for arg in impl_arguments {
+            w.write_str("impl ")?;
+            self.display_named_type(w, arg)?;
+            w.write_str(", ")?;
+        }
+        write!(w, "]")?;
         Ok(())
     }
 
-    pub fn ability_signature_to_string(
+    pub fn ability_signature_to_string(&self, sig: TypedAbilitySignature) -> String {
+        let mut s = String::new();
+        self.display_ability_signature(
+            &mut s,
+            sig.ability_id,
+            self.named_types.get_slice(sig.impl_arguments),
+        )
+        .unwrap();
+        s
+    }
+
+    pub fn ability_impl_signature_to_string(
         &self,
         ability_id: AbilityId,
         impl_arguments: NamedTypeSlice,
@@ -1045,9 +1034,9 @@ impl TypedProgram {
                     AbilityImplFunction::FunctionId(ability_impl_fn) => {
                         self.display_function(self.get_function(ability_impl_fn), w, false)?
                     }
-                    AbilityImplFunction::Abstract(type_id) => {
+                    AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
-                        self.display_type_id(type_id, false, w)?;
+                        self.display_type_id(sig.function_type, false, w)?;
                     }
                 };
                 writeln!(w)?;
@@ -1089,8 +1078,8 @@ impl TypedProgram {
             write!(
                 s,
                 "{} -> {}",
-                self.type_id_to_string_ext(pair.from, false),
-                self.type_id_to_string_ext(pair.to, false)
+                self.type_id_to_string_ext(pair.from, true),
+                self.type_id_to_string_ext(pair.to, true)
             )
             .unwrap();
             first = false;
@@ -1142,6 +1131,59 @@ impl TypedProgram {
         s
     }
 
+    pub fn function_signature_to_string(&self, fn_signature: FunctionSignature) -> String {
+        let mut s = String::new();
+        self.display_function_signature(&mut s, fn_signature).unwrap();
+        s
+    }
+
+    pub fn display_function_signature(
+        &self,
+        w: &mut impl Write,
+        signature: FunctionSignature,
+    ) -> std::fmt::Result {
+        if let Some(name) = signature.name {
+            self.write_ident(w, name)?;
+        }
+        if signature.is_generic() {
+            w.write_char('[')?;
+            for (idx, tp) in self.named_types.get_slice(signature.type_params).iter().enumerate() {
+                if idx > 0 {
+                    w.write_str(", ")?;
+                }
+                self.write_ident(w, tp.name)?;
+            }
+            for ftp in self.existential_type_params.get_slice(signature.function_type_params).iter()
+            {
+                self.write_ident(w, ftp.name)?;
+                w.write_str(": ")?;
+                self.display_type_id(ftp.type_id, false, w)?;
+                w.write_str(", ")?;
+            }
+            for stp in self.existential_type_params.get_slice(signature.static_type_params).iter() {
+                self.write_ident(w, stp.name)?;
+                w.write_str(": ")?;
+                self.display_type_id(stp.type_id, false, w)?;
+                w.write_str(", ")?;
+            }
+            w.write_char(']')?;
+        }
+        w.write_char('(')?;
+        let function_type = self.types.get(signature.function_type).as_function().unwrap();
+        for (idx, param) in function_type.physical_params.iter().enumerate() {
+            if idx > 0 {
+                w.write_str(", ")?;
+            }
+            w.write_str(self.ident_str(param.name))?;
+            w.write_str(": ")?;
+            self.display_type_id(param.type_id, false, w)?;
+        }
+        w.write_str(")")?;
+        w.write_str(": ")?;
+        self.display_type_id(function_type.return_type, false, w)?;
+        Ok(())
+    }
+
     pub fn dump_types_to_string(&self) -> String {
         let mut s = String::new();
         self.dump_types(&mut s).unwrap();
@@ -1170,6 +1212,18 @@ impl TypedProgram {
             writeln!(w)?;
             self.dump_type(w, id)?;
             w.write_str("\n")?;
+        }
+        Ok(())
+    }
+
+    pub fn dump_ability_impls(&self, w: &mut impl Write) -> std::fmt::Result {
+        for (self_type_id, impls) in self.ability_impl_table.iter() {
+            writeln!(w, "impls for {}", self.type_id_to_string_ext(*self_type_id, true))?;
+            for impl_handle in impls {
+                w.write_str("\t")?;
+                self.display_ability_impl(w, impl_handle.full_impl_id, true)?;
+                w.write_str("\n")?;
+            }
         }
         Ok(())
     }
