@@ -294,6 +294,13 @@ impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
     }
 }
 
+// WHEN T IS EQ
+impl<T: PartialEq, Index: PoolIndex> Pool<T, Index> {
+    pub fn slice_contains(&self, handle: SliceHandle<Index>, elem: &T) -> bool {
+        self.get_slice(handle).contains(elem)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::num::NonZeroU32;

@@ -3,19 +3,19 @@ ns ability_generic {
   impl Add[Rhs = i32, Output = i32] for i32 {
     fn add(self: i32, rhs: Rhs): i32 { self + rhs }
   }
-  
+
   impl Add[Rhs = i64, Output = i64] for i32 {
    fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
   }
-  
+
   ns Foob {
     deftype alias myInt = int
-    
+
     impl Add[Rhs = myInt, Output = myInt] for myInt {
       fn add(self: myInt, rhs: myInt): myInt { self + rhs }
     }
   }
-  
+
   deftype GenericPoint[T] = { x: T, y: T }
   ability Add[Rhs, impl Output] {
     fn add(self: Self, rhs: Rhs): Output
@@ -23,7 +23,7 @@ ns ability_generic {
   impl[T: Add[Rhs = T, Output = T] and Show]
     Add[Rhs = GenericPoint[T], Output = GenericPoint[T]]
     for GenericPoint[T] {
-      fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] { 
+      fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] {
         let newX: T = self.x.add(other.x);
         //let a = self.x; let b = other.x;
         //println("GenericPoint.add X {a} + {b} = {newX}");
@@ -33,18 +33,18 @@ ns ability_generic {
         { x: newX, y: newY }
       }
   }
-  
+
   ability From[F] { fn from(t: F): Self }
   ability To[To] { fn to(self: Self): To }
-  
+
   impl[T: Show] To[To = string] for T {
     fn to(self: T): string { self.show() }
   }
-  
+
   impl[U, T: To[To = U]] From[F = T] for U {
     fn from(t: T): U { t.to() }
   }
-  
+
   impl To[To = string] for i32 {
     fn to(self: Self): string { Show/show[i32](self) }
   }
@@ -54,26 +54,26 @@ ns ability_generic {
   impl To[To = char] for byte {
     fn to(self: byte): char { self as char }
   }
-  
+
   fn test(): unit {
-  
+
     let btoc: char = (101: u8).to();
-  
+
     let x: i32 = 4;
-  
+
     let add32 = x.add(10: i32);
     //assert(add32 == 14);
-  
+
     let add64 = x.add(12: i64);
     assert(add64 == 16: i64);
-  
+
     // Blanket Impls
     let p: GenericPoint[i32] = { x: 1, y: 2 };
 
     let added: GenericPoint[i32] = p.add(p);
     assertEquals(added.x, (1 + 1) as i32);
     assertEquals(added.y, (2 + 2) as i32);
-  
+
     assertEquals((3: i32).to(): string, "3");
     assertEquals(From/from(3: i32): string, "3");
   }

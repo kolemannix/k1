@@ -5,6 +5,7 @@ pub mod types;
 
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::error::Error;
@@ -2415,6 +2416,7 @@ pub struct TypedAbilityImpl {
     pub kind: AbilityImplKind,
     pub blanket_type_params: NamedTypeSlice,
     pub self_type_id: TypeId,
+    pub base_ability_id: AbilityId,
     pub ability_id: AbilityId,
     /// The values for the types that the implementation is responsible for providing.
     /// Yes, they are already baked into the functions but I need them explicitly in order
@@ -2544,7 +2546,8 @@ impl UseStatus {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AbilityImplHandle {
-    ability_id: AbilityId,
+    base_ability_id: AbilityId,
+    specialized_ability_id: AbilityId,
     full_impl_id: AbilityImplId,
 }
 
@@ -5026,10 +5029,13 @@ impl TypedProgram {
 
     pub fn add_ability_impl(&mut self, ability_impl: TypedAbilityImpl) -> AbilityImplId {
         let id = AbilityImplId(self.ability_impls.len() as u32);
-        self.ability_impl_table
-            .entry(ability_impl.self_type_id)
-            .or_default()
-            .push(AbilityImplHandle { ability_id: ability_impl.ability_id, full_impl_id: id });
+        self.ability_impl_table.entry(ability_impl.self_type_id).or_default().push(
+            AbilityImplHandle {
+                base_ability_id: ability_impl.base_ability_id,
+                specialized_ability_id: ability_impl.ability_id,
+                full_impl_id: id,
+            },
+        );
         self.ability_impls.push(ability_impl);
         id
     }
@@ -5037,11 +5043,12 @@ impl TypedProgram {
     fn add_constrained_ability_impl(
         &mut self,
         type_variable_id: TypeId,
-        implemented_ability: TypedAbilitySignature,
+        impl_signature: TypedAbilitySignature,
         scope_id: ScopeId,
         span: SpanId,
     ) -> AbilityImplId {
-        let ability = self.abilities.get(implemented_ability.ability_id);
+        let ability = self.abilities.get(impl_signature.ability_id);
+        let base_ability_id = ability.base_ability_id;
         let ability_self_type = ability.self_type_id;
         let all_params = match ability.parent_ability_id() {
             None => ability.parameters.clone(),
@@ -5063,12 +5070,12 @@ impl TypedProgram {
         for (parent_impl_param, impl_arg) in all_params
             .iter()
             .filter(|p| p.is_impl_param)
-            .zip(self.named_types.get_slice(implemented_ability.impl_arguments).iter())
+            .zip(self.named_types.get_slice(impl_signature.impl_arguments).iter())
         {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
-        let functions = self.abilities.get(implemented_ability.ability_id).functions.clone();
+        let functions = self.abilities.get(impl_signature.ability_id).functions.clone();
         let impl_kind = AbilityImplKind::VariableConstraint;
         let functions = functions
             .iter()
@@ -5112,8 +5119,9 @@ impl TypedProgram {
             kind: impl_kind,
             blanket_type_params: SliceHandle::Empty,
             self_type_id: type_variable_id,
-            ability_id: implemented_ability.ability_id,
-            impl_arguments: implemented_ability.impl_arguments,
+            base_ability_id: base_ability_id,
+            ability_id: impl_signature.ability_id,
+            impl_arguments: impl_signature.impl_arguments,
             functions,
             scope_id,
             span,
@@ -5167,55 +5175,79 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_ability_base(&self, ability_id: AbilityId) -> AbilityId {
-        self.abilities.get(ability_id).parent_ability_id().unwrap_or(ability_id)
-    }
-
-    pub fn find_ability_impl_for_type_or_generate(
+    /// New resolution works on the base ability
+    pub fn find_ability_impl_for_type_or_generate_new(
         &mut self,
         self_type_id: TypeId,
-        target_ability_id: AbilityId,
+        target_base_ability_id: AbilityId,
+        // For each ability parameter, the type it must conform to,
+        // or None for if we didn't solve for it, meaning anything is fine
+        parameter_constraints: &[Option<TypeId>],
+        scope_id: ScopeId,
         span: SpanId,
-    ) -> Option<AbilityImplHandle> {
-        let maybe_concrete_impl = self
-            .ability_impl_table
-            .get(&self_type_id)
-            .and_then(|impl_handles| {
-                debug!(
-                    "Ability dump for {} {:02} in search of {} {:02}\n{}",
-                    self.type_id_to_string(self_type_id),
-                    self_type_id,
-                    self.ident_str(self.abilities.get(target_ability_id).name),
-                    target_ability_id.0,
-                    impl_handles
+    ) -> Result<AbilityImplHandle, Cow<'static, str>> {
+        let impl_handles_for_self = self.ability_impl_table.get(&self_type_id);
+        if let Some(impl_handles) = impl_handles_for_self {
+            debug!(
+                "NEW Ability dump for {} {:02} in search of {} {:02}\n{}",
+                self.type_id_to_string(self_type_id),
+                self_type_id,
+                self.ident_str(self.abilities.get(target_base_ability_id).name),
+                target_base_ability_id.0,
+                impl_handles
+                    .iter()
+                    .map(|h| {
+                        format!(
+                            "IMPL {:02} {} with args {}",
+                            h.specialized_ability_id.0,
+                            self.ident_str(self.abilities.get(h.specialized_ability_id).name),
+                            self.pretty_print_named_type_slice(
+                                self.get_ability_impl(h.full_impl_id).impl_arguments,
+                                ", "
+                            )
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            let mut valid_impls: SV4<AbilityImplHandle> = smallvec![];
+            for impl_handle in impl_handles {
+                if let Ok(()) = self.check_ability_impl(
+                    target_base_ability_id,
+                    *impl_handle,
+                    parameter_constraints,
+                    scope_id,
+                ) {
+                    valid_impls.push(*impl_handle);
+                }
+            }
+            match valid_impls.len() {
+                0 => {
+                    // Fall through to trying blanket implementations
+                }
+                1 => return Ok(valid_impls[0]),
+                _ => {
+                    let impls_formatted = valid_impls
                         .iter()
-                        .map(|h| {
-                            format!(
-                                "IMPL {:02} {} with args {}",
-                                h.ability_id.0,
-                                self.ident_str(self.abilities.get(h.ability_id).name),
-                                self.pretty_print_named_type_slice(
-                                    self.get_ability_impl(h.full_impl_id).impl_arguments,
-                                    ", "
-                                )
+                        .map(|i| {
+                            self.ability_signature_to_string(
+                                self.get_ability_impl(i.full_impl_id).signature(),
                             )
                         })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                impl_handles.iter().find(|handle| handle.ability_id == target_ability_id)
-            })
-            .copied();
-        if let Some(concrete_impl) = maybe_concrete_impl {
-            return Some(concrete_impl);
+                        .join("\n");
+                    return Err(format!(
+                        "Multiple matching implementations found: {}",
+                        impls_formatted
+                    )
+                    .into());
+                }
+            }
         };
-
-        let target_base_ability_id = self.get_ability_base(target_ability_id);
+        // Blanket
         debug!(
-            "Blanket search for {} for {} using base {}",
+            "Blanket search for impl {} for {}",
+            self.ident_str(self.abilities.get(target_base_ability_id).name),
             self.type_id_to_string(self_type_id),
-            self.ident_str(self.abilities.get(target_ability_id).name),
-            self.ident_str(self.abilities.get(target_base_ability_id).name)
         );
         let mut s = String::new();
         use std::fmt::Write;
@@ -5231,28 +5263,163 @@ impl TypedProgram {
         }
         eprintln!("{s}");
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
-            eprintln!("there is >=1 blank impl for base");
+            eprintln!(
+                "there is >=1 blanket impl for base {}",
+                self.ident_str(self.abilities.get(target_base_ability_id).name)
+            );
+            // nocommit clone
             for blanket_impl_id in blanket_impls_for_base.clone() {
+                eprintln!("Trying blanky");
                 match self.try_apply_blanket_implementation(
                     blanket_impl_id,
                     self_type_id,
-                    target_ability_id,
+                    target_base_ability_id,
+                    parameter_constraints,
                     span,
                 ) {
                     None => debug!("Blanket impl didn't work"),
-                    Some(impl_handle) => return Some(impl_handle),
+                    Some(impl_handle) => return Ok(impl_handle),
+                }
+            }
+        };
+        Err("No matching implementations found".into())
+    }
+
+    fn check_ability_impl(
+        &self,
+        target_base_ability_id: AbilityId,
+        impl_handle: AbilityImplHandle,
+        parameter_constraints: &[Option<TypeId>],
+        scope_id: ScopeId,
+    ) -> Result<(), Cow<str>> {
+        if impl_handle.base_ability_id != target_base_ability_id {
+            return Err(Cow::Borrowed(""));
+        }
+        let specialized_ability = self.abilities.get(impl_handle.specialized_ability_id);
+        for (impl_arg, maybe_constraint) in self
+            .named_types
+            .get_slice(specialized_ability.kind.arguments())
+            .iter()
+            .zip(parameter_constraints.iter())
+        {
+            if let Some(constraint) = maybe_constraint {
+                // nocommit(0): Does this have to 'check_types', or can it be
+                // something simpler? Good thing to test once everything is passing
+                // using this impl
+                if let Err(msg) = self.check_types(*constraint, impl_arg.type_id, scope_id) {
+                    return Err(Cow::Owned(format!(
+                        "Implementation has {} := {}, but context requires it to be {}. {msg}",
+                        self.ident_str(impl_arg.name),
+                        self.type_id_to_string(impl_arg.type_id),
+                        self.type_id_to_string(*constraint),
+                    )));
                 }
             }
         }
+        Ok(())
+    }
 
-        None
+    // nocommit(0) remove old one
+    pub fn find_ability_impl_for_type_or_generate(
+        &mut self,
+        self_type_id: TypeId,
+        target_specialized_ability_id: AbilityId,
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> Result<AbilityImplHandle, Cow<'static, str>> {
+        let specialized_ability = self.abilities.get(target_specialized_ability_id);
+        let base_ability = specialized_ability.base_ability_id;
+        let args = specialized_ability.kind.arguments();
+        let parameter_constraints: SV4<Option<TypeId>> =
+            self.named_types.get_slice(args).iter().map(|nt| Some(nt.type_id)).collect();
+        self.find_ability_impl_for_type_or_generate_new(
+            self_type_id,
+            base_ability,
+            &parameter_constraints,
+            scope_id,
+            span,
+        )
+        // let maybe_concrete_impl = self
+        //     .ability_impl_table
+        //     .get(&self_type_id)
+        //     .and_then(|impl_handles| {
+        //         debug!(
+        //             "Ability dump for {} {:02} in search of {} {:02}\n{}",
+        //             self.type_id_to_string(self_type_id),
+        //             self_type_id,
+        //             self.ident_str(self.abilities.get(target_specialized_ability_id).name),
+        //             target_specialized_ability_id.0,
+        //             impl_handles
+        //                 .iter()
+        //                 .map(|h| {
+        //                     format!(
+        //                         "IMPL {:02} {} with args {}",
+        //                         h.specialized_ability_id.0,
+        //                         self.ident_str(self.abilities.get(h.specialized_ability_id).name),
+        //                         self.pretty_print_named_type_slice(
+        //                             self.get_ability_impl(h.full_impl_id).impl_arguments,
+        //                             ", "
+        //                         )
+        //                     )
+        //                 })
+        //                 .collect::<Vec<_>>()
+        //                 .join(", "),
+        //         );
+        //         impl_handles
+        //             .iter()
+        //             .find(|handle| handle.specialized_ability_id == target_specialized_ability_id)
+        //     })
+        //     .copied();
+        // if let Some(concrete_impl) = maybe_concrete_impl {
+        //     return Some(concrete_impl);
+        // };
+        //
+        // let target_base_ability_id =
+        //     self.abilities.get(target_specialized_ability_id).base_ability_id;
+        // debug!(
+        //     "Blanket search for impl {} for {} (base {})",
+        //     self.type_id_to_string(self_type_id),
+        //     self.ident_str(self.abilities.get(target_specialized_ability_id).name),
+        //     self.ident_str(self.abilities.get(target_base_ability_id).name)
+        // );
+        // let mut s = String::new();
+        // use std::fmt::Write;
+        // for (base_ab, impls) in self.blanket_impls.iter() {
+        //     writeln!(
+        //         &mut s,
+        //         "{:02} {}: {}",
+        //         base_ab.0,
+        //         self.ident_str(self.abilities.get(*base_ab).name),
+        //         impls.len()
+        //     )
+        //     .unwrap();
+        // }
+        // eprintln!("{s}");
+        // if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
+        //     eprintln!("there is >=1 blank impl for base, and my par");
+        //     for blanket_impl_id in blanket_impls_for_base.clone() {
+        //         match self.try_apply_blanket_implementation(
+        //             blanket_impl_id,
+        //             self_type_id,
+        //             target_specialized_ability_id,
+        //             &[],
+        //             span,
+        //         ) {
+        //             None => debug!("Blanket impl didn't work"),
+        //             Some(impl_handle) => return Some(impl_handle),
+        //         }
+        //     }
+        // }
+        //
+        // None
     }
 
     pub fn try_apply_blanket_implementation(
         &mut self,
         blanket_impl_id: AbilityImplId,
         self_type_id: TypeId,
-        target_ability_id: AbilityId,
+        target_base_ability_id: AbilityId,
+        target_ability_args: &[Option<TypeId>],
         span: SpanId,
     ) -> Option<AbilityImplHandle> {
         let old_inference_context = std::mem::take(&mut self.inference_context);
@@ -5265,24 +5432,21 @@ impl TypedProgram {
             debug!("Blanket impl failed compile; skipping");
             return None;
         }
-        let target_ability = self_.abilities.get(target_ability_id);
-        let target_ability_args = target_ability.kind.arguments();
         let AbilityImplKind::Blanket { parsed_id, .. } = blanket_impl.kind else {
             unreachable!("Expected a blanket impl")
         };
-        let target_base = self_.get_ability_base(target_ability_id);
 
         let blanket_ability = self_.abilities.get(blanket_impl.ability_id);
-        let blanket_base = self_.get_ability_base(blanket_impl.ability_id);
+        let blanket_base = blanket_ability.base_ability_id;
 
-        if blanket_base != target_base {
+        if blanket_base != target_base_ability_id {
             debug!("Wrong blanket base {}", self_.ident_str(blanket_ability.name));
             return None;
         }
 
         let blanket_arguments = blanket_ability.kind.arguments();
 
-        debug!(
+        eprintln!(
             "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
             self_.ident_str(blanket_ability.name),
             self_.pretty_print_named_types(self_.named_types.get_slice(blanket_arguments), ", "),
@@ -5290,15 +5454,7 @@ impl TypedProgram {
         );
 
         if blanket_arguments.len() != target_ability_args.len() {
-            debug!(
-                "Wrong arg count {} vs {}",
-                self_
-                    .pretty_print_named_types(self_.named_types.get_slice(blanket_arguments), ", "),
-                self_.pretty_print_named_types(
-                    self_.named_types.get_slice(target_ability_args),
-                    ", "
-                )
-            );
+            debug!("Wrong arg count {} vs {}", blanket_arguments.len(), target_ability_args.len());
             return None;
         }
 
@@ -5316,30 +5472,32 @@ impl TypedProgram {
             param_type: blanket_impl_self_type_id,
             allow_mismatch: true,
         });
-        for (arg_to_blanket, arg_to_target) in self_
-            .named_types
-            .get_slice(blanket_arguments)
-            .iter()
-            .zip(self_.named_types.get_slice(target_ability_args))
+        for (arg_to_blanket, arg_to_target) in
+            self_.named_types.get_slice(blanket_arguments).iter().zip(target_ability_args)
         {
-            args_and_params.push(InferenceInputPair {
-                arg: TypeOrParsedExpr::Type(arg_to_target.type_id),
-                param_type: arg_to_blanket.type_id,
-                allow_mismatch: true,
-            });
+            match arg_to_target {
+                None => {
+                    eprintln!("No arg for ability param; probably can't solve it")
+                }
+                Some(arg_to_target) => args_and_params.push(InferenceInputPair {
+                    arg: TypeOrParsedExpr::Type(*arg_to_target),
+                    param_type: arg_to_blanket.type_id,
+                    allow_mismatch: true,
+                }),
+            };
         }
 
         let blanket_impl_type_params_handle =
             self_.get_ability_impl(blanket_impl_id).blanket_type_params;
         let root_scope_id = self_.scopes.get_root_scope_id();
-        let solutions = self_.infer_types(
+        let solutions_result = self_.infer_types(
             blanket_impl_type_params_handle,
             blanket_impl_type_params_handle,
             &args_and_params,
             span,
             root_scope_id,
         );
-        let solutions = match solutions {
+        let (solutions, _all_solutions) = match solutions_result {
             Err(e) => {
                 debug!("Could not solve all blanket impl params: {e}");
                 return None;
@@ -5409,7 +5567,7 @@ impl TypedProgram {
     ) -> TyperResult<AbilityImplHandle> {
         let blanket_impl = self.get_ability_impl(blanket_impl_id).clone();
 
-        let generic_parent = blanket_impl.kind.blanket_parent().unwrap();
+        let generic_base_ability_id = blanket_impl.kind.blanket_parent().unwrap();
 
         let new_impl_scope = self.scopes.add_sibling_scope(
             blanket_impl.scope_id,
@@ -5448,7 +5606,7 @@ impl TypedProgram {
         let substituted_ability_args_handle =
             self.named_types.add_slice_from_copy_slice(&substituted_ability_args);
         let concrete_ability_id = self.specialize_ability(
-            generic_parent,
+            generic_base_ability_id,
             substituted_ability_args_handle,
             blanket_impl.span,
             blanket_impl.scope_id,
@@ -5514,13 +5672,18 @@ impl TypedProgram {
             blanket_type_params: SliceHandle::Empty,
             self_type_id,
             ability_id: concrete_ability_id,
+            base_ability_id: generic_base_ability_id,
             impl_arguments: substituted_impl_arguments_handle,
             functions: specialized_functions,
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: vec![],
         });
-        Ok(AbilityImplHandle { ability_id: concrete_ability_id, full_impl_id: id })
+        Ok(AbilityImplHandle {
+            base_ability_id: generic_base_ability_id,
+            specialized_ability_id: concrete_ability_id,
+            full_impl_id: id,
+        })
     }
 
     pub fn get_ability_impl(&self, ability_impl_id: AbilityImplId) -> &TypedAbilityImpl {
@@ -6027,6 +6190,7 @@ impl TypedProgram {
         let block_try_impl = self.expect_ability_implementation(
                     block_return_type,
                     TRY_ABILITY_ID,
+                    scope_id,
                     span,
                 ).map_err(|mut e| {
                         e.message = format!("`.try` can only be used from a function or lambda that returns a type implementing `Try`. {}", e.message);
@@ -6035,7 +6199,7 @@ impl TypedProgram {
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
         let try_value_type = self.get_expr_type_id(try_value_original_expr);
         let value_try_impl =
-            self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, span)?;
+            self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
         let block_impl_args = self.get_ability_impl(block_try_impl.full_impl_id).impl_arguments;
         let value_impl_args = self.get_ability_impl(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
@@ -6127,8 +6291,12 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
         let operand_type = self.exprs.get(operand_expr).get_type();
-        let _unwrap_impl =
-            self.expect_ability_implementation(operand_type, UNWRAP_ABILITY_ID, span)?;
+        let _unwrap_impl = self.expect_ability_implementation(
+            operand_type,
+            UNWRAP_ABILITY_ID,
+            ctx.scope_id,
+            span,
+        )?;
         self.synth_typed_function_call(
             qident!(self, span, ["Unwrap"], "unwrap"),
             &[],
@@ -8190,7 +8358,8 @@ impl TypedProgram {
                     }
                     TypedPattern::LiteralString(string_id, span) => {
                         let string_expr = self.exprs.add(TypedExpr::String(*string_id, *span));
-                        let condition = self.synth_equals_call(target_expr, string_expr, *span)?;
+                        let condition =
+                            self.synth_equals_call(target_expr, string_expr, arm_scope_id, *span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: condition });
                         Ok(())
                     }
@@ -8352,12 +8521,14 @@ impl TypedProgram {
         let (target_is_iterator, item_type) = match self.expect_ability_implementation(
             iterable_type,
             ITERABLE_ABILITY_ID,
+            ctx.scope_id,
             iterable_span,
         ) {
             Err(_not_iterable) => {
                 match self.expect_ability_implementation(
                     iterable_type,
                     ITERATOR_ABILITY_ID,
+                    ctx.scope_id,
                     iterable_span,
                 ) {
                     Err(_not_iterator) => {
@@ -8597,13 +8768,14 @@ impl TypedProgram {
         &mut self,
         type_id: TypeId,
         ability_id: AbilityId,
+        scope_id: ScopeId,
         span_for_error: SpanId,
     ) -> TyperResult<AbilityImplHandle> {
-        self.find_ability_impl_for_type_or_generate(type_id, ability_id, span_for_error).ok_or_else(
-            || {
+        self.find_ability_impl_for_type_or_generate(type_id, ability_id, scope_id, span_for_error).map_err(
+            |msg| {
                 errf!(
                     span_for_error,
-                    "Missing ability '{}' for '{}'. It implements the following abilities:\n{}",
+                    "Missing ability '{}' for '{}': {msg}. It implements the following abilities:\n{}",
                     self.ident_str(self.abilities.get(ability_id).name),
                     self.type_id_to_string(type_id),
                     &self
@@ -8612,7 +8784,7 @@ impl TypedProgram {
                         .unwrap_or(&vec![])
                         .iter()
                         .map(|h| self.ability_impl_signature_to_string(
-                            h.ability_id,
+                            h.specialized_ability_id,
                             self.get_ability_impl(h.full_impl_id).impl_arguments
                         ))
                         .collect::<Vec<_>>()
@@ -9043,8 +9215,9 @@ impl TypedProgram {
         // LHS must implement Unwrap and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get(lhs).get_type();
-        let unwrap_impl =
-            self.expect_ability_implementation(lhs_type, UNWRAP_ABILITY_ID, span).map_err(|e| {
+        let unwrap_impl = self
+            .expect_ability_implementation(lhs_type, UNWRAP_ABILITY_ID, ctx.scope_id, span)
+            .map_err(|e| {
                 errf!(
                     span,
                     "'?' operator can only be used on a type that implements `Unwrap`. {}",
@@ -9111,7 +9284,7 @@ impl TypedProgram {
                 self.type_id_to_string(lhs_type_id)
             )
         } else {
-            let call_expr = self.synth_equals_call(lhs, rhs, binary_op.span)?;
+            let call_expr = self.synth_equals_call(lhs, rhs, ctx.scope_id, binary_op.span)?;
             Ok(call_expr)
         }?;
         let final_result = match binary_op.op_kind {
@@ -9740,14 +9913,14 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<AbilityImplFunction> {
         let call_span = fn_call.span;
-        let ability_fn_signature = self.types.get(function_type_id).as_function().unwrap();
-        let ability_fn_return_type = ability_fn_signature.return_type;
-        let ability_fn_params: Vec<FnParamType> = ability_fn_signature.logical_params().to_vec();
+        let ability_fn_type = self.types.get(function_type_id).as_function().unwrap();
+        let ability_fn_return_type = ability_fn_type.return_type;
+        let ability_fn_params: Vec<FnParamType> = ability_fn_type.logical_params().to_vec();
         let ability_params = self.abilities.get(base_ability_id).parameters.clone();
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
-        if passed_len != ability_fn_signature.logical_params().len() {
+        if passed_len != ability_fn_type.logical_params().len() {
             return failf!(
                 call_span,
                 "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)",
@@ -9755,10 +9928,9 @@ impl TypedProgram {
             );
         }
 
-        // First, we need to solve for 'Self' and all of the ability's other type parameters
-        // using the expressions and (context + return type) of the called function
+        // First, we need to solve for 'Self' using the arguments and expected return type
         //
-        // Future TODO: Make sure we handle context params in ability functions correctly,
+        // TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
 
         let all_type_params: SmallVec<[NameAndType; 8]> = {
@@ -9791,6 +9963,12 @@ impl TypedProgram {
         };
         let must_solve_type_params_handle =
             self.named_types.add_slice_from_copy_slice(&must_solve_type_params);
+
+        let self_only_type_params_handle =
+            self.named_types.add_slice_from_copy_slice(&[NameAndType {
+                name: self.ast.idents.builtins.Self_,
+                type_id: ability_self_type_id,
+            }]);
 
         let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
             Some(ka) => &mut ka.1.iter().map(|t| MaybeTypedExpr::Typed(*t)),
@@ -9834,48 +10012,102 @@ impl TypedProgram {
             "to solve: {}",
             self.pretty_print_named_type_slice(must_solve_type_params_handle, ", ")
         );
-        let solved_params = self.infer_types(
+        //Battle plan
+        //    - Get rid of separate 'must solve', just infer what's passed
+        //    - Add a helper that checks must_solves for convenience
+        //    - Here, I ensure 'Self' is solved, then ensure that, for each solved param,
+        //      the impl's type for that param is _compatible_, maybe just meaning it typechecks or is an inference hole
+        let (self_only, other_solved) = self.infer_types(
             all_type_params_handle,
-            must_solve_type_params_handle,
+            self_only_type_params_handle,
             &args_and_params,
             fn_call.span,
             ctx.scope_id,
         )?;
-
-        let solved_self = *self.named_types.get_nth(solved_params, 0);
-        let solved_rest = solved_params.skip(1);
-
-        // We only solve for the ability-side params, so we pass a flag to check_ability_arguments
-        // indicating that we aren't providing the impl params
-        let skip_impl_check = true;
-        self.check_ability_arguments(base_ability_id, solved_rest, call_span, ctx.scope_id, skip_impl_check).map_err(|e| {
-            errf!(
-                e.span,
-                "I thought I found a matching ability call, but the arguments didn't check out. This is likely a bug {}",
-                e.message
-            )
-        })?;
-        let specialized_ability_id =
-            self.specialize_ability(base_ability_id, solved_rest, call_span, ctx.scope_id);
-
-        // 2) Find impl based on solved Self
-        //   - ensure params are consistent
-        //   - If not, try next impl
-        // 2a) Generate auto impl if that's what we find, cache it at low prio
-        // 3) Return impl fn id, which carries nice type information, since its fully specialized
-        let Some(impl_handle) = self.find_ability_impl_for_type_or_generate(
-            solved_self.type_id,
-            specialized_ability_id,
+        let mut parameter_constraints: SV8<Option<TypeId>> = smallvec![];
+        for ab_param in &ability_params {
+            if ab_param.is_impl_param {
+                continue;
+            }
+            let sltn =
+                self.named_types.get_slice(other_solved).iter().find(|nt| nt.name == ab_param.name);
+            match sltn.as_ref() {
+                Some(sltn) => eprintln!(
+                    "*** SOLVED other param {} -> {}",
+                    self.named_type_to_string(*ab_param),
+                    self.named_type_to_string(*sltn)
+                ),
+                None => {
+                    self.write_location(&mut stderr(), call_span);
+                    eprintln!(
+                        "*** UNSOLVED other param {}; other_solved was {}",
+                        self.named_type_to_string(*ab_param),
+                        self.pretty_print_named_type_slice(other_solved, ", ")
+                    )
+                }
+            };
+            parameter_constraints.push(sltn.map(|nt| nt.type_id));
+        }
+        let solved_self = self.named_types.get_nth(self_only, 0).type_id;
+        let impl_handle = self.find_ability_impl_for_type_or_generate_new(
+            solved_self,
+            base_ability_id,
+            &parameter_constraints,
+            ctx.scope_id,
             call_span,
-        ) else {
-            return failf!(
-                call_span,
-                "Call to `{}` with type Self = {} does not work, since it does not implement ability {}",
-                self.type_id_to_string(function_type_id),
-                self.type_id_to_string(solved_self.type_id),
-                self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
-            );
-        };
+        ).map_err(|msg| {
+           errf!(
+               call_span,
+               "Call to `{}` with type Self = {} does not work, since it does not implement ability {}. {}",
+               self.type_id_to_string(function_type_id),
+               self.type_id_to_string(solved_self),
+               self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
+               msg
+           )
+        })?;
+
+        //let (solved_params, _) = self.infer_types(
+        //    all_type_params_handle,
+        //    must_solve_type_params_handle,
+        //    &args_and_params,
+        //    fn_call.span,
+        //    ctx.scope_id,
+        //)?;
+
+        //let solved_self = *self.named_types.get_nth(solved_params, 0);
+        //let solved_rest = solved_params.skip(1);
+
+        //// We only solve for the ability-side params, so we pass a flag to check_ability_arguments
+        //// indicating that we aren't providing the impl params
+        //let skip_impl_check = true;
+        //self.check_ability_arguments(base_ability_id, solved_rest, call_span, ctx.scope_id, skip_impl_check).map_err(|e| {
+        //    errf!(
+        //        e.span,
+        //        "I thought I found a matching ability call, but the arguments didn't check out. This is likely a bug {}",
+        //        e.message
+        //    )
+        //})?;
+        //let specialized_ability_id =
+        //    self.specialize_ability(base_ability_id, solved_rest, call_span, ctx.scope_id);
+
+        //// 2) Find impl based on solved Self
+        ////   - ensure params are consistent
+        ////   - If not, try next impl
+        //// 2a) Generate auto impl if that's what we find, cache it at low prio
+        //// 3) Return impl fn id, which carries nice type information, since its fully specialized
+        //let Some(impl_handle) = self.find_ability_impl_for_type_or_generate(
+        //    solved_self.type_id,
+        //    specialized_ability_id,
+        //    call_span,
+        //) else {
+        //    return failf!(
+        //        call_span,
+        //        "Call to `{}` with type Self = {} does not work, since it does not implement ability {}",
+        //        self.type_id_to_string(function_type_id),
+        //        self.type_id_to_string(solved_self.type_id),
+        //        self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
+        //    );
+        //};
         let impl_function = self
             .get_ability_impl(impl_handle.full_impl_id)
             .function_at_index(function_ability_index);
@@ -10150,7 +10382,7 @@ impl TypedProgram {
                             param_type: generic_variant_payload,
                             allow_mismatch: false,
                         });
-                        let solutions = self.infer_types(
+                        let (solutions, _all_solutions) = self.infer_types(
                             g_params,
                             g_params,
                             &args_and_params,
@@ -10752,9 +10984,14 @@ impl TypedProgram {
         }
     }
 
-    /// allow_mismatch is used to avoid reporting a mismatch on the return type,
-    /// before we're able to learn more about the rest of the inference. We get a better
-    /// error message if we wait to report the mismatch until the end
+    /// Performs type inference given an input of, essentially, (expected type, actual type) and
+    /// a series of parameters to solve for, and performs unification/matching on those pairs.
+    ///
+    /// allow_mismatch allows inference to continue when a term does not match with its position's
+    /// type.
+    /// It is currently used to avoid reporting a mismatch on the return type
+    /// before we're able to learn more about the rest of the inference.
+    /// We get a better error message if we wait to report the mismatch until the end
     fn infer_types(
         &mut self,
         all_type_params: NamedTypeSlice,
@@ -10769,7 +11006,7 @@ impl TypedProgram {
         inference_pairs: &[InferenceInputPair],
         span: SpanId,
         scope_id: ScopeId,
-    ) -> TyperResult<NamedTypeSlice> {
+    ) -> TyperResult<(NamedTypeSlice, NamedTypeSlice)> {
         debug!("INFER LEVEL {}", self.inference_context.origin_stack.len());
 
         self.inference_context.origin_stack.push(span);
@@ -10794,7 +11031,6 @@ impl TypedProgram {
         // corresponding instantiated type holes for this inference context
         let mut instantiation_set: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
-        let mut solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
 
         let inference_var_count = self_.inference_context.vars.len();
         for (idx, param) in
@@ -10872,21 +11108,21 @@ impl TypedProgram {
             // Consider:
             // fn find[T, I: Iterator[Item = T]]
             // We need to learn T from the ability impl for Iterator for whatever I is
-            eprintln!("Checking for constraints of solved params...");
+            //eprintln!("Checking for constraints of solved params...");
             // nocommit clone
             for pair in self_.inference_context.substitutions_vec.clone().iter() {
                 if self_.types.get_contained_type_variable_counts(pair.to).inference_variable_count
                     == 0
                 {
-                    eprintln!("Searching set for {}", self_.type_id_to_string(pair.from));
+                    // eprintln!("Searching set for {}", self_.type_id_to_string(pair.from));
                     if let Some(instantiation_pair) =
                         instantiation_set.iter().find(|p| p.to == pair.from)
                     {
-                        eprintln!(
-                            "True solution for {}: {}",
-                            self_.type_id_to_string(instantiation_pair.from),
-                            self_.pretty_print_type_substitutions(&[*pair], ", ")
-                        );
+                        // eprintln!(
+                        //     "True solution for {}: {}",
+                        //     self_.type_id_to_string(instantiation_pair.from),
+                        //     self_.pretty_print_type_substitutions(&[*pair], ", ")
+                        // );
                         let solution = pair.to;
                         let type_param = self_
                             .named_types
@@ -10914,9 +11150,10 @@ impl TypedProgram {
                                 match self_.find_ability_impl_for_type_or_generate(
                                     solution,
                                     sig.ability_id,
+                                    scope_id,
                                     span,
                                 ) {
-                                    Some(impl_id) => {
+                                    Ok(impl_id) => {
                                         let the_impl = self_.get_ability_impl(impl_id.full_impl_id);
                                         //self_.add_substitution(set, pair);
                                         eprintln!(
@@ -10962,24 +11199,11 @@ impl TypedProgram {
                                                     "did not match; likely we'll fail later"
                                                 ),
                                             }
-                                            //self_.add_substitution(set, pair);
                                         }
                                         // nocommit: Iterate impl params too
                                     }
-                                    None => {}
+                                    Err(msg) => {}
                                 };
-                                // self_.specialize_ability()
-                                // if let Ok(_) = self_.check_type_constraint(
-                                //     pair.to,
-                                //     signature,
-                                //     type_param.name,
-                                //     scope_id,
-                                //     span,
-                                // ) {
-                                //     eprintln!("What can I learn from this impl holding")
-                                // } else {
-                                //     eprintln!("NO IMPL")
-                                // }
                             }
                         }
                     } else {
@@ -10995,16 +11219,24 @@ impl TypedProgram {
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
         let final_substitutions = &self_.inference_context.substitutions;
 
+        let mut solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
-        for param in self_.named_types.get_slice(must_solve_params) {
+        let mut all_solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
+        for param in self_.named_types.get_slice(all_type_params) {
             let param_to_hole =
                 instantiation_set.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
+            let is_must_solve = self_.named_types.slice_contains(must_solve_params, param);
             if let Some(solution) = final_substitutions.get(&corresponding_hole) {
-                solutions.push(NameAndType { name: param.name(), type_id: *solution });
+                if is_must_solve {
+                    solutions.push(NameAndType { name: param.name(), type_id: *solution });
+                };
+                all_solutions.push(NameAndType { name: param.name(), type_id: *solution });
             } else {
-                unsolved_params.push(*param);
-            };
+                if is_must_solve {
+                    unsolved_params.push(*param);
+                }
+            }
         }
         if !unsolved_params.is_empty() {
             return failf!(
@@ -11031,7 +11263,8 @@ impl TypedProgram {
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
         let solutions_handle = self_.named_types.add_slice_from_copy_slice(&solutions);
-        Ok(solutions_handle)
+        let all_solutions_handle = self_.named_types.add_slice_from_copy_slice(&all_solutions);
+        Ok((solutions_handle, all_solutions_handle))
     }
 
     fn infer_and_constrain_call_type_args(
@@ -11108,7 +11341,7 @@ impl TypedProgram {
 
             // Inference pairs for everything we learn from the constraints
 
-            let solutions = self
+            let (solutions, _all_solutions) = self
                 .infer_types(
                     generic_function_sig.type_params,
                     generic_function_sig.type_params,
@@ -11140,22 +11373,23 @@ impl TypedProgram {
                     .iter(),
             )
         {
-            self.check_type_constraints(
-                type_param.name,
-                type_param.type_id,
-                solution.type_id,
-                ctx.scope_id,
-                fn_call.span,
-            )
-            .map_err(|e| {
-                errf!(
-                    e.span,
-                    "{}. Therefore, cannot call function '{}' with given types: {}",
-                    e.message,
-                    self.ident_str(fn_call.name.name),
-                    self.pretty_print_named_type_slice(solved_type_params, ", ")
-                )
-            })?;
+            //eprintln!("this check_type_constraints");
+            //self.check_type_constraints(
+            //    type_param.name,
+            //    type_param.type_id,
+            //    solution.type_id,
+            //    ctx.scope_id,
+            //    fn_call.span,
+            //)
+            //.map_err(|e| {
+            //    errf!(
+            //        e.span,
+            //        "{}. Therefore, cannot call function '{}' with given types: {}",
+            //        e.message,
+            //        self.ident_str(fn_call.name.name),
+            //        self.pretty_print_named_type_slice(solved_type_params, ", ")
+            //    )
+            //})?;
         }
         Ok(solved_type_params)
     }
@@ -11181,7 +11415,10 @@ impl TypedProgram {
         }
         eprintln!(
             "Specializing constraint sig: {} on set {}",
-            self.ability_impl_signature_to_string(constraint.ability_id, old_impl.impl_arguments),
+            self.ability_impl_signature_to_string(
+                constraint.specialized_ability_id,
+                old_impl.impl_arguments
+            ),
             self.pretty_print_type_substitutions(set, ", ")
         );
         let mut ability_args_new: SV8<NameAndType> = smallvec![];
@@ -12589,9 +12826,12 @@ impl TypedProgram {
             self.type_id_to_string(target_type,),
             self.ability_impl_signature_to_string(signature.ability_id, signature.impl_arguments)
         );
-        if let Some(impl_handle) =
-            self.find_ability_impl_for_type_or_generate(target_type, signature.ability_id, span)
-        {
+        if let Ok(impl_handle) = self.find_ability_impl_for_type_or_generate(
+            target_type,
+            signature.ability_id,
+            scope_id,
+            span,
+        ) {
             let found_impl = self.get_ability_impl(impl_handle.full_impl_id);
             debug_assert!(signature.impl_arguments.len() == found_impl.impl_arguments.len());
             for (constraint_arg, passed_arg) in self
@@ -12640,7 +12880,7 @@ impl TypedProgram {
         let constraints = self.get_constrained_ability_impls_for_type(param_type).to_vec();
         for constraint in &constraints {
             let signature = TypedAbilitySignature {
-                ability_id: constraint.ability_id,
+                ability_id: constraint.specialized_ability_id,
                 impl_arguments: self.get_ability_impl(constraint.full_impl_id).impl_arguments,
             };
             self.check_type_constraint(passed_type, signature, param_name, scope_id, span)?;
@@ -13220,6 +13460,7 @@ impl TypedProgram {
                     let result_impl = self_.expect_ability_implementation(
                         return_type,
                         UNWRAP_ABILITY_ID,
+                        fn_scope_id,
                         parsed_function_span,
                     )?;
                     let impl_args = self_.get_ability_impl(result_impl.full_impl_id).impl_arguments;
@@ -13715,7 +13956,7 @@ impl TypedProgram {
             impl_arguments.push(NameAndType { name: impl_param.name, type_id: arg_type })
         }
 
-        let base_ability_id = self.get_ability_base(ability_id);
+        let base_ability_id = ability.base_ability_id;
         let kind = if parsed_ability_impl.generic_impl_params.is_empty() {
             AbilityImplKind::Concrete
         } else {
@@ -13807,6 +14048,7 @@ impl TypedProgram {
             blanket_type_params: blanked_type_params_handle,
             self_type_id: impl_self_type,
             ability_id,
+            base_ability_id,
             impl_arguments: impl_arguments_handle,
             functions: typed_functions,
             scope_id: impl_scope_id,
@@ -15080,11 +15322,12 @@ impl TypedProgram {
         &mut self,
         lhs: TypedExprId,
         rhs: TypedExprId,
+        scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         let lhs_type = self.exprs.get(lhs).get_type();
         let implementation =
-            self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, span)?;
+            self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, scope_id, span)?;
         let implementation = self.get_ability_impl(implementation.full_impl_id);
         let ability = self.abilities.get(EQUALS_ABILITY_ID);
         let equals_index =

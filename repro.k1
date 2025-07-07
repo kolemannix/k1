@@ -35,9 +35,8 @@ impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B] {
 fn unwrapB[
   X,
   Y,
-  T: AsPair[AA=X, BB=Y] and AsPair[AA=Y, BB=X]
+  T: AsPair[AA=X, BB=Y]// and AsPair[AA=Y, BB=X]
 ](t: T): Y? {
-  t.getB();
   // -> AsPair/getB(t)
   // t: T: Self
   // <ret>: Opt[Y]
@@ -47,6 +46,8 @@ fn unwrapB[
   // Try impl 1:
   //   getB(): Opt[Y]
   // A :=
+  //let b: Y? = t.getB();
+  //b.!
   t.getB()
 }
 
@@ -62,7 +63,8 @@ fn main(): i32 {
   // Phase 1
   let myPair: Pair[int, bool] = { a: mem/new(10), b: some(true) };
   getNothin(t = myPair);
-  @debug unwrapB(myPair);
+  let x = unwrapB(myPair);
+  assert(x.!);
 
   // Phase 2
   //position[int, BufferIterator[int]](x, y);
