@@ -255,12 +255,23 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
 
 /// WHEN T IS COPY IMPL
 impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
-    pub fn get_slice_to_smallvec_copy<const N: usize>(
-        &self,
-        handle: SliceHandle<Index>,
-    ) -> SmallVec<[T; N]>
+    pub fn copy_slice_sv<const N: usize>(&self, handle: SliceHandle<Index>) -> SmallVec<[T; N]>
     where
         [T; N]: smallvec::Array<Item = T>,
+    {
+        SmallVec::from_slice(self.get_slice(handle))
+    }
+
+    pub fn copy_slice_sv4(&self, handle: SliceHandle<Index>) -> SmallVec<[T; 4]>
+    where
+        [T; 4]: smallvec::Array<Item = T>,
+    {
+        SmallVec::from_slice(self.get_slice(handle))
+    }
+
+    pub fn copy_slice_sv8(&self, handle: SliceHandle<Index>) -> SmallVec<[T; 8]>
+    where
+        [T; 8]: smallvec::Array<Item = T>,
     {
         SmallVec::from_slice(self.get_slice(handle))
     }

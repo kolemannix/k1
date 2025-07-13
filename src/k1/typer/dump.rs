@@ -983,7 +983,7 @@ impl TypedProgram {
         let mut s = String::new();
         self.display_ability_signature(
             &mut s,
-            sig.ability_id,
+            sig.specialized_ability_id,
             self.named_types.get_slice(sig.impl_arguments),
         )
         .unwrap();
@@ -1078,8 +1078,8 @@ impl TypedProgram {
             write!(
                 s,
                 "{} -> {}",
-                self.type_id_to_string_ext(pair.from, true),
-                self.type_id_to_string_ext(pair.to, true)
+                self.type_id_to_string_ext(pair.from, false),
+                self.type_id_to_string_ext(pair.to, false)
             )
             .unwrap();
             first = false;
@@ -1224,6 +1224,20 @@ impl TypedProgram {
                 self.display_ability_impl(w, impl_handle.full_impl_id, true)?;
                 w.write_str("\n")?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn dump_blanket_impls(&self, w: &mut impl Write) -> std::fmt::Result {
+        for (base_ab, impls) in self.blanket_impls.iter() {
+            writeln!(
+                w,
+                "{:02} {}: {}",
+                base_ab.0,
+                self.ident_str(self.abilities.get(*base_ab).name),
+                impls.len()
+            )
+            .unwrap();
         }
         Ok(())
     }

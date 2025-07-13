@@ -299,7 +299,7 @@ impl FloatType {
 //     pub span: SpanId,
 // }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct FnParamType {
     // FIXME: Determine if param names are truly 'part' of the function type.
     // For now, keeping them to fix some bugs
