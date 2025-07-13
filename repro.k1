@@ -1,21 +1,22 @@
 use core/BufferIterator
 
-//fn find[T, I: Iterator[Item = T]](iter: I, pred: some \T -> bool): T? {
-//  for i in iter do {
-//    if pred(i) return(.Some(i))
-//  };
-//  return(.None)
-//}
+fn find[
+  T,
+  Iter: Iterator[Item = T],
+  I: Iterable[Item = T, I = Iter]
+](iterable: I, pred: some \T -> bool): T? {
+  for i in iterable do {
+    if pred(i) return(.Some(i))
+  };
+  return(.None)
+}
 
-// a1 =:= I
-// a2 =:= T
-// <I's iterator impl .Item> =:= T
-//fn position[T, I: Iterator[Item = T]](iter: I, needle: T): uword? {
-//  for iter do {
-//    if it == needle return(.Some(itIndex))
-//  };
-//  .None
-//}
+fn position[T: Equals, I: Iterator[Item = T]](iter: I, needle: T): uword? {
+  for iter do {
+    if it == needle return(.Some(itIndex))
+  };
+  .None
+}
 
 deftype Pair[PA, PB] = { a: PA*, b: PB? }
 ability AsPair[AA, BB] {
@@ -27,28 +28,21 @@ impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B] {
   fn getA(self: Pair[A, B]): A* { self.a }
   fn getB(self: Pair[A, B]): B? { self.b }
 }
-//impl AsPair[AA = int, BB = bool] for Pair[int, bool, unit] {
-//  fn getA(self: Self): AA { self.a }
-//  fn getB(self: Self): BB { self.b }
-//}
+
+// blanket impl that insanely swaps the pair for you
+impl[A, B] AsPair[AA = A, BB = B] for Pair[B, A] {
+  fn getA(self: Pair[B, A]): A* { mem/new(self.b.!) }
+  fn getB(self: Pair[B, A]): B? { some(self.a.*) }
+}
 
 fn unwrapB[
   X,
   Y,
-  T: AsPair[AA=X, BB=Y]// and AsPair[AA=Y, BB=X]
-](t: T): Y? {
-  // -> AsPair/getB(t)
-  // t: T: Self
-  // <ret>: Opt[Y]
-  // -> find all impls of base AsPair for T
-  //   -> 1. AsPair[X, Y, Z]
-  //   -> 2. AsPair[Y, X, Z]
-  // Try impl 1:
-  //   getB(): Opt[Y]
-  // A :=
-  //let b: Y? = t.getB();
-  //b.!
-  t.getB()
+  T: AsPair[AA=X, BB=Y] and AsPair[AA=Y, BB=X]
+](t: T): Y {
+  // Ability call resolution picks the implementation that results in the call working!
+  let y: Y? = t.getB();
+  y.!
 }
 
 //fn getBoth[A, B, T: AsPair[AA=A, BB=B]](t: T): { a: A, b: B } {
@@ -63,16 +57,13 @@ fn main(): i32 {
   // Phase 1
   let myPair: Pair[int, bool] = { a: mem/new(10), b: some(true) };
   getNothin(t = myPair);
-  let x = unwrapB(myPair);
-  assert(x.!);
-
-  // Phase 2
-  //position[int, BufferIterator[int]](x, y);
+  let b = unwrapB[int, bool, Pair[int, bool]](myPair);
+  assert(b);
+  let i = unwrapB[bool, int, Pair[int, bool]](myPair);
+  assertEquals(i, 10);
 
   // Phase 3
-  //find[
-  //  int,
-  //  BufferIterator[int]
-  //](x, y);
+  let firstOdd = find([1,2,3,4].toBuffer(): Buffer[int], \(x) x % 2 == 0);
+  assertEquals(firstOdd, some(2));
   0
 }
