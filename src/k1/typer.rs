@@ -41,63 +41,11 @@ use crate::parse::{
     Ident, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
-use crate::{SV4, impl_copy_if_small, static_assert_size, strings};
+use crate::{SV4, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
 use crate::{SV8, vm};
 
 #[cfg(test)]
 mod layout_test;
-
-#[macro_export]
-macro_rules! nz_u32_id {
-    ($name: ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(std::num::NonZeroU32);
-        impl From<std::num::NonZeroU32> for $name {
-            fn from(value: std::num::NonZeroU32) -> Self {
-                Self::from_nzu32(value)
-            }
-        }
-        impl From<$name> for std::num::NonZeroU32 {
-            fn from(val: $name) -> Self {
-                val.0
-            }
-        }
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                self.0.fmt(f)
-            }
-        }
-
-        impl $name {
-            pub const fn as_u32(self) -> u32 {
-                self.0.get()
-            }
-
-            pub const fn from_nzu32(value: NonZeroU32) -> Self {
-                $name(value)
-            }
-            pub const fn from_u32(value: u32) -> Option<Self> {
-                match NonZeroU32::new(value) {
-                    None => None,
-                    Some(nz_u32) => Some($name(nz_u32)),
-                }
-            }
-            pub const ONE: Self = $name(NonZeroU32::new(1).unwrap());
-            pub const PENDING: Self = $name(NonZeroU32::MAX);
-        }
-
-        impl core::ops::Add for $name {
-            type Output = $name;
-
-            fn add(self, rhs: Self) -> Self::Output {
-                let add_result = self.0.get() + rhs.0.get();
-                // Safety: Cannot possibly get 0 when adding two nonzero values together
-                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
-                $name(new_result)
-            }
-        }
-    };
-}
 
 nz_u32_id!(FunctionId);
 
@@ -170,7 +118,9 @@ pub struct InferenceInputPair {
 #[derive(Default)]
 pub struct InferenceContext {
     pub origin_stack: Vec<SpanId>,
-    pub vars: Vec<TypeId>,
+    pub params: Vec<TypeId>,
+    pub solutions_so_far: EcoVec<TypeSubstitutionPair>,
+    pub inference_vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
     pub substitutions: FxHashMap<TypeId, TypeId>,
     pub substitutions_vec: Vec<TypeSubstitutionPair>,
@@ -2733,8 +2683,10 @@ impl TypedProgram {
             module_in_progress: None,
             inference_context: InferenceContext {
                 origin_stack: Vec::with_capacity(64),
-                vars: Vec::with_capacity(128),
-                constraints: Vec::with_capacity(128),
+                params: Vec::with_capacity(128),
+                solutions_so_far: EcoVec::with_capacity(32),
+                inference_vars: Vec::with_capacity(32),
+                constraints: Vec::with_capacity(256),
                 substitutions: FxHashMap::with_capacity(256),
                 substitutions_vec: Vec::with_capacity(256),
             },
@@ -3455,7 +3407,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: Vec<FnParamType> = Vec::with_capacity(fun_type.params.len());
+                let mut params: EcoVec<FnParamType> = EcoVec::with_capacity(fun_type.params.len());
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
@@ -4068,7 +4020,7 @@ impl TypedProgram {
                     any_new = true
                 };
                 new_fun_type.return_type = new_return_type;
-                for param in new_fun_type.physical_params.iter_mut() {
+                for param in new_fun_type.physical_params.make_mut().iter_mut() {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
                         any_new = true;
@@ -4468,12 +4420,19 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> CheckExprTypeResult {
         let actual_type_id = self.exprs.get(expr).get_type();
+        // Expected Buffer[Buffer['2]] but got static[Buffer[Buffer[iword]]
         if let Err(msg) = self.check_types(expected, actual_type_id, scope_id) {
             let result = match (
                 self.types.get_no_follow_static(expected),
                 self.types.get_no_follow_static(actual_type_id),
             ) {
-                (_, Type::Static(actual_static)) if actual_static.inner_type_id == expected => {
+                // If the type inside this static would pass muster under the 'expected type',
+                // Erase the static
+                (_, Type::Static(actual_static))
+                    if self
+                        .check_types(expected, actual_static.inner_type_id, scope_id)
+                        .is_ok() =>
+                {
                     CheckExprTypeResult::Coerce(self.synth_cast(
                         expr,
                         expected,
@@ -4485,7 +4444,6 @@ impl TypedProgram {
                         if let Ok(static_lifted) = self.attempt_static_lift(expr) {
                             CheckExprTypeResult::Coerce(static_lifted)
                         } else {
-                            eprintln!("lifted to faile");
                             CheckExprTypeResult::Err(msg)
                         }
                     } else {
@@ -5228,7 +5186,6 @@ impl TypedProgram {
                     if has_holes {
                         return Ok(valid_impls[0]);
                     } else {
-                        // nocommit(0): find out where the duplicate impls come from
                         let impls_formatted = valid_impls
                             .iter()
                             .map(|i| {
@@ -5296,7 +5253,7 @@ impl TypedProgram {
         &self,
         target_base_ability_id: AbilityId,
         impl_handle: AbilityImplHandle,
-        parameter_constraints: &[Option<TypeId>],
+        parameter_requirements: &[Option<TypeId>],
         scope_id: ScopeId,
     ) -> Result<(), Cow<str>> {
         if impl_handle.base_ability_id != target_base_ability_id {
@@ -5307,15 +5264,12 @@ impl TypedProgram {
             .named_types
             .get_slice(specialized_ability.kind.arguments())
             .iter()
-            .zip(parameter_constraints.iter())
+            .zip(parameter_requirements.iter())
         {
             if let Some(constraint) = maybe_constraint {
-                // nocommit(0): Does this have to 'check_types', or can it be
-                // something simpler? Good thing to test once everything is passing
-                // using this impl
                 if let Err(msg) = self.check_types(*constraint, impl_arg.type_id, scope_id) {
                     return Err(Cow::Owned(format!(
-                        "Implementation has {} := {}, but context requires it to be {}. {msg}",
+                        "Implementation has {} := {}, but context requires it to be {}: {msg}",
                         self.ident_str(impl_arg.name),
                         self.type_id_to_string(impl_arg.type_id),
                         self.type_id_to_string(*constraint),
@@ -5326,7 +5280,6 @@ impl TypedProgram {
         Ok(())
     }
 
-    // nocommit(0) remove old one
     pub fn find_or_generate_specialized_ability_impl_for_type(
         &mut self,
         self_type_id: TypeId,
@@ -7658,7 +7611,7 @@ impl TypedProgram {
         // NO CAPTURES! Optimize to a regular function
         if lambda_info.captured_variables.is_empty() {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
-                physical_params: typed_params.into(),
+                physical_params: EcoVec::from_iter(typed_params.into_iter()),
                 return_type,
             }));
 
@@ -7786,7 +7739,7 @@ impl TypedProgram {
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
-            physical_params: typed_params.into(),
+            physical_params: EcoVec::from_iter(typed_params.into_iter()),
             return_type,
         }));
 
@@ -8727,13 +8680,14 @@ impl TypedProgram {
     fn expect_ability_implementation(
         &mut self,
         type_id: TypeId,
-        ability_id: AbilityId,
+        base_ability_id: AbilityId,
         scope_id: ScopeId,
         span_for_error: SpanId,
     ) -> TyperResult<AbilityImplHandle> {
-        self.find_or_generate_specialized_ability_impl_for_type(
+        self.find_ability_impl_for_type_or_generate_new(
             type_id,
-            ability_id,
+            base_ability_id,
+            &[],
             scope_id,
             span_for_error,
         )
@@ -8741,7 +8695,7 @@ impl TypedProgram {
             errf!(
                 span_for_error,
                 "Missing ability '{}' for '{}': {msg}. It implements the following abilities:\n{}",
-                self.ident_str(self.abilities.get(ability_id).name),
+                self.ident_str(self.abilities.get(base_ability_id).name),
                 self.type_id_to_string(type_id),
                 &self
                     .ability_impl_table
@@ -9976,11 +9930,7 @@ impl TypedProgram {
             "to solve: {}",
             self.pretty_print_named_type_slice(must_solve_type_params_handle, ", ")
         );
-        //Battle plan
-        //    - Get rid of separate 'must solve', just infer what's passed
-        //    - Add a helper that checks must_solves for convenience
-        //    - Here, I ensure 'Self' is solved, then ensure that, for each solved param,
-        //      the impl's type for that param is _compatible_, maybe just meaning it typechecks or is an inference hole
+
         let (self_only, other_solved) = self.infer_types(
             all_type_params_handle,
             self_only_type_params_handle,
@@ -10015,48 +9965,6 @@ impl TypedProgram {
            )
         })?;
 
-        //let (solved_params, _) = self.infer_types(
-        //    all_type_params_handle,
-        //    must_solve_type_params_handle,
-        //    &args_and_params,
-        //    fn_call.span,
-        //    ctx.scope_id,
-        //)?;
-
-        //let solved_self = *self.named_types.get_nth(solved_params, 0);
-        //let solved_rest = solved_params.skip(1);
-
-        //// We only solve for the ability-side params, so we pass a flag to check_ability_arguments
-        //// indicating that we aren't providing the impl params
-        //let skip_impl_check = true;
-        //self.check_ability_arguments(base_ability_id, solved_rest, call_span, ctx.scope_id, skip_impl_check).map_err(|e| {
-        //    errf!(
-        //        e.span,
-        //        "I thought I found a matching ability call, but the arguments didn't check out. This is likely a bug {}",
-        //        e.message
-        //    )
-        //})?;
-        //let specialized_ability_id =
-        //    self.specialize_ability(base_ability_id, solved_rest, call_span, ctx.scope_id);
-
-        //// 2) Find impl based on solved Self
-        ////   - ensure params are consistent
-        ////   - If not, try next impl
-        //// 2a) Generate auto impl if that's what we find, cache it at low prio
-        //// 3) Return impl fn id, which carries nice type information, since its fully specialized
-        //let Some(impl_handle) = self.find_or_generate_specialized_ability_impl_for_type(
-        //    solved_self.type_id,
-        //    specialized_ability_id,
-        //    call_span,
-        //) else {
-        //    return failf!(
-        //        call_span,
-        //        "Call to `{}` with type Self = {} does not work, since it does not implement ability {}",
-        //        self.type_id_to_string(function_type_id),
-        //        self.type_id_to_string(solved_self.type_id),
-        //        self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
-        //    );
-        //};
         let impl_function = self
             .get_ability_impl(impl_handle.full_impl_id)
             .function_at_index(function_ability_index);
@@ -10514,6 +10422,7 @@ impl TypedProgram {
         arg: TypedExprId,
         calling_scope: ScopeId,
     ) -> TyperResult<Option<TypedExprId>> {
+        eprintln!("Checking that argument has type {}", self.type_id_to_string(param.type_id));
         match self.check_expr_type(param.type_id, arg, calling_scope) {
             CheckExprTypeResult::Coerce(new_expr_id) => Ok(Some(new_expr_id)),
             CheckExprTypeResult::Ok => Ok(None),
@@ -10643,8 +10552,11 @@ impl TypedProgram {
 
                 // We infer the type arguments, or just use them if the user has supplied them
                 let type_args = match &known_args {
-                    Some((type_args, _va)) => {
+                    Some((type_args, _va)) if !type_args.is_empty() => {
                         // Need the name
+                        if type_args.len() != signature.type_params.len() {
+                            self.ice_with_span("Bad known type args, wrong count", span)
+                        }
                         let args: SV4<NameAndType> = type_args
                             .iter()
                             .zip(self.named_types.get_slice(signature.type_params).iter())
@@ -10655,7 +10567,8 @@ impl TypedProgram {
                             .collect();
                         self.named_types.add_slice_from_copy_slice(&args)
                     }
-                    None => self.infer_and_constrain_call_type_args(fn_call, signature, ctx)?,
+                    _ => self
+                        .infer_and_constrain_call_type_args(fn_call, signature, known_args, ctx)?,
                 };
 
                 let function_type_args = self.determine_function_type_args_for_call(
@@ -10681,23 +10594,16 @@ impl TypedProgram {
                     .types
                     .get_contained_type_variable_counts(specialized_function_type)
                     .is_abstract();
-                if is_abstract {
-                    // nocommit: Shouldn't we still typecheck these arguments even if the `Call`
-                    // doesnt need to contain them for codegen? Aren't we just constructing
-                    // a garbage call? I guess not if we say that's what 'Abstract' means, but
-                    // feels very wrong
-                    (
-                        Callee::Abstract {
-                            function_sig: FunctionSignature::make_no_generics(
-                                signature.name,
-                                specialized_function_type,
-                            ),
-                        },
-                        smallvec![],
-                        SliceHandle::Empty,
-                    )
+
+                let final_callee = if is_abstract {
+                    Callee::Abstract {
+                        function_sig: FunctionSignature::make_no_generics(
+                            signature.name,
+                            specialized_function_type,
+                        ),
+                    }
                 } else {
-                    let final_callee = match callee {
+                    match callee {
                         Callee::StaticFunction(function_id) => {
                             let function_id = self.specialize_function_signature(
                                 type_args,
@@ -10717,38 +10623,38 @@ impl TypedProgram {
                             "Unexpected Callee type for a generic that required specialization",
                             None,
                         ),
+                    }
+                };
+
+                let specialized_fn_type =
+                    self.types.get(specialized_function_type).as_function().unwrap();
+                let specialized_params = specialized_fn_type.physical_params.clone();
+                let args_and_params = self.align_call_arguments_with_parameters(
+                    fn_call,
+                    &specialized_params,
+                    known_args.map(|(_known_types, known_args)| known_args),
+                    ctx.scope_id,
+                    false,
+                )?;
+
+                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                eprintln!("specfntype: {}", self.type_id_to_string(specialized_function_type));
+                for (maybe_typed_expr, param) in args_and_params.iter() {
+                    let expr = match *maybe_typed_expr {
+                        MaybeTypedExpr::Typed(typed) => typed,
+                        MaybeTypedExpr::Parsed(parsed) => {
+                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
+                        }
                     };
 
-                    let specialized_fn_type =
-                        self.types.get(specialized_function_type).as_function().unwrap();
-                    let specialized_params = specialized_fn_type.physical_params.clone();
-                    let args_and_params = self.align_call_arguments_with_parameters(
-                        fn_call,
-                        &specialized_params,
-                        known_args.map(|(_known_types, known_args)| known_args),
-                        ctx.scope_id,
-                        false,
-                    )?;
-
-                    let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
-                    for (maybe_typed_expr, param) in args_and_params.iter() {
-                        let expr = match *maybe_typed_expr {
-                            MaybeTypedExpr::Typed(typed) => typed,
-                            MaybeTypedExpr::Parsed(parsed) => {
-                                self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
-                            }
-                        };
-
-                        let checked_expr =
-                            match self.check_call_argument(param, expr, ctx.scope_id)? {
-                                None => expr,
-                                Some(coerced_expr) => coerced_expr,
-                            };
-                        typechecked_args.push(checked_expr);
-                    }
-
-                    (final_callee, typechecked_args, type_args)
+                    let checked_expr = match self.check_call_argument(param, expr, ctx.scope_id)? {
+                        None => expr,
+                        Some(coerced_expr) => coerced_expr,
+                    };
+                    typechecked_args.push(checked_expr);
                 }
+
+                (final_callee, typechecked_args, type_args)
             }
         };
 
@@ -10961,7 +10867,9 @@ impl TypedProgram {
             if self_.inference_context.origin_stack.is_empty() {
                 debug!("Resetting inference buffers since stack is empty");
                 self_.inference_context.constraints.clear();
-                self_.inference_context.vars.clear();
+                self_.inference_context.params.clear();
+                self_.inference_context.solutions_so_far.clear();
+                self_.inference_context.inference_vars.clear();
                 self_.inference_context.substitutions.clear();
                 self_.inference_context.substitutions_vec.clear();
             } else {
@@ -10977,15 +10885,16 @@ impl TypedProgram {
         let mut instantiation_set: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
 
-        let inference_var_count = self_.inference_context.vars.len();
-        for (idx, param) in self_.named_types.copy_slice_sv::<8>(all_type_params).iter().enumerate()
-        {
+        let inference_var_count = self_.inference_context.inference_vars.len();
+        let all_type_params_slice = self_.named_types.copy_slice_sv::<8>(all_type_params);
+        self_.inference_context.params.extend(all_type_params_slice.iter().map(|nt| nt.type_id));
+        for (idx, param) in all_type_params_slice.iter().enumerate() {
             let hole_index = idx + inference_var_count;
 
             let type_hole = self_
                 .types
                 .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
-            self_.inference_context.vars.push(type_hole);
+            self_.inference_context.inference_vars.push(type_hole);
             instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
         }
 
@@ -11091,19 +11000,20 @@ impl TypedProgram {
             };
 
             // After each pair is 'walked', we 'apply' what we learned by calling calculate_inference_substitutions
-            self_.calculate_inference_substitutions(span)?;
+            let newly_solved_params = self_.calculate_inference_substitutions(span)?;
+            for newly_solved_param in &newly_solved_params {
+                self_.apply_constraints_to_inferred_type(
+                    newly_solved_param.from,
+                    newly_solved_param.to,
+                    scope_id,
+                    argument_span,
+                )?;
+            }
 
             debug!(
                 "[infer {infer_depth}] substitutions\n\t{}",
                 self_.pretty_print_type_substitutions(&self_.inference_context.constraints, "\n\t"),
             );
-
-            self_.apply_constraints_to_inferred_type(
-                all_type_params,
-                &instantiation_set,
-                scope_id,
-                argument_span,
-            )?;
         }
 
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
@@ -11171,135 +11081,91 @@ impl TypedProgram {
     /// type of the function param in \i i.isEven()
     fn apply_constraints_to_inferred_type(
         &mut self,
-        all_type_params: SliceHandle<NameAndTypeId>,
-        instantiation_set: &[TypeSubstitutionPair],
+        type_param_id: TypeId,
+        solution_type_id: TypeId,
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
         let infer_depth = self.inference_context.origin_stack.len();
-        // nocommit clone
-        for solved_subst_pair in self.inference_context.substitutions_vec.clone().iter() {
+        let constraint_impls = self.get_constrained_ability_impls_for_type(type_param_id);
+        if !constraint_impls.is_empty() {
             debug!(
-                "  > learning from pair {}",
-                self.pretty_print_type_substitutions(&[*solved_subst_pair], ", ")
+                "[infer {infer_depth}] > learning from param {} := {}. constraints: {}",
+                self.type_id_to_string(type_param_id),
+                self.type_id_to_string(solution_type_id),
+                constraint_impls.len()
             );
-            let is_fully_solved = self
-                .types
-                .get_contained_type_variable_counts(solved_subst_pair.to)
-                .inference_variable_count
-                == 0;
-            if !is_fully_solved {
-                continue;
-            }
+        }
+        let subst_set = self.inference_context.solutions_so_far.clone();
+        for constraint in &constraint_impls {
+            let constraint_signature = self.get_ability_impl(constraint.full_impl_id).signature();
 
-            // If the thing we've solved is the 'to' of one of the instantiation pairs
-            // e.g., from: T to: '0
-            let Some(instantiation_pair) =
-                instantiation_set.iter().find(|p| p.to == solved_subst_pair.from)
-            else {
-                continue;
-            };
-            let solution = solved_subst_pair.to;
-            // Then find the type param matching the 'from' type, T
-            let Some(type_param) = self
-                .named_types
-                .get_slice(all_type_params)
-                .iter()
-                .find(|nt| nt.type_id == instantiation_pair.from)
-                .copied()
-            else {
-                continue;
-            };
-
-            let constraint_impls = self.get_constrained_ability_impls_for_type(type_param.type_id);
-            // nocommit stop repeating this every time for every param!
-            if !constraint_impls.is_empty() {
-                debug!(
-                    "[infer {infer_depth}] > learning from param {} := {}. constraints: {}",
-                    self.type_id_to_string(type_param.type_id),
-                    self.type_id_to_string(solution),
-                    constraint_impls.len()
-                );
-            }
-            // nocommit(0)
-            let subst_set = self.inference_context.substitutions_vec.clone();
-            for constraint in &constraint_impls {
-                // nocommit: Does this need to be a throwaway scope? Or the
-                // ability's scope
-                let constraint_signature =
-                    self.get_ability_impl(constraint.full_impl_id).signature();
-
-                // nocommit: Do just 1 substitution by getting a hold of a
-                // 'solutions so far' set
-                let sig = self.substitute_in_ability_signature(
-                    instantiation_set,
-                    constraint_signature,
-                    scope_id,
-                    span,
-                );
-                // Then, apply any substitutions we have
-                let sig = self.substitute_in_ability_signature(&subst_set, sig, scope_id, span);
-                debug!(
-                    "[infer {infer_depth}] trying to learn from sig: {}",
-                    self.ability_signature_to_string(sig)
-                );
-                match self.find_or_generate_specialized_ability_impl_for_type(
-                    solution,
-                    sig.specialized_ability_id,
-                    scope_id,
-                    span,
-                ) {
-                    Ok(impl_id) => {
-                        let the_impl = self.get_ability_impl(impl_id.full_impl_id);
-                        let ability_arg_iterator = self
-                            .named_types
-                            .copy_slice_sv::<4>(
-                                self.abilities.get(sig.specialized_ability_id).kind.arguments(),
-                            )
-                            .into_iter()
-                            .zip(self.named_types.copy_slice_sv::<4>(
-                                self.abilities.get(the_impl.ability_id).kind.arguments(),
-                            ));
-                        let impl_arg_iterator = self
-                            .named_types
-                            .copy_slice_sv::<4>(sig.impl_arguments)
-                            .into_iter()
-                            .zip(self.named_types.copy_slice_sv::<4>(the_impl.impl_arguments));
-                        for (constrained_type, found_impl_type) in
-                            ability_arg_iterator.chain(impl_arg_iterator)
-                        {
-                            debug!(
-                                "[infer {infer_depth}] I will unify impl args {} and {}",
-                                self.named_type_to_string(constrained_type),
-                                self.named_type_to_string(found_impl_type)
-                            );
-                            match self.unify_and_find_substitutions(
-                                found_impl_type.type_id,
-                                constrained_type.type_id,
-                            ) {
-                                TypeUnificationResult::Matching => {
-                                    debug!("[infer {infer_depth}] unify succeeded",);
-                                    self.calculate_inference_substitutions(span)?;
-                                }
-                                TypeUnificationResult::NoHoles => {}
-                                TypeUnificationResult::NonMatching(_) => {
-                                    eprintln!("did not match; likely we'll fail later")
-                                }
+            let sig = self.substitute_in_ability_signature(
+                &subst_set,
+                constraint_signature,
+                scope_id,
+                span,
+            );
+            debug!(
+                "[infer {infer_depth}] trying to learn from sig: {}",
+                self.ability_signature_to_string(sig)
+            );
+            match self.find_or_generate_specialized_ability_impl_for_type(
+                solution_type_id,
+                sig.specialized_ability_id,
+                scope_id,
+                span,
+            ) {
+                Ok(impl_id) => {
+                    let the_impl = self.get_ability_impl(impl_id.full_impl_id);
+                    let ability_arg_iterator = self
+                        .named_types
+                        .copy_slice_sv::<4>(
+                            self.abilities.get(sig.specialized_ability_id).kind.arguments(),
+                        )
+                        .into_iter()
+                        .zip(self.named_types.copy_slice_sv::<4>(
+                            self.abilities.get(the_impl.ability_id).kind.arguments(),
+                        ));
+                    let impl_arg_iterator = self
+                        .named_types
+                        .copy_slice_sv::<4>(sig.impl_arguments)
+                        .into_iter()
+                        .zip(self.named_types.copy_slice_sv::<4>(the_impl.impl_arguments));
+                    for (constrained_type, found_impl_type) in
+                        ability_arg_iterator.chain(impl_arg_iterator)
+                    {
+                        debug!(
+                            "[infer {infer_depth}] I will unify impl args {} and {}",
+                            self.named_type_to_string(constrained_type),
+                            self.named_type_to_string(found_impl_type)
+                        );
+                        match self.unify_and_find_substitutions(
+                            found_impl_type.type_id,
+                            constrained_type.type_id,
+                        ) {
+                            TypeUnificationResult::Matching => {
+                                debug!("[infer {infer_depth}] unify succeeded",);
+                                self.calculate_inference_substitutions(span)?;
+                            }
+                            TypeUnificationResult::NoHoles => {}
+                            TypeUnificationResult::NonMatching(_) => {
+                                eprintln!("did not match; likely we'll fail later")
                             }
                         }
                     }
-                    Err(msg) => {
-                        let signature = self.get_ability_impl(constraint.full_impl_id).signature();
-                        return failf!(
-                            span,
-                            "Could not satisfy ability constraint {} for given type {} := {} due to: {msg}",
-                            self.ability_signature_to_string(signature),
-                            self.ident_str(type_param.name),
-                            self.type_id_to_string(solution)
-                        );
-                    }
-                };
-            }
+                }
+                Err(msg) => {
+                    let signature = self.get_ability_impl(constraint.full_impl_id).signature();
+                    return failf!(
+                        span,
+                        "Could not satisfy ability constraint {} for given type {} := {} due to: {msg}",
+                        self.ability_signature_to_string(signature),
+                        self.type_id_to_string(type_param_id),
+                        self.type_id_to_string(solution_type_id)
+                    );
+                }
+            };
         }
         Ok(())
     }
@@ -11308,6 +11174,7 @@ impl TypedProgram {
         &mut self,
         fn_call: &ParsedCall,
         generic_function_sig: FunctionSignature,
+        known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
     ) -> TyperResult<NamedTypeSlice> {
         debug_assert!(generic_function_sig.is_generic());
@@ -11359,7 +11226,7 @@ impl TypedProgram {
             let args_and_params = self.align_call_arguments_with_parameters(
                 fn_call,
                 &generic_function_params,
-                None,
+                known_args.map(|(_known_types, known_args)| known_args),
                 ctx.scope_id,
                 true,
             )?;
@@ -11413,16 +11280,8 @@ impl TypedProgram {
         };
 
         // Enforce ability constraints
-        let mut params_to_solutions_pairs: SV4<TypeSubstitutionPair> = smallvec![];
-        for (solution, type_param) in self
-            .named_types
-            .copy_slice_sv4(solved_type_params)
-            .iter()
-            .zip(self.named_types.copy_slice_sv4(generic_function_sig.type_params).iter())
-        {
-            // need to substitute the SOLUTIONS in for the constraint this time
-            params_to_solutions_pairs.push(spair! { type_param.type_id => solution.type_id });
-        }
+        let params_to_solutions_pairs: SV4<TypeSubstitutionPair> = self
+            .zip_named_types_to_subst_pairs(generic_function_sig.type_params, solved_type_params);
         for (solution, type_param) in self
             .named_types
             .copy_slice_sv::<4>(solved_type_params)
@@ -11717,7 +11576,11 @@ impl TypedProgram {
         debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
     }
 
-    fn calculate_inference_substitutions(&mut self, span: SpanId) -> TyperResult<()> {
+    /// Returns: Any newly, fully solved params after applying constraints
+    fn calculate_inference_substitutions(
+        &mut self,
+        span: SpanId,
+    ) -> TyperResult<SV4<TypeSubstitutionPair>> {
         let mut ctx = std::mem::take(&mut self.inference_context);
         debug!(
             "calculate_inference_substitutions. constraints: [{}]",
@@ -11775,15 +11638,50 @@ impl TypedProgram {
                 }
             }
         }
-        for p in final_pairs.iter() {
+
+        // Look for new 'fully solved' params among the set. This is used to trigger behaviors
+        // sometimes. For example, once we solve a type parameter, we then look up its constraints
+        // and add information from them into the inference context
+        let mut newly_solved_params: SV4<TypeSubstitutionPair> = smallvec![];
+        for (solved_from, solved_to) in final_pairs.iter() {
+            let is_fully_solved =
+                self.types.get_contained_type_variable_counts(*solved_to).inference_variable_count
+                    == 0;
+            if !is_fully_solved {
+                continue;
+            }
+
+            // If the thing we've solved is the 'to' of one of the instantiation pairs
+            // e.g., from: T to: '0
+            let Some(original_param) = ctx.params.iter().find(|p| *p == solved_from) else {
+                continue;
+            };
+
             debug!(
                 "final_pair {} -> {}",
-                self.type_id_to_string(*p.0),
-                self.type_id_to_string(*p.1)
+                self.type_id_to_string(*solved_from),
+                self.type_id_to_string(*solved_to)
             );
+
+            // Then find the type param matching the 'from' type, T
+            // let Some(type_param) = self
+            //     .named_types
+            //     .get_slice(all_type_params)
+            //     .iter()
+            //     .find(|nt| nt.type_id == original_param.from)
+            //     .copied()
+            // else {
+            //     continue;
+            // };
+            //
+
+            if ctx.solutions_so_far.iter().find(|pair| pair.from == *original_param).is_none() {
+                newly_solved_params.push(spair! { *original_param => *solved_to });
+            }
+            ctx.solutions_so_far.push(spair! { *original_param => *solved_to })
         }
         self.inference_context = ctx;
-        Ok(())
+        Ok(newly_solved_params)
     }
 
     fn unify_and_find_substitutions(
@@ -13358,7 +13256,8 @@ impl TypedProgram {
         }
 
         // Process parameters
-        let mut param_types: Vec<FnParamType> = Vec::with_capacity(parsed_function_params.len());
+        let mut param_types: EcoVec<FnParamType> =
+            EcoVec::with_capacity(parsed_function_params.len());
         let mut param_variables = EcoVec::with_capacity(parsed_function_params.len());
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()

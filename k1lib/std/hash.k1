@@ -194,7 +194,7 @@ fn test(size: int): unit {
   while i < size {
     myMap.insert(i.show(), i);
     if i % 5 == 0 {
-      myMap.remove(i.show());
+      myMap.remove(i.show())
     };
     i = i + 1;
   };

@@ -312,7 +312,7 @@ pub struct FnParamType {
 
 #[derive(Debug, Clone)]
 pub struct FunctionType {
-    pub physical_params: Vec<FnParamType>,
+    pub physical_params: EcoVec<FnParamType>,
     pub return_type: TypeId,
 }
 
