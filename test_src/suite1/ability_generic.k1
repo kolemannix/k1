@@ -70,7 +70,7 @@ ns ability_generic {
     // Blanket Impls
     let p: GenericPoint[i32] = { x: 1, y: 2 };
 
-    let added: GenericPoint[i32] = @debug (p.add(p));
+    let added: GenericPoint[i32] = p.add(p);
     assertEquals(added.x, (1 + 1) as i32);
     assertEquals(added.y, (2 + 2) as i32);
 
