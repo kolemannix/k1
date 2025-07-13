@@ -5453,8 +5453,8 @@ impl TypedProgram {
                 let actual_value =
                     self_.substitute_in_type(blanket_arg.type_id, &solutions_as_pairs);
                 if let Err(msg) = self_.check_types(*required_arg, actual_value, root_scope_id) {
-                    eprintln!(
-                        "XXX Blanket impl, if applied, would result in the wrong type for param {}. {}",
+                    debug!(
+                        "blanket impl, if applied, would result in the wrong type for param {}. {}",
                         self_.ident_str(blanket_arg.name),
                         msg
                     );
@@ -5526,8 +5526,8 @@ impl TypedProgram {
         let blanket_impl = self.get_ability_impl(blanket_impl_id).clone();
 
         let generic_base_ability_id = blanket_impl.kind.blanket_parent().unwrap();
-        eprintln!(
-            "*** instantiate_blanket_impl: impl {} for {} with {}",
+        debug!(
+            "instantiate_blanket_impl: impl {} for {} with {}",
             self.ident_str(self.abilities.get(generic_base_ability_id).name),
             self.type_id_to_string(self_type_id),
             self.pretty_print_named_type_slice(solutions, ", ")
@@ -11278,7 +11278,7 @@ impl TypedProgram {
                                 constrained_type.type_id,
                             ) {
                                 TypeUnificationResult::Matching => {
-                                    eprintln!("HOORAY matched");
+                                    debug!("[infer {infer_depth}] unify succeeded",);
                                     self.calculate_inference_substitutions(span)?;
                                 }
                                 TypeUnificationResult::NoHoles => {}
