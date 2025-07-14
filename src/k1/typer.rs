@@ -362,7 +362,7 @@ pub struct AggregateLayout {
     pub offsets: SmallVec<[u32; 8]>,
 }
 
-// nocommit(2): Switch to pool; make it less allocatey period
+// nocommit(2): Switch to pool; make pattern matching code it less allocatey period
 nz_u32_id!(PatternCtorId);
 
 /// Used for analyzing pattern matching
@@ -6626,7 +6626,7 @@ impl TypedProgram {
                 Ok(result)
             }
             ParsedExpr::Is(is_expr) => {
-                let is_expr = is_expr.clone();
+                let is_expr = *is_expr;
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only

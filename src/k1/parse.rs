@@ -735,7 +735,7 @@ pub struct ParsedEnumConstructor {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedIsExpr {
     pub target_expression: ParsedExprId,
     pub pattern: ParsedPatternId,
