@@ -25,12 +25,8 @@ fn typeVariantName(typeId: u64): string? {
   let schemaSchema = types/typeSchema(typeId[TypeSchema]());
   require schemaSchema is .Either(e) else { return(.None) };
   let it = e.variants.iterator();
-  let* variant = Opt.None[EnumVariant];
-  for v in e.variants do {
-    require v.tag is .U8(vTag) else { return(.None) };
-    if vTag == schema.tag { variant <- some(v) };
-  };
-  (variant.*)?.name
+  let variant = find(e.variants.iterator(), \(v) v.tag is .U8(t) and t == schema.tag);
+  variant?.name
 }
 
 fn main(): i32 {

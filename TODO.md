@@ -148,7 +148,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Runtime type info story
 - [x] typeOf, typeId
 - [x] TypeSchema for all types
-- [ ] Test 'Any' type
+- [x] Test 'Any' type
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] (static only?) 'Type predicate' functions as type bounds
 
