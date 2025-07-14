@@ -845,25 +845,25 @@ impl TypedProgram {
 
     pub fn display_pattern_ctor(
         &self,
-        pattern_ctor: &PatternConstructor,
+        pattern_ctor: &PatternCtor,
         writ: &mut impl Write,
     ) -> std::fmt::Result {
         match pattern_ctor {
-            PatternConstructor::Unit => writ.write_str("()"),
-            PatternConstructor::BoolTrue => writ.write_str("true"),
-            PatternConstructor::BoolFalse => writ.write_str("false"),
-            PatternConstructor::Char => writ.write_str("'<char>'"),
-            PatternConstructor::String => writ.write_str("<string>"),
-            PatternConstructor::Int => writ.write_str("<int>"),
-            PatternConstructor::Float => writ.write_str("<float>"),
-            PatternConstructor::Pointer => writ.write_str("<ptr>"),
-            PatternConstructor::TypeVariable => writ.write_str("<tvar>"),
-            PatternConstructor::FunctionReference => writ.write_str("fn*"),
-            PatternConstructor::Reference(inner) => {
+            PatternCtor::Unit => writ.write_str("()"),
+            PatternCtor::BoolTrue => writ.write_str("true"),
+            PatternCtor::BoolFalse => writ.write_str("false"),
+            PatternCtor::Char => writ.write_str("'<char>'"),
+            PatternCtor::String => writ.write_str("<string>"),
+            PatternCtor::Int => writ.write_str("<int>"),
+            PatternCtor::Float => writ.write_str("<float>"),
+            PatternCtor::Pointer => writ.write_str("<ptr>"),
+            PatternCtor::TypeVariable => writ.write_str("<tvar>"),
+            PatternCtor::FunctionReference => writ.write_str("fn*"),
+            PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;
                 self.display_pattern_ctor(inner, writ)
             }
-            PatternConstructor::Struct { fields } => {
+            PatternCtor::Struct { fields } => {
                 writ.write_str("{ ")?;
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
                     writ.write_str(self.ident_str(*field_name))?;
@@ -879,7 +879,7 @@ impl TypedProgram {
                 writ.write_str("}")?;
                 Ok(())
             }
-            PatternConstructor::Enum { variant_name, inner } => {
+            PatternCtor::Enum { variant_name, inner } => {
                 writ.write_str(self.ident_str(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
                     writ.write_str("(")?;
@@ -891,7 +891,7 @@ impl TypedProgram {
         }
     }
 
-    pub fn pattern_ctor_to_string(&self, pattern_ctor: &PatternConstructor) -> String {
+    pub fn pattern_ctor_to_string(&self, pattern_ctor: &PatternCtor) -> String {
         let mut s = String::new();
         self.display_pattern_ctor(pattern_ctor, &mut s).unwrap();
         s
@@ -1011,7 +1011,7 @@ impl TypedProgram {
         id: AbilityImplId,
         display_functions: bool,
     ) -> std::fmt::Result {
-        let i = self.get_ability_impl(id);
+        let i = self.ability_impls.get(id);
         let kind_str = match i.kind {
             AbilityImplKind::Concrete => "concrete",
             AbilityImplKind::Blanket { .. } => "blanket",
