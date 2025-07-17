@@ -90,7 +90,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Private functions?
 - [ ] Bug: Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [ ] Rename 'Buffer' to ... Slice?
-- [ ] b"" strings that are of type Buffer[u8] (what about interpolation?)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [ ] A clone ability
 - [ ] Make demo readme / site
@@ -162,6 +161,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Multiline string literals,
 - [x] #code directive
 - [x] static type universe: `static T`
+- [ ] A syntax for talking about a certain impl of an ability: `Show::bool/show(b: bool)` or `(Allocator for T)/supportsFree()`
 - [ ] Upgrade Allocator api in std/mem to use static and metaprogramming
 
 ## Project: Array types

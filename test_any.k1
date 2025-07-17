@@ -10,22 +10,15 @@ fn kindOfAny(any: Any): string {
   typeVariantName(any.typeId) ? "fail"
 }
 
-// nocommit(1) make find work
-fn find[T, I: Iterator[Item = T]](iter: I, pred: some \T -> bool): T? {
-  for i in iter do {
-    if pred(i) return(.Some(i))
-  };
-  return(.None)
-}
-
 deftype alias EnumVariant = TypeSchema.Either.value.variants.T
 
 fn typeVariantName(typeId: u64): string? {
   let schema = types/typeSchema(typeId);
   let schemaSchema = types/typeSchema(typeId[TypeSchema]());
   require schemaSchema is .Either(e) else { return(.None) };
-  let it = e.variants.iterator();
-  let variant = find(e.variants.iterator(), \(v) v.tag is .U8(t) and t == schema.tag);
+  let variant = core/iter/find(e.variants, \(v)
+    if v.tag is .U8(t) and t == schema.tag true else false
+  );
   variant?.name
 }
 

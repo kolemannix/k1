@@ -58,6 +58,7 @@ fn moderate(): unit {
   struct_composition/test();
   zero_test/test();
   type_schema/test();
+  ability_complex/test();
 }
 
 fn coreLib(): unit {
@@ -65,6 +66,7 @@ fn coreLib(): unit {
   // core lib coverage
   for_yield_test/test();
   allocator_test/test();
+  iterator_tests/test();
   buffer_test/test();
   string_test/test();
   list_test/test();
