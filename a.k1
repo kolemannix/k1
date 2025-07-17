@@ -1,0 +1,25 @@
+ability HasSecretInt {
+  fn secret(): int
+}
+ability HasSecretGen[A] {
+  fn secret(): A
+}
+
+deftype Foo = {}
+deftype Bar = {}
+
+impl HasSecretGen[A = int] for Foo {
+  fn secret(): int { 10 }
+}
+impl HasSecretGen[A = int] for Bar {
+  fn secret(): int { 20 }
+}
+
+fn main(): i32 {
+  // let secret: int = HasSecretInt@(Foo)/secret();
+  let sFoo: int = HasSecretGen[A = int]@(Foo)/secret();
+  println("The int secret for Foo is {sFoo}");
+  let sBar: int = HasSecretGen[A = int]@(Bar)/secret();
+  println("The int secret for Foo is {sBar}");
+  0
+}

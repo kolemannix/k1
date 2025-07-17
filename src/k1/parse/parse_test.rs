@@ -101,7 +101,7 @@ fn infix() -> Result<(), ParseError> {
         {
             assert_eq!(*operation, BinaryOpKind::Multiply);
             assert!(matches!(*module.exprs.get(*operand1), ParsedExpr::Variable(_)));
-            assert!(matches!(*module.exprs.get(*operand2), ParsedExpr::FnCall(_)));
+            assert!(matches!(*module.exprs.get(*operand2), ParsedExpr::Call(_)));
         } else {
             panic!("Expected nested infix ops; got {:?}", result);
         }
@@ -129,7 +129,7 @@ fn parse_eof() -> Result<(), ParseError> {
 fn fn_args_literal() -> Result<(), ParseError> {
     let input = "f(myarg = 42,42,\"abc\")";
     let (module, result) = test_single_expr(input)?;
-    if let ParsedExpr::FnCall(fn_call) = result {
+    if let ParsedExpr::Call(fn_call) = result {
         let args = module.p_call_args.get_slice(fn_call.args);
         let idents = &module.idents;
         assert_eq!(idents.get_name(fn_call.name.name), "f");
@@ -262,7 +262,7 @@ fn cmp_operators() -> Result<(), ParseError> {
 fn generic_fn_call() -> Result<(), ParseError> {
     let input = "square[int](42)";
     let (_parser, result) = test_single_expr(input)?;
-    assert!(matches!(result, ParsedExpr::FnCall(_)));
+    assert!(matches!(result, ParsedExpr::Call(_)));
     Ok(())
 }
 
@@ -270,9 +270,9 @@ fn generic_fn_call() -> Result<(), ParseError> {
 fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let input = "getFn().baz[u64](42)";
     let (mut parser, result) = test_single_expr(input)?;
-    let ParsedExpr::FnCall(call) = result else { panic!() };
+    let ParsedExpr::Call(call) = result else { panic!() };
     let args = parser.p_call_args.get_slice(call.args);
-    let ParsedExpr::FnCall(fn_call) = parser.exprs.get(args[0].value).clone() else { panic!() };
+    let ParsedExpr::Call(fn_call) = parser.exprs.get(args[0].value).clone() else { panic!() };
     assert_eq!(fn_call.name.name, parser.idents.intern("getFn"));
     assert_eq!(call.name.name, parser.idents.intern("baz"));
     let type_args = parser.p_type_args.get_slice(call.type_args);
@@ -294,7 +294,7 @@ fn char_value() -> ParseResult<()> {
 fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (mut parser, result) = test_single_expr(input)?;
-    let ParsedExpr::FnCall(fn_call) = result else {
+    let ParsedExpr::Call(fn_call) = result else {
         dbg!(result);
         panic!("not fncall")
     };

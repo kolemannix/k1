@@ -218,8 +218,7 @@ impl TypedProgram {
                 Ok(())
             }
             Type::FunctionTypeParameter(ftp) => {
-                self.write_ident(w, ftp.name)?;
-                w.write_str(": some ")?;
+                w.write_str("some ")?;
                 self.display_type_id(ftp.function_type, expand, w)?;
                 Ok(())
             }
@@ -301,7 +300,7 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Function(fun) => {
-                w.write_str("fn")?;
+                w.write_str("\\")?;
                 w.write_str("(")?;
                 for (idx, param) in fun.physical_params.iter().enumerate() {
                     if param.is_lambda_env {

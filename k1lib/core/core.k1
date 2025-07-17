@@ -4,6 +4,40 @@ fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T
   }
 }
 
+ns iter {
+
+  fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): T? {
+    for i in iterable do {
+      if pred(i) return(.Some(i))
+    };
+    .None
+  }
+
+  fn position[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): uword? {
+    for iterable do {
+      if it == needle return(.Some(itIndex))
+    };
+    .None
+  }
+
+  fn contains[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): bool {
+    position(iterable, needle).isSome()
+  }
+
+  fn forall[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
+    for iterable do { if not pred(it) return(false) };
+    true
+  }
+
+  fn exists[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
+    for iterable do {
+      if pred(it) return(true)
+    };
+    false
+  }
+
+}
+
 ns Pointer {
   let NULL: Pointer = 0: uword as Pointer;
 

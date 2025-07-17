@@ -1,22 +1,4 @@
-use core/BufferIterator
-
-fn find[
-  T,
-  Iter: Iterator[Item = T],
-  I: Iterable[Item = T, I = Iter]
-](iterable: I, pred: some \T -> bool): T? {
-  for i in iterable do {
-    if pred(i) return(.Some(i))
-  };
-  return(.None)
-}
-
-fn position[T: Equals, I: Iterator[Item = T]](iter: I, needle: T): uword? {
-  for iter do {
-    if it == needle return(.Some(itIndex))
-  };
-  .None
-}
+ns ability_complex;
 
 deftype Pair[PA, PB] = { a: PA*, b: PB? }
 ability AsPair[AA, BB] {
@@ -45,15 +27,11 @@ fn unwrapB[
   y.!
 }
 
-//fn getBoth[A, B, T: AsPair[AA=A, BB=B]](t: T): { a: A, b: B } {
-//  return({ a: *t.getA(), c: t.getB().! })
-//}
-
 fn getNothin[A, B, T: AsPair[AA=A, BB=B]](t: T): unit {
   ()
 }
 
-fn main(): i32 {
+fn test(): unit {
   // Phase 1
   let myPair: Pair[int, bool] = { a: mem/new(10), b: some(true) };
   getNothin(t = myPair);
@@ -62,8 +40,5 @@ fn main(): i32 {
   let i = unwrapB[bool, int, Pair[int, bool]](myPair);
   assertEquals(i, 10);
 
-  // Phase 3
-  let firstOdd = find([1,2,3,4].toBuffer(): Buffer[int], \(x) x % 2 == 0);
-  assertEquals(firstOdd, some(2));
-  0
+  ()
 }

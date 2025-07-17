@@ -8,6 +8,7 @@ use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size}
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
 use fxhash::FxHashMap;
+use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;
@@ -554,16 +555,16 @@ impl ParsedCallArg {
 pub struct NamedTypeArg {
     pub name: Option<Ident>,
     pub type_expr: ParsedTypeExprId,
+    pub span: SpanId,
 }
-impl_copy_if_small!(8, NamedTypeArg);
+impl_copy_if_small!(12, NamedTypeArg);
 
 impl NamedTypeArg {
-    pub fn unnamed(type_expr: ParsedTypeExprId) -> NamedTypeArg {
-        NamedTypeArg { type_expr, name: None }
+    pub fn unnamed(type_expr: ParsedTypeExprId, span: SpanId) -> NamedTypeArg {
+        NamedTypeArg { type_expr, name: None, span }
     }
 }
 
-// TOOD(perf): ParsedCall is huge
 static_assert_size!(ParsedCall, 56);
 #[derive(Debug, Clone)]
 pub struct ParsedCall {
@@ -701,28 +702,6 @@ pub struct ParsedStruct {
 }
 
 #[derive(Debug, Clone)]
-/// Example: users  [42]
-///          ^target ^index_value
-pub struct IndexOperation {
-    pub target: ParsedExprId,
-    pub index_expr: ParsedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub struct MethodCall {
-    pub base: ParsedExprId,
-    pub call: Box<ParsedCall>,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub struct OptionalGet {
-    pub base: ParsedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
 pub struct AnonEnumConstructor {
     pub variant_name: Ident,
     pub payload: Option<ParsedExprId>,
@@ -821,6 +800,16 @@ pub struct ParsedCode {
     pub span: SpanId,
 }
 
+/// When you need to refer to a specific ability implementation:
+/// `(Show @ int)/show()`
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedQAbilityCall {
+    pub ability_expr: ParsedAbilityExprId,
+    pub self_name: ParsedTypeExprId,
+    pub call_expr: ParsedExprId,
+    pub span: SpanId,
+}
+
 static_assert_size!(ParsedExpr, 56);
 #[derive(Debug, Clone)]
 pub enum ParsedExpr {
@@ -843,7 +832,7 @@ pub enum ParsedExpr {
     /// ```md
     /// square(1, 2)
     /// ```
-    FnCall(ParsedCall),
+    Call(ParsedCall),
     /// ```md
     /// x
     /// ```
@@ -904,6 +893,7 @@ pub enum ParsedExpr {
     Builtin(SpanId),
     Static(ParsedStaticExpr),
     Code(ParsedCode),
+    QualifiedAbilityCall(ParsedQAbilityCall),
 }
 
 impl ParsedExpr {
@@ -923,7 +913,7 @@ impl ParsedExpr {
             Self::UnaryOp(op) => op.span,
             Self::Literal(lit) => lit.get_span(),
             Self::InterpolatedString(is) => is.span,
-            Self::FnCall(call) => call.span,
+            Self::Call(call) => call.span,
             Self::Variable(var) => var.name.span,
             Self::FieldAccess(acc) => acc.span,
             Self::Block(block) => block.span,
@@ -941,6 +931,7 @@ impl ParsedExpr {
             Self::Builtin(span) => *span,
             Self::Static(s) => s.span,
             Self::Code(c) => c.span,
+            Self::QualifiedAbilityCall(c) => c.span,
         }
     }
 
@@ -948,6 +939,7 @@ impl ParsedExpr {
         if let Self::Match(v) = self { Some(v) } else { None }
     }
 
+    #[track_caller]
     pub fn expect_cast(&self) -> &ParsedCast {
         match self {
             ParsedExpr::Cast(as_cast) => as_cast,
@@ -955,13 +947,15 @@ impl ParsedExpr {
         }
     }
 
+    #[track_caller]
     pub fn expect_call(&self) -> &ParsedCall {
         match self {
-            ParsedExpr::FnCall(call) => call,
+            ParsedExpr::Call(call) => call,
             _ => panic!("expected fn call"),
         }
     }
 
+    #[track_caller]
     pub fn expect_lambda(&self) -> &ParsedLambda {
         match self {
             ParsedExpr::Lambda(c) => c,
@@ -1285,22 +1279,14 @@ impl ParsedTypeExpr {
 #[derive(Debug, Clone)]
 pub struct ParsedTypeParam {
     pub name: Ident,
-    pub constraints: Vec<ParsedTypeConstraintExpr>,
+    pub constraints: EcoVec<ParsedTypeConstraintExpr>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ParsedTypeConstraintExpr {
-    Ability(ParsedAbilityExpr),
+    Ability(ParsedAbilityExprId),
     // Predicate(NamespaceIdentifier)
-}
-
-impl ParsedTypeConstraintExpr {
-    pub fn span(&self) -> SpanId {
-        match self {
-            ParsedTypeConstraintExpr::Ability(app) => app.span,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1418,26 +1404,21 @@ pub struct ParsedAbility {
     pub id: ParsedAbilityId,
 }
 
+nz_u32_id!(ParsedAbilityExprId);
+
 #[derive(Debug, Clone)]
 pub struct ParsedAbilityExpr {
     pub name: NamespacedIdentifier,
-    pub arguments: Vec<AbilityTypeArgument>,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone)]
-pub struct AbilityTypeArgument {
-    pub name: Ident,
-    pub value: ParsedTypeExprId,
+    pub arguments: SliceHandle<NamedTypeArgId>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedAbilityImplementation {
-    pub ability_expr: ParsedAbilityExpr,
-    pub generic_impl_params: Vec<ParsedTypeParam>,
+    pub ability_expr: ParsedAbilityExprId,
+    pub generic_impl_params: EcoVec<ParsedTypeParam>,
     pub self_type: ParsedTypeExprId,
-    pub functions: Vec<ParsedFunctionId>,
+    pub functions: EcoVec<ParsedFunctionId>,
     pub id: ParsedAbilityImplId,
     pub span: SpanId,
 }
@@ -1483,7 +1464,7 @@ impl ParsedExpressionPool {
 
     pub fn add_expression(&mut self, mut expression: ParsedExpr) -> ParsedExprId {
         let id: ParsedExprId = self.expressions.next_id();
-        if let ParsedExpr::FnCall(call) = &mut expression {
+        if let ParsedExpr::Call(call) = &mut expression {
             call.id = id;
         }
         self.expressions.add(expression);
@@ -1626,6 +1607,7 @@ pub struct ParsedProgram {
     pub p_type_args: Pool<NamedTypeArg, NamedTypeArgId>,
     pub p_call_args: Pool<ParsedCallArg, CallArgId>,
     pub p_idents: Pool<Ident, IdentSliceId>,
+    pub p_ability_exprs: Pool<ParsedAbilityExpr, ParsedAbilityExprId>,
 }
 
 impl ParsedProgram {
@@ -1655,6 +1637,7 @@ impl ParsedProgram {
             p_type_args: Pool::with_capacity("parsed_named_type_args", 8192),
             p_call_args: Pool::with_capacity("parsed_call_args", 8192),
             p_idents: Pool::with_capacity("ident_slices", 8192),
+            p_ability_exprs: Pool::with_capacity("ability_exprs", 8192),
         }
     }
 
@@ -2770,7 +2753,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // int,
                 // Box[Point],
                 // std::Map[int, int]
-                let (type_params, type_params_span) = self.parse_bracketed_type_args_new()?;
+                let (type_params, type_params_span) = self.parse_bracketed_type_args()?;
                 let span = self.extend_span(first.span, type_params_span);
                 Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(
                     TypeApplication { name: base_name, args: type_params, span },
@@ -2975,7 +2958,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         ));
                     }
                 };
-                let (type_args, _) = self.parse_bracketed_type_args_new()?;
+                let (type_args, _) = self.parse_bracketed_type_args()?;
                 let next = self.peek();
                 // a.b[int](...)
                 if next.kind == K::OpenParen {
@@ -2995,9 +2978,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         index_of_first_explicit_arg,
                         ParsedCallArg { name: None, value: self_arg, is_explicit_context: false },
                     );
-                    let args_handle = self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+                    let args_handle = self.ast.p_call_args.add_slice_from_copy_slice(&args);
 
-                    Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
+                    Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
                         type_args,
                         args: args_handle,
@@ -3127,9 +3110,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.extend_span(self.get_expression_span(expr1), self.get_expression_span(expr2))
     }
 
-    fn parse_bracketed_type_args_new(
-        &mut self,
-    ) -> ParseResult<(SliceHandle<NamedTypeArgId>, SpanId)> {
+    fn parse_bracketed_type_args(&mut self) -> ParseResult<(SliceHandle<NamedTypeArgId>, SpanId)> {
         let Some(open_bracket) = self.maybe_consume_next(K::OpenBracket) else {
             return Ok((SliceHandle::Empty, self.peek_back().span));
         };
@@ -3140,9 +3121,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &mut type_args,
             K::Comma,
             &[K::CloseBracket],
-            |p| p.expect_type_expression().map(|e| NamedTypeArg { name: None, type_expr: e }),
+            |p| {
+                let (one, two) = p.peek_two();
+                let name = if one.kind == K::Ident && two.kind == K::Equals {
+                    let (_, name_ident) = p.expect_ident()?;
+                    p.expect_eat_token(K::Equals)?;
+                    Some(name_ident)
+                } else {
+                    None
+                };
+                let type_expr = p.expect_type_expression()?;
+                let span = p.extend_span(one.span, p.get_type_expression_span(type_expr));
+                Ok(NamedTypeArg { name, type_expr, span })
+            },
         )?;
-        let slice = self.ast.p_type_args.add_slice_from_iter(type_args.into_iter());
+        let slice = self.ast.p_type_args.add_slice_from_copy_slice(&type_args);
         let span = self.extend_span(open_bracket.span, args_span);
         Ok((slice, span))
     }
@@ -3155,11 +3148,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Loop until we don't see a /
             namespaces.push(self.intern_ident_token(first));
             self.advance(); // ident
-            self.advance(); // coloncolon
+            self.advance(); // slash
             loop {
-                trace!("Parsing namespaces {:?}", namespaces);
                 let (a, b) = self.tokens.peek_two();
-                trace!("Parsing namespaces peeked 3 {} {}", a.kind, b.kind);
                 if a.kind == K::Ident && b.kind == K::Slash {
                     self.advance(); // ident
                     self.advance(); // slash
@@ -3323,19 +3314,76 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let namespaced_ident = self.expect_namespaced_ident()?;
             let second = self.tokens.peek();
             // FnCall
-            if second.kind == K::OpenBracket || second.kind == K::OpenParen {
-                let (type_args, _) = self.parse_bracketed_type_args_new()?;
-                let (args, args_span) = self.expect_fn_call_args()?;
-                let args_handle = self.ast.p_call_args.add_slice_from_iter(args.into_iter());
-                let span = self.extend_span(namespaced_ident.span, args_span);
-                Ok(Some(self.add_expression(ParsedExpr::FnCall(ParsedCall {
-                    name: namespaced_ident,
-                    type_args,
-                    args: args_handle,
-                    span,
-                    is_method: false,
-                    id: ParsedExprId::PENDING,
-                }))))
+            if second.kind == K::At || second.kind == K::OpenBracket || second.kind == K::OpenParen
+            {
+                let first_type_args = match second.kind {
+                    K::OpenBracket => self.parse_bracketed_type_args()?.0,
+                    K::At => SliceHandle::Empty,
+                    K::OpenParen => SliceHandle::Empty,
+                    _ => unreachable!(),
+                };
+                let next_after_tparams = self.peek();
+                match next_after_tparams.kind {
+                    K::OpenParen => {
+                        // Call with type params above
+                        let (args, args_span) = self.expect_fn_call_args()?;
+                        let args_handle =
+                            self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+                        let span = self.extend_span(namespaced_ident.span, args_span);
+                        Ok(Some(self.add_expression(ParsedExpr::Call(ParsedCall {
+                            name: namespaced_ident,
+                            type_args: first_type_args,
+                            args: args_handle,
+                            span,
+                            is_method: false,
+                            id: ParsedExprId::PENDING,
+                        }))))
+                    }
+                    K::At => {
+                        // Qualified ability call with first_type_args: Ability[<first_type_args>]@(int)/baz()
+                        self.advance();
+                        self.expect_eat_token(K::OpenParen)?;
+                        let target_type = self.expect_type_expression()?;
+                        self.expect_eat_token(K::CloseParen)?;
+                        self.expect_eat_token(K::Slash)?;
+                        let (call_name_token, call_name) = self.expect_ident()?;
+                        let (call_type_args, _) = self.parse_bracketed_type_args()?;
+                        let (args, _) = self.expect_fn_call_args()?;
+                        let args_handle =
+                            self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+
+                        let span = self.extend_to_here(first.span);
+
+                        let call_expr_id = self.add_expression(ParsedExpr::Call(ParsedCall {
+                            name: NamespacedIdentifier::naked(call_name, call_name_token.span),
+                            type_args: call_type_args,
+                            args: args_handle,
+                            span,
+                            is_method: false,
+                            id: ParsedExprId::PENDING,
+                        }));
+
+                        let ability_type_arguments = first_type_args;
+                        let ab_expr_span = self.extend_to_here(namespaced_ident.span);
+                        let ability_expr_id = self.ast.p_ability_exprs.add(ParsedAbilityExpr {
+                            name: namespaced_ident,
+                            arguments: ability_type_arguments,
+                            span: ab_expr_span,
+                        });
+                        Ok(Some(self.add_expression(ParsedExpr::QualifiedAbilityCall(
+                            ParsedQAbilityCall {
+                                ability_expr: ability_expr_id,
+                                self_name: target_type,
+                                call_expr: call_expr_id,
+                                span,
+                            },
+                        ))))
+                    }
+                    _ => Err(error(
+                        "Expected '(' for function call; or '@' for qualified ability impl",
+                        self.peek(),
+                    )),
+                }
             } else {
                 // The last thing it can be is a simple variable reference expression
                 Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
@@ -3842,7 +3890,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         //           constraints
         let name_token = self.expect_eat_token(K::Ident)?;
         let name = self.intern_ident_token(name_token);
-        let mut constraints = vec![];
+        let mut constraints = eco_vec![];
         if self.maybe_consume_next(K::Colon).is_some() {
             loop {
                 constraints.push(self.expect_type_constraint_expr()?);
@@ -3985,14 +4033,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_type_constraint_expr(&mut self) -> ParseResult<ParsedTypeConstraintExpr> {
         let ability_expr = self.expect_ability_expr()?;
-        Ok(ParsedTypeConstraintExpr::Ability(ability_expr))
+        let id = self.ast.p_ability_exprs.add(ability_expr);
+        Ok(ParsedTypeConstraintExpr::Ability(id))
     }
 
     fn expect_named_type_constraint(&mut self) -> ParseResult<ParsedTypeConstraint> {
         let (name_token, name) = self.expect_ident_upper()?;
         self.expect_eat_token(K::Colon)?;
         let constraint_expr = self.expect_type_constraint_expr()?;
-        let span = self.extend_span(name_token.span, constraint_expr.span());
+        let span = self.extend_to_here(name_token.span);
         Ok(ParsedTypeConstraint { name, constraint_expr, span })
     }
 
@@ -4011,6 +4060,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_ident_upper(&mut self) -> ParseResult<(Token, Ident)> {
         self.expect_ident_ext(true, false)
+    }
+
+    fn expect_ident(&mut self) -> ParseResult<(Token, Ident)> {
+        self.expect_ident_ext(false, false)
     }
 
     fn parse_ability_defn(&mut self) -> ParseResult<Option<ParsedAbilityId>> {
@@ -4063,18 +4116,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ability_id))
     }
 
-    fn expect_ability_type_argument(&mut self) -> ParseResult<AbilityTypeArgument> {
+    fn expect_ability_type_argument(&mut self) -> ParseResult<NamedTypeArg> {
         let name_token = self.expect_eat_token(K::Ident)?;
         let name = self.intern_ident_token(name_token);
         self.expect_eat_token(K::Equals)?;
         let value = self.expect_type_expression()?;
         let span = self.extend_span(name_token.span, self.get_type_expression_span(value));
-        Ok(AbilityTypeArgument { name, value, span })
+        Ok(NamedTypeArg { name: Some(name), type_expr: value, span })
     }
 
     fn expect_ability_expr(&mut self) -> ParseResult<ParsedAbilityExpr> {
         let name = self.expect_namespaced_ident()?;
-        let mut arguments = vec![];
+        let mut arguments: SV4<NamedTypeArg> = smallvec![];
         let span = match self.eat_delimited_if_opener(
             "Ability Arguments",
             &mut arguments,
@@ -4086,12 +4139,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None => name.span,
             Some(args_span) => self.extend_span(name.span, args_span),
         };
-        Ok(ParsedAbilityExpr { name, arguments, span })
+        let arguments_handle = self.ast.p_type_args.add_slice_from_copy_slice(&arguments);
+        Ok(ParsedAbilityExpr { name, arguments: arguments_handle, span })
     }
 
     fn parse_ability_impl(&mut self) -> ParseResult<Option<ParsedAbilityImplId>> {
         let Some(keyword_impl) = self.maybe_consume_next(K::KeywordImpl) else { return Ok(None) };
-        let mut generic_impl_params = vec![];
+        let mut generic_impl_params = eco_vec![];
         self.eat_delimited_if_opener(
             "Generic implementation parameters",
             &mut generic_impl_params,
@@ -4101,11 +4155,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             |p| p.expect_type_param(),
         )?;
         let ability = self.expect_ability_expr()?;
+        let ability_expr_id = self.ast.p_ability_exprs.add(ability);
         self.expect_eat_token(K::KeywordFor)?;
         let target_type = self.expect_type_expression()?;
 
         // Read the functions inside block; one day also associated constants
-        let mut functions = Vec::with_capacity(2);
+        let mut functions = eco_vec![];
         self.expect_eat_token(K::OpenBrace)?;
 
         while let Some(parsed_function) = self.parse_function(None)? {
@@ -4116,7 +4171,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let span = self.extend_token_span(keyword_impl, close_brace);
 
         let ability_impl_id = self.ast.add_ability_impl(ParsedAbilityImplementation {
-            ability_expr: ability,
+            ability_expr: ability_expr_id,
             generic_impl_params,
             self_type: target_type,
             functions,
@@ -4265,7 +4320,7 @@ impl ParsedProgram {
                 w.write_char('"')?;
                 Ok(())
             }
-            ParsedExpr::FnCall(call) => {
+            ParsedExpr::Call(call) => {
                 w.write_str(self.idents.get_name(call.name.name))?;
                 w.write_str("(...)")?;
                 Ok(())
@@ -4369,7 +4424,52 @@ impl ParsedProgram {
                 self.display_stmt_id(w, code.parsed_stmt)?;
                 Ok(())
             }
+            ParsedExpr::QualifiedAbilityCall(qcall) => {
+                // Qualified ability call: foo/Ability@int/baz()
+                self.display_ability_expr(w, qcall.ability_expr)?;
+                w.write_char('@')?;
+                self.display_type_expr_id(qcall.self_name, w)?;
+                w.write_char('/')?;
+                self.display_expr_id(w, qcall.call_expr)?;
+                Ok(())
+            }
         }
+    }
+
+    fn display_namespaced_identifier(
+        &self,
+        w: &mut impl Write,
+        ns_id: &NamespacedIdentifier,
+    ) -> std::fmt::Result {
+        if !ns_id.namespaces.is_empty() {
+            for (index, ns) in ns_id.namespaces.iter().enumerate() {
+                w.write_str(self.idents.get_name(*ns))?;
+                if index < ns_id.namespaces.len() - 1 {
+                    w.write_str("/")?;
+                }
+            }
+        }
+        w.write_str(self.idents.get_name(ns_id.name))
+    }
+
+    fn display_ability_expr(
+        &self,
+        w: &mut impl Write,
+        ability_expr_id: ParsedAbilityExprId,
+    ) -> std::fmt::Result {
+        let e = self.p_ability_exprs.get(ability_expr_id);
+        self.display_namespaced_identifier(w, &e.name)?;
+        if !e.arguments.is_empty() {
+            w.write_str("[")?;
+            for (idx, arg) in self.p_type_args.get_slice(e.arguments).iter().enumerate() {
+                self.display_type_expr_id(arg.type_expr, w)?;
+                if idx < e.arguments.len() - 1 {
+                    w.write_str(", ")?;
+                }
+            }
+            w.write_str("]")?;
+        }
+        Ok(())
     }
 
     pub fn display_pattern_expression_id(

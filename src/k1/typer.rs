@@ -5446,7 +5446,7 @@ impl TypedProgram {
             for constraint in parsed_param.constraints.iter() {
                 let constraint_signature = match constraint {
                     parse::ParsedTypeConstraintExpr::Ability(parsed_ability_expr) => self_
-                        .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
+                        .eval_ability_expr(*parsed_ability_expr, false, constraint_checking_scope)
                         .unwrap(),
                 };
                 if let Err(mut e) = self_.check_type_constraint(
@@ -6590,7 +6590,7 @@ impl TypedProgram {
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
                 Ok(self.exprs.add(TypedExpr::Block(block)))
             }
-            ParsedExpr::FnCall(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx),
+            ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
             ParsedExpr::AnonEnumConstructor(anon_enum) => {
                 let span = anon_enum.span;
@@ -6712,10 +6712,48 @@ impl TypedProgram {
                 let id = self.exprs.add(parsed_code_string);
                 Ok(id)
             }
+            ParsedExpr::QualifiedAbilityCall(qcall) => {
+                let qcall = *qcall;
+                let signature = self.eval_ability_expr(qcall.ability_expr, true, ctx.scope_id)?;
+                // Locate the precise impl
+                let self_type_id = self.eval_type_expr(qcall.self_name, ctx.scope_id)?;
+                let impl_handle = self
+                    .find_or_generate_specialized_ability_impl_for_type(
+                        self_type_id,
+                        signature.specialized_ability_id,
+                        ctx.scope_id,
+                        qcall.span,
+                    )
+                    .map_err(|msg| errf!(qcall.span, "{}", msg))?;
+
+                // Get the function id from it by name I guess
+                let call_ast_expr = self.ast.exprs.get(qcall.call_expr).expect_call().clone();
+                let call_name = call_ast_expr.name.name;
+                let Some((function_index, tafr)) = self
+                    .abilities
+                    .get(signature.specialized_ability_id)
+                    .find_function_by_name(call_name)
+                else {
+                    return failf!(
+                        call_ast_expr.name.span,
+                        "No such function `{}` in ability `{}`",
+                        self.ident_str(call_name),
+                        self.ability_signature_to_string(signature)
+                    );
+                };
+                let impl_ = self.ability_impls.get(impl_handle.full_impl_id);
+                let impl_function = impl_.function_at_index(function_index);
+                self.eval_function_call(
+                    &call_ast_expr,
+                    None,
+                    ctx,
+                    Some(Callee::from_ability_impl_fn(impl_function)),
+                )
+            }
         }
     }
 
-    /// Compiles `#static <expr>` and `#meta <expr>` the constructs
+    /// Compiles `#static <expr>` and `#meta <expr>` constructs
     fn eval_static_expr(
         &mut self,
         expr_id: ParsedExprId,
@@ -9233,7 +9271,7 @@ impl TypedProgram {
                     id: ParsedExprId::PENDING,
                 }
             }
-            ParsedExpr::FnCall(fn_call) => {
+            ParsedExpr::Call(fn_call) => {
                 let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
                 args.push(ParsedCallArg::unnamed(lhs));
                 args.extend_from_slice(self.ast.p_call_args.get_slice(fn_call.args));
@@ -9254,9 +9292,9 @@ impl TypedProgram {
                 );
             }
         };
-        let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpr::FnCall(new_fn_call));
+        let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpr::Call(new_fn_call));
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
-        self.eval_function_call(&new_fn_call_clone, None, ctx)
+        self.eval_function_call(&new_fn_call_clone, None, ctx, None)
     }
 
     /// Can 'shortcircuit' with Left if the function call to resolve
@@ -10492,15 +10530,19 @@ impl TypedProgram {
         fn_call: &ParsedCall,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
+        known_callee: Option<Callee>,
     ) -> TyperResult<TypedExprId> {
         let span = fn_call.span;
         assert!(
             fn_call.args.is_empty() || known_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let callee = match self.resolve_parsed_function_call(fn_call, known_args.as_ref(), ctx)? {
-            Either::Left(expr) => return Ok(expr),
-            Either::Right(callee) => callee,
+        let callee = match known_callee {
+            None => match self.resolve_parsed_function_call(fn_call, known_args.as_ref(), ctx)? {
+                Either::Left(expr) => return Ok(expr),
+                Either::Right(callee) => callee,
+            },
+            Some(callee) => callee,
         };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
@@ -11450,7 +11492,13 @@ impl TypedProgram {
                                     PhysicalPassedFunction::FunctionReference
                                 }
                                 _ => {
-                                    unreachable!("Unsupported type for abstract function parameter")
+                                    let span = self.exprs.get(t).get_span();
+                                    return failf!(
+                                        span,
+                                        "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
+                                        self.type_id_to_string(function_type_param.type_id),
+                                        self.type_id_to_string(type_id)
+                                    );
                                 }
                             }
                         }
@@ -13072,16 +13120,20 @@ impl TypedProgram {
 
     fn check_ability_expr(
         &mut self,
-        ability_expr: &parse::ParsedAbilityExpr,
+        ability_expr_id: parse::ParsedAbilityExprId,
         scope_id: ScopeId,
         skip_impl_check: bool,
     ) -> TyperResult<(AbilityId, NamedTypeSlice, NamedTypeSlice)> {
+        let ability_expr = self.ast.p_ability_exprs.get(ability_expr_id).clone();
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
 
         let mut arguments: SV4<NameAndType> = SmallVec::with_capacity(ability_expr.arguments.len());
-        for arg in ability_expr.arguments.iter() {
-            let arg_type = self.eval_type_expr(arg.value, scope_id)?;
-            arguments.push(NameAndType { name: arg.name, type_id: arg_type });
+        for arg in self.ast.p_type_args.copy_slice_sv4(ability_expr.arguments).iter() {
+            let arg_type = self.eval_type_expr(arg.type_expr, scope_id)?;
+            let Some(name) = arg.name else {
+                return failf!(arg.span, "Ability arguments must all be named, for now");
+            };
+            arguments.push(NameAndType { name, type_id: arg_type });
         }
 
         let arguments_handle = self.named_types.add_slice_from_copy_slice(&arguments);
@@ -13097,18 +13149,15 @@ impl TypedProgram {
 
     fn eval_ability_expr(
         &mut self,
-        ability_expr: &parse::ParsedAbilityExpr,
+        ability_expr_id: parse::ParsedAbilityExprId,
         skip_impl_check: bool,
         scope_id: ScopeId,
     ) -> TyperResult<TypedAbilitySignature> {
         let (base_ability_id, ability_arguments, impl_arguments) =
-            self.check_ability_expr(ability_expr, scope_id, skip_impl_check)?;
-        let new_ability_id = self.specialize_ability(
-            base_ability_id,
-            ability_arguments,
-            ability_expr.span,
-            scope_id,
-        );
+            self.check_ability_expr(ability_expr_id, scope_id, skip_impl_check)?;
+        let span = self.ast.p_ability_exprs.get(ability_expr_id).span;
+        let new_ability_id =
+            self.specialize_ability(base_ability_id, ability_arguments, span, scope_id);
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
@@ -13207,7 +13256,7 @@ impl TypedProgram {
             for parsed_constraint in type_parameter.constraints.iter() {
                 let ability_sig = match parsed_constraint {
                     parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        self_.eval_ability_expr(ability_expr, false, fn_scope_id)?
+                        self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?
                     }
                 };
                 ability_constraints.push(ability_sig);
@@ -13216,7 +13265,7 @@ impl TypedProgram {
                 if param.name == type_parameter.name {
                     let ability_id = match &param.constraint_expr {
                         parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                            self_.eval_ability_expr(ability_expr, false, fn_scope_id)?
+                            self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?
                         }
                     };
                     ability_constraints.push(ability_id);
@@ -13644,7 +13693,7 @@ impl TypedProgram {
                 .iter()
                 .map(|constraint| match constraint {
                     parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        self.eval_ability_expr(ability_expr, false, ability_scope_id)
+                        self.eval_ability_expr(*ability_expr, false, ability_scope_id)
                     }
                 })
                 .collect();
@@ -13791,10 +13840,9 @@ impl TypedProgram {
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
     ) -> TyperResult<AbilityImplId> {
-        // TODO(clone): Very coarse clone of ast impl node
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
-        let ability_expr = &parsed_ability_impl.ability_expr;
+        let ability_expr = self.ast.p_ability_exprs.get(parsed_ability_impl.ability_expr).clone();
         let parsed_functions = &parsed_ability_impl.functions;
 
         let impl_scope_id =
@@ -13831,16 +13879,19 @@ impl TypedProgram {
                 let param_constraints_scope_id =
                     self.scopes.add_child_scope(impl_scope_id, ScopeType::AbilityImpl, None, None);
                 for parsed_constraint in &generic_impl_param.constraints {
-                    let constraint_ability_sig = match parsed_constraint {
+                    let (constraint_ability_sig, constraint_span) = match parsed_constraint {
                         parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                            self.eval_ability_expr(ability_expr, false, impl_scope_id)?
+                            let sig =
+                                self.eval_ability_expr(*ability_expr, false, impl_scope_id)?;
+                            let constraint_span = self.ast.p_ability_exprs.get(*ability_expr).span;
+                            (sig, constraint_span)
                         }
                     };
                     self.add_constrained_ability_impl(
                         type_variable_id,
                         constraint_ability_sig,
                         param_constraints_scope_id,
-                        parsed_constraint.span(),
+                        constraint_span,
                     );
                 }
             }
@@ -13849,7 +13900,8 @@ impl TypedProgram {
         }
 
         let impl_self_type = self.eval_type_expr(parsed_ability_impl.self_type, impl_scope_id)?;
-        let ability_sig = self.eval_ability_expr(ability_expr, true, impl_scope_id)?;
+        let ability_sig =
+            self.eval_ability_expr(parsed_ability_impl.ability_expr, true, impl_scope_id)?;
         let ability_id = ability_sig.specialized_ability_id;
 
         // Uniqueness of implementation:
@@ -13900,8 +13952,12 @@ impl TypedProgram {
         let mut impl_arguments: SV8<NameAndType> =
             SmallVec::with_capacity(ability.parameters.len());
         for impl_param in ability.parameters.iter().filter(|p| p.is_impl_param) {
-            let Some(matching_arg) =
-                ability_expr.arguments.iter().find(|arg| arg.name == impl_param.name)
+            let Some(&matching_arg) = self
+                .ast
+                .p_type_args
+                .get_slice(ability_expr.arguments)
+                .iter()
+                .find(|arg| arg.name == Some(impl_param.name))
             else {
                 return failf!(
                     ability_expr.span,
@@ -13911,7 +13967,7 @@ impl TypedProgram {
                 );
             };
 
-            let arg_type = self.eval_type_expr(matching_arg.value, impl_scope_id)?;
+            let arg_type = self.eval_type_expr(matching_arg.type_expr, impl_scope_id)?;
 
             self.check_type_constraints(
                 impl_param.name,
@@ -15549,13 +15605,13 @@ impl TypedProgram {
         args: &[ParsedExprId],
     ) -> ParsedExprId {
         let span = name.span;
-        let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id));
+        let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id, span));
         let type_args = self.ast.p_type_args.add_slice_from_iter(type_args_iter);
         let args = self
             .ast
             .p_call_args
             .add_slice_from_iter(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
-        self.ast.exprs.add_expression(ParsedExpr::FnCall(ParsedCall {
+        self.ast.exprs.add_expression(ParsedExpr::Call(ParsedCall {
             name,
             type_args,
             args,
@@ -15574,7 +15630,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let call_id = self.synth_parsed_function_call(name, &[], &[]);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
-        self.eval_function_call(&call, Some((type_args, args)), ctx)
+        self.eval_function_call(&call, Some((type_args, args)), ctx, None)
     }
 
     // These are only used by the old coalescing accessor and should be removed when its rebuilt
