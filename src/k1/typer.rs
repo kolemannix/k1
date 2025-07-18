@@ -6762,8 +6762,11 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let span = stat.span;
         let base_expr = stat.base_expr;
+
         // We don't execute statics during the generic pass, since there's no point
         // since we don't know the real types or values
+        self.write_location(&mut stderr(), span);
+        eprintln!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass);
         if ctx.is_generic_pass {
             let typed_expr = match ctx.expected_type_id {
                 None => TypedExpr::Unit(span),
@@ -8748,12 +8751,27 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let condition_bool = self.execute_static_bool(if_expr.cond, ctx)?;
+        // We just proceed as if it yielded 'true' in the generic case
+        let condition_bool = match ctx.is_generic_pass {
+            false => self.execute_static_bool(if_expr.cond, ctx)?,
+            true => true,
+        };
+
+        // Should we still compile both expressions; I think all the code should get typechecked
+        // even if the path isn't taken? Or does this prevent important use-cases like
+        // platform-dependent code?
+        //let cons_expr = self.eval_expr(if_expr.cons, ctx)?;
+        //let alt_expr =
+        //    if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
+
         let expr = if condition_bool {
-            self.eval_expr(if_expr.cons, ctx)?
+            let cons_expr = self.eval_expr(if_expr.cons, ctx)?;
+            cons_expr
         } else {
-            if let Some(alt) = if_expr.alt {
-                self.eval_expr(alt, ctx)?
+            let alt_expr =
+                if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
+            if let Some(alt) = alt_expr {
+                alt
             } else {
                 self.exprs.add(TypedExpr::Unit(if_expr.span))
             }

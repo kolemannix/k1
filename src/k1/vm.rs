@@ -1317,6 +1317,10 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     if function.body_block.is_none() {
         let prev_level = log::max_level();
         log::set_max_level(log::LevelFilter::Info);
+        eprintln!(
+            "vm has to trigger compilation of body: {}",
+            m.function_id_to_string(function_id, true)
+        );
         m.eval_function_body(function_id)?;
         log::set_max_level(prev_level);
     }

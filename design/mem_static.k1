@@ -1,0 +1,125 @@
+// Explorations in making the allocator-based differences
+// statically resolved, specializing each function over
+// different allocation _styles_. For example,
+// calling free when growing a buffer, or not
+// doing so, statically, based on whether the allocator-style
+// is GC, Explicit Heap, or Stack/Push.
+ns mem {
+  deftype AllocStyle = either Heap, Push, GcHeap
+
+  deftype SystemHeap = {}
+
+  ability Allocator {
+    fn allocate(self: Self, size: uword, align: uword): Pointer
+    fn reallocate(self: Self, ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+    fn free(self: Self, ptr: Pointer, size: uword, align: uword): unit
+
+    fn allocStyle(): AllocStyle
+  }
+
+  impl Allocator for mem/SystemHeap {
+    fn allocate(self: Self, size: uword, align: uword): Pointer {
+      core/mem/alloc(size, align)
+    }
+    fn reallocate(self: Self, ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+      core/mem/realloc(ptr, oldSize = oldSize, align = align, newSize = newSize)
+    }
+    fn free(self: Self, ptr: Pointer, size: uword, align: uword): unit {
+      core/mem/free(ptr, size, align)
+    }
+    fn allocStyle(): AllocStyle { .Heap }
+  }
+
+  // These top-level functions allow for a slightly terser syntax than 'allocator.allocate()' since you can just write: mem/allocate()
+  // and the context provides the allocator
+  fn allocate[A: Allocator](context alloc: A)(size: uword, align: uword): Pointer {
+    alloc.allocate(size, align)
+  }
+  fn reallocate[A: Allocator](context alloc: A)(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+    alloc.reallocate(ptr, oldSize, align, newSize)
+  }
+  fn free[A: Allocator](context alloc: A)(ptr: Pointer, size: uword, align: uword): unit {
+    alloc.free(ptr, size, align)
+  }
+
+  fn requiresFree[A: Allocator](): bool {
+    #static switch Allocator@(A)/allocStyle() {
+      .Heap -> true,
+      .Push -> false,
+      .GcHeap -> false
+    }
+  }
+
+  fn supportsRealloc[A: Allocator](): bool {
+    #static switch Allocator@(A)/allocStyle() {
+      .Heap -> true,
+      .Push -> false,
+      .GcHeap -> false
+    }
+  }
+
+  // The allocator _could_ end up being zero-sized, in which case
+  // we should optimize out the function argument altogether!
+  fn bufferGrowTo[T, A: Allocator](context a: A)(self: Buffer[T]*, newCount: u64): unit {
+    #if supportsRealloc[A]() {
+      let newSize = bufferSizeBytes[T](newCount);
+      let realloc = a.realloc(self.dataPointer(), newSize);
+      self <- { len: newCount, data: realloc }
+    } else {
+      let oldPtr = self.data;
+      let newBuffer = Buffer/_allocate[T](newCount);
+      _copyFrom[T](self.*, newBuffer, self.len);
+
+      #if requiresFree[A]() { a.free(oldPtr) };
+
+      self <- newBuffer
+    }
+  }
+
+}
+
+fn myAllocateIn[A: Allocator, T](context a: A)(size: uword): Buffer[T] {
+  let ptr = if count == 0 {
+    Pointer/NULL
+  } else {
+    let sizeBytes = bufferSizeBytes[T](count);
+    mem/allocate(sizeBytes, core/types/alignOf[T]())
+  };
+  let data = ptr as T*;
+  { len: count, data }
+}
+
+fn myFilledIn[A: Allocator, T](context a: A)(b: Buffer[T], size: uword, value: T): Buffer[T] {
+  let buf: Buffer[T] = myAllocateIn[A, T](size);
+  let mut i = 0: uword;
+  while i < size {
+    buf.set(i, value);
+    i = i + 1;
+  };
+  buf
+}
+
+fn main(): i32 {
+   // Compiler Setting to inject a context value equal to the global constant rt/ALLOC_MODE_GC
+   // to opt out of worrying about allocation for that program. If enabled, how do we prevent users from accidentally using it?
+   // Also to consider, push/pop and scopes
+
+   let debug = core/k1/DEBUG;
+
+   let context alloc: mem/SystemHeap = {};
+   // TODO: Use context values to aid inference :O
+   mem/allocate(8, 8);
+   println("debug? {debug}");
+   {
+     let b = myFilledIn[int](size = 5, value = 42);
+     for i in b do {
+       println("{i}");
+     };
+     let b2 = myFilledIn[int](size = 5, value = 49);
+     for i in b2 do {
+       println("{i}");
+     };
+   };
+
+   0
+}
