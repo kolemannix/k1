@@ -15,7 +15,20 @@ K1 is an experimental systems programming language that combines C-like performa
 ./check.sh [file]    # Build compiler and run validation (skips codegen/linking if file specified)
 ./test.sh            # Run comprehensive test suite + build test_suite and compiler binaries
 ./run.sh <file>      # Compile and run K1 programs
+./debug <file>       # Debug build and launch interactive lldb with the specified file
 ./build_lsp.sh       # Build language server
+```
+
+### Debug Commands
+```bash
+# Run program with sanitizers (address, undefined behavior detection)
+./.k1-out/<filename>  # After building with ./debug <file>
+
+# Non-interactive debugging (useful for automated testing)
+lldb --batch -o run .k1-out/<filename>
+
+# Non-interactive debug script (builds with sanitizers and runs)
+./debug_run.sh <file>  # Build with debug/sanitizers and run non-interactively
 ```
 
 ### Individual Build Commands

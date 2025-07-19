@@ -2661,7 +2661,7 @@ impl TypedProgram {
             variables: Pool::with_capacity("typed_variables", 8192),
             types,
             globals: Pool::with_capacity("typed_globals", 4096),
-            exprs: Pool::with_capacity("typed_exprs", 32768),
+            exprs: Pool::with_capacity("typed_exprs", 65536),
             stmts: Pool::with_capacity("typed_stmts", 8192),
             // TODO: De-dupe the static values pool a bit: for example unit, ints, btrue and
             //       bfalse, strings are easy due to string id, ...

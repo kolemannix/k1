@@ -10,11 +10,11 @@ use core/types/TypeSchema
 deftype Point = { x: i32, y: i32 }
 
 // Generic function to test type substitution with Arrays
-fn getArrayInfo[T](dummy: T): { elementName: string, arraySize: uword, totalSize: uword } {
+fn getArrayInfo[T](): { elementName: string, fiveSize: uword, tenSize: uword } {
   {
     elementName: typeName(typeId[T]()),
-    arraySize: sizeOf[Array[5 x T]](),
-    totalSize: sizeOf[Array[10 x T]]()
+    fiveSize: sizeOf[Array[5 x T]](),
+    tenSize: sizeOf[Array[10 x T]]()
   }
 }
 
@@ -77,20 +77,20 @@ fn test(): unit {
 
   // Test 4: Generic functions with Arrays (tests type substitution)
   print("4. Testing generic Array operations...");
-  let u8Info = getArrayInfo[u8](0 as u8);
+  let u8Info = getArrayInfo[u8]();
   assertEquals(u8Info.elementName, "u8");
-  assertEquals(u8Info.arraySize, 5);    // Array[5 x u8] = 5 bytes
-  assertEquals(u8Info.totalSize, 10);   // Array[10 x u8] = 10 bytes
+  assertEquals(u8Info.fiveSize, 5);    // Array[5 x u8] = 5 bytes
+  assertEquals(u8Info.tenSize, 10);   // Array[10 x u8] = 10 bytes
 
-  let i64Info = getArrayInfo[i64](0);
+  let i64Info = getArrayInfo[i64]();
   assertEquals(i64Info.elementName, "i64");
-  assertEquals(i64Info.arraySize, 40);  // Array[5 x i64] = 5 * 8 = 40 bytes
-  assertEquals(i64Info.totalSize, 80);  // Array[10 x i64] = 10 * 8 = 80 bytes
+  assertEquals(i64Info.fiveSize, 40);  // Array[5 x i64] = 5 * 8 = 40 bytes
+  assertEquals(i64Info.tenSize, 80);  // Array[10 x i64] = 10 * 8 = 80 bytes
 
-  let pointInfo = getArrayInfo[Point]({x: 0, y: 0});
+  let pointInfo = getArrayInfo[Point]();
   assertEquals(pointInfo.elementName, "Point");
-  assertEquals(pointInfo.arraySize, 40);  // Array[5 x Point] = 5 * 8 = 40 bytes
-  assertEquals(pointInfo.totalSize, 80);  // Array[10 x Point] = 10 * 8 = 80 bytes
+  assertEquals(pointInfo.fiveSize, 40);  // Array[5 x Point] = 5 * 8 = 40 bytes
+  assertEquals(pointInfo.tenSize, 80);  // Array[10 x Point] = 10 * 8 = 80 bytes
   println("   PASS");
 
   // Test 5: More generic functions

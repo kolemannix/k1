@@ -214,9 +214,9 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                             };
                             if run_status.code() != expectation.exit_code() {
                                 bail!(
-                                    "{name} failed wrong exit code: exp {:?}, actual {:?}",
+                                    "{name} failed wrong exit code: exp {:?}, actual status: {:?}",
                                     expectation.exit_code(),
-                                    run_status.code(),
+                                    run_status,
                                 );
                             }
                             if let Some(expected_exit_message) = expectation.expected_message() {
