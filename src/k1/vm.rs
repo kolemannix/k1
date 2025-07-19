@@ -1317,7 +1317,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     if function.body_block.is_none() {
         let prev_level = log::max_level();
         log::set_max_level(log::LevelFilter::Info);
-        eprintln!(
+        debug!(
             "vm has to trigger compilation of body: {}",
             m.function_id_to_string(function_id, true)
         );
@@ -2024,7 +2024,7 @@ impl StackFrame {
 
 impl Stack {
     pub fn make(size: usize) -> Stack {
-        eprintln!("make stack {size}");
+        debug!("make stack {size}");
         let allocation: Box<[u8]> = vec![0; size].into();
         let base_ptr = allocation.as_ptr();
         let frames_cap = if size == 0 { 0 } else { 512 };
