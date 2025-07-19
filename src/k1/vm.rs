@@ -1475,6 +1475,7 @@ fn execute_intrinsic(
                     ),
                     vm.eval_span,
                 ),
+                Type::Array(_) => unimplemented!("array type in VM zeroed intrinsic"),
             };
             Ok(VmResult::Value(value))
         }
@@ -1884,6 +1885,7 @@ pub fn load_value(
         | Type::InferenceHole(_)
         | Type::Unresolved(_)
         | Type::RecursiveReference(_) => unreachable!("Not a value type"),
+        Type::Array(_) => unimplemented!("array type in VM load_value"),
     }
 }
 

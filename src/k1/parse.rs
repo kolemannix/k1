@@ -1146,6 +1146,15 @@ pub struct ParsedReference {
 }
 
 #[derive(Debug, Clone)]
+// TODO(array): Switch to impl_copy_if_small
+pub struct ParsedArrayType {
+    pub size_expr: ParsedExprId,
+    pub element_type: ParsedTypeExprId,
+    pub span: SpanId,
+}
+impl_copy_if_small!(12, ParsedArrayType);
+
+#[derive(Debug, Clone)]
 pub struct ParsedEnumVariant {
     pub tag_name: Ident,
     pub payload_expression: Option<ParsedTypeExprId>,
@@ -1246,6 +1255,7 @@ pub enum ParsedTypeExpr {
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
     Reference(ParsedReference),
+    Array(ParsedArrayType),
     Enum(ParsedEnumType),
     DotMemberAccess(ParsedDotMemberAccess),
     Function(ParsedFunctionType),
@@ -1265,6 +1275,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::TypeApplication(app) => app.span,
             ParsedTypeExpr::Optional(opt) => opt.span,
             ParsedTypeExpr::Reference(r) => r.span,
+            ParsedTypeExpr::Array(arr) => arr.span,
             ParsedTypeExpr::Enum(e) => e.span,
             ParsedTypeExpr::DotMemberAccess(a) => a.span,
             ParsedTypeExpr::Function(f) => f.span,
@@ -2749,6 +2760,44 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.ast.type_exprs.add(quantifier)))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
+
+                // Special case for Array[N x T] syntax
+                if base_name.namespaces.is_empty()
+                    && self.ast.idents.get_name(base_name.name) == "Array"
+                {
+                    // Array must always have bracket syntax
+                    if self.peek().kind != K::OpenBracket {
+                        return Err(error(
+                            "Array type requires bracket syntax: Array[N x T]",
+                            self.peek(),
+                        ));
+                    }
+
+                    let start_bracket = self.advance();
+                    let size_expr = self.expect_expression()?;
+
+                    // Expect 'x' keyword
+                    let x_token = self.peek();
+                    if x_token.kind == K::Ident && self.get_token_chars(x_token) == "x" {
+                        self.advance();
+                    } else {
+                        return Err(error(
+                            format!(
+                                "Expected 'x' in Array type, found '{}'",
+                                self.get_token_chars(x_token)
+                            ),
+                            x_token,
+                        ));
+                    }
+
+                    let element_type = self.expect_type_expression()?;
+                    let end_bracket = self.expect_eat_token(K::CloseBracket)?;
+                    let span = self.extend_token_span(first, end_bracket);
+
+                    let array_type = ParsedArrayType { size_expr, element_type, span };
+                    return Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Array(array_type))));
+                }
+
                 // parameterized, namespaced type. Examples:
                 // int,
                 // Box[Point],
@@ -4574,6 +4623,13 @@ impl ParsedProgram {
                 self.display_expr_id(w, tfi.id_expr)?;
                 w.write_str(")")?;
                 Ok(())
+            }
+            ParsedTypeExpr::Array(array_type) => {
+                w.write_str("Array[")?;
+                self.display_expr_id(w, array_type.size_expr)?;
+                w.write_str(" x ")?;
+                self.display_type_expr_id(array_type.element_type, w)?;
+                w.write_str("]")
             }
         }
     }

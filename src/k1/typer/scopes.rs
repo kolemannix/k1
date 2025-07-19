@@ -229,11 +229,7 @@ impl Scopes {
         }
     }
 
-    pub fn find_variable(
-        &self,
-        scope_id: ScopeId,
-        ident: Ident,
-    ) -> Option<(VariableId, ScopeId)> {
+    pub fn find_variable(&self, scope_id: ScopeId, ident: Ident) -> Option<(VariableId, ScopeId)> {
         let scope = self.get_scope(scope_id);
         match scope.find_variable(ident) {
             Some(VariableInScope::Defined(id)) => Some((id, scope_id)),

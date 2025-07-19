@@ -74,6 +74,10 @@ ns types {
     Bool,
     Pointer,
     Reference({ innerTypeId: u64 }),
+    Array({
+      elementTypeId: u64,
+      size: uword
+    }),
     Struct({
       fields: Buffer[{
         name: string,

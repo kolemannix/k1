@@ -1093,6 +1093,30 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .into())
                 }
             }
+            Type::Array(array_type) => {
+                let element_type = self.codegen_type_inner(array_type.element_type, depth + 1)?;
+                let element_basic_type = element_type.rich_repr_type();
+                let llvm_array_type = element_basic_type.array_type(array_type.size as u32);
+
+                let layout = self.get_layout(type_id);
+                let array_name = format!(
+                    "Array[{} x {}]",
+                    array_type.size,
+                    self.k1.type_id_to_string(array_type.element_type)
+                );
+
+                // For now, use a simple debug type (we can improve this later)
+                // TODO(array): Needs to be an array debug type
+                let di_type = element_type.debug_type();
+
+                Ok(LlvmValueType {
+                    type_id,
+                    basic_type: llvm_array_type.as_basic_type_enum(),
+                    layout,
+                    di_type,
+                }
+                .into())
+            }
             Type::Enum(enum_type) => {
                 let enum_name = self
                     .k1

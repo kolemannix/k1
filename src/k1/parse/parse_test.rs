@@ -385,3 +385,17 @@ fn empty_struct() -> ParseResult<()> {
     assert!(matches!(expr, ParsedExpr::Struct(_)));
     Ok(())
 }
+
+#[test]
+fn array_type_parsing() -> ParseResult<()> {
+    let input = "Array[10 x i32]";
+    let (_module, result) = test_single_type_expr(input)?;
+    if let ParsedTypeExpr::Array(array_type) = result {
+        // Check that we have a size expression and element type
+        assert!(array_type.size_expr.0.get() > 0); // Should have a valid expression ID  
+        assert!(array_type.element_type.0.get() > 0); // Should have a valid type expression ID
+    } else {
+        panic!("Expected Array type expression, got {:?}", result);
+    }
+    Ok(())
+}

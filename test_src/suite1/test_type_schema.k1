@@ -73,6 +73,14 @@ ns type_schema {
 
     assert(getTypeSchema[\(int) -> int]() is .Other("function"));
 
+    // Test Array types
+    assert(getTypeSchema[Array[10 x i32]]() is .Array(_));
+    require getTypeSchema[Array[5 x string]]()
+      is .Array({ elementTypeId, size })
+      and elementTypeId == typeId[string]()
+      and size == 5
+      else crash("Array type schema test failed");
+
     println(printStructShape[Point3[u8]]());
     println(printStructShape[TypeSchema.Struct.value]());
     println(printStructShape[TypeSchema.Either]());

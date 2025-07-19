@@ -140,6 +140,12 @@ pub struct ReferenceType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ArrayType {
+    pub element_type: TypeId,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
     pub enum_type_id: TypeId,
     pub my_type_id: TypeId,
@@ -384,6 +390,7 @@ pub enum Type {
     Integer(IntegerType),
     Float(FloatType),
     Reference(ReferenceType),
+    Array(ArrayType),
     Struct(StructType),
     Enum(TypedEnum),
 
@@ -439,6 +446,9 @@ impl PartialEq for Type {
                 true
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
+            (Type::Array(a1), Type::Array(a2)) => {
+                a1.element_type == a2.element_type && a1.size == a2.size
+            }
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
             }
@@ -614,6 +624,11 @@ impl std::hash::Hash for Type {
                 "recurse".hash(state);
                 rr.root_type_id.hash(state);
             }
+            Type::Array(arr) => {
+                "array".hash(state);
+                arr.element_type.hash(state);
+                arr.size.hash(state);
+            }
         }
     }
 }
@@ -642,6 +657,7 @@ impl Type {
             Type::Static(_) => "static",
             Type::Unresolved(_) => "unresolved",
             Type::RecursiveReference(_) => "recurse",
+            Type::Array(_) => "array",
         }
     }
 
@@ -1208,6 +1224,7 @@ impl Types {
             Type::LambdaObject(_) => None,
             Type::Unresolved(_) => None,
             Type::RecursiveReference(_) => None,
+            Type::Array(_) => None,
         }
     }
 
@@ -1424,6 +1441,10 @@ impl Types {
                     EMPTY
                 }
             }
+            Type::Array(arr) => {
+                // Arrays contain type variables if their element type does
+                self.count_type_variables(arr.element_type)
+            }
         }
     }
 
@@ -1514,6 +1535,15 @@ impl Types {
             Type::InferenceHole(_) => Z,
             Type::Unresolved(_) => Z,
             Type::RecursiveReference(_) => Z,
+            Type::Array(arr) => {
+                // TODO(array): I think we have a Layout constructor for array layouts; the VM already
+                // uses it for managing 'Buffer's
+                let element_layout = self.compute_type_layout(arr.element_type);
+                Layout {
+                    size: element_layout.size * (arr.size as u32),
+                    align: element_layout.align,
+                }
+            }
         }
     }
 
@@ -1560,6 +1590,7 @@ impl Types {
             Type::InferenceHole(_) => false,
             Type::Unresolved(_) => false,
             Type::RecursiveReference(_) => false,
+            Type::Array(_) => true,
         }
     }
 }
