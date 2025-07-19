@@ -58,6 +58,7 @@ fn moderate(): unit {
   struct_composition/test();
   zero_test/test();
   type_schema/test();
+  array_type_test/test();
   ability_complex/test();
 }
 

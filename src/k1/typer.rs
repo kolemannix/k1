@@ -3222,10 +3222,15 @@ impl TypedProgram {
                 let element_type =
                     self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
 
-                // Evaluate the size expression at compile time
-                // TODO(array): We need to hint into this expression an expected type of `uword` so
-                // that we parse the literal as such!
-                let size_expr_ctx = EvalExprContext::make(scope_id);
+                // Evaluate the size expression at compile time with uword type hint
+                let size_expr_ctx = EvalExprContext {
+                    scope_id,
+                    expected_type_id: Some(UWORD_TYPE_ID),
+                    is_inference: false,
+                    static_ctx: None,
+                    global_defn_name: None,
+                    is_generic_pass: false,
+                };
                 let size_expr_result = self.eval_expr(arr.size_expr, size_expr_ctx)?;
 
                 // Try to lift the expression to a static value
@@ -3441,14 +3446,24 @@ impl TypedProgram {
                             }
                         }
                     }
+                    Type::Array(array_type) => {
+                        let member_name = self.ast.idents.get_name(dot_acc.member_name);
+                        match member_name {
+                            "element" => Ok(array_type.element_type),
+                            _ => {
+                                return failf!(
+                                    dot_acc.span,
+                                    "Array type has no member named {}; try '.element'",
+                                    member_name
+                                );
+                            }
+                        }
+                    }
                     _ => {
-                        return make_fail_ast_id(
-                            &self.ast,
-                            format!(
-                                "Invalid type for '.' access: {}",
-                                self.type_id_to_string(base_type)
-                            ),
-                            type_expr_id.into(),
+                        return failf!(
+                            dot_acc.span,
+                            "Invalid type for '.' access: {}",
+                            self.type_id_to_string(base_type)
                         );
                     }
                 }
@@ -6822,8 +6837,7 @@ impl TypedProgram {
 
         // We don't execute statics during the generic pass, since there's no point
         // since we don't know the real types or values
-        self.write_location(&mut stderr(), span);
-        eprintln!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass);
+        debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass);
         if ctx.is_generic_pass {
             let typed_expr = match ctx.expected_type_id {
                 None => TypedExpr::Unit(span),
@@ -6924,7 +6938,7 @@ impl TypedProgram {
                         }
                     }
                     content.push('}');
-                    eprintln!(
+                    debug!(
                         "Emitted raw content after {} emits:\n---\n{content}\n---",
                         vm_result.emits.len()
                     );
@@ -6945,7 +6959,7 @@ impl TypedProgram {
                     self.buffers.emitted_code = content;
                     let parsed_metaprogram = parsed_metaprogram_result?;
                     let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
-                    eprintln!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
+                    debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
 
                     // Typecheck the metaprogram!
 

@@ -8,7 +8,6 @@ use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size}
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
 use fxhash::FxHashMap;
-use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;

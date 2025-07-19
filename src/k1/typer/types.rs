@@ -1541,7 +1541,8 @@ impl Types {
                 let element_layout = self.compute_type_layout(arr.element_type);
                 Layout {
                     size: element_layout.size * (arr.size as u32),
-                    align: element_layout.align,
+                    // Zero-length arrays should have alignment 1 since they contain no elements
+                    align: if arr.size == 0 { 1 } else { element_layout.align },
                 }
             }
         }
