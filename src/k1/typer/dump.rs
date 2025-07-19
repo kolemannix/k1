@@ -360,6 +360,13 @@ impl TypedProgram {
                 w.write_str(")")?;
                 Ok(())
             }
+            Type::Array(array_type) => {
+                w.write_str("Array[")?;
+                write!(w, "{}", array_type.size)?;
+                w.write_str(" x ")?;
+                self.display_type_ext(array_type.element_type, expand, w)?;
+                w.write_str("]")
+            }
         }
     }
 

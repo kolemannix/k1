@@ -3217,6 +3217,50 @@ impl TypedProgram {
                 let type_id = self.types.add_anon(reference_type);
                 Ok(type_id)
             }
+            ParsedTypeExpr::Array(arr) => {
+                let arr = *arr; // Copy to avoid borrow checker issues
+                let element_type =
+                    self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
+
+                // Evaluate the size expression at compile time
+                // TODO(array): We need to hint into this expression an expected type of `uword` so
+                // that we parse the literal as such!
+                let size_expr_ctx = EvalExprContext::make(scope_id);
+                let size_expr_result = self.eval_expr(arr.size_expr, size_expr_ctx)?;
+
+                // Try to lift the expression to a static value
+                let static_size_expr = self.attempt_static_lift(size_expr_result).map_err(|e| {
+                    errf!(
+                        arr.span,
+                        "The value for the array size must be knowable at compile time: {e}",
+                    )
+                })?;
+
+                // Extract the static value from the lifted expression
+                let static_value_id = match self.exprs.get(static_size_expr) {
+                    TypedExpr::StaticValue(static_id, _, _) => *static_id,
+                    _ => {
+                        self.ice_with_span("static lift did not produce StaticValue", arr.span);
+                    }
+                };
+                let static_value = self.static_values.get(static_value_id);
+
+                let size = match static_value {
+                    StaticValue::Int(TypedIntValue::UWord64(u64)) => *u64,
+                    StaticValue::Int(TypedIntValue::UWord32(u32)) => *u32 as u64,
+                    _ => {
+                        return failf!(
+                            arr.span,
+                            "Array size must be a uword; got {}",
+                            self.type_id_to_string(static_value.get_type())
+                        );
+                    }
+                };
+
+                let array_type = Type::Array(ArrayType { element_type, size });
+                let type_id = self.types.add_anon(array_type);
+                Ok(type_id)
+            }
             ParsedTypeExpr::Enum(e) => {
                 let e = e.clone();
                 let variant_count = e.variants.len();
@@ -4062,6 +4106,19 @@ impl TypedProgram {
             Type::RecursiveReference(_rr) => unreachable!(
                 "substitute_in_type is not expected to be called on RecursiveReference"
             ),
+            Type::Array(arr) => {
+                let element_type = arr.element_type;
+                let array_size = arr.size;
+                let new_element_type = self.substitute_in_type(element_type, substitution_pairs);
+                if new_element_type == element_type {
+                    type_id // No change needed
+                } else {
+                    // Create new Array type with substituted element type
+                    let new_array_type =
+                        Type::Array(ArrayType { element_type: new_element_type, size: array_size });
+                    self.types.add_anon(new_array_type)
+                }
+            }
         };
         debug!(
             "substitute in type on {}.\npairs: {}.\nGot: {}",
@@ -15158,6 +15215,26 @@ impl TypedProgram {
                     fields: eco_vec![inner_type_id_value_id],
                 }));
                 make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
+            }
+            Type::Array(array_type) => {
+                let array_schema_payload_type_id =
+                    get_schema_variant(get_ident!(self, "Array")).payload.unwrap();
+                // { elementTypeId: u64, size: uword }
+                let element_type_id_value_id = self.static_values.add(StaticValue::Int(
+                    TypedIntValue::U64(array_type.element_type.as_u32() as u64),
+                ));
+                let size_value_id = self
+                    .static_values
+                    .add(StaticValue::Int(TypedIntValue::UWord64(array_type.size)));
+                // We need to ensure that any and all typeIds that we share with the user
+                // are available at runtime, by calling these functions at least once.
+                self.register_type_metainfo(array_type.element_type, span);
+
+                let payload_struct_id = self.static_values.add(StaticValue::Struct(StaticStruct {
+                    type_id: array_schema_payload_type_id,
+                    fields: eco_vec![element_type_id_value_id, size_value_id],
+                }));
+                make_variant(get_ident!(self, "Array"), Some(payload_struct_id))
             }
             Type::Enum(typed_enum) => {
                 let either_payload_type_id =
