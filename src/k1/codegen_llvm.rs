@@ -3299,8 +3299,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::TypeSchema | IntrinsicOperation::TypeName => {
                 // intern fn typeSchema(id: u64): TypeSchema
                 let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
-                let type_schema_llvm_type =
-                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?;
+                let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
+                let return_llvm_type = if is_type_name {
+                    // typeName returns string
+                    self.codegen_type(STRING_TYPE_ID)?
+                } else {
+                    // typeSchema returns TypeSchema
+                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?
+                };
                 let entry_block = self.builder.get_insert_block().unwrap();
 
                 // typeSchema and typeName return a struct, so we have to do sret shenanigans
@@ -3312,8 +3318,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
 
                 let finish_block = self.append_basic_block("finish");
-
-                let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
@@ -3341,7 +3345,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             let global_value = self.codegen_string_id(*string_id)?;
                             global_value.as_pointer_value().as_basic_value_enum()
                         };
-                        self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
+                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
                         self.builder.build_unconditional_branch(finish_block).unwrap();
                         cases.push((type_id_int_value, my_block));
                     }
@@ -3365,7 +3369,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
                         let value = self.codegen_static_value_as_code(*schema_value_id)?;
-                        self.store_k1_value(&type_schema_llvm_type, sret_ptr, value);
+                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
                         self.builder.build_unconditional_branch(finish_block).unwrap();
                         cases.push((type_id_int_value, my_block));
                     }
