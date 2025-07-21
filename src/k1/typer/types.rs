@@ -1536,14 +1536,8 @@ impl Types {
             Type::Unresolved(_) => Z,
             Type::RecursiveReference(_) => Z,
             Type::Array(arr) => {
-                // TODO(array): I think we have a Layout constructor for array layouts; the VM already
-                // uses it for managing 'Buffer's
                 let element_layout = self.compute_type_layout(arr.element_type);
-                Layout {
-                    size: element_layout.size * (arr.size as u32),
-                    // Zero-length arrays should have alignment 1 since they contain no elements
-                    align: if arr.size == 0 { 1 } else { element_layout.align },
-                }
+                Layout::array_me(&element_layout, arr.size as usize)
             }
         }
     }

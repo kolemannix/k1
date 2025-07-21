@@ -33,6 +33,44 @@ impl Codec for string {
   }
 }
 
+ns qualified_syntax {
+
+  ability HasSecretInt {
+    fn secret(): int
+  }
+  ability HasSecretGen[A] {
+    fn secret(): A
+  }
+
+  deftype Foo = {}
+  deftype Bar = {}
+
+  impl HasSecretGen[A = int] for Foo {
+    fn secret(): int { 10 }
+  }
+  impl HasSecretGen[A = int] for Bar {
+    fn secret(): int { 20 }
+  }
+  impl HasSecretInt for Foo {
+    fn secret(): int { 10 }
+  }
+  impl HasSecretInt for Bar {
+    fn secret(): int { 20 }
+  }
+
+  fn test(): unit {
+    let sFoo: int = HasSecretGen[A = int]@(Foo)/secret();
+    assertEquals(sFoo, 10);
+    let sBar: int = HasSecretGen[A = int]@(Bar)/secret();
+    assertEquals(sBar, 20);
+
+    let sFooInt: int = HasSecretInt@(Foo)/secret();
+    assertEquals(sFooInt, 10);
+    let sBarInt: int = HasSecretInt@(Bar)/secret();
+    assertEquals(sBarInt, 20);
+  }
+}
+
 
 fn test(): unit {
 
@@ -49,8 +87,10 @@ fn test(): unit {
 
   let buf: Buffer[u8] = [104: u8, 101, 108, 108, 111].toBuffer();
   let x: string = Codec/read(buf);
-  assert(x == "hello");
-  assert("asdf" == Codec/read("asdf".write()));
+  assertEquals(x, "hello");
+  assertEquals("asdf", Codec/read("asdf".write()));
+
+  qualified_syntax/test();
 }
 
 // This is below 'main' so that

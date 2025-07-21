@@ -1,0 +1,9 @@
+fn fromArray[N, T](a: Array[N x T]): Buffer[T] {
+
+}
+fn main(): i32 {
+
+  let emptyArray: Array[u8 x 10] = [0 x 5];
+  let a = [1,2,3,4];
+  0
+}
