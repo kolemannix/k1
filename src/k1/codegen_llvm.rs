@@ -1099,15 +1099,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let llvm_array_type = element_basic_type.array_type(array_type.size as u32);
 
                 let layout = self.get_layout(type_id);
-                let array_name = format!(
-                    "Array[{} x {}]",
-                    array_type.size,
-                    self.k1.type_id_to_string(array_type.element_type)
-                );
 
-                // For now, use a simple debug type (we can improve this later)
-                // TODO(array): Needs to be an array debug type
-                let di_type = element_type.debug_type();
+                let di_type = self
+                    .debug
+                    .debug_builder
+                    .create_array_type(
+                        element_type.debug_type(),
+                        layout.size_bits() as u64,
+                        layout.align_bits(),
+                        &[],
+                    )
+                    .as_type();
 
                 Ok(LlvmValueType {
                     type_id,

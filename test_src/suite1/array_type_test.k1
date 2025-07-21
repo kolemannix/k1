@@ -4,6 +4,7 @@ use core/types/typeName
 use core/types/typeId
 use core/types/typeSchema
 use core/types/sizeOf
+use core/types/sizeOfStride
 use core/types/alignOf
 use core/types/TypeSchema
 
@@ -71,6 +72,10 @@ fn test(): unit {
   assertEquals(alignOf[Array[2 x u64]](), 8);
 
   // Point arrays: Point is 8 bytes (2 * i32), 4-byte aligned
+  assertEquals(alignOf[Point](), 4);
+  assertEquals(sizeOf[Point](), 8);
+  assertEquals(sizeOfStride[Point](), 8);
+
   assertEquals(sizeOf[Array[2 x Point]](), 16);
   assertEquals(alignOf[Array[2 x Point]](), 4);
   println("   PASS");

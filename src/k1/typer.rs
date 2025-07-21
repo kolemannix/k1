@@ -354,7 +354,7 @@ impl Layout {
     pub fn array_me(&self, len: usize) -> Layout {
         let element_size_padded = self.stride();
         let array_size = element_size_padded * (len as u32);
-        Layout { size: array_size, align: self.align }
+        Layout { size: array_size, align: if array_size == 0 { 1 } else { self.align } }
     }
 }
 

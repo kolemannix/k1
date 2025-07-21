@@ -1145,7 +1145,6 @@ pub struct ParsedReference {
 }
 
 #[derive(Debug, Clone)]
-// TODO(array): Switch to impl_copy_if_small
 pub struct ParsedArrayType {
     pub size_expr: ParsedExprId,
     pub element_type: ParsedTypeExprId,
