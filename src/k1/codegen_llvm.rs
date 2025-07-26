@@ -1096,7 +1096,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Array(array_type) => {
                 let element_type = self.codegen_type_inner(array_type.element_type, depth + 1)?;
                 let element_basic_type = element_type.rich_repr_type();
-                let llvm_array_type = element_basic_type.array_type(array_type.size as u32);
+                let Some(size) = array_type.concrete_size else {
+                    self.k1.ice("codegen_type_inner: expected concrete size for array type", None);
+                };
+                let llvm_array_type = element_basic_type.array_type(size as u32);
 
                 let layout = self.get_layout(type_id);
 
@@ -2204,6 +2207,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let field_value = self.load_k1_value(field_type, field_pointer, name, true);
                     Ok(field_value.into())
                 }
+            }
+            TypedExpr::Array(_array) => {
+                todo!("codegen new fixed array literals")
             }
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),

@@ -195,7 +195,7 @@ pub struct ParsedNumericLiteral {
 }
 
 #[derive(Debug, Clone)]
-pub enum Literal {
+pub enum ParsedLiteral {
     Unit(SpanId),
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
@@ -203,19 +203,19 @@ pub enum Literal {
     String(StringId, SpanId),
 }
 
-impl Display for Literal {
+impl Display for ParsedLiteral {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Unit(_) => f.write_str("()"),
-            Literal::Char(byte, _) => {
+            ParsedLiteral::Unit(_) => f.write_str("()"),
+            ParsedLiteral::Char(byte, _) => {
                 f.write_char('\'')?;
                 f.write_char(*byte as char)?;
                 f.write_char('\'')
             }
-            Literal::Numeric(i) => f.write_str(&i.text),
-            Literal::Bool(true, _) => f.write_str("true"),
-            Literal::Bool(false, _) => f.write_str("false"),
-            Literal::String(s, _) => {
+            ParsedLiteral::Numeric(i) => f.write_str(&i.text),
+            ParsedLiteral::Bool(true, _) => f.write_str("true"),
+            ParsedLiteral::Bool(false, _) => f.write_str("false"),
+            ParsedLiteral::String(s, _) => {
                 f.write_char('"')?;
                 write!(f, "{}", s).unwrap();
                 f.write_char('"')
@@ -224,14 +224,14 @@ impl Display for Literal {
     }
 }
 
-impl Literal {
+impl ParsedLiteral {
     pub fn get_span(&self) -> SpanId {
         match self {
-            Literal::Unit(span) => *span,
-            Literal::Char(_, span) => *span,
-            Literal::Numeric(i) => i.span,
-            Literal::Bool(_, span) => *span,
-            Literal::String(_, span) => *span,
+            ParsedLiteral::Unit(span) => *span,
+            ParsedLiteral::Char(_, span) => *span,
+            ParsedLiteral::Numeric(i) => i.span,
+            ParsedLiteral::Bool(_, span) => *span,
+            ParsedLiteral::String(_, span) => *span,
         }
     }
 }
@@ -823,7 +823,7 @@ pub enum ParsedExpr {
     /// ```md
     /// 42, "asdf"
     /// ```
-    Literal(Literal),
+    Literal(ParsedLiteral),
     /// ```md
     /// "hello, \{x}"
     /// ```
@@ -899,7 +899,7 @@ impl ParsedExpr {
     pub fn is_literal(e: &ParsedExpr) -> bool {
         matches!(e, ParsedExpr::Literal(_))
     }
-    pub fn expect_literal(&self) -> &Literal {
+    pub fn expect_literal(&self) -> &ParsedLiteral {
         match self {
             ParsedExpr::Literal(lit) => lit,
             _ => panic!("expected literal"),
@@ -1146,7 +1146,7 @@ pub struct ParsedReference {
 
 #[derive(Debug, Clone)]
 pub struct ParsedArrayType {
-    pub size_expr: ParsedExprId,
+    pub size_expr: ParsedTypeExprId,
     pub element_type: ParsedTypeExprId,
     pub span: SpanId,
 }
@@ -1262,6 +1262,7 @@ pub enum ParsedTypeExpr {
     Static(ParsedStaticTypeExpr),
     /// Used only by compiler-generated code, currently
     TypeFromId(ParsedTypeFromId),
+    StaticLiteral(ParsedLiteral),
 }
 
 impl ParsedTypeExpr {
@@ -1281,6 +1282,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::SomeQuant(q) => q.span,
             ParsedTypeExpr::Static(s) => s.span,
             ParsedTypeExpr::TypeFromId(tfi) => tfi.span,
+            ParsedTypeExpr::StaticLiteral(l) => l.get_span(),
         }
     }
 }
@@ -1292,10 +1294,36 @@ pub struct ParsedTypeParam {
     pub span: SpanId,
 }
 
+impl ParsedTypeParam {}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ParsedTypeConstraintExpr {
     Ability(ParsedAbilityExprId),
+    Static(ParsedTypeExprId),
     // Predicate(NamespaceIdentifier)
+}
+
+impl ParsedTypeConstraintExpr {
+    pub fn as_ability(&self) -> Option<ParsedAbilityExprId> {
+        if let ParsedTypeConstraintExpr::Ability(ability) = self { Some(*ability) } else { None }
+    }
+
+    pub fn single_static_constraint_or_fail(
+        constraints: &[ParsedTypeConstraintExpr],
+    ) -> Result<Option<ParsedTypeExprId>, &'static str> {
+        let mut constraint: Option<ParsedTypeExprId> = None;
+        for c in constraints.iter() {
+            if let ParsedTypeConstraintExpr::Static(s) = c {
+                match &constraint {
+                    None => constraint = Some(*s),
+                    Some(_) => {
+                        return Err("Type parameter has more than one static constraint");
+                    }
+                }
+            }
+        }
+        Ok(constraint)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1400,7 +1428,7 @@ pub struct ParsedTypeDefn {
 pub struct ParsedAbilityParameter {
     pub name: Ident,
     pub is_impl_param: bool,
-    pub constraints: Vec<ParsedTypeConstraintExpr>,
+    pub constraints: EcoVec<ParsedTypeConstraintExpr>,
     pub span: SpanId,
 }
 
@@ -2245,7 +2273,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
 
     fn expect_pattern_base(&mut self) -> ParseResult<ParsedPatternId> {
         let (first, second) = self.peek_two();
-        if let Some(literal_id) = self.parse_literal()? {
+        if let Some(literal_id) = self.parse_literal_atom()? {
             let pattern = ParsedPattern::Literal(literal_id);
             let id = self.ast.patterns.add_pattern(pattern);
             Ok(id)
@@ -2444,7 +2472,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.ast.type_exprs.get(id).get_span()
     }
 
-    fn parse_literal(&mut self) -> ParseResult<Option<ParsedExprId>> {
+    fn parse_literal_atom(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
         match (first.kind, second.kind) {
@@ -2457,7 +2485,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 self.advance();
                 let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Unit(span)))))
+                Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
             }
             (K::Char, _) => {
                 trace!("parse_literal char");
@@ -2471,7 +2499,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let esc_char = bytes[2];
                     let literal =
                         match CHAR_ESCAPED_CHARS.iter().find(|c| c.sentinel == esc_char as char) {
-                            Some(c) => Ok(Literal::Char(c.output, first.span)),
+                            Some(c) => Ok(ParsedLiteral::Char(c.output, first.span)),
                             None => Err(error(
                                 format!(
                                     "Invalid escaped char following escape sequence: {}",
@@ -2484,9 +2512,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else {
                     debug_assert_eq!(bytes.len(), 3);
                     let byte = bytes[1];
-                    Ok(Some(
-                        self.add_expression(ParsedExpr::Literal(Literal::Char(byte, first.span))),
-                    ))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Char(
+                        byte, first.span,
+                    )))))
                 }
             }
             (K::String { .. } | K::StringUnterminated { .. }, _) => Ok(Some(self.expect_string()?)),
@@ -2498,7 +2526,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.advance();
                     self.advance();
                     let span = self.extend_token_span(first, second);
-                    let numeric = Literal::Numeric(ParsedNumericLiteral { text: s, span });
+                    let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { text: s, span });
                     Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
                 } else {
                     Err(error_expected("number following '-'", second))
@@ -2508,22 +2536,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let text = self.token_chars(first);
                 if text == "true" {
                     self.advance();
-                    Ok(Some(
-                        self.add_expression(ParsedExpr::Literal(Literal::Bool(true, first.span))),
-                    ))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Bool(
+                        true, first.span,
+                    )))))
                 } else if text == "false" {
                     self.advance();
-                    Ok(Some(
-                        self.add_expression(ParsedExpr::Literal(Literal::Bool(false, first.span))),
-                    ))
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Bool(
+                        false, first.span,
+                    )))))
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() => {
                             let s = text.to_string();
                             self.advance();
-                            Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Numeric(
-                                ParsedNumericLiteral { text: s, span: first.span },
-                            )))))
+                            Ok(Some(self.add_expression(ParsedExpr::Literal(
+                                ParsedLiteral::Numeric(ParsedNumericLiteral {
+                                    text: s,
+                                    span: first.span,
+                                }),
+                            ))))
                         }
                         _ => Ok(None),
                     }
@@ -2625,7 +2656,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let InterpolatedStringPart::String(s) = parts.into_iter().next().unwrap() else {
                 panic!()
             };
-            let literal = Literal::String(s, first.span);
+            let literal = ParsedLiteral::String(s, first.span);
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
             let span = self.extend_to_here(first.span);
@@ -2723,6 +2754,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
             Ok(Some(builtin_id))
+        } else if let Some(literal_expr_id) = self.parse_literal_atom()? {
+            match self.ast.exprs.get(literal_expr_id) {
+                ParsedExpr::Literal(l) => {
+                    let type_expr_id =
+                        self.ast.type_exprs.add(ParsedTypeExpr::StaticLiteral(l.clone()));
+                    Ok(Some(type_expr_id))
+                }
+                _ => unreachable!("parse_literal returned non-literal"),
+            }
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
             if ident_chars == "typeOf" {
@@ -2760,40 +2800,32 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let base_name = self.expect_namespaced_ident()?;
 
                 // Special case for Array[N x T] syntax
-                if base_name.namespaces.is_empty()
-                    && self.ast.idents.get_name(base_name.name) == "Array"
-                {
-                    // Array must always have bracket syntax
-                    if self.peek().kind != K::OpenBracket {
-                        return Err(error(
-                            "Array type requires bracket syntax: Array[N x T]",
-                            self.peek(),
+                if base_name.namespaces.is_empty() {
+                    if self.ast.idents.get_name(base_name.name) == "Array" {
+                        // Array must always have bracket syntax
+                        self.expect_eat_token(K::OpenBracket)?;
+                        let size_expr = self.expect_type_expression()?;
+
+                        // Expect 'x' keyword
+                        let x_token = self.peek();
+                        if x_token.kind == K::Ident && self.get_token_chars(x_token) == "x" {
+                            self.advance();
+                        } else {
+                            return Err(error(
+                                "Expected 'x' in Array type, example Array[4 x u8]",
+                                x_token,
+                            ));
+                        }
+
+                        let element_type = self.expect_type_expression()?;
+                        let end_bracket = self.expect_eat_token(K::CloseBracket)?;
+                        let span = self.extend_token_span(first, end_bracket);
+
+                        let array_type = ParsedArrayType { size_expr, element_type, span };
+                        return Ok(Some(
+                            self.ast.type_exprs.add(ParsedTypeExpr::Array(array_type)),
                         ));
                     }
-
-                    let start_bracket = self.advance();
-                    let size_expr = self.expect_expression()?;
-
-                    // Expect 'x' keyword
-                    let x_token = self.peek();
-                    if x_token.kind == K::Ident && self.get_token_chars(x_token) == "x" {
-                        self.advance();
-                    } else {
-                        return Err(error(
-                            format!(
-                                "Expected 'x' in Array type, found '{}'",
-                                self.get_token_chars(x_token)
-                            ),
-                            x_token,
-                        ));
-                    }
-
-                    let element_type = self.expect_type_expression()?;
-                    let end_bracket = self.expect_eat_token(K::CloseBracket)?;
-                    let span = self.extend_token_span(first, end_bracket);
-
-                    let array_type = ParsedArrayType { size_expr, element_type, span };
-                    return Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Array(array_type))));
                 }
 
                 // parameterized, namespaced type. Examples:
@@ -3225,7 +3257,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if self.peek().kind == K::CloseParen {
                 let end = self.tokens.next();
                 let span = self.extend_token_span(first, end);
-                Ok(Some(self.add_expression(ParsedExpr::Literal(Literal::Unit(span)))))
+                Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
             } else {
                 // Note: Here would be where we would support tuples
                 let expr = self.expect_expression()?;
@@ -3355,7 +3387,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     AnonEnumConstructor { variant_name, payload: None, span },
                 ))))
             }
-        } else if let Some(literal_id) = self.parse_literal()? {
+        } else if let Some(literal_id) = self.parse_literal_atom()? {
             Ok(Some(literal_id))
         } else if first.kind == K::Ident {
             let namespaced_ident = self.expect_namespaced_ident()?;
@@ -4079,9 +4111,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_type_constraint_expr(&mut self) -> ParseResult<ParsedTypeConstraintExpr> {
-        let ability_expr = self.expect_ability_expr()?;
-        let id = self.ast.p_ability_exprs.add(ability_expr);
-        Ok(ParsedTypeConstraintExpr::Ability(id))
+        let next = self.peek();
+        if next.kind == K::Ident && self.token_chars(next) == "static" {
+            let static_type_expr = self.expect_type_expression()?;
+            Ok(ParsedTypeConstraintExpr::Static(static_type_expr))
+        } else {
+            let ability_expr = self.expect_ability_expr()?;
+            let id = self.ast.p_ability_exprs.add(ability_expr);
+            Ok(ParsedTypeConstraintExpr::Ability(id))
+        }
     }
 
     fn expect_named_type_constraint(&mut self) -> ParseResult<ParsedTypeConstraint> {
@@ -4119,12 +4157,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let is_impl_param = p.maybe_consume_next(K::KeywordImpl).is_some();
             let name_token = p.expect_eat_token(K::Ident)?;
             let name = p.intern_ident_token(name_token);
-            // The parser only supports one type constraint for now
+            // nocommit(0) The parser only supports one type constraint for now
             let constraints = if p.maybe_consume_next(K::Colon).is_some() {
                 let constraint = p.expect_type_constraint_expr()?;
-                vec![constraint]
+                eco_vec![constraint]
             } else {
-                vec![]
+                eco_vec![]
             };
             let span = p.extend_span(start, name_token.span);
             Ok(ParsedAbilityParameter { name, is_impl_param, constraints, span })
@@ -4624,10 +4662,14 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Array(array_type) => {
                 w.write_str("Array[")?;
-                self.display_expr_id(w, array_type.size_expr)?;
+                self.display_type_expr_id(array_type.size_expr, w)?;
                 w.write_str(" x ")?;
                 self.display_type_expr_id(array_type.element_type, w)?;
                 w.write_str("]")
+            }
+            ParsedTypeExpr::StaticLiteral(parsed_literal) => {
+                write!(w, "{}", parsed_literal);
+                Ok(())
             }
         }
     }

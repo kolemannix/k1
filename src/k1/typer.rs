@@ -20,7 +20,7 @@ use anyhow::bail;
 use colored::Colorize;
 use either::Either;
 use fxhash::FxHashMap;
-use log::{debug, trace};
+use log::{debug, error, trace};
 use smallvec::{SmallVec, smallvec};
 
 use scopes::*;
@@ -33,12 +33,13 @@ use crate::parse::{
     NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
     ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedDirective, ParsedExprId, ParsedFunctionId,
     ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedWhileExpr, Sources, StringId, StructValueField,
+    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
+    ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
+    ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, Sources, StringId,
+    StructValueField,
 };
 use crate::parse::{
-    Ident, Literal, ParsedBlock, ParsedCall, ParsedExpr, ParsedProgram, ParsedStmt,
+    Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
 };
 use crate::pool::{Pool, SliceHandle};
 use crate::{SV4, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
@@ -1146,16 +1147,31 @@ pub struct StructField {
 
 #[derive(Debug, Clone)]
 pub struct StructLiteral {
-    pub fields: Vec<StructField>,
+    pub fields: EcoVec<StructField>,
     pub type_id: TypeId,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ListLiteral {
-    pub elements: Vec<TypedExprId>,
+pub enum ArrayLiteralElements {
+    Filled(TypedExprId, u64),
+    Listed(EcoVec<TypedExprId>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayLiteral {
+    pub elements: ArrayLiteralElements,
     pub type_id: TypeId,
     pub span: SpanId,
+}
+
+impl ArrayLiteral {
+    pub fn len(&self) -> u64 {
+        match &self.elements {
+            ArrayLiteralElements::Filled(_, len) => *len,
+            ArrayLiteralElements::Listed(elements) => elements.len() as u64,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1761,6 +1777,7 @@ pub enum TypedExpr {
     String(StringId, SpanId),
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
+    Array(ArrayLiteral),
     Variable(VariableExpr),
     UnaryOp(UnaryOp),
     BinaryOp(BinaryOp),
@@ -1822,8 +1839,9 @@ impl TypedExpr {
             TypedExpr::Float(_) => "float",
             TypedExpr::Bool(_, _) => "bool",
             TypedExpr::Struct(_) => "struct",
-            TypedExpr::Variable(_) => "variable",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
+            TypedExpr::Array(_) => "array_literal",
+            TypedExpr::Variable(_) => "variable",
             TypedExpr::UnaryOp(_) => "unary_op",
             TypedExpr::BinaryOp(_) => "binary_op",
             TypedExpr::Block(_) => "block",
@@ -1855,8 +1873,9 @@ impl TypedExpr {
             TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
-            TypedExpr::Variable(var) => var.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
+            TypedExpr::Array(a) => a.type_id,
+            TypedExpr::Variable(var) => var.type_id,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
@@ -1888,8 +1907,9 @@ impl TypedExpr {
             TypedExpr::Float(float) => float.span,
             TypedExpr::String(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
-            TypedExpr::Variable(var) => var.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
+            TypedExpr::Array(a) => a.span,
+            TypedExpr::Variable(var) => var.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
@@ -2161,6 +2181,7 @@ pub enum IntrinsicOperation {
     EmitString,
     BakeStaticValue,
     GetStaticValue,
+    StaticTypeToValue,
 }
 
 impl IntrinsicOperation {
@@ -2172,6 +2193,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::CompilerSourceLocation => true,
             IntrinsicOperation::GetStaticValue => true,
+            IntrinsicOperation::StaticTypeToValue => true,
             //
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
@@ -2225,6 +2247,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::EmitString => true,
             IntrinsicOperation::GetStaticValue => true,
             IntrinsicOperation::BakeStaticValue => true,
+            IntrinsicOperation::StaticTypeToValue => true,
         }
     }
 }
@@ -3016,9 +3039,20 @@ impl TypedProgram {
         let mut type_params: SV4<NameAndType> =
             SmallVec::with_capacity(parsed_type_defn.type_params.len());
         for type_param in parsed_type_defn.type_params.iter() {
+            let maybe_static_constraint =
+                match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
+                    &type_param.constraints,
+                ) {
+                    Ok(Some(parsed_static_constraint)) => {
+                        Some(self.eval_type_expr(parsed_static_constraint, defn_scope_id)?)
+                    }
+                    Ok(None) => None,
+                    Err(msg) => return failf!(type_param.span, "{}", msg),
+                };
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
+                    static_constraint: maybe_static_constraint,
                     scope_id: defn_scope_id,
                     span: type_param.span,
                 },
@@ -3218,51 +3252,48 @@ impl TypedProgram {
                 Ok(type_id)
             }
             ParsedTypeExpr::Array(arr) => {
-                let arr = *arr; // Copy to avoid borrow checker issues
+                let arr = *arr;
                 let element_type =
                     self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
 
-                // Evaluate the size expression at compile time with uword type hint
-                let size_expr_ctx = EvalExprContext {
-                    scope_id,
-                    expected_type_id: Some(UWORD_TYPE_ID),
-                    is_inference: false,
-                    static_ctx: None,
-                    global_defn_name: None,
-                    is_generic_pass: false,
-                };
-                let size_expr_result = self.eval_expr(arr.size_expr, size_expr_ctx)?;
-
-                // Try to lift the expression to a static value
-                let static_size_expr = self.attempt_static_lift(size_expr_result).map_err(|e| {
-                    errf!(
-                        arr.span,
-                        "The value for the array size must be knowable at compile time: {e}",
-                    )
-                })?;
-
-                // Extract the static value from the lifted expression
-                let static_value_id = match self.exprs.get(static_size_expr) {
-                    TypedExpr::StaticValue(static_id, _, _) => *static_id,
-                    _ => {
-                        self.ice_with_span("static lift did not produce StaticValue", arr.span);
+                let size_type_id = match self.ast.type_exprs.get(arr.size_expr).clone() {
+                    ParsedTypeExpr::StaticLiteral(parsed_literal) => {
+                        // For array sizes, we want numeric literals to be interpreted as uword
+                        let (static_value, inner_type_id) = self.literal_to_static_value_and_type(
+                            &parsed_literal,
+                            scope_id,
+                            Some(UWORD_TYPE_ID),
+                        )?;
+                        let static_value_id = self.static_values.add(static_value);
+                        let static_type =
+                            StaticType { inner_type_id, value_id: Some(static_value_id) };
+                        self.types.add_anon(Type::Static(static_type))
                     }
-                };
-                let static_value = self.static_values.get(static_value_id);
-
-                let size = match static_value {
-                    StaticValue::Int(TypedIntValue::UWord64(u64)) => *u64,
-                    StaticValue::Int(TypedIntValue::UWord32(u32)) => *u32 as u64,
                     _ => {
-                        return failf!(
-                            arr.span,
-                            "Array size must be a uword; got {}",
-                            self.type_id_to_string(static_value.get_type())
-                        );
+                        // For other expressions, evaluate normally
+                        self.eval_type_expr_ext(arr.size_expr, scope_id, context.descended())?
                     }
                 };
 
-                let array_type = Type::Array(ArrayType { element_type, size });
+                let Some(static_type_id) = self.types.get_static_type_of_type(size_type_id) else {
+                    return failf!(arr.span, "Array size must be a static type");
+                };
+                match self.types.get_no_follow_static(static_type_id) {
+                    Type::Static(static_type) => {
+                        if static_type.inner_type_id != UWORD_TYPE_ID {
+                            return failf!(
+                                arr.span,
+                                "Array size must be a uword; got {}",
+                                self.type_id_to_string(static_type.inner_type_id)
+                            );
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                let concrete_size = self.get_concrete_size_of_array(size_type_id);
+
+                let array_type =
+                    Type::Array(ArrayType { element_type, size_type: size_type_id, concrete_size });
                 let type_id = self.types.add_anon(array_type);
                 Ok(type_id)
             }
@@ -3579,8 +3610,48 @@ impl TypedProgram {
                 let static_type_id = self.types.add_anon(Type::Static(static_type));
                 Ok(static_type_id)
             }
+            ParsedTypeExpr::StaticLiteral(parsed_literal) => {
+                let parsed_literal = parsed_literal.clone();
+                let (static_value, inner_type_id) =
+                    self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
+                let static_value_id = self.static_values.add(static_value);
+                let static_type = StaticType { inner_type_id, value_id: Some(static_value_id) };
+                let static_type_id = self.types.add_anon(Type::Static(static_type));
+                Ok(static_type_id)
+            }
         }?;
         Ok(base)
+    }
+
+    fn literal_to_static_value_and_type(
+        &mut self,
+        parsed_literal: &ParsedLiteral,
+        scope_id: ScopeId,
+        expected_type_hint: Option<TypeId>,
+    ) -> TyperResult<(StaticValue, TypeId)> {
+        match parsed_literal {
+            ParsedLiteral::Unit(_) => Ok((StaticValue::Unit, UNIT_TYPE_ID)),
+            ParsedLiteral::Char(byte, _) => Ok((StaticValue::Char(*byte), CHAR_TYPE_ID)),
+            ParsedLiteral::Bool(b, _) => Ok((StaticValue::Boolean(*b), BOOL_TYPE_ID)),
+            ParsedLiteral::String(s, _) => Ok((StaticValue::String(*s), STRING_TYPE_ID)),
+            ParsedLiteral::Numeric(numeric) => {
+                // Parse the numeric literal and determine its type and value
+                // Use the expected type hint if provided (e.g., uword for array sizes)
+                let eval_context =
+                    EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
+                let parsed_value =
+                    self.eval_numeric_value(&numeric.text, numeric.span, eval_context)?;
+                match parsed_value {
+                    TypedExpr::Integer(int_expr) => {
+                        Ok((StaticValue::Int(int_expr.value), int_expr.get_type()))
+                    }
+                    TypedExpr::Float(float_expr) => {
+                        Ok((StaticValue::Float(float_expr.value), float_expr.get_type()))
+                    }
+                    _ => unreachable!("eval_numeric_value should only return Integer or Float"),
+                }
+            }
+        }
     }
 
     fn add_or_resolve_type(&mut self, defn_type_id: Option<TypeId>, type_value: Type) -> TypeId {
@@ -4110,10 +4181,23 @@ impl TypedProgram {
                     type_id
                 }
             }
-            Type::Static(_stat) => {
-                unreachable!(
-                    "substitute_in_type for static; generic statics (`static T`) should be impossible"
-                )
+            Type::Static(stat) => {
+                if stat.value_id.is_some() {
+                    // Can't substitute inside the type "static[string; "hello"]"
+                    // But you can inside type "static[T; _]"
+                    type_id
+                } else {
+                    let inner_type = stat.inner_type_id;
+                    let new_inner_type = self.substitute_in_type(inner_type, substitution_pairs);
+                    if new_inner_type == inner_type {
+                        type_id
+                    } else {
+                        self.types.add_anon(Type::Static(StaticType {
+                            inner_type_id: new_inner_type,
+                            value_id: None,
+                        }))
+                    }
+                }
             }
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
@@ -4122,15 +4206,20 @@ impl TypedProgram {
                 "substitute_in_type is not expected to be called on RecursiveReference"
             ),
             Type::Array(arr) => {
+                let arr = *arr;
                 let element_type = arr.element_type;
-                let array_size = arr.size;
                 let new_element_type = self.substitute_in_type(element_type, substitution_pairs);
-                if new_element_type == element_type {
+                let new_size_type = self.substitute_in_type(arr.size_type, substitution_pairs);
+                if new_element_type == element_type && new_size_type == arr.size_type {
                     type_id // No change needed
                 } else {
                     // Create new Array type with substituted element type
-                    let new_array_type =
-                        Type::Array(ArrayType { element_type: new_element_type, size: array_size });
+                    let concrete_size = self.get_concrete_size_of_array(new_size_type);
+                    let new_array_type = Type::Array(ArrayType {
+                        element_type: new_element_type,
+                        size_type: new_size_type,
+                        concrete_size,
+                    });
                     self.types.add_anon(new_array_type)
                 }
             }
@@ -4142,6 +4231,22 @@ impl TypedProgram {
             self.dump_type_id_to_string(res)
         );
         res
+    }
+
+    /// Based on the 'size_type' of an array, determine what its concrete size is
+    /// Size type can be a type parameter, in which case its 0
+    /// But it can also be a known static uword, in which case its the value of it
+    pub fn get_concrete_size_of_array(&self, size_type: TypeId) -> Option<u64> {
+        match self.types.get_no_follow_static(size_type) {
+            Type::Static(StaticType { value_id: Some(value_id), .. }) => {
+                match self.static_values.get(*value_id) {
+                    StaticValue::Int(TypedIntValue::UWord32(u)) => Some(*u as u64),
+                    StaticValue::Int(TypedIntValue::UWord64(u)) => Some(*u),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     fn get_module_manifest(
@@ -4203,7 +4308,7 @@ impl TypedProgram {
             ParsedPattern::Wildcard(span) => Ok(TypedPattern::Wildcard(*span)),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    Literal::Unit(span) => match self.types.get(target_type_id) {
+                    ParsedLiteral::Unit(span) => match self.types.get(target_type_id) {
                         Type::Unit => Ok(TypedPattern::LiteralUnit(*span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
@@ -4211,7 +4316,7 @@ impl TypedProgram {
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    Literal::Char(c, span) => match self.types.get(target_type_id) {
+                    ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
                         Type::Char => Ok(TypedPattern::LiteralChar(*c, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
@@ -4219,7 +4324,7 @@ impl TypedProgram {
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    Literal::Numeric(num_lit) => {
+                    ParsedLiteral::Numeric(num_lit) => {
                         match self.eval_numeric_value(
                             &num_lit.text,
                             num_lit.span,
@@ -4253,7 +4358,7 @@ impl TypedProgram {
                             }
                         }
                     }
-                    Literal::Bool(b, span) => match self.types.get(target_type_id) {
+                    ParsedLiteral::Bool(b, span) => match self.types.get(target_type_id) {
                         Type::Bool => Ok(TypedPattern::LiteralBool(*b, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
@@ -4261,7 +4366,7 @@ impl TypedProgram {
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    Literal::String(string_id, span) => match target_type_id {
+                    ParsedLiteral::String(string_id, span) => match target_type_id {
                         STRING_TYPE_ID => Ok(TypedPattern::LiteralString(*string_id, *span)),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
@@ -4459,7 +4564,8 @@ impl TypedProgram {
     }
 
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
-        if let Type::TypeParameter(tvar) = self.types.get(type_id) {
+        let lookup_result = self.types.get_no_follow_static(type_id);
+        if let Type::TypeParameter(tvar) = lookup_result {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
                     eprintln!(
@@ -4602,6 +4708,21 @@ impl TypedProgram {
             return Ok(());
         }
 
+        debug!(
+            "typecheck resolved: {} <: {}",
+            self.type_id_to_string(actual).blue(),
+            self.type_id_to_string(expected).blue(),
+        );
+
+        let expected = self.types.get_static_type_of_type(expected).unwrap_or(expected);
+        let actual = self.types.get_static_type_of_type(actual).unwrap_or(actual);
+
+        debug!(
+            "typecheck resolved: {} <: {}",
+            self.type_id_to_string(actual).blue(),
+            self.type_id_to_string(expected).blue(),
+        );
+
         match (self.types.get_no_follow_static(expected), self.types.get_no_follow_static(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
@@ -4625,69 +4746,6 @@ impl TypedProgram {
                         "expected enum {} but got variant {} of a different enum",
                         self.type_id_to_string(expected),
                         self.ident_str(actual_variant.name)
-                    ))
-                }
-            }
-            (Type::Lambda(expected_lambda), Type::Lambda(actual_lambda)) => {
-                if expected_lambda.parsed_id == actual_lambda.parsed_id
-                    && expected_lambda.function_type == actual_lambda.function_type
-                {
-                    Ok(())
-                } else {
-                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".to_string())
-                }
-            }
-            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => Err(format!(
-                "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
-                self.type_id_to_string(expected),
-                self.type_id_to_string(actual),
-            )),
-            (Type::LambdaObject(exp_lambda_object), Type::LambdaObject(act_lambda_object)) => self
-                .check_types(
-                    exp_lambda_object.function_type,
-                    act_lambda_object.function_type,
-                    scope_id,
-                ),
-            (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
-                if exp_static_type.inner_type_id == act_static_type.inner_type_id {
-                    match (exp_static_type.value_id, act_static_type.value_id) {
-                        (None, None) => Ok(()),    // Both unresolved
-                        (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
-                        (Some(exp_value_id), Some(act_value_id)) => {
-                            if self.static_value_eq(exp_value_id, act_value_id) {
-                                Ok(())
-                            } else {
-                                Err(format!(
-                                    "Different static values of same type: {} vs {}",
-                                    self.static_value_to_string(exp_value_id),
-                                    self.static_value_to_string(act_value_id)
-                                ))
-                            }
-                        }
-                        (Some(_), None) => Err(format!(
-                            "Expected a specific static but got an unresolved one: {} vs {}",
-                            self.type_id_to_string_ext(expected, false),
-                            self.type_id_to_string_ext(actual, false),
-                        )),
-                    }
-                } else {
-                    Err(format!(
-                        "Expected static {} but got static {}",
-                        self.type_id_to_string(expected),
-                        self.type_id_to_string(actual)
-                    ))
-                }
-            }
-            (Type::FunctionTypeParameter(expected_abstract_function), act) => {
-                let expected_function_type = expected_abstract_function.function_type;
-                let actual_function_type = self.extract_function_type_from_functionlike(act);
-                if let Some(actual_function_type) = actual_function_type {
-                    self.check_types(expected_function_type, actual_function_type, scope_id)
-                } else {
-                    Err(format!(
-                        "Expected some function-like with type: {} but got {}",
-                        self.type_id_to_string(expected_function_type),
-                        self.type_id_to_string(actual),
                     ))
                 }
             }
@@ -4719,11 +4777,104 @@ impl TypedProgram {
                     Ok(())
                 }
             }
+            (Type::Lambda(expected_lambda), Type::Lambda(actual_lambda)) => {
+                if expected_lambda.parsed_id == actual_lambda.parsed_id
+                    && expected_lambda.function_type == actual_lambda.function_type
+                {
+                    Ok(())
+                } else {
+                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".to_string())
+                }
+            }
+            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => Err(format!(
+                "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
+                self.type_id_to_string(expected),
+                self.type_id_to_string(actual),
+            )),
+            (Type::LambdaObject(exp_lambda_object), Type::LambdaObject(act_lambda_object)) => self
+                .check_types(
+                    exp_lambda_object.function_type,
+                    act_lambda_object.function_type,
+                    scope_id,
+                ),
+            // (Type::TypeParameter(exp_static_tparam), Type::Static(_act_static)) => {
+            //     eprintln!("this one");
+            //     self.check_types(exp_static_tparam.static_constraint.unwrap(), actual, scope_id)
+            // }
+            // (Type::Static(_exp_static_type), Type::TypeParameter(act_static_tparam))
+            //     if act_static_tparam.static_constraint.is_some() =>
+            // {
+            //     eprintln!("that one");
+            //     self.check_types(expected, act_static_tparam.static_constraint.unwrap(), scope_id)
+            //     // If both have no values, we're ok. This is generic static stuff
+            //     // let actual_static_type_id = act_static_tparam.static_constraint.unwrap();
+            //     // let actual_static_type =
+            //     //     self.types.get_no_follow_static(actual_static_type_id).as_static().unwrap();
+            //     // if exp_static_type.value_id.is_none() && actual_static_type.value_id.is_none() {
+            //     //     match self.check_types(
+            //     //         exp_static_type.inner_type_id,
+            //     //         actual_static_type.inner_type_id,
+            //     //         scope_id,
+            //     //     ) {
+            //     //         Ok(()) => Ok(()),
+            //     //         Err(msg) => Err(format!("Mismatching types inside statics: {msg}")),
+            //     //     }
+            //     // } else {
+            //     //     Err(format!(
+            //     //         "Expected static type {}, or constrained param {}, had values, which is unexpected",
+            //     //         self.type_id_to_string(expected),
+            //     //         self.type_id_to_string(actual)
+            //     //     ))
+            //     // }
+            // }
+            (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
+                if exp_static_type.inner_type_id == act_static_type.inner_type_id {
+                    match (exp_static_type.value_id, act_static_type.value_id) {
+                        (None, None) => Ok(()),    // Both unresolved
+                        (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
+                        (Some(exp_value_id), Some(act_value_id)) => {
+                            if self.static_value_eq(exp_value_id, act_value_id) {
+                                Ok(())
+                            } else {
+                                Err(format!(
+                                    "Different static values of same type: {} vs {}",
+                                    self.static_value_to_string(exp_value_id),
+                                    self.static_value_to_string(act_value_id)
+                                ))
+                            }
+                        }
+                        (Some(_), None) => Err(format!(
+                            "Expected a specific static but got an unresolved one: {} vs {}",
+                            self.type_id_to_string(expected),
+                            self.type_id_to_string(actual),
+                        )),
+                    }
+                } else {
+                    Err(format!(
+                        "Expected static {} but got static {}",
+                        self.type_id_to_string(expected),
+                        self.type_id_to_string(actual)
+                    ))
+                }
+            }
+            (Type::FunctionTypeParameter(expected_abstract_function), act) => {
+                let expected_function_type = expected_abstract_function.function_type;
+                let actual_function_type = self.extract_function_type_from_functionlike(act);
+                if let Some(actual_function_type) = actual_function_type {
+                    self.check_types(expected_function_type, actual_function_type, scope_id)
+                } else {
+                    Err(format!(
+                        "Expected some function-like with type: {} but got {}",
+                        self.type_id_to_string(expected_function_type),
+                        self.type_id_to_string(actual),
+                    ))
+                }
+            }
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
-                self.type_id_to_string_ext(expected, false),
-                self.type_id_to_string_ext(actual, false),
+                self.type_id_to_string_ext(expected, true),
+                self.type_id_to_string_ext(actual, true),
             )),
         }
     }
@@ -5168,19 +5319,16 @@ impl TypedProgram {
         ability_impls: SmallVec<[TypedAbilitySignature; 4]>,
     ) -> TypeId {
         let type_id = self.types.add_anon(Type::TypeParameter(value));
-        if !ability_impls.is_empty() {
-            for ability_sig in ability_impls.into_iter() {
-                let constrained_impl_scope =
-                    self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
-                let _ =
-                    self.scopes.get_scope_mut(constrained_impl_scope).add_type(value.name, type_id);
-                self.add_constrained_ability_impl(
-                    type_id,
-                    ability_sig,
-                    constrained_impl_scope,
-                    value.span,
-                );
-            }
+        for ability_sig in ability_impls.into_iter() {
+            let constrained_impl_scope =
+                self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
+            let _ = self.scopes.get_scope_mut(constrained_impl_scope).add_type(value.name, type_id);
+            self.add_constrained_ability_impl(
+                type_id,
+                ability_sig,
+                constrained_impl_scope,
+                value.span,
+            );
         }
         type_id
     }
@@ -5504,10 +5652,12 @@ impl TypedProgram {
             None,
         );
         let parsed_blanket_impl = self_.ast.get_ability_impl(parsed_id);
-        for (parsed_param, solution) in parsed_blanket_impl
-            .generic_impl_params
-            .clone()
+
+        for ((typed_param, parsed_param), solution) in self_
+            .named_types
+            .copy_slice_sv4(blanket_impl_type_params_handle)
             .iter()
+            .zip(parsed_blanket_impl.generic_impl_params.clone().iter())
             .zip(self_.named_types.copy_slice_sv::<4>(solutions).iter())
         {
             let _ = self_.scopes.add_type(
@@ -5515,12 +5665,25 @@ impl TypedProgram {
                 parsed_param.name,
                 solution.type_id,
             );
-            for constraint in parsed_param.constraints.iter() {
-                let constraint_signature = match constraint {
-                    parse::ParsedTypeConstraintExpr::Ability(parsed_ability_expr) => self_
-                        .eval_ability_expr(*parsed_ability_expr, false, constraint_checking_scope)
-                        .unwrap(),
-                };
+            let tp = self_.types.get_type_parameter(typed_param.type_id);
+            if let Some(static_constraint) = tp.static_constraint {
+                let static_type =
+                    self_.types.get_no_follow_static(static_constraint).as_static().unwrap();
+                if static_type.inner_type_id != solution.type_id {
+                    eprintln!(
+                        "Blanket impl almost matched but a static constraint failed: {} != {}",
+                        self_.type_id_to_string(static_type.inner_type_id),
+                        self_.type_id_to_string(solution.type_id)
+                    );
+                    return None;
+                }
+            }
+            for parsed_ability_expr in
+                parsed_param.constraints.iter().filter_map(|p| p.as_ability())
+            {
+                let constraint_signature = self_
+                    .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
+                    .unwrap();
                 if let Err(mut e) = self_.check_type_constraint(
                     solution.type_id,
                     constraint_signature,
@@ -6625,19 +6788,21 @@ impl TypedProgram {
                     }
                 }
             }
-            ParsedExpr::Literal(Literal::Unit(span)) => Ok(self.exprs.add(TypedExpr::Unit(*span))),
-            ParsedExpr::Literal(Literal::Char(byte, span)) => {
+            ParsedExpr::Literal(ParsedLiteral::Unit(span)) => {
+                Ok(self.exprs.add(TypedExpr::Unit(*span)))
+            }
+            ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
                 Ok(self.exprs.add(TypedExpr::Char(*byte, *span)))
             }
-            ParsedExpr::Literal(Literal::Numeric(int)) => {
+            ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
                 let numeric_expr = self.eval_numeric_value(&int.text, int.span, ctx)?;
                 Ok(self.exprs.add(numeric_expr))
             }
-            ParsedExpr::Literal(Literal::Bool(b, span)) => {
+            ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => {
                 let expr = TypedExpr::Bool(*b, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpr::Literal(Literal::String(s, span)) => {
+            ParsedExpr::Literal(ParsedLiteral::String(s, span)) => {
                 let expr = TypedExpr::String(*s, *span);
                 Ok(self.exprs.add(expr))
             }
@@ -6703,10 +6868,10 @@ impl TypedProgram {
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
                 let true_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
-                    parse::Literal::Bool(true, is_expr.span),
+                    parse::ParsedLiteral::Bool(true, is_expr.span),
                 ));
                 let false_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
-                    parse::Literal::Bool(false, is_expr.span),
+                    parse::ParsedLiteral::Bool(false, is_expr.span),
                 ));
                 let true_case = parse::ParsedMatchCase {
                     patterns: smallvec![is_expr.pattern],
@@ -6801,7 +6966,7 @@ impl TypedProgram {
                 // Get the function id from it by name I guess
                 let call_ast_expr = self.ast.exprs.get(qcall.call_expr).expect_call().clone();
                 let call_name = call_ast_expr.name.name;
-                let Some((function_index, tafr)) = self
+                let Some((function_index, _)) = self
                     .abilities
                     .get(signature.specialized_ability_id)
                     .find_function_by_name(call_name)
@@ -6878,22 +7043,41 @@ impl TypedProgram {
             let (variable_id, variable_expr) =
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get(variable_expr).get_type();
-            if let Type::Static(stat) = self.types.get_no_follow_static(variable_type) {
-                if let Some(value_id) = stat.value_id {
+            match self.types.get_no_follow_static(variable_type) {
+                Type::Static(stat) => {
+                    if let Some(value_id) = stat.value_id {
+                        static_parameters.push((variable_id, value_id));
+                    } else {
+                        return failf!(
+                            span,
+                            "Static parameter `{}` is unresolved",
+                            self.ident_str(param)
+                        );
+                    }
+                }
+                Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                    let static_type = self
+                        .types
+                        .get_no_follow_static(tp.static_constraint.unwrap())
+                        .as_static()
+                        .unwrap();
+                    let Some(value_id) = static_type.value_id else {
+                        return failf!(
+                            span,
+                            "Expected a resolved static type for argument {}",
+                            self.ident_str(param),
+                        );
+                    };
                     static_parameters.push((variable_id, value_id));
-                } else {
+                }
+                _ => {
                     return failf!(
                         span,
-                        "Static parameter `{}` is unresolved",
-                        self.ident_str(param)
+                        "Non-static parameters aren't supported yet: {}: {}",
+                        self.ident_str(param),
+                        self.type_id_to_string(variable_type)
                     );
                 }
-            } else {
-                return failf!(
-                    span,
-                    "Non-static parameters aren't supported yet: {}",
-                    self.ident_str(param)
-                );
             }
         }
         for s in &static_parameters {
@@ -7029,8 +7213,8 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let mut field_values = Vec::new();
-        let mut field_defns = EcoVec::new();
+        let mut field_values = eco_vec![];
+        let mut field_defns = eco_vec![];
         let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
@@ -7121,7 +7305,7 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: Vec<StructField> = Vec::with_capacity(field_count);
+        let mut field_values: EcoVec<StructField> = EcoVec::with_capacity(field_count);
         let mut field_types: EcoVec<StructTypeField> = EcoVec::with_capacity(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(expected_struct.fields.iter())
@@ -7462,10 +7646,18 @@ impl TypedProgram {
                     recurse!(f.expr);
                 }
             }
-            TypedExpr::Variable(_) => (),
             TypedExpr::StructFieldAccess(field_access) => {
                 recurse!(field_access.base);
             }
+            TypedExpr::Array(array) => match &array.elements {
+                ArrayLiteralElements::Filled(e, _) => recurse!(*e),
+                ArrayLiteralElements::Listed(elems) => {
+                    for elem in elems {
+                        recurse!(*elem)
+                    }
+                }
+            },
+            TypedExpr::Variable(_) => (),
             TypedExpr::BinaryOp(binary_op) => {
                 let lhs = binary_op.lhs;
                 let rhs = binary_op.rhs;
@@ -9781,14 +9973,15 @@ impl TypedProgram {
             } else if fn_name == self.ast.idents.builtins.fromStatic {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type_id = self.exprs.get(base_value).get_type();
-                let Type::Static(static_type) = self.types.get_no_follow_static(base_type_id)
-                else {
+                let Some(static_type_id) = self.types.get_static_type_of_type(base_type_id) else {
                     return failf!(
                         call_span,
                         "Cannot use .fromStatic() on non-static type: {}",
                         self.type_id_to_string(base_type_id)
                     );
                 };
+                let static_type =
+                    self.types.get_no_follow_static(static_type_id).as_static().unwrap();
                 return Ok(Either::Left(self.synth_cast(
                     base_value,
                     static_type.inner_type_id,
@@ -10922,6 +11115,31 @@ impl TypedProgram {
                     TypedExpr::StaticValue(static_value_id, value.get_type(), span);
                 Ok(self.exprs.add(static_value_expr))
             }
+            IntrinsicOperation::StaticTypeToValue => {
+                // intern fn staticTypeToValue[T, ST: static T](): ST
+                let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
+                let static_type_arg = self.named_types.get_nth(call.type_args, 1);
+
+                let return_static_type = static_type_arg.type_id;
+                let Type::Static(static_type) = self.types.get_no_follow_static(return_static_type)
+                else {
+                    return failf!(
+                        span,
+                        "Expected type must be a static type, got {}",
+                        self.type_id_to_string(return_static_type)
+                    );
+                };
+                let Some(static_value_id) = static_type.value_id else {
+                    return failf!(
+                        span,
+                        "Expected type {} is not a static type with a value",
+                        self.type_id_to_string(return_static_type)
+                    );
+                };
+                let static_value_expr =
+                    TypedExpr::StaticValue(static_value_id, return_static_type, span);
+                Ok(self.exprs.add(static_value_expr))
+            }
             IntrinsicOperation::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
@@ -11220,33 +11438,49 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<()> {
         let infer_depth = self.inference_context.origin_stack.len();
-        let constraint_impls = self.get_constrained_ability_impls_for_type(type_param_id);
-        if !constraint_impls.is_empty() {
+        if let Some(static_type) = self.types.get_type_parameter(type_param_id).static_constraint {
             debug!(
-                "[infer {infer_depth}] > learning from param {} := {}. constraints: {}",
+                "[infer {infer_depth}] > learning from STATIC param {} := {}. static type: {}",
                 self.type_id_to_string(type_param_id),
                 self.type_id_to_string(solution_type_id),
-                constraint_impls.len()
+                self.type_id_to_string(static_type),
             );
+            let Some(solution_static_type) = self.types.get_static_type_of_type(solution_type_id)
+            else {
+                error!("The solution was not a static type; this is probably crashworthy");
+                return Ok(());
+            };
+            let subst_set = self.make_inference_substitution_set();
+            let static_type_subst = self.substitute_in_type(static_type, &subst_set);
+            // TODO: This function should probably just report the findings, not apply new
+            // substitutions, because there may be other things we need to do when we learn a type
+            // like when we learn a static type param I think we may need to do more
+            match self.unify_and_find_substitutions(solution_static_type, static_type_subst) {
+                TypeUnificationResult::Matching => {
+                    debug!("[infer {infer_depth}] unify succeeded",);
+                    self.calculate_inference_substitutions(span)?;
+                }
+                TypeUnificationResult::NoHoles => {}
+                TypeUnificationResult::NonMatching(_) => {
+                    eprintln!("did not match; likely we'll fail later")
+                }
+            }
+            return Ok(());
+        }
+        let constraint_impls = self.get_constrained_ability_impls_for_type(type_param_id);
+
+        if constraint_impls.is_empty() {
+            return Ok(());
         }
 
-        // Used for fixing up the constraint signatures:
-        // For each param they mention, if its solved, use the solution, otherwise use the
-        // inference hole so we can learn more about it
-        // This is probably a re-usable concept for inference context, I think its probably quite
-        // often that we want this mapping for each param
-        let mut subst_set: SV8<TypeSubstitutionPair> = smallvec![];
-        for (param, inference_hole) in
-            self.inference_context.params.iter().zip(self.inference_context.inference_vars.iter())
-        {
-            if let Some(solution) =
-                self.inference_context.solutions_so_far.iter().find(|p| p.from == *param)
-            {
-                subst_set.push(*solution)
-            } else {
-                subst_set.push(spair! { *param => *inference_hole })
-            }
-        }
+        debug!(
+            "[infer {infer_depth}] > learning from param {} := {}. constraints: {}",
+            self.type_id_to_string(type_param_id),
+            self.type_id_to_string(solution_type_id),
+            constraint_impls.len()
+        );
+        let subst_set = self.make_inference_substitution_set();
+
         for constraint in &constraint_impls {
             let constraint_signature = self.ability_impls.get(constraint.full_impl_id).signature();
 
@@ -11827,6 +12061,27 @@ impl TypedProgram {
         Ok(newly_solved_params)
     }
 
+    /// Used for fixing up the constraint signatures:
+    /// For each param they mention, if its solved, use the solution, otherwise use the
+    /// inference hole so we can learn more about it
+    /// This is probably a re-usable concept for inference context, I think its probably quite
+    /// often that we want this mapping for each param
+    fn make_inference_substitution_set(&self) -> SV8<TypeSubstitutionPair> {
+        let mut subst_set: SV8<TypeSubstitutionPair> = smallvec![];
+        for (param, inference_hole) in
+            self.inference_context.params.iter().zip(self.inference_context.inference_vars.iter())
+        {
+            if let Some(solution) =
+                self.inference_context.solutions_so_far.iter().find(|p| p.from == *param)
+            {
+                subst_set.push(*solution)
+            } else {
+                subst_set.push(spair! { *param => *inference_hole })
+            }
+        }
+        subst_set
+    }
+
     fn unify_and_find_substitutions(
         &mut self,
         passed_type: TypeId,
@@ -11911,12 +12166,6 @@ impl TypedProgram {
         }
 
         match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
-            (Type::Static(static_type), _) => self.unify_and_find_substitutions_rec(
-                substitutions,
-                static_type.inner_type_id,
-                slot_type,
-                type_param_enabled,
-            ),
             (Type::InferenceHole(_actual_hole), _expected_type) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
@@ -12069,6 +12318,19 @@ impl TypedProgram {
                     param_lambda.function_type,
                     type_param_enabled,
                 ),
+            (Type::Static(passed_static), Type::Static(param_static)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_static.inner_type_id,
+                    param_static.inner_type_id,
+                    type_param_enabled,
+                ),
+            (Type::Static(static_type), _) => self.unify_and_find_substitutions_rec(
+                substitutions,
+                static_type.inner_type_id,
+                slot_type,
+                type_param_enabled,
+            ),
             (Type::TypeParameter(_actual_param), _expected_type) if type_param_enabled => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
@@ -12803,6 +13065,7 @@ impl TypedProgram {
                     "emit" => Some(IntrinsicOperation::EmitString),
                     "bakeStaticValue" => Some(IntrinsicOperation::BakeStaticValue),
                     "getStaticValue" => Some(IntrinsicOperation::GetStaticValue),
+                    "staticTypeToValue" => Some(IntrinsicOperation::StaticTypeToValue),
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
@@ -12979,8 +13242,20 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
-        let constraints = self.get_constrained_ability_impls_for_type(param_type);
-        for constraint in &constraints {
+        let tp = self.types.get_type_parameter(param_type);
+        if let Some(static_constraint) = tp.static_constraint {
+            let specialized_constraint =
+                self.substitute_in_type(static_constraint, substitution_pairs);
+            if let Err(msg) = self.check_types(specialized_constraint, passed_type, scope_id) {
+                return failf!(
+                    span,
+                    "Provided type for {} didn't satisfy the static constraint: {msg}",
+                    self.ident_str(param_name),
+                );
+            }
+        }
+        let ability_constraints = self.get_constrained_ability_impls_for_type(param_type);
+        for constraint in &ability_constraints {
             let original_signature = TypedAbilitySignature {
                 specialized_ability_id: constraint.specialized_ability_id,
                 impl_arguments: self.ability_impls.get(constraint.full_impl_id).impl_arguments,
@@ -12988,7 +13263,7 @@ impl TypedProgram {
             let signature = if substitution_pairs.is_empty() {
                 original_signature
             } else {
-                let s = self.substitute_in_ability_signature(
+                let specialized_constraint_signature = self.substitute_in_ability_signature(
                     substitution_pairs,
                     original_signature,
                     scope_id,
@@ -12996,9 +13271,9 @@ impl TypedProgram {
                 );
                 debug!(
                     "I specialized an ability constraint for checking: {}",
-                    self.ability_signature_to_string(s)
+                    self.ability_signature_to_string(specialized_constraint_signature)
                 );
-                s
+                specialized_constraint_signature
             };
             self.check_type_constraint(passed_type, signature, param_name, scope_id, span)?;
         }
@@ -13147,7 +13422,12 @@ impl TypedProgram {
         };
         let self_ident = self.ast.idents.builtins.Self_;
         let new_self_type_id = self.add_type_parameter(
-            TypeParameter { name: self_ident, scope_id: specialized_ability_scope, span },
+            TypeParameter {
+                name: self_ident,
+                static_constraint: None,
+                scope_id: specialized_ability_scope,
+                span,
+            },
             smallvec![],
         );
         let _ = self
@@ -13342,27 +13622,39 @@ impl TypedProgram {
         }
         for type_parameter in parsed_type_params.iter() {
             let mut ability_constraints = SmallVec::new();
-            for parsed_constraint in type_parameter.constraints.iter() {
-                let ability_sig = match parsed_constraint {
-                    parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?
+            let mut static_constraint: Option<TypeId> = None;
+
+            for parsed_constraint in type_parameter.constraints.iter().chain(
+                parsed_function
+                    .additional_where_constraints
+                    .iter()
+                    .filter(|c| c.name == type_parameter.name)
+                    .map(|c| &c.constraint_expr),
+            ) {
+                match parsed_constraint {
+                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
+                        let ability_sig =
+                            self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?;
+                        ability_constraints.push(ability_sig);
+                    }
+                    ParsedTypeConstraintExpr::Static(static_expr) => {
+                        let static_type = self_.eval_type_expr(*static_expr, fn_scope_id)?;
+                        match &static_constraint {
+                            None => static_constraint = Some(static_type),
+                            Some(_) => {
+                                return failf!(
+                                    type_parameter.span,
+                                    "Cannot specify more than one static constraint for a parameter"
+                                );
+                            }
+                        }
                     }
                 };
-                ability_constraints.push(ability_sig);
-            }
-            for param in &parsed_function.additional_where_constraints {
-                if param.name == type_parameter.name {
-                    let ability_id = match &param.constraint_expr {
-                        parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                            self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?
-                        }
-                    };
-                    ability_constraints.push(ability_id);
-                }
             }
             let type_variable_id = self_.add_type_parameter(
                 TypeParameter {
                     name: type_parameter.name,
+                    static_constraint,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
                 },
@@ -13770,6 +14062,7 @@ impl TypedProgram {
         let self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident_id,
+                static_constraint: None,
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
             },
@@ -13777,23 +14070,36 @@ impl TypedProgram {
         );
         let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
         for ability_param in parsed_ability.params.clone().iter() {
-            let ability_impls: TyperResult<SmallVec<[TypedAbilitySignature; 4]>> = ability_param
-                .constraints
-                .iter()
-                .map(|constraint| match constraint {
+            let mut ability_constraints: SV4<TypedAbilitySignature> = smallvec![];
+            for constraint in ability_param.constraints.iter() {
+                match constraint {
                     parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        self.eval_ability_expr(*ability_expr, false, ability_scope_id)
+                        let signature =
+                            self.eval_ability_expr(*ability_expr, false, ability_scope_id)?;
+                        ability_constraints.push(signature);
                     }
-                })
-                .collect();
-            let ability_impls = ability_impls?;
+                    _ => {}
+                }
+            }
+            let maybe_static_constraint =
+                match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
+                    &ability_param.constraints,
+                ) {
+                    Ok(Some(parsed_constraint)) => {
+                        Some(self.eval_type_expr(parsed_constraint, ability_scope_id)?)
+                    }
+                    Ok(None) => None,
+                    Err(msg) => return failf!(ability_param.span, "{}", msg),
+                };
+
             let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,
+                    static_constraint: maybe_static_constraint,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
                 },
-                ability_impls,
+                ability_constraints,
             );
 
             if !self
@@ -13939,14 +14245,25 @@ impl TypedProgram {
 
         let mut blanket_type_params: SV4<NameAndType> =
             SmallVec::with_capacity(parsed_ability_impl.generic_impl_params.len());
-        for generic_impl_param in &parsed_ability_impl.generic_impl_params {
+        for blanket_impl_param in &parsed_ability_impl.generic_impl_params {
+            let maybe_static_constraint =
+                match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
+                    &blanket_impl_param.constraints,
+                ) {
+                    Ok(Some(parsed_constraint)) => {
+                        Some(self.eval_type_expr(parsed_constraint, impl_scope_id)?)
+                    }
+                    Ok(None) => None,
+                    Err(msg) => return failf!(blanket_impl_param.span, "{}", msg),
+                };
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
-                    name: generic_impl_param.name,
+                    name: blanket_impl_param.name,
+                    static_constraint: maybe_static_constraint,
                     scope_id: impl_scope_id,
-                    span: generic_impl_param.span,
+                    span: blanket_impl_param.span,
                 },
-                // We create the variable with no constraints, then add them later, so that its
+                // We create the variable with no ability constraints, then add them later, so that its
                 // constraints can reference itself
                 // Example: impl[T] Add[Rhs = T where T: Num]
                 // The constraints need T to exist
@@ -13955,37 +14272,34 @@ impl TypedProgram {
             if !self
                 .scopes
                 .get_scope_mut(impl_scope_id)
-                .add_type(generic_impl_param.name, type_variable_id)
+                .add_type(blanket_impl_param.name, type_variable_id)
             {
                 return failf!(
-                    generic_impl_param.span,
+                    blanket_impl_param.span,
                     "Duplicate generic impl parameter name: {}",
-                    self.ident_str(generic_impl_param.name)
+                    self.ident_str(blanket_impl_param.name)
                 );
             }
 
-            if !generic_impl_param.constraints.is_empty() {
+            if !blanket_impl_param.constraints.is_empty() {
                 let param_constraints_scope_id =
                     self.scopes.add_child_scope(impl_scope_id, ScopeType::AbilityImpl, None, None);
-                for parsed_constraint in &generic_impl_param.constraints {
-                    let (constraint_ability_sig, constraint_span) = match parsed_constraint {
-                        parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                            let sig =
-                                self.eval_ability_expr(*ability_expr, false, impl_scope_id)?;
-                            let constraint_span = self.ast.p_ability_exprs.get(*ability_expr).span;
-                            (sig, constraint_span)
-                        }
-                    };
+                for ability_expr in
+                    blanket_impl_param.constraints.iter().filter_map(|c| c.as_ability())
+                {
+                    let constrained_ability_sig =
+                        self.eval_ability_expr(ability_expr, false, impl_scope_id)?;
+                    let constraint_span = self.ast.p_ability_exprs.get(ability_expr).span;
                     self.add_constrained_ability_impl(
                         type_variable_id,
-                        constraint_ability_sig,
+                        constrained_ability_sig,
                         param_constraints_scope_id,
                         constraint_span,
                     );
                 }
             }
             blanket_type_params
-                .push(NameAndType { name: generic_impl_param.name, type_id: type_variable_id });
+                .push(NameAndType { name: blanket_impl_param.name, type_id: type_variable_id });
         }
 
         let impl_self_type = self.eval_type_expr(parsed_ability_impl.self_type, impl_scope_id)?;
@@ -15231,15 +15545,26 @@ impl TypedProgram {
                 make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
             }
             Type::Array(array_type) => {
+                let array_type = *array_type;
                 let array_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Array")).payload.unwrap();
                 // { elementTypeId: u64, size: uword }
                 let element_type_id_value_id = self.static_values.add(StaticValue::Int(
                     TypedIntValue::U64(array_type.element_type.as_u32() as u64),
                 ));
-                let size_value_id = self
-                    .static_values
-                    .add(StaticValue::Int(TypedIntValue::UWord64(array_type.size)));
+                let maybe_concrete_size_value_id = match array_type.concrete_size {
+                    None => None,
+                    Some(size) => {
+                        Some(self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(size))))
+                    }
+                };
+                let option_uword = self.synth_optional_type(UWORD_TYPE_ID);
+                let size_value_id = synth_static_option(
+                    &self.types,
+                    &mut self.static_values,
+                    option_uword,
+                    maybe_concrete_size_value_id,
+                );
                 // We need to ensure that any and all typeIds that we share with the user
                 // are available at runtime, by calling these functions at least once.
                 self.register_type_metainfo(array_type.element_type, span);
@@ -15803,7 +16128,7 @@ impl TypedProgram {
     ) -> TypedExprId {
         let struct_type = self.types.get(struct_type_id).expect_struct();
         debug_assert_eq!(struct_type.fields.len(), field_exprs.len());
-        let mut fields: Vec<StructField> = Vec::with_capacity(struct_type.fields.len());
+        let mut fields: EcoVec<StructField> = EcoVec::with_capacity(struct_type.fields.len());
         for (index, field_expr) in field_exprs.into_iter().enumerate() {
             let field = &struct_type.fields[index];
             #[cfg(debug_assertions)]
@@ -15833,7 +16158,7 @@ impl TypedProgram {
         let filename_string_id = self.ast.strings.intern(&source.filename);
 
         let struct_expr = TypedExpr::Struct(StructLiteral {
-            fields: vec![
+            fields: eco_vec![
                 StructField {
                     name: self.ast.idents.builtins.filename,
                     expr: self.exprs.add(TypedExpr::String(filename_string_id, span)),

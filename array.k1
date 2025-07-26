@@ -1,9 +1,10 @@
-fn fromArray[N, T](a: Array[N x T]): Buffer[T] {
-
+fn makeByteArray[N: static uword](): Array[N x uword] {
+  let a: 1 = 1.toStatic();
+  let hello: 'c' = 'c'.toStatic();
+  crash("unimplemented")
 }
+
 fn main(): i32 {
 
-  let emptyArray: Array[u8 x 10] = [0 x 5];
-  let a = [1,2,3,4];
   0
 }

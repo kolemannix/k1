@@ -111,10 +111,11 @@ pub struct ListType {
 #[derive(Debug, Clone)]
 pub struct TypeParameter {
     pub name: Ident,
+    pub static_constraint: Option<TypeId>,
     pub scope_id: ScopeId,
     pub span: SpanId,
 }
-impl_copy_if_small!(12, TypeParameter);
+impl_copy_if_small!(16, TypeParameter);
 
 #[derive(Debug, Clone)]
 pub struct FunctionTypeParameter {
@@ -142,8 +143,10 @@ pub struct ReferenceType {
 #[derive(Debug, Clone)]
 pub struct ArrayType {
     pub element_type: TypeId,
-    pub size: u64,
+    pub size_type: TypeId,
+    pub concrete_size: Option<u64>,
 }
+impl_copy_if_small!(24, ArrayType);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumVariant {
@@ -362,7 +365,7 @@ pub struct LambdaObjectType {
     pub struct_representation: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StaticType {
     pub inner_type_id: TypeId,
     pub value_id: Option<StaticValueId>,
@@ -447,7 +450,7 @@ impl PartialEq for Type {
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
             (Type::Array(a1), Type::Array(a2)) => {
-                a1.element_type == a2.element_type && a1.size == a2.size
+                a1.element_type == a2.element_type && a1.size_type == a2.size_type
             }
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
@@ -627,7 +630,8 @@ impl std::hash::Hash for Type {
             Type::Array(arr) => {
                 "array".hash(state);
                 arr.element_type.hash(state);
-                arr.size.hash(state);
+                arr.size_type.hash(state);
+                arr.concrete_size.hash(state);
             }
         }
     }
@@ -1163,6 +1167,21 @@ impl Types {
         }
     }
 
+    /// The two types of types that we need to treat as 'static' types are Static types themselves
+    /// and type parameters with a constraint to a specific static, which is basically the same
+    /// thing since it can have no other constraints
+    pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<TypeId> {
+        match self.get_no_follow_static(type_id) {
+            Type::Static(_st) => Some(type_id),
+            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                let t = tp.static_constraint.unwrap();
+                debug_assert!(self.get_no_follow(t).as_static().is_some());
+                Some(t)
+            }
+            _ => None,
+        }
+    }
+
     #[inline]
     /// Its important to understand that this basic 'get type' follows
     /// redirects for both recursives and statics. This is because 99% of
@@ -1177,7 +1196,8 @@ impl Types {
         }
     }
 
-    pub fn get_type_variable(&self, type_id: TypeId) -> &TypeParameter {
+    #[track_caller]
+    pub fn get_type_parameter(&self, type_id: TypeId) -> &TypeParameter {
         if let Type::TypeParameter(tv) = self.get(type_id) {
             tv
         } else {
@@ -1442,8 +1462,10 @@ impl Types {
                 }
             }
             Type::Array(arr) => {
-                // Arrays contain type variables if their element type does
+                // Arrays contain 2 types, the element type and the size type,
+                // which is usually a `static uword`, but can be a type parameter
                 self.count_type_variables(arr.element_type)
+                    .add(self.count_type_variables(arr.size_type))
             }
         }
     }
@@ -1537,7 +1559,10 @@ impl Types {
             Type::RecursiveReference(_) => Z,
             Type::Array(arr) => {
                 let element_layout = self.compute_type_layout(arr.element_type);
-                Layout::array_me(&element_layout, arr.size as usize)
+                match arr.concrete_size {
+                    None => Z,
+                    Some(size) => Layout::array_me(&element_layout, size as usize),
+                }
             }
         }
     }

@@ -1,0 +1,27 @@
+fn makeByteArray[N: static uword](): Array[N x uword] {
+  crash("unimplemented");
+}
+
+fn main(): i32 {
+
+  let a: 1 = 1.toStatic();
+  let a: 1 = 1.toStatic();
+  let c: 'c' = 'c'.toStatic();
+  let hello: "hello" = "hello".toStatic();
+
+  let hello: "hello" = #static {
+    let* bytes = [104: u8];
+    println("Hello, world!");
+    bytes.push(101);
+    bytes.push(108);
+    bytes.push(108);
+    bytes.push(111);
+    bytes.push(33);
+    string/wrapBytes(bytes.toBuffer())
+  };
+
+  let statStr: static string = #static "(?,?,?)";
+  (statStr as string).splitByChar('?');
+
+  0
+}

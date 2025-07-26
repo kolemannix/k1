@@ -570,6 +570,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 Ok(field_value.into())
             }
         }
+        TypedExpr::Array(_array) => {
+            todo!("execute new array literal in vm")
+        }
         TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, m, *variable_expr),
         TypedExpr::UnaryOp(unary_op) => {
             let span = unary_op.span;
@@ -1429,7 +1432,8 @@ fn execute_intrinsic(
         IntrinsicOperation::SizeOf
         | IntrinsicOperation::SizeOfStride
         | IntrinsicOperation::AlignOf
-        | IntrinsicOperation::GetStaticValue => {
+        | IntrinsicOperation::GetStaticValue
+        | IntrinsicOperation::StaticTypeToValue => {
             unreachable!("Handled by typer phase")
         }
         IntrinsicOperation::Zeroed => {
