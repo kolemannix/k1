@@ -78,7 +78,7 @@ ns type_schema {
     require getTypeSchema[Array[5 x string]]()
       is .Array({ elementTypeId, size })
       and elementTypeId == typeId[string]()
-      and size == 5
+      and size == .Some(5)
       else crash("Array type schema test failed");
 
     println(printStructShape[Point3[u8]]());

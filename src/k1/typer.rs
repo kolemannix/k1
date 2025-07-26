@@ -7006,12 +7006,13 @@ impl TypedProgram {
         if ctx.is_generic_pass {
             let typed_expr = match ctx.expected_type_id {
                 None => TypedExpr::Unit(span),
-                Some(_) => {
+                Some(expected) => {
                     let unit_expr = self.exprs.add(TypedExpr::Unit(span));
                     TypedExpr::Cast(TypedCast {
+                        // nocommit(0): Change name of ToNever?
                         cast_type: CastType::ToNever,
                         base_expr: unit_expr,
-                        target_type_id: NEVER_TYPE_ID,
+                        target_type_id: expected,
                         span,
                     })
                 }

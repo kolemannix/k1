@@ -1,10 +1,5 @@
 fn main(): int {
   //let statStr: string = "(?,?)";
-  let statStr: static string = #static "(?,?,?)";
-  (statStr as string).splitByChar('?');
-  format(statStr);
-
-  format("(?,?)");
 
   0
 }
