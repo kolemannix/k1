@@ -41,7 +41,7 @@ use crate::parse::{
 use crate::parse::{
     Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
 };
-use crate::pool::{Pool, SliceHandle};
+use crate::pool::{Pool, SliceHandle, PoolHash, PoolEq};
 use crate::{SV4, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
 use crate::{SV8, vm};
 
@@ -296,6 +296,92 @@ impl StaticValue {
         match self {
             StaticValue::Enum(e) => Some(e),
             _ => None,
+        }
+    }
+}
+
+// Custom pool-aware hashing and equality for StaticValue deduplication
+impl PoolHash<Pool<StaticValue, StaticValueId>> for StaticValue {
+    fn pool_hash<H: std::hash::Hasher>(&self, pool: &Pool<StaticValue, StaticValueId>, state: &mut H) {
+        use std::hash::Hash;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            StaticValue::Unit => {}
+            StaticValue::Boolean(b) => b.hash(state),
+            StaticValue::Char(c) => c.hash(state),
+            StaticValue::Int(i) => i.hash(state),
+            StaticValue::Float(f) => {
+                // Hash floats by their bit representation since f32/f64 don't impl Hash
+                match f {
+                    TypedFloatValue::F32(val) => val.to_bits().hash(state),
+                    TypedFloatValue::F64(val) => val.to_bits().hash(state),
+                }
+            },
+            StaticValue::String(s) => s.hash(state),
+            StaticValue::NullPointer => {}
+            StaticValue::Struct(s) => {
+                s.type_id.hash(state);
+                s.fields.len().hash(state);
+                for &field_id in &s.fields {
+                    pool.get(field_id).pool_hash(pool, state);
+                }
+            }
+            StaticValue::Enum(e) => {
+                e.variant_type_id.hash(state);
+                e.variant_index.hash(state);
+                e.typed_as_enum.hash(state);
+                if let Some(payload_id) = e.payload {
+                    pool.get(payload_id).pool_hash(pool, state);
+                }
+            }
+            StaticValue::Buffer(b) => {
+                b.type_id.hash(state);
+                b.elements.len().hash(state);
+                for &element_id in &b.elements {
+                    pool.get(element_id).pool_hash(pool, state);
+                }
+            }
+        }
+    }
+}
+
+impl PoolEq<Pool<StaticValue, StaticValueId>> for StaticValue {
+    fn pool_eq(&self, other: &Self, pool: &Pool<StaticValue, StaticValueId>) -> bool {
+        match (self, other) {
+            (StaticValue::Unit, StaticValue::Unit) => true,
+            (StaticValue::Boolean(a), StaticValue::Boolean(b)) => a == b,
+            (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
+            (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
+            (StaticValue::Float(a), StaticValue::Float(b)) => a == b,
+            (StaticValue::String(a), StaticValue::String(b)) => a == b,
+            (StaticValue::NullPointer, StaticValue::NullPointer) => true,
+            (StaticValue::Struct(a), StaticValue::Struct(b)) => {
+                a.type_id == b.type_id && 
+                a.fields.len() == b.fields.len() &&
+                a.fields.iter().zip(b.fields.iter()).all(|(&a_field, &b_field)| {
+                    pool.get(a_field).pool_eq(pool.get(b_field), pool)
+                })
+            }
+            (StaticValue::Enum(a), StaticValue::Enum(b)) => {
+                a.variant_type_id == b.variant_type_id &&
+                a.variant_index == b.variant_index &&
+                a.typed_as_enum == b.typed_as_enum &&
+                match (a.payload, b.payload) {
+                    (None, None) => true,
+                    (Some(a_payload), Some(b_payload)) => {
+                        pool.get(a_payload).pool_eq(pool.get(b_payload), pool)
+                    }
+                    _ => false,
+                }
+            }
+            (StaticValue::Buffer(a), StaticValue::Buffer(b)) => {
+                a.type_id == b.type_id &&
+                a.elements.len() == b.elements.len() &&
+                a.elements.iter().zip(b.elements.iter()).all(|(&a_elem, &b_elem)| {
+                    pool.get(a_elem).pool_eq(pool.get(b_elem), pool)
+                })
+            }
+            _ => false,
         }
     }
 }
@@ -1227,7 +1313,7 @@ pub struct TypedMatchArm {
     pub consequent_expr: TypedExprId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypedIntValue {
     U8(u8),
     U16(u16),
@@ -2585,6 +2671,7 @@ pub struct TypedProgram {
     pub exprs: Pool<TypedExpr, TypedExprId>,
     pub stmts: Pool<TypedStmt, TypedStmtId>,
     pub static_values: Pool<StaticValue, StaticValueId>,
+    pub static_values_dedup: FxHashMap<u64, StaticValueId>, // Hash -> first StaticValueId
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
     pub type_names: FxHashMap<TypeId, StringId>,
     pub scopes: Scopes,
@@ -2689,6 +2776,7 @@ impl TypedProgram {
             // TODO: De-dupe the static values pool a bit: for example unit, ints, btrue and
             //       bfalse, strings are easy due to string id, ...
             static_values: Pool::with_capacity("compile_time_values", 8192),
+            static_values_dedup: FxHashMap::new(),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
@@ -4249,6 +4337,53 @@ impl TypedProgram {
         }
     }
 
+    pub fn add_static_value(&mut self, value: StaticValue) -> StaticValueId {
+        use std::hash::Hasher;
+        use fxhash::FxHasher;
+        
+        // Compute hash using our custom pool-aware method
+        let mut hasher = FxHasher::default();
+        value.pool_hash(&self.static_values, &mut hasher);
+        let hash = hasher.finish();
+        
+        // Check if we already have this value
+        if let Some(&existing_id) = self.static_values_dedup.get(&hash) {
+            // Double-check with deep equality to handle hash collisions
+            if value.pool_eq(self.static_values.get(existing_id), &self.static_values) {
+                return existing_id;
+            }
+        }
+        
+        // Value not found, add it
+        let new_id = self.static_values.add(value);
+        self.static_values_dedup.insert(hash, new_id);
+        new_id
+    }
+
+    pub fn synth_static_option(
+        &mut self,
+        option_type_id: TypeId,
+        value_id: Option<StaticValueId>,
+    ) -> StaticValueId {
+        let opt_enum_type = self.types.get(option_type_id).expect_enum();
+        let static_enum = match value_id {
+            None => StaticEnum {
+                variant_type_id: opt_enum_type.variant_by_index(0).my_type_id,
+                variant_index: 0,
+                typed_as_enum: true,
+                payload: None,
+            },
+            Some(value_id) => StaticEnum {
+                variant_type_id: opt_enum_type.variant_by_index(1).my_type_id,
+                variant_index: 1,
+                typed_as_enum: true,
+                payload: Some(value_id),
+            },
+        };
+
+        self.add_static_value(StaticValue::Enum(static_enum))
+    }
+
     fn get_module_manifest(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -4910,16 +5045,16 @@ impl TypedProgram {
         _scope_id: ScopeId,
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
-            TypedExpr::Unit(_) => Ok(Some(self.static_values.add(StaticValue::Unit))),
-            TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
-            TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Boolean(*b)))),
+            TypedExpr::Unit(_) => Ok(Some(self.add_static_value(StaticValue::Unit))),
+            TypedExpr::Char(byte, _) => Ok(Some(self.add_static_value(StaticValue::Char(*byte)))),
+            TypedExpr::Bool(b, _) => Ok(Some(self.add_static_value(StaticValue::Boolean(*b)))),
             TypedExpr::Integer(typed_integer_expr) => {
-                Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
+                Ok(Some(self.add_static_value(StaticValue::Int(typed_integer_expr.value))))
             }
             TypedExpr::Float(typed_float_expr) => {
-                Ok(Some(self.static_values.add(StaticValue::Float(typed_float_expr.value))))
+                Ok(Some(self.add_static_value(StaticValue::Float(typed_float_expr.value))))
             }
-            TypedExpr::String(s, _) => Ok(Some(self.static_values.add(StaticValue::String(*s)))),
+            TypedExpr::String(s, _) => Ok(Some(self.add_static_value(StaticValue::String(*s)))),
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -15556,13 +15691,11 @@ impl TypedProgram {
                 let maybe_concrete_size_value_id = match array_type.concrete_size {
                     None => None,
                     Some(size) => {
-                        Some(self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(size))))
+                        Some(self.add_static_value(StaticValue::Int(TypedIntValue::UWord64(size))))
                     }
                 };
                 let option_uword = self.synth_optional_type(UWORD_TYPE_ID);
-                let size_value_id = synth_static_option(
-                    &self.types,
-                    &mut self.static_values,
+                let size_value_id = self.synth_static_option(
                     option_uword,
                     maybe_concrete_size_value_id,
                 );
@@ -16318,3 +16451,7 @@ fn synth_static_option(
 
     static_values.add(StaticValue::Enum(static_enum))
 }
+
+#[cfg(test)]
+mod dedup_pool_test;
+
