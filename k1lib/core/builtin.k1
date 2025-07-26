@@ -76,7 +76,7 @@ ns types {
     Reference({ innerTypeId: u64 }),
     Array({
       elementTypeId: u64,
-      size: uword
+      size: uword?
     }),
     Struct({
       fields: Buffer[{
@@ -124,6 +124,13 @@ ns meta {
   // Must be provided an integer literal.
   // Can only be called by generated code
   intern fn getStaticValue[T](id: u64): T
+
+  intern fn staticTypeToValue[T, ST: static T](): ST
+
+  fn summonStatic[T, ST: static T](): T {
+    let st: ST = meta/staticTypeToValue();
+    st.fromStatic()
+  }
 
 }
 

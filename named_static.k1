@@ -1,0 +1,15 @@
+use core/meta
+
+fn addStatic[I: static int](x: int): int {
+  let i: int = core/meta/summonStatic[int, I]();
+  i + x
+}
+
+fn main(): i32 {
+  // nocommit(0); make var decls a coercion site
+  // nocommit(0); Commit this test case to suite1
+  let THREE: static int = #static 3;
+  let result = addStatic[typeOf(THREE)](3);
+  assertEquals(result, 3 + 3);
+  0
+}

@@ -362,7 +362,7 @@ impl TypedProgram {
             }
             Type::Array(array_type) => {
                 w.write_str("Array[")?;
-                write!(w, "{}", array_type.size)?;
+                self.display_type_id(array_type.size_type, expand, w)?;
                 w.write_str(" x ")?;
                 self.display_type_ext(array_type.element_type, expand, w)?;
                 w.write_str("]")
@@ -547,15 +547,35 @@ impl TypedProgram {
                 w.write_str(&"  ".repeat(indentation))?;
                 w.write_str("}")
             }
-            TypedExpr::Variable(v) => {
-                let variable = self.variables.get(v.variable_id);
-                w.write_str(self.ident_str(variable.name))
-            }
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr_id(field_access.base, w, indentation)?;
                 w.write_str(".")?;
                 self.write_ident(w, field_access.target_field)?;
                 Ok(())
+            }
+            TypedExpr::Array(array) => {
+                w.write_str("[")?;
+                match &array.elements {
+                    ArrayLiteralElements::Filled(expr, n) => {
+                        self.display_expr_id(*expr, w, indentation)?;
+                        w.write_str(" x ")?;
+                        w.write_str(&n.to_string())?;
+                    }
+                    ArrayLiteralElements::Listed(exprs) => {
+                        for (idx, expr) in exprs.iter().enumerate() {
+                            if idx > 0 {
+                                w.write_str(", ")?;
+                            }
+                            self.display_expr_id(*expr, w, indentation)?;
+                        }
+                    }
+                }
+                w.write_str("]")?;
+                Ok(())
+            }
+            TypedExpr::Variable(v) => {
+                let variable = self.variables.get(v.variable_id);
+                w.write_str(self.ident_str(variable.name))
             }
             TypedExpr::Call(fn_call) => {
                 match &fn_call.callee {

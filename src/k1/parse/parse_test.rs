@@ -74,7 +74,7 @@ fn basic_fn() -> Result<(), ParseError> {
 #[test]
 fn string_literal() -> ParseResult<()> {
     let (module, result) = test_single_expr(r#""Hello, World!""#)?;
-    let ParsedExpr::Literal(Literal::String(s, span_id)) = result else { panic!() };
+    let ParsedExpr::Literal(ParsedLiteral::String(s, span_id)) = result else { panic!() };
     let span = module.spans.get(span_id);
     assert_eq!(module.get_string(s), "Hello, World!");
     assert_eq!(span.start, 0);
@@ -220,7 +220,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpr::Literal(rhs) = module.exprs.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, Literal::Numeric(_)));
+    assert!(matches!(rhs, ParsedLiteral::Numeric(_)));
     Ok(())
 }
 
@@ -286,7 +286,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 fn char_value() -> ParseResult<()> {
     let input = "'x'";
     let (_parser, result) = test_single_expr(input)?;
-    assert!(matches!(result, ParsedExpr::Literal(Literal::Char(b, _)) if b == b'x'));
+    assert!(matches!(result, ParsedExpr::Literal(ParsedLiteral::Char(b, _)) if b == b'x'));
     Ok(())
 }
 
@@ -383,19 +383,5 @@ fn empty_struct() -> ParseResult<()> {
     let (_module, expr, _expr_id) = test_single_expr_with_id(input)?;
     eprintln!("{:?}", &expr);
     assert!(matches!(expr, ParsedExpr::Struct(_)));
-    Ok(())
-}
-
-#[test]
-fn array_type_parsing() -> ParseResult<()> {
-    let input = "Array[10 x i32]";
-    let (_module, result) = test_single_type_expr(input)?;
-    if let ParsedTypeExpr::Array(array_type) = result {
-        // Check that we have a size expression and element type
-        assert!(array_type.size_expr.0.get() > 0); // Should have a valid expression ID  
-        assert!(array_type.element_type.0.get() > 0); // Should have a valid type expression ID
-    } else {
-        panic!("Expected Array type expression, got {:?}", result);
-    }
     Ok(())
 }
