@@ -27,7 +27,7 @@ fn describeArray[T](): string {
     return("Failed to get Array schema")
   };
   let actualElementName = typeName(elementTypeId);
-  "Array[{size} x {actualElementName}]"
+  "Array[{size.!} x {actualElementName}]"
 }
 
 fn test(): unit {

@@ -362,7 +362,11 @@ impl TypedProgram {
             }
             Type::Array(array_type) => {
                 w.write_str("Array[")?;
-                self.display_type_id(array_type.size_type, expand, w)?;
+                if let Some(size) = array_type.concrete_size {
+                    write!(w, "{}", size)?;
+                } else {
+                    self.display_type_id(array_type.size_type, expand, w)?;
+                }
                 w.write_str(" x ")?;
                 self.display_type_ext(array_type.element_type, expand, w)?;
                 w.write_str("]")
