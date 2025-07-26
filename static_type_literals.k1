@@ -1,4 +1,7 @@
 fn makeByteArray[N: static uword](): Array[N x uword] {
+  // nocommit(0): Have to debug why #statics with a type hint register as
+  //              'never' only in generic pass!
+  let x = (#static "hi"): "hi";
   crash("unimplemented");
 }
 
@@ -9,7 +12,7 @@ fn main(): i32 {
   let c: 'c' = 'c'.toStatic();
   let hello: "hello" = "hello".toStatic();
 
-  let hello: "hello" = #static {
+  let hello: "hello!" = #static {
     let* bytes = [104: u8];
     println("Hello, world!");
     bytes.push(101);

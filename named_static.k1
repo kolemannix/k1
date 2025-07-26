@@ -11,5 +11,9 @@ fn main(): i32 {
   let THREE: static int = #static 3;
   let result = addStatic[typeOf(THREE)](3);
   assertEquals(result, 3 + 3);
+
+  let result2 = addStatic[5](3);
+  assertEquals(result, 8);
+
   0
 }

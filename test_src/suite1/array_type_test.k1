@@ -47,14 +47,14 @@ fn test(): unit {
     crash("Expected Array schema for Array[10 x i32]")
   };
   assertEquals(typeName(elementTypeId), "i32");
-  assertEquals(size, 10);
+  assertEquals(size, .Some(10));
 
   let stringArraySchema = typeSchema(typeId[Array[7 x string]]());
   require stringArraySchema is .Array({ elementTypeId, size }) else {
     crash("Expected Array schema for Array[7 x string]")
   };
   assertEquals(typeName(elementTypeId), "string");
-  assertEquals(size, 7);
+  assertEquals(size, .Some(7));
   println("   PASS");
 
   // Test 3: Layout and size information
