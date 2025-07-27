@@ -87,6 +87,7 @@ fn main(): i32 {
   moderate();
   // #static moderate();
 
+  static_parameter/test();
   static_run/test();
 
   test_meta/test();

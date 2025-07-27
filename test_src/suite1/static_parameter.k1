@@ -1,0 +1,21 @@
+ns static_parameter;
+
+use core/meta
+
+fn addStatic[I: static int](x: int): int {
+  let i: int = core/meta/summonStatic[int, I]();
+  i + x
+}
+
+fn test(): unit {
+  let THREE: static int = 3;
+  let result = addStatic[typeOf(THREE)](3);
+  let result2 = addStatic[3](3);
+  assertEquals(result, 3 + 3);
+  assertEquals(result2, 3 + 3);
+
+  let result3 = addStatic[5](3);
+  assertEquals(result3, 8);
+
+  ()
+}

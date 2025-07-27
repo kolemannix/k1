@@ -86,3 +86,13 @@ macro_rules! impl_copy_if_small {
         impl std::marker::Copy for $struct_name where Self: Sized {}
     };
 }
+
+// A hash function with dependencies on D
+pub trait DepHash<D> {
+    fn dep_hash<H: std::hash::Hasher>(&self, dep: &D, state: &mut H);
+}
+
+// An Eq function with dependencies on D
+pub trait DepEq<D> {
+    fn dep_eq(&self, other: &Self, dep: &D) -> bool;
+}

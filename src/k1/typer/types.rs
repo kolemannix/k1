@@ -184,13 +184,6 @@ impl TypedEnum {
 }
 
 #[derive(Debug, Clone)]
-pub struct OpaqueTypeAlias {
-    pub ast_id: ParsedTypeDefnId,
-    pub aliasee: TypeId,
-    pub type_defn_info: TypeDefnInfo,
-}
-
-#[derive(Debug, Clone)]
 pub struct GenericType {
     pub params: SliceHandle<NameAndTypeId>,
     pub inner: TypeId,
@@ -369,12 +362,6 @@ pub struct LambdaObjectType {
 pub struct StaticType {
     pub inner_type_id: TypeId,
     pub value_id: Option<StaticValueId>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionValue {
-    pub function_id: FunctionId,
-    pub function_type: TypeId,
 }
 
 // To shrink this, we'd

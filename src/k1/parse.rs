@@ -3962,13 +3962,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedBlock { stmts, kind, span }))
     }
 
-    fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParam> {
-        // fn foo[T: Into[bool] and Into[Baz], U: Into[int]]
-        //        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        //           ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^
-        //           constraints
-        let name_token = self.expect_eat_token(K::Ident)?;
-        let name = self.intern_ident_token(name_token);
+    fn parse_type_constraints(&mut self) -> ParseResult<EcoVec<ParsedTypeConstraintExpr>> {
         let mut constraints = eco_vec![];
         if self.maybe_consume_next(K::Colon).is_some() {
             loop {
@@ -3980,6 +3974,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
         }
+        Ok(constraints)
+    }
+
+    fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParam> {
+        // fn foo[T: Into[bool] and Into[Baz], U: Into[int]]
+        //        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //           ^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^
+        //           constraints
+        let name_token = self.expect_eat_token(K::Ident)?;
+        let name = self.intern_ident_token(name_token);
+        let constraints = self.parse_type_constraints()?;
         let span = self.extend_to_here(name_token.span);
         Ok(ParsedTypeParam { name, span, constraints })
     }
@@ -4157,13 +4162,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let is_impl_param = p.maybe_consume_next(K::KeywordImpl).is_some();
             let name_token = p.expect_eat_token(K::Ident)?;
             let name = p.intern_ident_token(name_token);
-            // nocommit(0) The parser only supports one type constraint for now
-            let constraints = if p.maybe_consume_next(K::Colon).is_some() {
-                let constraint = p.expect_type_constraint_expr()?;
-                eco_vec![constraint]
-            } else {
-                eco_vec![]
-            };
+            let constraints = p.parse_type_constraints()?;
             let span = p.extend_span(start, name_token.span);
             Ok(ParsedAbilityParameter { name, is_impl_param, constraints, span })
         }
@@ -4668,7 +4667,7 @@ impl ParsedProgram {
                 w.write_str("]")
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                write!(w, "{}", parsed_literal);
+                write!(w, "{}", parsed_literal)?;
                 Ok(())
             }
         }

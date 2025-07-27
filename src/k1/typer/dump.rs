@@ -38,6 +38,8 @@ impl Display for TypedProgram {
             self.display_scope(scope, f)?;
             f.write_str("\n")?;
         }
+        f.write_str("--- Static Values ---\n")?;
+        self.dump_static_values(f)?;
         Ok(())
     }
 }
@@ -1268,6 +1270,15 @@ impl TypedProgram {
                 impls.len()
             )
             .unwrap();
+        }
+        Ok(())
+    }
+
+    pub fn dump_static_values(&self, w: &mut impl Write) -> std::fmt::Result {
+        for (id, _value) in self.static_values.iter_with_ids() {
+            write!(w, "{:04} ", id.as_u32())?;
+            self.display_static_value(w, id)?;
+            writeln!(w)?;
         }
         Ok(())
     }
