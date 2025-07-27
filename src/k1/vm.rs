@@ -914,7 +914,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     lambda_object.set_type_id(lambda_object_type);
                     Ok(lambda_object.into())
                 }
-                CastType::ToNever => Ok(VmResult::Value(base_value)),
+                CastType::Transmute => Ok(VmResult::Value(base_value)),
                 CastType::StaticErase => Ok(VmResult::Value(base_value)),
             }
         }

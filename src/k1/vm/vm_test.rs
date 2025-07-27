@@ -172,7 +172,7 @@ mod stack_tests {
         let v1_locn = gep_struct_field(&types, struct_type, struct_ptr, 0);
         let v1_offset = v1_locn.addr() - stack.base_addr();
         assert_eq!(v1_offset, 4);
-        assert_eq!(unsafe { (v1_locn as *const u8).read() }, 42);
+        assert_eq!(unsafe { v1_locn.read() }, 42);
 
         let v2_locn = gep_struct_field(&types, struct_type, struct_ptr, 1);
         let v2_offset = v2_locn.addr() - stack.base_addr();

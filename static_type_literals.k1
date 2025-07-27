@@ -1,6 +1,4 @@
 fn makeByteArray[N: static uword](): Array[N x uword] {
-  // nocommit(0): Have to debug why #statics with a type hint register as
-  //              'never' only in generic pass!
   let x = (#static "hi"): "hi";
   crash("unimplemented");
 }

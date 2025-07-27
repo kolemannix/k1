@@ -38,8 +38,8 @@ use crate::SV8;
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
-use crate::pool::Pool;
 use crate::typer::scopes::ScopeId;
+use crate::typer::static_value::StaticValuePool;
 use crate::typer::types::{
     BOOL_TYPE_ID, BUFFER_DATA_FIELD_NAME, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID,
     I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
@@ -2575,8 +2575,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(lam_obj_ptr.as_basic_value_enum().into())
             }
-            CastType::ToNever => {
-                self.k1.ice_with_span("Cast ToNever unsupported by codegen", cast.span)
+            CastType::Transmute => {
+                self.k1.ice_with_span("Cast Transmute unsupported by codegen", cast.span)
             }
         }
     }
@@ -4098,10 +4098,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 /// If false, we represent it as a call to a function that builds up
 /// the struct or enum or buffer using 'runtime' code, albeit entirely
 /// compile-time known, so it gets massively optimized
-fn is_llvm_const_representable(
-    static_values: &Pool<StaticValue, StaticValueId>,
-    id: StaticValueId,
-) -> bool {
+fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueId) -> bool {
     match static_values.get(id) {
         StaticValue::Unit => true,
         StaticValue::Boolean(_) => true,
