@@ -108,7 +108,7 @@ fn main(): i32 {
 
    let context alloc: mem/SystemHeap = {};
    // TODO: Use context values to aid inference :O
-   mem/allocate(8, 8);
+   mem/allocate[mem/SystemHeap](8, 8);
    println("debug? {debug}");
    {
      let b = myFilledIn[int](size = 5, value = 42);

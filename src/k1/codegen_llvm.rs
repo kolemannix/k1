@@ -3179,6 +3179,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
+            IntrinsicOperation::ArrayGetElementPtr => {
+                todo!("llvm array gep")
+            }
             _ => panic!("Unexpected inline intrinsic {:?}", intrinsic_type),
         }
     }

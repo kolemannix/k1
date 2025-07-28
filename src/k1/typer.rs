@@ -40,8 +40,8 @@ use crate::parse::{
     self, FileId, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId,
     NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
     ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedDirective, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedPattern, ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
     ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
     ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, Sources, StringId,
     StructValueField,
@@ -2100,6 +2100,9 @@ pub enum IntrinsicOperation {
     BakeStaticValue,
     GetStaticValue,
     StaticTypeToValue,
+
+    // Array Functions
+    ArrayGetElementPtr,
 }
 
 impl IntrinsicOperation {
@@ -2131,6 +2134,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeSchema => false,
             IntrinsicOperation::EmitString => false,
             IntrinsicOperation::BakeStaticValue => false,
+            IntrinsicOperation::ArrayGetElementPtr => false,
         }
     }
 
@@ -2166,6 +2170,8 @@ impl IntrinsicOperation {
             IntrinsicOperation::GetStaticValue => true,
             IntrinsicOperation::BakeStaticValue => true,
             IntrinsicOperation::StaticTypeToValue => true,
+            // Array
+            IntrinsicOperation::ArrayGetElementPtr => true,
         }
     }
 }
@@ -3192,21 +3198,16 @@ impl TypedProgram {
                     }
                 };
 
-                let Some(static_type_id) = self.types.get_static_type_of_type(size_type_id) else {
+                let Some(static_type) = self.types.get_static_type_of_type(size_type_id) else {
                     return failf!(arr.span, "Array size must be a static type");
                 };
-                match self.types.get_no_follow_static(static_type_id) {
-                    Type::Static(static_type) => {
-                        if static_type.inner_type_id != UWORD_TYPE_ID {
-                            return failf!(
-                                arr.span,
-                                "Array size must be a uword; got {}",
-                                self.type_id_to_string(static_type.inner_type_id)
-                            );
-                        }
-                    }
-                    _ => unreachable!(),
-                };
+                if static_type.inner_type_id != UWORD_TYPE_ID {
+                    return failf!(
+                        arr.span,
+                        "Array size must be a uword; got {}",
+                        self.type_id_to_string(static_type.inner_type_id)
+                    );
+                }
                 let concrete_size = self.get_concrete_size_of_array(size_type_id);
 
                 let array_type =
@@ -4543,15 +4544,16 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> CheckExprTypeResult {
         let actual_type_id = self.exprs.get(expr).get_type();
-        // Expected Buffer[Buffer['2]] but got static[Buffer[Buffer[iword]]
+
         if let Err(msg) = self.check_types(expected, actual_type_id, scope_id) {
             let result = match (
                 self.types.get_no_follow_static(expected),
-                self.types.get_no_follow_static(actual_type_id),
+                self.types.get_static_type_of_type(actual_type_id),
             ) {
-                // If the type inside this static would pass muster under the 'expected type',
-                // Erase the static
-                (_, Type::Static(actual_static))
+                // If we failed typechecking, and passed a static, then see
+                // whether the type inside this static would pass muster under the 'expected type',
+                // If so, erase the static
+                (_, Some(actual_static))
                     if self
                         .check_types(expected, actual_static.inner_type_id, scope_id)
                         .is_ok() =>
@@ -4560,9 +4562,12 @@ impl TypedProgram {
                         expr,
                         expected,
                         CastType::StaticErase,
+                        None,
                     ))
                 }
-                (Type::Static(expected_static), actual) if actual.as_static().is_none() => {
+                // If we failed typechecking, and we expected a static, and we passed a non-static
+                // Try to lift it
+                (Type::Static(expected_static), None) => {
                     if expected_static.inner_type_id == actual_type_id {
                         if let Ok(static_lifted) = self.attempt_static_lift(expr) {
                             CheckExprTypeResult::Coerce(static_lifted)
@@ -4655,8 +4660,8 @@ impl TypedProgram {
             self.type_id_to_string(expected).blue(),
         );
 
-        let expected = self.types.get_static_type_of_type(expected).unwrap_or(expected);
-        let actual = self.types.get_static_type_of_type(actual).unwrap_or(actual);
+        let expected = self.types.get_static_type_id_of_type(expected).unwrap_or(expected);
+        let actual = self.types.get_static_type_id_of_type(actual).unwrap_or(actual);
 
         debug!(
             "typecheck resolved: {} <: {}",
@@ -4814,8 +4819,8 @@ impl TypedProgram {
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
-                self.type_id_to_string_ext(expected, true),
-                self.type_id_to_string_ext(actual, true),
+                self.type_id_to_string_ext(expected, false),
+                self.type_id_to_string_ext(actual, false),
             )),
         }
     }
@@ -4910,7 +4915,7 @@ impl TypedProgram {
             // is to represent the types of expressions that never yield a value, and code
             // whose value we never insert into the program fits that description perfectly,
             // better than Unit
-            self.synth_cast(expr_original, NEVER_TYPE_ID, CastType::Transmute)
+            self.synth_cast(expr_original, NEVER_TYPE_ID, CastType::Transmute, None)
         } else {
             expr_original
         };
@@ -6012,7 +6017,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         is_assignment_lhs: bool,
     ) -> TyperResult<TypedExprId> {
-        // Bailout case: Enum Constructor
+        // Special case: Enum Constructor
         let span = field_access.span;
         let base_span = self.ast.exprs.get_span(field_access.base);
         if let Some(enum_result) = self.handle_enum_constructor(
@@ -6026,12 +6031,12 @@ impl TypedProgram {
             return Ok(enum_result);
         }
 
-        // Bailout case: .* dereference operation
+        // Special case: .* dereference operation
         if field_access.field_name == self.ast.idents.builtins.asterisk {
             return self.eval_dereference(field_access.base, ctx, span);
         }
 
-        // Bailout case: .! unwrap operation
+        // Special case: .! unwrap operation
         if field_access.field_name == self.ast.idents.builtins.bang {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with unwrap operator");
@@ -6045,7 +6050,7 @@ impl TypedProgram {
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
-        // Bailout case: .try unwrap operation
+        // Special case: .try unwrap operation
         if field_access.field_name == self.ast.idents.builtins.try_ {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with try operator");
@@ -6062,10 +6067,45 @@ impl TypedProgram {
         let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get(base_expr).get_type();
 
+        // Optional fork case: Array accesses
+        // - array.4
+        // - array.4*
+        // - list.3
+        // - list.
+        // - array.get()
+        if let Type::Array(array_type) = self.types.get_type_dereferenced(base_expr_type) {
+            if field_access.is_coalescing {
+                return failf!(field_access.span, "TODO: support coalesce for Array.len");
+            }
+            if is_assignment_lhs {
+                return failf!(field_access.span, "Cannot assign to Array.len");
+            }
+            let array_length = match array_type.concrete_size {
+                None => {
+                    // We have some generic Array type like arr: Array[N, T] where N is a type
+                    // parameter
+                    // And someone called arr.len. The value does not matter as it will never
+                    // be seen at runtime, or even compile-time since we don't execute during
+                    // the 'generic' pass. So we just provide a validly-typed value of type 'N'.
+                    // We do it with a transmute cast
+                    let unit = self.exprs.add(TypedExpr::Unit(span));
+                    self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
+                }
+                Some(s) => self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+                    value: match self.target_word_size() {
+                        WordSize::W32 => TypedIntValue::UWord32(s as u32),
+                        WordSize::W64 => TypedIntValue::UWord64(s),
+                    },
+                    span,
+                })),
+            };
+            return Ok(array_length);
+        }
+
         // Optional fork case: .tag enum special accessor
         if field_access.field_name == self.ast.idents.builtins.tag {
             if field_access.is_coalescing {
-                return failf!(field_access.span, "TODO: tag access on nullish values");
+                return failf!(field_access.span, "TODO: support coalesce for .tag");
             }
             if is_assignment_lhs {
                 return failf!(field_access.span, "Cannot assign to tag");
@@ -6614,96 +6654,7 @@ impl TypedProgram {
         let expr = self.ast.exprs.get(expr_id);
         match expr {
             ParsedExpr::ListLiteral(list_expr) => {
-                let expected_element_type: Option<TypeId> = match &ctx.expected_type_id {
-                    Some(type_id) => match self.types.get(*type_id).as_list_instance() {
-                        Some(arr) => Ok(Some(arr.element_type)),
-                        None => Ok(None),
-                    },
-                    None => Ok(None),
-                }?;
-                let span = list_expr.span;
-                let parsed_elements = list_expr.elements.clone();
-                let element_count = parsed_elements.len();
-
-                let mut list_lit_block = self.synth_block(ctx.scope_id, span);
-                list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
-                let list_lit_scope = list_lit_block.scope_id;
-                let mut element_type = None;
-                let elements: Vec<TypedExprId> = {
-                    let mut elements = Vec::with_capacity(element_count);
-                    for elem in parsed_elements.iter() {
-                        let element_expr = self.eval_expr(
-                            *elem,
-                            ctx.with_expected_type(element_type.or(expected_element_type)),
-                        )?;
-                        let this_element_type = self.exprs.get(element_expr).get_type();
-                        if element_type.is_none() {
-                            element_type = Some(this_element_type)
-                        } else if let Err(msg) = self.check_types(
-                            element_type.unwrap(),
-                            this_element_type,
-                            list_lit_scope,
-                        ) {
-                            return failf!(span, "List element had incorrect type: {msg}");
-                        };
-                        elements.push(element_expr);
-                    }
-                    elements
-                };
-                // Note: Typing of list literals is very suspicious, I'm not sure how to type it when there
-                //        are no elements, I don't have an 'Unknown' type but maybe that's the
-                //        ticket.
-                //
-                //        Trying is_inference here to use UNIT or fail.
-                //        Failing during inference is like producing a type hole
-                //        But if I report UNIT during inference we won't keep searching
-                //        for a 'real' solution, yaknow?
-                let element_type = match element_type.or(expected_element_type) {
-                    Some(et) => et,
-                    None => {
-                        if ctx.is_inference {
-                            return failf!(
-                                span,
-                                "Not enough information to determine empty list type"
-                            );
-                        } else {
-                            UNIT_TYPE_ID
-                        }
-                    }
-                };
-                let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-                let count_expr = self.synth_uword(element_count, span);
-                let list_new_fn_call = self.synth_typed_function_call(
-                    qident!(self, span, ["List"], "withCapacity"),
-                    &[element_type],
-                    &[count_expr],
-                    list_lit_ctx,
-                )?;
-                let list_variable = self.synth_variable_defn(
-                    get_ident!(self, "list_literal"),
-                    list_new_fn_call,
-                    false,
-                    false,
-                    true,
-                    list_lit_scope,
-                );
-                let mut set_elements = Vec::with_capacity(element_count);
-                for element_value_expr in elements.into_iter() {
-                    let push_call = self.synth_typed_function_call(
-                        qident!(self, span, ["List"], "push"),
-                        &[element_type],
-                        &[list_variable.variable_expr, element_value_expr],
-                        list_lit_ctx,
-                    )?;
-                    let type_id = self.exprs.get(push_call).get_type();
-                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-                    set_elements.push(push_stmt);
-                }
-                self.push_block_stmt_id(&mut list_lit_block, list_variable.defn_stmt);
-                list_lit_block.statements.extend(set_elements);
-                let dereference_list_literal = self.synth_dereference(list_variable.variable_expr);
-                self.add_expr_id_to_block(&mut list_lit_block, dereference_list_literal);
-                Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
+                self.eval_list_literal(expr_id, &list_expr.clone(), ctx)
             }
             ParsedExpr::Struct(_ast_struct) => {
                 if let Some(expected_type) = ctx.expected_type_id {
@@ -6927,6 +6878,132 @@ impl TypedProgram {
                     ctx,
                     Some(Callee::from_ability_impl_fn(impl_function)),
                 )
+            }
+        }
+    }
+
+    fn eval_list_literal(
+        &mut self,
+        _expr_id: ParsedExprId,
+        list_expr: &ParsedList,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        // List literals can become Arrays, Buffers, or Lists, depending on what is expected
+        enum ListKind {
+            Array,
+            Buffer,
+            List,
+        }
+        let (expected_element_type, list_kind) = match &ctx.expected_type_id {
+            Some(type_id) => match self.types.get(*type_id) {
+                s @ Type::Struct(_) if s.as_list_instance().is_some() => {
+                    (Some(s.as_list_instance().unwrap().element_type), ListKind::List)
+                }
+                s @ Type::Struct(_) if s.as_buffer_instance().is_some() => {
+                    (Some(s.as_buffer_instance().unwrap().generic_parent), ListKind::Buffer)
+                }
+                Type::Array(array_type) => (Some(array_type.element_type), ListKind::Array),
+                _ => (None, ListKind::List),
+            },
+            None => (None, ListKind::List),
+        };
+        let span = list_expr.span;
+        match &list_expr.elements {
+            parse::ListElements::Filled { element_expr, count_expr } => {
+                let element =
+                    self.eval_expr(*element_expr, ctx.with_expected_type(expected_element_type))?;
+                let element_type = self.exprs.get(element).get_type();
+                let count =
+                    self.eval_expr(*count_expr, ctx.with_expected_type(Some(UWORD_TYPE_ID)))?;
+                match list_kind {
+                    ListKind::Array => todo!(),
+                    ListKind::Buffer => todo!(),
+                    ListKind::List => self.synth_typed_function_call(
+                        qident!(self, span, ["List"], "filledIn"),
+                        &[element_type],
+                        &[count, element],
+                        ctx,
+                    ),
+                }
+            }
+            parse::ListElements::Listed { elements: parsed_elements } => {
+                let element_count = parsed_elements.len();
+
+                let mut list_lit_block = self.synth_block(ctx.scope_id, span);
+                list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
+                let list_lit_scope = list_lit_block.scope_id;
+                let mut element_type = None;
+                let elements: Vec<TypedExprId> = {
+                    let mut elements = Vec::with_capacity(element_count);
+                    for elem in parsed_elements.iter() {
+                        let element_expr = self.eval_expr(
+                            *elem,
+                            ctx.with_expected_type(element_type.or(expected_element_type)),
+                        )?;
+                        let this_element_type = self.exprs.get(element_expr).get_type();
+                        if element_type.is_none() {
+                            element_type = Some(this_element_type)
+                        } else if let Err(msg) = self.check_types(
+                            element_type.unwrap(),
+                            this_element_type,
+                            list_lit_scope,
+                        ) {
+                            return failf!(span, "List element had incorrect type: {msg}");
+                        };
+                        elements.push(element_expr);
+                    }
+                    elements
+                };
+                // Note: Typing of empty list literals with no expected type is tricky
+                //        We use is_inference here to use UNIT or fail.
+                //        If I report UNIT during inference it leads to incorrect failures
+                //        Failing during inference is like producing a type hole
+                let element_type = match element_type.or(expected_element_type) {
+                    Some(et) => et,
+                    None => {
+                        if ctx.is_inference {
+                            return failf!(
+                                span,
+                                "Not enough information to determine empty list type"
+                            );
+                        } else {
+                            UNIT_TYPE_ID
+                        }
+                    }
+                };
+                let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
+                let count_expr = self.synth_uword(element_count, span);
+                let list_new_fn_call = self.synth_typed_function_call(
+                    qident!(self, span, ["List"], "withCapacity"),
+                    &[element_type],
+                    &[count_expr],
+                    list_lit_ctx,
+                )?;
+                let list_variable = self.synth_variable_defn(
+                    get_ident!(self, "list_literal"),
+                    list_new_fn_call,
+                    false,
+                    false,
+                    true,
+                    list_lit_scope,
+                );
+                let mut set_elements_statements = Vec::with_capacity(element_count);
+                for element_value_expr in elements.into_iter() {
+                    let push_call = self.synth_typed_function_call(
+                        qident!(self, span, ["List"], "push"),
+                        &[element_type],
+                        &[list_variable.variable_expr, element_value_expr],
+                        list_lit_ctx,
+                    )?;
+                    let type_id = self.exprs.get(push_call).get_type();
+                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
+                    set_elements_statements.push(push_stmt);
+                }
+                self.push_block_stmt_id(&mut list_lit_block, list_variable.defn_stmt);
+                list_lit_block.statements.extend(set_elements_statements);
+                let dereference_list_literal = self.synth_dereference(list_variable.variable_expr);
+                self.add_expr_id_to_block(&mut list_lit_block, dereference_list_literal);
+                Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
             }
         }
     }
@@ -7775,6 +7852,7 @@ impl TypedProgram {
             environment_param_access_expr,
             environment_struct_reference_type,
             CastType::PointerToReference,
+            None,
         );
         let environment_casted_variable = self.synth_variable_defn(
             self.ast.idents.builtins.env,
@@ -9745,19 +9823,18 @@ impl TypedProgram {
             } else if fn_name == self.ast.idents.builtins.fromStatic {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type_id = self.exprs.get(base_value).get_type();
-                let Some(static_type_id) = self.types.get_static_type_of_type(base_type_id) else {
+                let Some(static_type) = self.types.get_static_type_of_type(base_type_id) else {
                     return failf!(
                         call_span,
                         "Cannot use .fromStatic() on non-static type: {}",
                         self.type_id_to_string(base_type_id)
                     );
                 };
-                let static_type =
-                    self.types.get_no_follow_static(static_type_id).as_static().unwrap();
                 return Ok(Either::Left(self.synth_cast(
                     base_value,
                     static_type.inner_type_id,
                     CastType::StaticErase,
+                    Some(call_span),
                 )));
             }
         }
@@ -9778,8 +9855,24 @@ impl TypedProgram {
         let base_for_method_derefed = match self.types.get_no_follow_static(base_expr_type) {
             Type::Reference(r) => r.inner_type,
             Type::Static(stat) => stat.inner_type_id,
+            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                self.types
+                    .get_no_follow_static(tp.static_constraint.unwrap())
+                    .as_static()
+                    .unwrap()
+                    .inner_type_id
+            }
             _ => base_expr_type,
         };
+
+        if let Type::Array(_array_type) = self.types.get(base_for_method_derefed) {
+            // Handle Array methods
+            let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
+            if let Some(method_id) = array_scope.find_function(fn_name) {
+                return Ok(Either::Right(Callee::make_static(method_id)));
+            }
+        }
+
         if let Some(companion_ns) =
             self.types.get_defn_info(base_for_method_derefed).and_then(|d| d.companion_namespace)
         {
@@ -11043,6 +11136,11 @@ impl TypedProgram {
         self.scopes.k1_scope_id
     }
 
+    pub fn get_array_scope_id(&self) -> ScopeId {
+        debug_assert_ne!(self.scopes.array_scope_id, ScopeId::PENDING);
+        self.scopes.array_scope_id
+    }
+
     fn substitute_in_function_signature(
         &mut self,
         // Must 'zip' up with each type param
@@ -11728,6 +11826,10 @@ impl TypedProgram {
                     "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
                     _ => None,
                 },
+                Some("Array") => match fn_name_str {
+                    "getElementPtr" => Some(IntrinsicOperation::ArrayGetElementPtr),
+                    _ => None,
+                },
                 Some("meta") => match fn_name_str {
                     "emit" => Some(IntrinsicOperation::EmitString),
                     "bakeStaticValue" => Some(IntrinsicOperation::BakeStaticValue),
@@ -11833,7 +11935,12 @@ impl TypedProgram {
                         "casted enum constructor to its enum type: {}",
                         self.type_id_to_string(concrete_enum_type)
                     );
-                    self.synth_cast(enum_constructor, concrete_enum_type, CastType::VariantToEnum)
+                    self.synth_cast(
+                        enum_constructor,
+                        concrete_enum_type,
+                        CastType::VariantToEnum,
+                        None,
+                    )
                 }
             }
         };
@@ -13537,6 +13644,11 @@ impl TypedProgram {
             parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.types;
         if is_types {
             self.scopes.types_scope_id = ns_scope_id;
+        }
+        let is_array =
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.Array;
+        if is_array {
+            self.scopes.array_scope_id = ns_scope_id;
         }
 
         let namespace = Namespace {

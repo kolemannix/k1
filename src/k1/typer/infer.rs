@@ -275,7 +275,8 @@ impl TypedProgram {
                 self.type_id_to_string(solution_type_id),
                 self.type_id_to_string(static_type),
             );
-            let Some(solution_static_type) = self.types.get_static_type_of_type(solution_type_id)
+            let Some(solution_static_type) =
+                self.types.get_static_type_id_of_type(solution_type_id)
             else {
                 error!("The solution was not a static type; this is probably crashworthy");
                 return Ok(());
@@ -1035,6 +1036,21 @@ impl TypedProgram {
                     slot_type,
                     type_param_enabled,
                 ),
+            (Type::Array(passed_array), Type::Array(slot_array)) => {
+                self.unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_array.size_type,
+                    slot_array.size_type,
+                    type_param_enabled,
+                );
+                self.unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_array.element_type,
+                    slot_array.element_type,
+                    type_param_enabled,
+                );
+                TypeUnificationResult::Matching
+            }
             (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
                 if let Some(passed_function_type) =
                     self.extract_function_type_from_functionlike(passed)

@@ -1,10 +1,28 @@
-fn xmakeByteArray[N: static uword](): Array[N x uword] {
-  let a: 1 = 1.toStatic();
-  let hello: 'c' = 'c'.toStatic();
-  crash("unimplemented")
+fn bufferFromArray[N: static uword, T](array: Array[N x T]): Buffer[T] {
+  let base = array.getBase();
+  let l = array.len;
+  Buffer/fromBaseAndCount(l, array.getBase()).cloned()
+}
+
+fn listToArray[N: static uword, T](list: List[T], count: N): Array[N x T]* {
+  let countVal = count.fromStatic();
+  assertEquals(list.len, countVal);
+  let base: T* = list.getRef(0);
+  base as Array[N x T]*
 }
 
 fn main(): i32 {
+  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
+  let ls: List[int] = [10 x 50];
+  let fifty = (50: uword).toStatic();
+  let a: Array[50 x int]* = listToArray(ls, fifty);
+  // a.50*
+  // a.3
+  for core/IntRange/upTo(fifty.fromStatic() as int) do {
+    // dereferencing the array shouldn't copy the whole thing, I hope
+    // get should accept the pointer maybe?
+    printIt(a.get(it as uword));
+  };
 
   0
 }
