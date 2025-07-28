@@ -1157,7 +1157,7 @@ impl Types {
     /// The two types of types that we need to treat as 'static' types are Static types themselves
     /// and type parameters with a constraint to a specific static, which is basically the same
     /// thing since it can have no other constraints
-    pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<TypeId> {
+    pub fn get_static_type_id_of_type(&self, type_id: TypeId) -> Option<TypeId> {
         match self.get_no_follow_static(type_id) {
             Type::Static(_st) => Some(type_id),
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
@@ -1166,6 +1166,13 @@ impl Types {
                 Some(t)
             }
             _ => None,
+        }
+    }
+
+    pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<StaticType> {
+        match self.get_static_type_id_of_type(type_id) {
+            None => None,
+            Some(type_id) => Some(*self.get_no_follow_static(type_id).as_static().unwrap()),
         }
     }
 

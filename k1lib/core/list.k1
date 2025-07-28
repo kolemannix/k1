@@ -21,6 +21,11 @@ ns List {
     { len: size, buffer: buffer }
   }
 
+  fn filledIn[T](context mode: mem/AllocMode)(size: uword, value: T): List[T] {
+    let buffer = Buffer/filledIn(size, value);
+    { len: size, buffer: buffer }
+  }
+
   fn withCapacity[T](cap: uword): List[T] {
     let buffer = Buffer/_allocate[T](cap);
     { len: 0, buffer: buffer }

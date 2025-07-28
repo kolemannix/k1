@@ -134,8 +134,12 @@ ns meta {
 
 }
 
+ns Array {
+  intern fn getElementPtr[N: static uword, T](array: Array[N x T], n: uword): T*
+}
+
 ////////////////////////////////
-// Builtin Abilities
+// Built-in Abilities
 
 // Equals must have ability id 0
 ability Equals {

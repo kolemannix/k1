@@ -79,8 +79,9 @@ impl TypedProgram {
         expr: TypedExprId,
         target_type: TypeId,
         cast_type: CastType,
+        span: Option<SpanId>,
     ) -> TypedExprId {
-        let span = self.exprs.get(expr).get_span();
+        let span = span.unwrap_or_else(|| self.exprs.get(expr).get_span());
         self.exprs.add(TypedExpr::Cast(TypedCast {
             cast_type,
             base_expr: expr,
@@ -110,7 +111,8 @@ impl TypedProgram {
             span,
             payload: Some(expr_id),
         }));
-        let casted = self.synth_cast(some_expr, some_variant.enum_type_id, CastType::VariantToEnum);
+        let casted =
+            self.synth_cast(some_expr, some_variant.enum_type_id, CastType::VariantToEnum, None);
         (casted, optional_type)
     }
 
@@ -128,7 +130,8 @@ impl TypedProgram {
             span,
             payload: None,
         }));
-        let casted = self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum);
+        let casted =
+            self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum, None);
         casted
     }
 

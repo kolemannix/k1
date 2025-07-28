@@ -183,8 +183,14 @@ impl ParsedId {
 }
 
 #[derive(Debug, Clone)]
-pub struct ListExpr {
-    pub elements: EcoVec<ParsedExprId>,
+pub enum ListElements {
+    Filled { element_expr: ParsedExprId, count_expr: ParsedExprId },
+    Listed { elements: EcoVec<ParsedExprId> },
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedList {
+    pub elements: ListElements,
     pub span: SpanId,
 }
 
@@ -322,6 +328,7 @@ pub struct BuiltinIdentifiers {
     pub char: Ident,
     pub string: Ident,
     pub length: Ident,
+    pub len: Ident,
     pub has_value: Ident,
     pub get: Ident,
     pub not: Ident,
@@ -367,6 +374,7 @@ pub struct BuiltinIdentifiers {
     pub IntKind: Ident,
     pub IntValue: Ident,
     pub Layout: Ident,
+    pub Array: Ident,
     pub param_0: Ident,
     pub param_1: Ident,
     pub param_2: Ident,
@@ -410,6 +418,7 @@ impl Default for Identifiers {
         let char = Ident(pool.get_or_intern_static("char"));
         let string = Ident(pool.get_or_intern_static("string"));
         let length = Ident(pool.get_or_intern_static("length"));
+        let len = Ident(pool.get_or_intern_static("len"));
         let has_value = Ident(pool.get_or_intern_static("hasValue"));
         let get = Ident(pool.get_or_intern_static("get"));
         let not = Ident(pool.get_or_intern_static("not"));
@@ -455,6 +464,7 @@ impl Default for Identifiers {
         let IntKind = Ident(pool.get_or_intern_static("IntKind"));
         let IntValue = Ident(pool.get_or_intern_static("IntValue"));
         let Layout = Ident(pool.get_or_intern_static("Layout"));
+        let Array = Ident(pool.get_or_intern_static("Array"));
 
         let param_0 = Ident(pool.get_or_intern_static("param_0"));
         let param_1 = Ident(pool.get_or_intern_static("param_1"));
@@ -477,6 +487,7 @@ impl Default for Identifiers {
                 char,
                 string,
                 length,
+                len,
                 has_value,
                 get,
                 not,
@@ -522,6 +533,7 @@ impl Default for Identifiers {
                 IntKind,
                 IntValue,
                 Layout,
+                Array,
                 param_0,
                 param_1,
                 param_2,
@@ -863,7 +875,7 @@ pub enum ParsedExpr {
     /// ```md
     /// [<expr>, <expr>, <expr>]
     /// ```
-    ListLiteral(ListExpr),
+    ListLiteral(ParsedList),
     /// ```md
     /// for <ident> in <coll: expr> do <body: expr>
     /// ```
@@ -3485,18 +3497,53 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
             Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
         } else if first.kind == K::OpenBracket {
-            // list
-            let start = self.expect_eat_token(K::OpenBracket)?;
-            let mut elements = eco_vec![];
-            let (elements_span, _terminator) = self.eat_delimited_ext(
-                "list elements",
-                &mut elements,
-                TokenKind::Comma,
-                &[TokenKind::CloseBracket],
-                |p| Parser::expect("expression", start, p.parse_expression()),
-            )?;
-            let span = self.extend_span(start.span, elements_span);
-            Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ListExpr { elements, span }))))
+            // List literal
+            // []
+            // [a,b,c]
+            // [a x 10]
+            self.advance();
+            let start = first;
+            if let Some(close) = self.maybe_consume_next(K::CloseBracket) {
+                let span = self.extend_span(start.span, close.span);
+                Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList {
+                    elements: ListElements::Listed { elements: eco_vec![] },
+                    span,
+                }))))
+            } else {
+                let first_element = self.expect_expression()?;
+                let next = self.peek();
+                let is_filled = next.kind == K::Ident && self.token_chars(next) == "x";
+                let list_elements = if is_filled {
+                    self.advance();
+                    let count = self.expect_expression()?;
+                    self.expect_eat_token(K::CloseBracket)?;
+                    ListElements::Filled { element_expr: first_element, count_expr: count }
+                } else if next.kind == K::CloseBracket {
+                    self.advance();
+                    ListElements::Listed { elements: eco_vec![] }
+                } else if next.kind == K::Comma {
+                    self.advance();
+                    let mut elements = eco_vec![first_element];
+                    let (_elements_span, _terminator) = self.eat_delimited_ext(
+                        "list elements",
+                        &mut elements,
+                        TokenKind::Comma,
+                        &[TokenKind::CloseBracket],
+                        |p| Parser::expect("expression", start, p.parse_expression()),
+                    )?;
+                    ListElements::Listed { elements }
+                } else {
+                    return Err(error_expected(
+                        "expression or comma or `x` after first list element",
+                        next,
+                    ));
+                };
+                let span = self.extend_to_here(start.span);
+                Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList {
+                    elements: list_elements,
+                    span,
+                }))))
+            }
         } else if first.kind == K::Hash {
             self.advance();
 
