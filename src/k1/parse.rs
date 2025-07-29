@@ -331,6 +331,7 @@ pub struct BuiltinIdentifiers {
     pub len: Ident,
     pub has_value: Ident,
     pub get: Ident,
+    pub getRef: Ident,
     pub not: Ident,
     pub iter: Ident,
     pub iteree: Ident,
@@ -421,6 +422,7 @@ impl Default for Identifiers {
         let len = Ident(pool.get_or_intern_static("len"));
         let has_value = Ident(pool.get_or_intern_static("hasValue"));
         let get = Ident(pool.get_or_intern_static("get"));
+        let getRef = Ident(pool.get_or_intern_static("getRef"));
         let not = Ident(pool.get_or_intern_static("not"));
         let iter = Ident(pool.get_or_intern_static("iter"));
         let iteree = Ident(pool.get_or_intern_static("iteree"));
@@ -490,6 +492,7 @@ impl Default for Identifiers {
                 len,
                 has_value,
                 get,
+                getRef,
                 not,
                 iter,
                 iteree,
@@ -3520,7 +3523,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ListElements::Filled { element_expr: first_element, count_expr: count }
                 } else if next.kind == K::CloseBracket {
                     self.advance();
-                    ListElements::Listed { elements: eco_vec![] }
+                    ListElements::Listed { elements: eco_vec![first_element] }
                 } else if next.kind == K::Comma {
                     self.advance();
                     let mut elements = eco_vec![first_element];

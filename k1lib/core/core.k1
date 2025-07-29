@@ -242,13 +242,13 @@ impl Show for char { fn show(self: char): string { self.toString() } }
 fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
   if value == 0 { w.writeChar('0'); return(()) }
   else if value < base {
-    let digit = u8/toAsciiDigit(value as u8);
+    let digit = u8/toAsciiDigitBase(value as u8, base);
     w.writeChar(digit);
   } else if value < (base * 2) {
     let first: uword = (value / base);
-    let firstDigit = u8/toAsciiDigit(first as u8);
+    let firstDigit = u8/toAsciiDigitBase(first as u8, base);
     let second: uword = value % base;
-    let secondDigit = u8/toAsciiDigit(second as u8);
+    let secondDigit = u8/toAsciiDigitBase(second as u8, base);
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
   } else {
@@ -257,7 +257,7 @@ fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
     let* digits = List/withCapacity[char](8);
     while remaining > 0 {
       let d = remaining % base;
-      let c = u8/toAsciiDigit(d as u8);
+      let c = u8/toAsciiDigitBase(d as u8, base);
       digits.push(c);
       remaining = remaining / base;
     };
@@ -278,7 +278,7 @@ impl Print for i64 {
 
 impl Print for u64 {
   fn printTo[W: Writer](self: u64, w: W*): unit {
-    formatUInt(context w)(self as uword, 10);
+    formatUInt(context w)(self as uword, base =10);
   }
 }
 
@@ -384,6 +384,17 @@ impl Comparable for u8 {
 }
 
 ns u8 {
+  fn toAsciiDigitBase(v: u8, base: uword): char {
+    if v < 10 {
+      (v + 48) as char // '0' + v
+    } else if v < 36 {
+      (v + 87) as char // 'a' + (v - 10)
+    } else if v < 62 {
+      (v + 29) as char // 'A' + (v - 36)
+    } else {
+      crash("u8/toAsciiDigitBase: value {v} is out of range for base {base}")
+    }
+  }
   fn toAsciiDigit(v: u8): char {
     (v + 48) as char
   }

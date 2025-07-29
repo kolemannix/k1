@@ -1093,6 +1093,17 @@ impl ArrayLiteral {
 }
 
 #[derive(Debug, Clone)]
+pub struct ArrayGetElement {
+    pub base: TypedExprId,
+    pub index: TypedExprId,
+    pub result_type: TypeId,
+    pub array_type: TypeId,
+    pub is_referencing: bool,
+    pub span: SpanId,
+}
+impl_copy_if_small!(24, ArrayGetElement);
+
+#[derive(Debug, Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub target_field: Ident,
@@ -1696,6 +1707,7 @@ pub enum TypedExpr {
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     Array(ArrayLiteral),
+    ArrayGetElement(ArrayGetElement),
     Variable(VariableExpr),
     UnaryOp(UnaryOp),
     BinaryOp(BinaryOp),
@@ -1759,6 +1771,7 @@ impl TypedExpr {
             TypedExpr::Struct(_) => "struct",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
             TypedExpr::Array(_) => "array_literal",
+            TypedExpr::ArrayGetElement(_) => "array_get_element",
             TypedExpr::Variable(_) => "variable",
             TypedExpr::UnaryOp(_) => "unary_op",
             TypedExpr::BinaryOp(_) => "binary_op",
@@ -1793,6 +1806,7 @@ impl TypedExpr {
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::Array(a) => a.type_id,
+            TypedExpr::ArrayGetElement(ag) => ag.result_type,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
@@ -1827,6 +1841,7 @@ impl TypedExpr {
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::Array(a) => a.span,
+            TypedExpr::ArrayGetElement(ag) => ag.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
@@ -6067,41 +6082,6 @@ impl TypedProgram {
         let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get(base_expr).get_type();
 
-        // Optional fork case: Array accesses
-        // - array.4
-        // - array.4*
-        // - list.3
-        // - list.
-        // - array.get()
-        if let Type::Array(array_type) = self.types.get_type_dereferenced(base_expr_type) {
-            if field_access.is_coalescing {
-                return failf!(field_access.span, "TODO: support coalesce for Array.len");
-            }
-            if is_assignment_lhs {
-                return failf!(field_access.span, "Cannot assign to Array.len");
-            }
-            let array_length = match array_type.concrete_size {
-                None => {
-                    // We have some generic Array type like arr: Array[N, T] where N is a type
-                    // parameter
-                    // And someone called arr.len. The value does not matter as it will never
-                    // be seen at runtime, or even compile-time since we don't execute during
-                    // the 'generic' pass. So we just provide a validly-typed value of type 'N'.
-                    // We do it with a transmute cast
-                    let unit = self.exprs.add(TypedExpr::Unit(span));
-                    self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
-                }
-                Some(s) => self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                    value: match self.target_word_size() {
-                        WordSize::W32 => TypedIntValue::UWord32(s as u32),
-                        WordSize::W64 => TypedIntValue::UWord64(s),
-                    },
-                    span,
-                })),
-            };
-            return Ok(array_length);
-        }
-
         // Optional fork case: .tag enum special accessor
         if field_access.field_name == self.ast.idents.builtins.tag {
             if field_access.is_coalescing {
@@ -9632,6 +9612,9 @@ impl TypedProgram {
         Ok(self.exprs.add(TypedExpr::Return(TypedReturn { value: return_value, span })))
     }
 
+    ////////////////////////////////////////
+    // Handling function calls and function-call lookalikes
+
     fn handle_builtin_function_call_lookalikes(
         &mut self,
         fn_call: &ParsedCall,
@@ -9740,18 +9723,101 @@ impl TypedProgram {
         }
     }
 
+    fn handle_array_method_call(
+        &mut self,
+        base: TypedExprId,
+        array_type_id: TypeId,
+        call: &ParsedCall,
+        ctx: EvalExprContext,
+    ) -> TyperResult<Either<TypedExprId, Callee>> {
+        let span = call.span;
+        let array_type = self.types.get(array_type_id).as_array().unwrap();
+        match call.name.name {
+            n if n == self.ast.idents.builtins.len => {
+                let array_length = match array_type.concrete_size {
+                    None => {
+                        // We have some generic Array type like arr: Array[N, T] where N is a type
+                        // parameter
+                        // And someone called arr.len. The value does not matter as it will never
+                        // be seen at runtime, or even compile-time since we don't execute during
+                        // the 'generic' pass. So we just provide a validly-typed value of type 'N'.
+                        // We do it with a transmute cast
+                        let unit = self.exprs.add(TypedExpr::Unit(span));
+                        self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
+                    }
+                    Some(s) => self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
+                        value: match self.target_word_size() {
+                            WordSize::W32 => TypedIntValue::UWord32(s as u32),
+                            WordSize::W64 => TypedIntValue::UWord64(s),
+                        },
+                        span,
+                    })),
+                };
+                Ok(Either::Left(array_length))
+            }
+            n if n == self.ast.idents.builtins.get || n == self.ast.idents.builtins.getRef => {
+                if call.args.len() != 2 {
+                    return failf!(span, "Array get takes 1 argument, the index");
+                }
+                let index_arg = self.ast.p_call_args.get_nth(call.args, 1);
+                let index_expr =
+                    self.eval_expr(index_arg.value, ctx.with_expected_type(Some(UWORD_TYPE_ID)))?;
+                let index_expr = match self.check_expr_type(UWORD_TYPE_ID, index_expr, ctx.scope_id)
+                {
+                    CheckExprTypeResult::Err(msg) => {
+                        return failf!(span, "Array get index type error: {}", msg);
+                    }
+                    CheckExprTypeResult::Coerce(new_expr) => new_expr,
+                    CheckExprTypeResult::Ok => index_expr,
+                };
+
+                let is_referencing = n == self.ast.idents.builtins.getRef;
+                if is_referencing
+                    && self.types.get(self.exprs.get(base).get_type()).as_reference().is_none()
+                {
+                    return failf!(
+                        span,
+                        "Cannot use .getRef() on this Array since it is not a reference: {}",
+                        self.type_id_to_string(self.exprs.get(base).get_type())
+                    );
+                }
+                let result_type = if is_referencing {
+                    self.types.add_reference_type(array_type.element_type)
+                } else {
+                    array_type.element_type
+                };
+                Ok(Either::Left(self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
+                    base,
+                    index: index_expr,
+                    result_type,
+                    array_type: array_type_id,
+                    is_referencing,
+                    span,
+                }))))
+            }
+            _ => {
+                let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
+                if let Some(method_id) = array_scope.find_function(call.name.name) {
+                    Ok(Either::Right(Callee::make_static(method_id)))
+                } else {
+                    failf!(span, "No such method on Array: {}", call.name.name)
+                }
+            }
+        }
+    }
+
     fn resolve_parsed_function_call_method(
         &mut self,
         base_expr: MaybeTypedExpr,
-        fn_call: &ParsedCall,
+        call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
     ) -> TyperResult<Either<TypedExprId, Callee>> {
-        debug_assert!(fn_call.name.namespaces.is_empty());
-        let fn_name = fn_call.name.name;
-        let call_span = fn_call.span;
+        debug_assert!(call.name.namespaces.is_empty());
+        let fn_name = call.name.name;
+        let call_span = call.span;
 
-        let args = self.ast.p_call_args.get_slice(fn_call.args);
+        let args = self.ast.p_call_args.get_slice(call.args);
         let first_arg = args.first().copied();
         let second_arg = args.get(1).copied();
 
@@ -9761,9 +9827,9 @@ impl TypedProgram {
                 Some(base_arg.value),
                 fn_name,
                 second_arg.map(|param| param.value),
-                fn_call.type_args,
+                call.type_args,
                 ctx,
-                fn_call.span,
+                call.span,
             )? {
                 return Ok(Either::Left(enum_constr));
             }
@@ -9810,7 +9876,7 @@ impl TypedProgram {
                     }
                 }
             } else if fn_name == self.ast.idents.builtins.toStatic {
-                if fn_call.args.len() != 1 {
+                if call.args.len() != 1 {
                     return failf!(call_span, ".toStatic() takes no additional arguments");
                 }
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
@@ -9847,7 +9913,7 @@ impl TypedProgram {
         };
 
         // Handle the special case of the synthesized enum 'as{Variant}' methods
-        if let Some(enum_as_result) = self.handle_enum_as(base_expr, fn_call)? {
+        if let Some(enum_as_result) = self.handle_enum_as(base_expr, call)? {
             return Ok(Either::Left(enum_as_result));
         }
 
@@ -9866,11 +9932,7 @@ impl TypedProgram {
         };
 
         if let Type::Array(_array_type) = self.types.get(base_for_method_derefed) {
-            // Handle Array methods
-            let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
-            if let Some(method_id) = array_scope.find_function(fn_name) {
-                return Ok(Either::Right(Callee::make_static(method_id)));
-            }
+            return self.handle_array_method_call(base_expr, base_for_method_derefed, call, ctx);
         }
 
         if let Some(companion_ns) =
@@ -9900,7 +9962,7 @@ impl TypedProgram {
             return failf!(
                 call_span,
                 "Method '{}' does not exist on type: '{}'",
-                self.ident_str(fn_call.name.name),
+                self.ident_str(call.name.name),
                 self.type_id_to_string(base_expr_type),
             );
         };
@@ -9910,7 +9972,7 @@ impl TypedProgram {
             ability_function_type,
             ability_function_index,
             ability_id,
-            fn_call,
+            call,
             known_args,
             ctx,
         )?;
@@ -10878,6 +10940,9 @@ impl TypedProgram {
             Ok(self.exprs.add(TypedExpr::Call(call)))
         }
     }
+
+    ////////////////////////////////
+    // End of handling function calls
 
     fn attempt_static_lift(&mut self, expr_id: TypedExprId) -> TyperResult<TypedExprId> {
         // Take an arbitrary expression and do our very best to turn it into a statically-known
@@ -13869,9 +13934,9 @@ impl TypedProgram {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
         }
 
-        let mut s = String::new();
-        self.dump_static_values(&mut s).unwrap();
-        eprintln!("{s}");
+        // let mut s = String::new();
+        // self.dump_static_values(&mut s).unwrap();
+        // eprintln!("{s}");
 
         Ok(module_id)
     }

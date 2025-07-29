@@ -8,8 +8,8 @@ deftype Arena = {
   maxAddr: uword
 }
 ns Arena {
-  let mb: uword = 0x100000;
-  let gb: uword = 0x40000000;
+  let mb: uword = 1048576;
+  let gb: uword = 1073741824;
 
   fn regionSizeBytes(self: Arena): uword {
     self.maxAddr - (self.basePtr as uword)
@@ -47,7 +47,7 @@ ns Arena {
     let dataStart = alignTo(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
-      crash("Arena is out of space to allocate {size} bytes.")
+      crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
 
     self.curAddr* <- newEnd;

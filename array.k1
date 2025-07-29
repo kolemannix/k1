@@ -1,28 +1,44 @@
-fn bufferFromArray[N: static uword, T](array: Array[N x T]): Buffer[T] {
+fn bufferFromArray[N: static uword, T](array: Array[N x T]*): Buffer[T] {
   let base = array.getBase();
-  let l = array.len;
+  let l = array.len();
   Buffer/fromBaseAndCount(l, array.getBase()).cloned()
 }
 
 fn listToArray[N: static uword, T](list: List[T], count: N): Array[N x T]* {
   let countVal = count.fromStatic();
   assertEquals(list.len, countVal);
-  let base: T* = list.getRef(0);
+  let base: Pointer = list.toBuffer().cloned().dataPointer();
   base as Array[N x T]*
 }
 
+deftype Thing = {
+  data: Array[1024 x u8],
+  data2: Array[1024 x u64],
+}
+
 fn main(): i32 {
-  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
-  let ls: List[int] = [10 x 50];
-  let fifty = (50: uword).toStatic();
-  let a: Array[50 x int]* = listToArray(ls, fifty);
-  // a.50*
-  // a.3
-  for core/IntRange/upTo(fifty.fromStatic() as int) do {
-    // dereferencing the array shouldn't copy the whole thing, I hope
-    // get should accept the pointer maybe?
-    printIt(a.get(it as uword));
+  assertEquals(types/sizeOf[Thing](), 9216);
+  let context alloc: mem/AllocMode = mem/AllocMode/SYSTEM_HEAP;
+  // nocommit(0): mem/getTempArena() always 0!
+  // let t: core/Arena* = mem/getTempArena();
+  let ls: List[u8] = [3 x 10];
+  let ten = (10: uword).toStatic();
+
+  for ls do { println("{it}") };
+
+  let a: Array[10 x u8]* = listToArray(ls, ten);
+  let* w = List/empty[char]();
+  core/formatUInt(context w)(ls.toBuffer().dataPointer() as uword, 16);
+  println("ls base dec: {ls.toBuffer().dataPointer() as uword}");
+  println("ls base hex: 0x{string/wrapList(w)}");
+  println("a base:  {a as Pointer as uword}");
+  for core/IntRange/upTo(a.len() as iword) do {
+    if it % 2 == 0 { a.getRef(it as uword) <- 1 };
   };
+  for core/IntRange/upTo(a.len() as iword) do {
+    println("{it}: {a.get(it as uword)}");
+  };
+  for ls do { println("ls: {itIndex}: {it}") };
 
   0
 }
