@@ -865,6 +865,13 @@ impl Type {
             _ => None,
         }
     }
+
+    pub(crate) fn as_array(&self) -> Option<ArrayType> {
+        match self {
+            Type::Array(arr) => Some(*arr),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

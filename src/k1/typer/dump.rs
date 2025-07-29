@@ -557,6 +557,9 @@ impl TypedProgram {
                 self.display_expr_id(field_access.base, w, indentation)?;
                 w.write_str(".")?;
                 self.write_ident(w, field_access.target_field)?;
+                if field_access.is_referencing {
+                    w.write_char('*')?;
+                }
                 Ok(())
             }
             TypedExpr::Array(array) => {
@@ -577,6 +580,18 @@ impl TypedProgram {
                     }
                 }
                 w.write_str("]")?;
+                Ok(())
+            }
+            TypedExpr::ArrayGetElement(array_get) => {
+                // array.get(index) / array.getRef(index)
+                self.display_expr_id(array_get.base, w, indentation)?;
+                if array_get.is_referencing {
+                    w.write_str(".getRef(")?;
+                } else {
+                    w.write_str(".get(")?;
+                }
+                self.display_expr_id(array_get.index, w, indentation)?;
+                w.write_str(")")?;
                 Ok(())
             }
             TypedExpr::Variable(v) => {

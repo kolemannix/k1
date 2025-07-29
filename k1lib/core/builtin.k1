@@ -136,6 +136,10 @@ ns meta {
 
 ns Array {
   intern fn getElementPtr[N: static uword, T](array: Array[N x T], n: uword): T*
+
+  fn getBase[N: static uword, T](array: Array[N x T]*): T* {
+    array.getRef(0)
+  }
 }
 
 ////////////////////////////////

@@ -219,6 +219,15 @@ struct LlvmStructType<'ctx> {
     layout: Layout,
 }
 
+#[derive(Debug, Clone)]
+struct LlvmArrayType<'ctx> {
+    type_id: TypeId,
+    array_type: ArrayType<'ctx>,
+    element_type: Box<K1LlvmType<'ctx>>,
+    di_type: DIType<'ctx>,
+    layout: Layout,
+}
+
 // Can this just be 'struct'? :()
 #[derive(Debug, Clone)]
 struct LlvmLambdaObjectType<'ctx> {
@@ -233,6 +242,7 @@ enum K1LlvmType<'ctx> {
     Value(LlvmValueType<'ctx>),
     EnumType(LlvmEnumType<'ctx>),
     StructType(LlvmStructType<'ctx>),
+    ArrayType(LlvmArrayType<'ctx>),
     LambdaObject(LlvmLambdaObjectType<'ctx>),
     Reference(LlvmReferenceType<'ctx>),
     Void(LlvmVoidType<'ctx>),
@@ -275,17 +285,17 @@ impl<'ctx> From<LlvmLambdaObjectType<'ctx>> for K1LlvmType<'ctx> {
 }
 
 impl<'ctx> K1LlvmType<'ctx> {
-    #[allow(unused)]
-    pub fn size_info(&self) -> Layout {
-        match self {
-            K1LlvmType::Value(v) => v.layout,
-            K1LlvmType::EnumType(e) => e.layout,
-            K1LlvmType::StructType(s) => s.layout,
-            K1LlvmType::Reference(r) => r.layout,
-            K1LlvmType::Void(_) => Layout::ZERO,
-            K1LlvmType::LambdaObject(c) => c.size,
-        }
-    }
+    // pub fn size_info(&self) -> Layout {
+    //     match self {
+    //         K1LlvmType::Value(v) => v.layout,
+    //         K1LlvmType::Reference(r) => r.layout,
+    //         K1LlvmType::EnumType(e) => e.layout,
+    //         K1LlvmType::StructType(s) => s.layout,
+    //         K1LlvmType::ArrayType(a) => a.layout,
+    //         K1LlvmType::Void(_) => Layout::ZERO,
+    //         K1LlvmType::LambdaObject(c) => c.size,
+    //     }
+    // }
 
     pub fn is_aggregate(&self) -> bool {
         match self {
@@ -294,6 +304,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Void(_) => false,
             K1LlvmType::EnumType(_) => true,
             K1LlvmType::StructType(_) => true,
+            K1LlvmType::ArrayType(_) => true,
             K1LlvmType::LambdaObject(_) => true,
         }
     }
@@ -330,6 +341,14 @@ impl<'ctx> K1LlvmType<'ctx> {
         }
     }
 
+    #[track_caller]
+    fn expect_array(self) -> LlvmArrayType<'ctx> {
+        match self {
+            K1LlvmType::ArrayType(array) => array,
+            _ => panic!("expected array on {self:?}"),
+        }
+    }
+
     fn fn_type(
         &self,
         args: &[BasicMetadataTypeEnum<'ctx>],
@@ -348,6 +367,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Reference(pointer) => pointer.type_id,
             K1LlvmType::EnumType(e) => e.type_id,
             K1LlvmType::StructType(s) => s.type_id,
+            K1LlvmType::ArrayType(a) => a.type_id,
             K1LlvmType::Void(_) => NEVER_TYPE_ID,
             K1LlvmType::LambdaObject(c) => c.type_id,
         }
@@ -365,10 +385,13 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::StructType(s) => {
                 s.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
-            K1LlvmType::Void(_) => panic!("No canonical repr type on Void / never"),
+            K1LlvmType::ArrayType(a) => {
+                a.array_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
+            }
             K1LlvmType::LambdaObject(c) => {
                 c.struct_type.get_context().ptr_type(AddressSpace::default()).as_basic_type_enum()
             }
+            K1LlvmType::Void(_) => panic!("No canonical repr type on Void / never"),
         }
     }
 
@@ -378,6 +401,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
             K1LlvmType::EnumType(e) => e.base_array_type.as_basic_type_enum(),
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
+            K1LlvmType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
             K1LlvmType::LambdaObject(c) => c.struct_type.as_basic_type_enum(),
         }
@@ -389,6 +413,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Reference(pointer) => pointer.layout,
             K1LlvmType::EnumType(e) => e.layout,
             K1LlvmType::StructType(s) => s.layout,
+            K1LlvmType::ArrayType(a) => a.layout,
             K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
             K1LlvmType::LambdaObject(c) => c.size,
         }
@@ -400,6 +425,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Reference(pointer) => pointer.di_type,
             K1LlvmType::EnumType(e) => e.di_type,
             K1LlvmType::StructType(s) => s.di_type,
+            K1LlvmType::ArrayType(a) => a.di_type,
             K1LlvmType::Void(v) => v.di_type,
             K1LlvmType::LambdaObject(c) => c.di_type,
         }
@@ -1114,13 +1140,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     )
                     .as_type();
 
-                Ok(LlvmValueType {
+                Ok(K1LlvmType::ArrayType(LlvmArrayType {
                     type_id,
-                    basic_type: llvm_array_type.as_basic_type_enum(),
-                    layout,
+                    array_type: llvm_array_type,
+                    element_type: Box::new(element_type),
                     di_type,
-                }
-                .into())
+                    layout,
+                }))
             }
             Type::Enum(enum_type) => {
                 let enum_name = self
@@ -1472,7 +1498,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variable_type.debug_type(),
             true,
             0,
-            variable_type.size_info().align,
+            variable_type.rich_repr_layout().align,
         );
 
         // Some 'lets' don't need an extra alloca; if they are not re-assignable
@@ -2209,7 +2235,48 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Array(_array) => {
-                todo!("codegen new fixed array literals")
+                todo!("llvm new fixed array literals")
+            }
+            TypedExpr::ArrayGetElement(array_get) => {
+                // `base` can be a pointer to an array or an array value proper, just like
+                // struct access
+                let base_value = self.codegen_expr(array_get.base)?;
+                let LlvmValue::BasicValue(base_value) = base_value else {
+                    // It exits
+                    return Ok(base_value);
+                };
+                let index_value = self.codegen_expr(array_get.index)?;
+                let LlvmValue::BasicValue(index_value) = index_value else {
+                    // It exits
+                    return Ok(index_value);
+                };
+                let index_value = index_value.into_int_value();
+
+                let array_type = self.codegen_type(array_get.array_type)?.expect_array();
+
+                // This will be an Llvm PointerValue whether its a reference in K1 or not!
+                let array_ptr = base_value.into_pointer_value();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(
+                            array_type.array_type,
+                            array_ptr,
+                            &[self.builtin_types.ptr_sized_int.const_zero(), index_value],
+                            "",
+                        )
+                        .unwrap()
+                };
+
+                if array_get.is_referencing {
+                    Ok(elem_ptr.as_basic_value_enum().into())
+                } else {
+                    let element_type = &array_type.element_type;
+                    // We copy the element whether or not the base array is a reference, because it
+                    // could be inside a reference, we can't assume this isn't mutable memory just
+                    // because our immediate base array isn't a reference
+                    let element_value = self.load_k1_value(element_type, elem_ptr, "", true);
+                    Ok(element_value.into())
+                }
             }
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),

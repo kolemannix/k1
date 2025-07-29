@@ -107,6 +107,10 @@ impl TypedProgram {
                     }
                 }
             },
+            TypedExpr::ArrayGetElement(array_get) => {
+                recurse!(array_get.base);
+                recurse!(array_get.index);
+            }
             TypedExpr::Variable(_) => (),
             TypedExpr::BinaryOp(binary_op) => {
                 let lhs = binary_op.lhs;
