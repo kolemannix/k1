@@ -16,11 +16,8 @@ deftype Thing = {
   data2: Array[1024 x u64],
 }
 
-fn main(): i32 {
-  assertEquals(types/sizeOf[Thing](), 9216);
-  let context alloc: mem/AllocMode = mem/AllocMode/SYSTEM_HEAP;
-  // nocommit(0): mem/getTempArena() always 0!
-  // let t: core/Arena* = mem/getTempArena();
+fn testArray(): unit {
+  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let ls: List[u8] = [3 x 10];
   let ten = (10: uword).toStatic();
 
@@ -28,17 +25,20 @@ fn main(): i32 {
 
   let a: Array[10 x u8]* = listToArray(ls, ten);
   let* w = List/empty[char]();
-  core/formatUInt(context w)(ls.toBuffer().dataPointer() as uword, 16);
-  println("ls base dec: {ls.toBuffer().dataPointer() as uword}");
-  println("ls base hex: 0x{string/wrapList(w)}");
-  println("a base:  {a as Pointer as uword}");
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
   };
   for core/IntRange/upTo(a.len() as iword) do {
     println("{it}: {a.get(it as uword)}");
   };
-  for ls do { println("ls: {itIndex}: {it}") };
+}
+
+fn main(): i32 {
+  // nocommit(0); commit array test
+  assertEquals(types/sizeOf[Thing](), 9216);
+
+  #static testArray();
+  testArray();
 
   0
 }

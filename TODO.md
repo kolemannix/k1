@@ -1,7 +1,9 @@
 New tagline? "C with typeclasses and tagged unions"
 
-- [ ] Generic (co)recursive types do not work
+- [ ] Defect: Generic (co)recursive types do not work
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
+- [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
+           'skip and progress' style of pass for them
 - [ ] Related: Detect duplicate blanket impls?
 - [ ] Bug: Fix returning Result from main
 - [ ] Typecheck 'main' better
@@ -88,18 +90,21 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions?
-- [ ] Bug: Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
+- [ ] Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [ ] Rename 'Buffer' to ... Slice?
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
-- [ ] A clone ability
+- [ ] A clone ability. Clone and Copy are not good enough words for this; the distinct meanings are completely imposed rather than intrinsic
+      What about: Value for Copy; Entity for "not copy"
+- [ ] Mark types as trivially copyable or not
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-- [ ] Mark types as trivially copyable or not
 ^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Support ability constraints on generics
 - [ ] Make statics ZSTs instead of sharing a repr with their inner type
-- [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
-           'skip and progress' style of pass for them
+- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
+- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
+- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
@@ -165,11 +170,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Upgrade Allocator api in std/mem to use static and metaprogramming
 
 ## Project: Array types
-- [ ] Add fixed length array types: `Array[<type expr> x <int literal>]`
-- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
-      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
-- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
+- [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
+- [ ] implement iterator for them
+- [ ] 
 
 ## Project: Operator overloading story
 - [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
