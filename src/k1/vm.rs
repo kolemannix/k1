@@ -573,8 +573,26 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::Array(_array) => {
             todo!("execute new array literal in vm")
         }
-        TypedExpr::ArrayGetElement(_arrayGet) => {
-            todo!("execute ArrayGetElement in vm")
+        TypedExpr::ArrayGetElement(array_get) => {
+            let array_get = *array_get;
+            let base = execute_expr_return_exit!(vm, m, array_get.base)?;
+            let index =
+                execute_expr_return_exit!(vm, m, array_get.index)?.expect_int().expect_uword();
+            let base_ptr = match base {
+                Value::Agg { ptr: array_ptr, .. } => array_ptr,
+                Value::Reference { ptr, .. } => ptr,
+                _ => unreachable!("malformed array access: not an Array or Array*"),
+            };
+            let array_type = m.types.get(array_get.array_type).as_array().unwrap();
+            let offset = offset_at_index(&m.types, array_type.element_type, index);
+            let element_ptr = unsafe { base_ptr.byte_add(offset) };
+            let output_value = if array_get.is_referencing {
+                Value::Reference { type_id: array_get.result_type, ptr: element_ptr }
+            } else {
+                let loaded = load_value(vm, m, array_type.element_type, element_ptr, true)?;
+                loaded
+            };
+            Ok(VmResult::Value(output_value))
         }
         TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, m, *variable_expr),
         TypedExpr::UnaryOp(unary_op) => {
@@ -1605,7 +1623,7 @@ fn execute_intrinsic(
             };
             Ok(VmResult::UNIT)
         }
-        IntrinsicOperation::MemSet => todo!(),
+        IntrinsicOperation::MemSet => m.ice("memset not implemented", None),
         IntrinsicOperation::MemEquals => {
             //intern fn compare(p1: Pointer, p2: Pointer, size: uword): i32
             let [p1, p2, size] = args[0..3] else { unreachable!() };
@@ -2363,7 +2381,7 @@ pub fn vm_value_to_static_value(
             // Rely on the VM's code to load it, then make a K1 'global' to hold it?
 
             //let _loaded_value = vm::load_value(vm, m, *type_id, *ptr, true, span).unwrap();
-            todo!("Introduce CompileTimeValue::Reference");
+            todo!("Introduce StaticValue::Reference");
         }
         Value::Agg { type_id, ptr } => {
             if type_id == STRING_TYPE_ID {

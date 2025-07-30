@@ -1,13 +1,19 @@
 ns test_globals;
 
+let foo: int = 42;
+let bar: int = 31;
+
 let globalInt: int = 0;
 let* mut globalIntRef: int* = 10;
 let staticInt: int = 2;
 
 fn test(): unit {
 
-   assert(globalInt == 0);
-   assert(staticInt == 2);
+   assertEquals(foo, 42);
+   assertEquals(bar, 31);
+
+   assertEquals(globalInt, 0);
+   assertEquals(staticInt, 2);
 
    while globalIntRef.* > staticInt {
      globalIntRef <- globalIntRef.* - 1;
