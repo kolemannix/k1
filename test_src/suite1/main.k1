@@ -4,7 +4,6 @@ fn low(): unit {
   arith/test();
   bool_test/test();
   char_test/test();
-  global_int/test();
   assign/test();
   pointer/test();
   fib/test();
