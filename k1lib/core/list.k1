@@ -54,12 +54,12 @@ ns List {
 
   fn cap[T](self: List[T]): uword { self.buffer.len }
 
-  fn getRef[T](self: List[T], index: uword): T* {
-    self.buffer.getRef[T](index)
+  fn getRef[T](self: List[T]*, index: uword): T* {
+    self.*.buffer.getRef[T](index)
   }
 
-  fn set[T](self: List[T], index: uword, elem: T): unit {
-    self.buffer.set(index, elem);
+  fn set[T](self: List[T]*, index: uword, elem: T): unit {
+    self.*.buffer.set(index, elem);
   }
 
   fn get[T](self: List[T], index: uword): T {
@@ -98,7 +98,7 @@ ns List {
       self._grow();
     };
     self.len* <- startLength + 1;
-    self.*.set(startLength, elem);
+    self.set(startLength, elem);
     ()
   }
 
@@ -116,7 +116,7 @@ ns List {
     self.len > 0
   }
 
-  fn firstRef[T](self: List[T]): T*? {
+  fn firstRef[T](self: List[T]*): T*? {
     if self.nonEmpty() {
       .Some(self.getRef(0))
     } else {
@@ -125,25 +125,18 @@ ns List {
   }
 
   fn first[T](self: List[T]): T? {
-    switch self.firstRef() {
-      .None -> .None,
-      .Some(firstRef) -> .Some(firstRef.*)
-    }
+    if self.nonEmpty() .Some(self.get(0)) 
+    else .None
   }
 
-  fn lastRef[T](self: List[T]): T*? {
-    if self.nonEmpty() {
-      .Some(self.getRef(self.len - 1))
-    } else {
-      .None
-    }
+  fn lastRef[T](self: List[T]*): T*? {
+    if self.nonEmpty() .Some(self.getRef(self.len - 1))
+    else .None
   }
 
   fn last[T](self: List[T]): T? {
-    switch self.lastRef() {
-      .None -> .None,
-      .Some(lastRef) -> .Some(lastRef.*)
-    }
+    if self.nonEmpty() .Some(self.get(self.len - 1))
+    else .None
   }
 
   fn reverse[T](self: List[T]*): unit {
@@ -208,17 +201,17 @@ ns List {
   
     let mut i: uword = 0;
     for item in left.* do {
-      input.*.set(i, item);
+      input.set(i, item);
       i = i + 1;
     };
   
     for item in equal.* do {
-      input.*.set(i, item);
+      input.set(i, item);
       i = i + 1;
     };
   
     for item in right.* do {
-      input.*.set(i, item);
+      input.set(i, item);
       i = i + 1;
     };
   }
@@ -310,6 +303,7 @@ impl[T: Equals] Equals for List[T] {
   }
 }
 
+// nocommit(1): Should be Print
 impl[T: Show] Show for List[T] {
   fn show(self: List[T]): string {
     let b = StringBuilder/new();

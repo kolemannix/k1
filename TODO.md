@@ -174,6 +174,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] implement iterator for them
 - [ ] 
 
+## Project
+- [ ] Defer
+
 ## Project: Operator overloading story
 - [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
       ability Equals { syntax(2, "==") fn }

@@ -134,14 +134,6 @@ ns meta {
 
 }
 
-ns Array {
-  intern fn getElementPtr[N: static uword, T](array: Array[N x T], n: uword): T*
-
-  fn getBase[N: static uword, T](array: Array[N x T]*): T* {
-    array.getRef(0)
-  }
-}
-
 ////////////////////////////////
 // Built-in Abilities
 
@@ -227,6 +219,12 @@ impl Equals for Buffer[char] {
 
 impl Equals for Buffer[int] {
   fn equals(self: Buffer[int], other: Buffer[int]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for Buffer[bool] {
+  fn equals(self: Buffer[bool], other: Buffer[bool]): bool {
     self.equalsBits(other)
   }
 }
@@ -340,8 +338,38 @@ impl Equals for i32 { fn equals(self: i32, other: i32): bool { self == other } }
 impl Equals for i64 { fn equals(self: i64, other: i64): bool { self == other } }
 impl Equals for iword { fn equals(self: Self, other: Self): bool { self == other } }
 
-
 fn discard[T](t: T): unit { () }
+
+ns Array {
+  fn getBase[N: static uword, T](array: Array[N x T]*): T* {
+    array.getRef(0)
+  }
+
+  fn allocate[N: static uword, T](context alloc: mem/AllocMode)(): Array[N x T]* {
+    let ptr = mem/allocIn(alloc, size = types/sizeOf[Array[N x T]](), align = types/alignOf[Array[N x T]]());
+    ptr as Array[N x T]*
+  }
+
+  fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit {
+    array.getRef(index) <- value
+  }
+
+  fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): Array[N x T]* {
+    let arrayUninit = allocate[N, T]();
+    let mut i: uword = 0;
+    while i < n.fromStatic() {
+      arrayUninit.getRef(i) <- t;
+      i = i + 1;
+    };
+    arrayUninit
+  }
+
+  fn toBuffer[N: static uword, T](array: Array[N x T]*): Buffer[T] {
+    let len: uword = array.len();
+    { len, data: array.getBase() }
+  }
+
+}
 
 #if k1/OS_POSIX
 ns posix {

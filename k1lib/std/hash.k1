@@ -63,13 +63,13 @@ ns HashMap {
   }
 
   // Super naive fully linear probing
-  fn _probe[V](self: HashMap[V], startIndex: uword): Entry[V]* {
+  fn _probe[V](self: HashMap[V]*, startIndex: uword): Entry[V]* {
     let mut probeIndex = startIndex;
     loop {
       probeIndex = probeIndex + 1;
       if probeIndex == self.entries.len { probeIndex = 0 };
 
-      let entryRef = self.entries.getRef(probeIndex);
+      let entryRef = self.entries*.getRef(probeIndex);
       // TODO: match on reference
       if entryRef.* is .None {
         return(entryRef)
@@ -89,7 +89,7 @@ ns HashMap {
       self.grow();
     };
     let index = self._computeIndex(key);
-    let entryRef = self.entries.getRef(index);
+    let entryRef = self.entries*.getRef(index);
     let entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
       .None -> {
@@ -100,7 +100,7 @@ ns HashMap {
         if existingKey == key {
           entryRef <- .Some(entry);
         } else {
-          let nextAvailableEntry = self.*._probe(index);
+          let nextAvailableEntry = self._probe(index);
           nextAvailableEntry <- .Some(entry);
           self.size* <- self.size + 1;
         }
@@ -139,7 +139,7 @@ ns HashMap {
 
   fn remove[V](self: HashMap[V]*, key: string): bool {
     let index = self._computeIndex(key);
-    let entryRef = self.entries.getRef(index);
+    let entryRef = self.entries*.getRef(index);
     switch entryRef.* {
       .None -> false,
       .Some({ key: existingKey, value: value, deleted }) -> {
@@ -152,7 +152,7 @@ ns HashMap {
             probeIndex = probeIndex + 1;
             if probeIndex == self.entries.len { probeIndex = 0; };
 
-            let probedEntryRef = self.entries.getRef(probeIndex);
+            let probedEntryRef = self.entries*.getRef(probeIndex);
             switch probedEntryRef.* {
               .Some({ key: existingKey, value, deleted }) -> {
                 if key == existingKey {
