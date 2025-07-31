@@ -2235,7 +2235,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Array(_array) => {
-                todo!("llvm new fixed array literals")
+                todo!("nocommit(0) llvm new fixed array literals")
             }
             TypedExpr::ArrayGetElement(array_get) => {
                 // `base` can be a pointer to an array or an array value proper, just like
@@ -3246,9 +3246,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             IntrinsicOperation::CompilerSourceLocation => {
                 unreachable!("CompilerSourceLocation is handled in typechecking phase")
             }
-            IntrinsicOperation::ArrayGetElementPtr => {
-                todo!("llvm array gep")
-            }
             _ => panic!("Unexpected inline intrinsic {:?}", intrinsic_type),
         }
     }
@@ -3346,7 +3343,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   value: u8,
                 //   count: uword
                 // ): unit
-                todo!()
+                todo!("vm memset")
             }
             IntrinsicOperation::MemEquals => {
                 // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool

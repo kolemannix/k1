@@ -183,14 +183,8 @@ impl ParsedId {
 }
 
 #[derive(Debug, Clone)]
-pub enum ListElements {
-    Filled { element_expr: ParsedExprId, count_expr: ParsedExprId },
-    Listed { elements: EcoVec<ParsedExprId> },
-}
-
-#[derive(Debug, Clone)]
 pub struct ParsedList {
-    pub elements: ListElements,
+    pub elements: EcoVec<ParsedExprId>,
     pub span: SpanId,
 }
 
@@ -3505,48 +3499,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // [a,b,c]
             // [a x 10]
             self.advance();
-            let start = first;
-            if let Some(close) = self.maybe_consume_next(K::CloseBracket) {
-                let span = self.extend_span(start.span, close.span);
-                Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList {
-                    elements: ListElements::Listed { elements: eco_vec![] },
-                    span,
-                }))))
-            } else {
-                let first_element = self.expect_expression()?;
-                let next = self.peek();
-                let is_filled = next.kind == K::Ident && self.token_chars(next) == "x";
-                let list_elements = if is_filled {
-                    self.advance();
-                    let count = self.expect_expression()?;
-                    self.expect_eat_token(K::CloseBracket)?;
-                    ListElements::Filled { element_expr: first_element, count_expr: count }
-                } else if next.kind == K::CloseBracket {
-                    self.advance();
-                    ListElements::Listed { elements: eco_vec![first_element] }
-                } else if next.kind == K::Comma {
-                    self.advance();
-                    let mut elements = eco_vec![first_element];
-                    let (_elements_span, _terminator) = self.eat_delimited_ext(
-                        "list elements",
-                        &mut elements,
-                        TokenKind::Comma,
-                        &[TokenKind::CloseBracket],
-                        |p| Parser::expect("expression", start, p.parse_expression()),
-                    )?;
-                    ListElements::Listed { elements }
-                } else {
-                    return Err(error_expected(
-                        "expression or comma or `x` after first list element",
-                        next,
-                    ));
-                };
-                let span = self.extend_to_here(start.span);
-                Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList {
-                    elements: list_elements,
-                    span,
-                }))))
-            }
+            let mut elements = eco_vec![];
+            let (_elements_span, _terminator) = self.eat_delimited_ext(
+                "list elements",
+                &mut elements,
+                TokenKind::Comma,
+                &[TokenKind::CloseBracket],
+                Parser::expect_expression,
+            )?;
+            let span = self.extend_to_here(first.span);
+            Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList { elements, span }))))
         } else if first.kind == K::Hash {
             self.advance();
 

@@ -16,9 +16,34 @@ deftype Thing = {
   data2: Array[1024 x u64],
 }
 
+fn testLiterals(): unit {
+  let* array: Array[3 x bool]* = [false, true, true];
+  let buffer: Buffer[bool] = [false, true, true];
+  let list: List[bool] = [false, true, true];
+  assertEquals(array.toBuffer(), buffer);
+  assertEquals(list.toBuffer(), buffer);
+}
+
+fn testFilled(): unit {
+  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
+  let buffer: Buffer[u8] = Buffer/filledIn(size = 64, value = 3);
+  // this doesnt infer because we don't look at the return type first
+  // let array: Array[64 x u8] = Array/filledIn(3, (64: uword).toStatic());
+  let array: Array[64 x u8] = Array/filledIn(3: u8, (64: uword).toStatic());
+  let list: List[u8] = List/filledIn(size = 64, value = 3);
+  assertEquals(buffer.len, 64);
+  assertEquals(array.len(), 64);
+  assertEquals(list.len, 64);
+  for buffer do {
+    assertEquals(buffer.get(itIndex), 3);
+    assertEquals(list.get(itIndex), 3);
+    assertEquals(array.get(itIndex), 3);
+  }
+}
+
 fn testArray(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
-  let ls: List[u8] = [3 x 10];
+  let ls: List[u8] = List/filledIn(size = 10, value = 3);
   let ten = (10: uword).toStatic();
 
   for ls do { println("{it}") };
@@ -31,6 +56,7 @@ fn testArray(): unit {
   for core/IntRange/upTo(a.len() as iword) do {
     println("{it}: {a.get(it as uword)}");
   };
+
 }
 
 fn main(): i32 {
@@ -39,6 +65,9 @@ fn main(): i32 {
 
   #static testArray();
   testArray();
+
+  testLiterals();
+  testFilled();
 
   0
 }

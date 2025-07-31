@@ -1693,9 +1693,6 @@ fn execute_intrinsic(
             let value_id = vm_value_to_static_value(m, vm, value_value, vm.eval_span)?;
             Ok(VmResult::Value(Value::Int(TypedIntValue::U64(value_id.as_u32() as u64))))
         }
-        IntrinsicOperation::ArrayGetElementPtr => {
-            m.todo_with_span("vm ArrayGetElementPtr", vm.eval_span)
-        }
     }
 }
 

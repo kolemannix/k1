@@ -2115,9 +2115,6 @@ pub enum IntrinsicOperation {
     BakeStaticValue,
     GetStaticValue,
     StaticTypeToValue,
-
-    // Array Functions
-    ArrayGetElementPtr,
 }
 
 impl IntrinsicOperation {
@@ -2149,7 +2146,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeSchema => false,
             IntrinsicOperation::EmitString => false,
             IntrinsicOperation::BakeStaticValue => false,
-            IntrinsicOperation::ArrayGetElementPtr => false,
         }
     }
 
@@ -2185,8 +2181,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::GetStaticValue => true,
             IntrinsicOperation::BakeStaticValue => true,
             IntrinsicOperation::StaticTypeToValue => true,
-            // Array
-            IntrinsicOperation::ArrayGetElementPtr => true,
         }
     }
 }
@@ -6870,7 +6864,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         // List literals can become Arrays, Buffers, or Lists, depending on what is expected
         enum ListKind {
-            Array,
+            Array(TypeId),
             Buffer,
             List,
         }
@@ -6880,112 +6874,132 @@ impl TypedProgram {
                     (Some(s.as_list_instance().unwrap().element_type), ListKind::List)
                 }
                 s @ Type::Struct(_) if s.as_buffer_instance().is_some() => {
-                    (Some(s.as_buffer_instance().unwrap().generic_parent), ListKind::Buffer)
+                    (Some(s.as_buffer_instance().unwrap().type_args[0]), ListKind::Buffer)
                 }
-                Type::Array(array_type) => (Some(array_type.element_type), ListKind::Array),
+                Type::Array(array_type) => {
+                    (Some(array_type.element_type), ListKind::Array(*type_id))
+                }
                 _ => (None, ListKind::List),
             },
             None => (None, ListKind::List),
         };
         let span = list_expr.span;
-        match &list_expr.elements {
-            parse::ListElements::Filled { element_expr, count_expr } => {
-                let element =
-                    self.eval_expr(*element_expr, ctx.with_expected_type(expected_element_type))?;
-                let element_type = self.exprs.get(element).get_type();
-                let count =
-                    self.eval_expr(*count_expr, ctx.with_expected_type(Some(UWORD_TYPE_ID)))?;
-                match list_kind {
-                    ListKind::Array => todo!(),
-                    ListKind::Buffer => todo!(),
-                    ListKind::List => self.synth_typed_function_call(
-                        qident!(self, span, ["List"], "filledIn"),
-                        &[element_type],
-                        &[count, element],
-                        ctx,
-                    ),
-                }
-            }
-            parse::ListElements::Listed { elements: parsed_elements } => {
-                let element_count = parsed_elements.len();
+        let parsed_elements = &list_expr.elements;
+        let element_count = parsed_elements.len();
 
-                let mut list_lit_block = self.synth_block(ctx.scope_id, span);
-                list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
-                let list_lit_scope = list_lit_block.scope_id;
-                let mut element_type = None;
-                let elements: Vec<TypedExprId> = {
-                    let mut elements = Vec::with_capacity(element_count);
-                    for elem in parsed_elements.iter() {
-                        let element_expr = self.eval_expr(
-                            *elem,
-                            ctx.with_expected_type(element_type.or(expected_element_type)),
-                        )?;
-                        let this_element_type = self.exprs.get(element_expr).get_type();
-                        if element_type.is_none() {
-                            element_type = Some(this_element_type)
-                        } else if let Err(msg) = self.check_types(
-                            element_type.unwrap(),
-                            this_element_type,
-                            list_lit_scope,
-                        ) {
-                            return failf!(span, "List element had incorrect type: {msg}");
-                        };
-                        elements.push(element_expr);
-                    }
-                    elements
-                };
-                // Note: Typing of empty list literals with no expected type is tricky
-                //        We use is_inference here to use UNIT or fail.
-                //        If I report UNIT during inference it leads to incorrect failures
-                //        Failing during inference is like producing a type hole
-                let element_type = match element_type.or(expected_element_type) {
-                    Some(et) => et,
-                    None => {
-                        if ctx.is_inference {
-                            return failf!(
-                                span,
-                                "Not enough information to determine empty list type"
-                            );
-                        } else {
-                            UNIT_TYPE_ID
-                        }
-                    }
-                };
-                let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-                let count_expr = self.synth_uword(element_count, span);
-                let list_new_fn_call = self.synth_typed_function_call(
-                    qident!(self, span, ["List"], "withCapacity"),
-                    &[element_type],
-                    &[count_expr],
-                    list_lit_ctx,
+        let mut list_lit_block = self.synth_block(ctx.scope_id, span);
+        list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
+        let list_lit_scope = list_lit_block.scope_id;
+        let mut element_type = None;
+        let elements: Vec<TypedExprId> = {
+            let mut elements = Vec::with_capacity(element_count);
+            for elem in parsed_elements.iter() {
+                let element_expr = self.eval_expr(
+                    *elem,
+                    ctx.with_expected_type(element_type.or(expected_element_type)),
                 )?;
-                let list_variable = self.synth_variable_defn(
-                    get_ident!(self, "list_literal"),
-                    list_new_fn_call,
-                    false,
-                    false,
-                    true,
-                    list_lit_scope,
-                );
-                let mut set_elements_statements = Vec::with_capacity(element_count);
-                for element_value_expr in elements.into_iter() {
-                    let push_call = self.synth_typed_function_call(
-                        qident!(self, span, ["List"], "push"),
-                        &[element_type],
-                        &[list_variable.variable_expr, element_value_expr],
-                        list_lit_ctx,
-                    )?;
-                    let type_id = self.exprs.get(push_call).get_type();
-                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-                    set_elements_statements.push(push_stmt);
-                }
-                self.push_block_stmt_id(&mut list_lit_block, list_variable.defn_stmt);
-                list_lit_block.statements.extend(set_elements_statements);
-                let dereference_list_literal = self.synth_dereference(list_variable.variable_expr);
-                self.add_expr_id_to_block(&mut list_lit_block, dereference_list_literal);
-                Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
+                let this_element_type = self.exprs.get(element_expr).get_type();
+                if element_type.is_none() {
+                    element_type = Some(this_element_type)
+                } else if let Err(msg) =
+                    self.check_types(element_type.unwrap(), this_element_type, list_lit_scope)
+                {
+                    return failf!(span, "List element had incorrect type: {msg}");
+                };
+                elements.push(element_expr);
             }
+            elements
+        };
+        // Note: Typing of empty list literals with no expected type is tricky
+        //        We use is_inference here to use UNIT or fail.
+        //        If I report UNIT during inference it leads to incorrect failures
+        //        Failing during inference is like producing a type hole
+        let element_type = match element_type.or(expected_element_type) {
+            Some(et) => et,
+            None => {
+                if ctx.is_inference {
+                    return failf!(span, "Not enough information to determine empty list type");
+                } else {
+                    UNIT_TYPE_ID
+                }
+            }
+        };
+        let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
+        let count_expr = self.synth_uword(element_count, span);
+        let list_new_fn_call = match list_kind {
+            ListKind::List => self.synth_typed_function_call(
+                qident!(self, span, ["List"], "withCapacity"),
+                &[element_type],
+                &[count_expr],
+                list_lit_ctx,
+            )?,
+            ListKind::Buffer => self.synth_typed_function_call(
+                qident!(self, span, ["Buffer"], "_allocate"),
+                &[element_type],
+                &[count_expr],
+                list_lit_ctx,
+            )?,
+            // Unlike the others, the array literal should go on the stack!
+            ListKind::Array(array_type_id) => self.synth_typed_function_call(
+                qident!(self, span, ["core", "mem"], "zeroed"),
+                &[array_type_id],
+                &[],
+                list_lit_ctx,
+            )?,
+        };
+        let is_referencing_let = match list_kind {
+            ListKind::Array(_) => true,
+            ListKind::Buffer => false,
+            ListKind::List => true,
+        };
+        let dest_coll_variable = self.synth_variable_defn(
+            get_ident!(self, "list_literal"),
+            list_new_fn_call,
+            false,
+            false,
+            is_referencing_let,
+            list_lit_scope,
+        );
+        let mut set_elements_statements = Vec::with_capacity(element_count);
+        for (index, element_value_expr) in elements.into_iter().enumerate() {
+            let index_expr = self.synth_uword(index, span);
+            let push_call = match list_kind {
+                ListKind::List => self.synth_typed_function_call(
+                    qident!(self, span, ["List"], "push"),
+                    &[element_type],
+                    &[dest_coll_variable.variable_expr, element_value_expr],
+                    list_lit_ctx,
+                )?,
+                ListKind::Buffer => self.synth_typed_function_call(
+                    qident!(self, span, ["Buffer"], "set"),
+                    &[element_type],
+                    &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
+                    list_lit_ctx,
+                )?,
+                ListKind::Array(array_type_id) => {
+                    // fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit
+                    let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
+                    self.synth_typed_function_call(
+                        qident!(self, span, ["Array"], "set"),
+                        &[size_type, element_type],
+                        &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
+                        list_lit_ctx,
+                    )?
+                }
+            };
+            let type_id = self.exprs.get(push_call).get_type();
+            let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
+            set_elements_statements.push(push_stmt);
         }
+        self.push_block_stmt_id(&mut list_lit_block, dest_coll_variable.defn_stmt);
+        list_lit_block.statements.extend(set_elements_statements);
+        let final_expression = match list_kind {
+            ListKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
+            ListKind::Buffer => dest_coll_variable.variable_expr,
+            ListKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
+        };
+        self.add_expr_id_to_block(&mut list_lit_block, final_expression);
+        Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
@@ -9745,13 +9759,7 @@ impl TypedProgram {
                         let unit = self.exprs.add(TypedExpr::Unit(span));
                         self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
                     }
-                    Some(s) => self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                        value: match self.target_word_size() {
-                            WordSize::W32 => TypedIntValue::UWord32(s as u32),
-                            WordSize::W64 => TypedIntValue::UWord64(s),
-                        },
-                        span,
-                    })),
+                    Some(s) => self.synth_uword(s as usize, span),
                 };
                 Ok(Either::Left(array_length))
             }
@@ -9786,6 +9794,9 @@ impl TypedProgram {
                 } else {
                     array_type.element_type
                 };
+                // nocommit(1): Attempt static lift of index and try a static bounds check
+                // nocommit(0): Add bounds check to vm ArrayGetElement
+                // nocommit(0): Add bounds check to codegen_llvm ArrayGetElement
                 Ok(Either::Left(self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
                     base,
                     index: index_expr,
@@ -9800,7 +9811,11 @@ impl TypedProgram {
                 if let Some(method_id) = array_scope.find_function(call.name.name) {
                     Ok(Either::Right(Callee::make_static(method_id)))
                 } else {
-                    failf!(span, "No such method on Array: {}", call.name.name)
+                    failf!(
+                        span,
+                        "No such method on Array: {}",
+                        self.namespaced_identifier_to_string(&call.name)
+                    )
                 }
             }
         }
@@ -10895,7 +10910,16 @@ impl TypedProgram {
                         }
                     };
 
-                    let checked_expr = match self.check_call_argument(param, expr, ctx.scope_id)? {
+                    let checked_expr = match self
+                        .check_call_argument(param, expr, ctx.scope_id)
+                        .map_err(|err| {
+                            errf!(
+                                err.span,
+                                "Invalid call to {}. {}",
+                                self.namespaced_identifier_to_string(&fn_call.name),
+                                err.message
+                            )
+                        })? {
                         None => expr,
                         Some(coerced_expr) => coerced_expr,
                     };
@@ -11889,10 +11913,6 @@ impl TypedProgram {
                 Some("char") => None,
                 Some("Pointer") => match fn_name_str {
                     "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
-                    _ => None,
-                },
-                Some("Array") => match fn_name_str {
-                    "getElementPtr" => Some(IntrinsicOperation::ArrayGetElementPtr),
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
@@ -14214,6 +14234,7 @@ impl TypedProgram {
             qident!(self, span, ["core"], "f32"),
             qident!(self, span, ["core"], "f64"),
             qident!(self, span, ["core"], "Buffer"),
+            qident!(self, span, ["core"], "Array"),
             qident!(self, span, ["core"], "List"),
             qident!(self, span, ["core"], "string"),
             qident!(self, span, ["core"], "Opt"),
