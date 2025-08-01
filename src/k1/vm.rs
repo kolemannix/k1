@@ -570,9 +570,6 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 Ok(field_value.into())
             }
         }
-        TypedExpr::Array(_array) => {
-            todo!("execute new array literal in vm")
-        }
         TypedExpr::ArrayGetElement(array_get) => {
             let array_get = *array_get;
             let base = execute_expr_return_exit!(vm, m, array_get.base)?;
@@ -817,7 +814,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                             if int_to_cast.is_signed() {
                                 TypedFloatValue::F64(int_to_cast.to_i64() as f64)
                             } else {
-                                TypedFloatValue::F64(int_to_cast.to_u64() as f64)
+                                TypedFloatValue::F64(int_to_cast.to_u64_unconditional() as f64)
                             }
                         }
                         _ => unreachable!(),
@@ -2602,15 +2599,19 @@ fn integer_cast(
         IntegerType::U8 => int_to_cast.to_u8().into(),
         IntegerType::U16 => int_to_cast.to_u16().into(),
         IntegerType::U32 => int_to_cast.to_u32().into(),
-        IntegerType::U64 => int_to_cast.to_u64().into(),
+        IntegerType::U64 => int_to_cast.to_u64_unconditional().into(),
         IntegerType::I8 => (int_to_cast.to_u8() as i8).into(),
         IntegerType::I16 => (int_to_cast.to_u16() as i16).into(),
         IntegerType::I32 => (int_to_cast.to_u32() as i32).into(),
-        IntegerType::I64 => (int_to_cast.to_u64() as i64).into(),
+        IntegerType::I64 => (int_to_cast.to_u64_unconditional() as i64).into(),
         IntegerType::UWord(WordSize::W32) => unreachable!(),
-        IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(int_to_cast.to_u64()),
+        IntegerType::UWord(WordSize::W64) => {
+            TypedIntValue::UWord64(int_to_cast.to_u64_unconditional())
+        }
         IntegerType::IWord(WordSize::W32) => unreachable!(),
-        IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(int_to_cast.to_u64() as i64),
+        IntegerType::IWord(WordSize::W64) => {
+            TypedIntValue::IWord64(int_to_cast.to_u64_unconditional() as i64)
+        }
     }
 }
 

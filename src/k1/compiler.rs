@@ -364,7 +364,7 @@ pub fn write_executable(
     let ll_file = ll_name.to_str().unwrap();
     let out_name = out_dir.join(module_name);
     let out_file = out_name.to_str().unwrap();
-    let unwind_c_path = k1_lib_dir.join("k1_unwind.c");
+    let k1rt_c_path = k1_lib_dir.join("k1rt.c");
     // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
     build_cmd.args([
         // "-v",
@@ -377,7 +377,7 @@ pub fn write_executable(
         llvm_base.join("include").to_str().unwrap(),
         &format!("-mmacosx-version-min={}", MAC_SDK_VERSION),
         "-lunwind",
-        unwind_c_path.to_str().unwrap(),
+        k1rt_c_path.to_str().unwrap(),
         ll_file,
         "-o",
         out_file,
