@@ -13,11 +13,18 @@ void _k1_show_backtrace(void) {
   char *name = symbol;
 
   while (unw_step(&cursor) > 0) {
-    if ( !unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off) ) {
+    if (!unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off)) {
       name = symbol;
     }
     unw_get_reg(&cursor, UNW_REG_IP, &ip);
     unw_get_reg(&cursor, UNW_REG_SP, &sp);
-    printf("%-30s [ ip = %lx, sp = %lx ]\n", name, (long) ip, (long) sp);
+    printf("%-30s [ ip = %lx, sp = %lx ]\n", name, (long)ip, (long)sp);
   }
+}
+
+int _k1_snprintf_f32(char *buf, size_t size, const char *fmt, float arg) {
+  return snprintf(buf, size, "%f", arg);
+}
+int _k1_snprintf_f64(char *buf, size_t size, const char *fmt, double arg) {
+  return snprintf(buf, size, "%f", arg);
 }

@@ -406,7 +406,7 @@ impl TypedProgram {
         w: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
-        if matches!(function.linkage, Linkage::External(_)) {
+        if function.linkage.is_external() {
             w.write_str("extern ")?;
         }
         if function.linkage == Linkage::Intrinsic {
@@ -560,26 +560,6 @@ impl TypedProgram {
                 if field_access.is_referencing {
                     w.write_char('*')?;
                 }
-                Ok(())
-            }
-            TypedExpr::Array(array) => {
-                w.write_str("[")?;
-                match &array.elements {
-                    ArrayLiteralElements::Filled(expr, n) => {
-                        self.display_expr_id(*expr, w, indentation)?;
-                        w.write_str(" x ")?;
-                        w.write_str(&n.to_string())?;
-                    }
-                    ArrayLiteralElements::Listed(exprs) => {
-                        for (idx, expr) in exprs.iter().enumerate() {
-                            if idx > 0 {
-                                w.write_str(", ")?;
-                            }
-                            self.display_expr_id(*expr, w, indentation)?;
-                        }
-                    }
-                }
-                w.write_str("]")?;
                 Ok(())
             }
             TypedExpr::ArrayGetElement(array_get) => {

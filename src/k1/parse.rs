@@ -4050,7 +4050,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 None
             };
-            Linkage::External(external_name)
+            Linkage::External { link_name: external_name }
         } else {
             Linkage::Standard
         };

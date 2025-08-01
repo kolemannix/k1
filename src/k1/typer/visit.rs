@@ -99,14 +99,6 @@ impl TypedProgram {
             TypedExpr::StructFieldAccess(field_access) => {
                 recurse!(field_access.base);
             }
-            TypedExpr::Array(array) => match &array.elements {
-                ArrayLiteralElements::Filled(e, _) => recurse!(*e),
-                ArrayLiteralElements::Listed(elems) => {
-                    for elem in elems {
-                        recurse!(*elem)
-                    }
-                }
-            },
             TypedExpr::ArrayGetElement(array_get) => {
                 recurse!(array_get.base);
                 recurse!(array_get.index);

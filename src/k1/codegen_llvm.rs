@@ -1240,7 +1240,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         envelope_type: self.ctx.i8_type().array_type(0),
                         variant_struct_type: variant_struct,
                         payload_type,
-                        tag_value: tag_int_type.const_int(variant.tag_value.to_u64(), false),
+                        tag_value: tag_int_type
+                            .const_int(variant.tag_value.to_u64_unconditional(), false),
                         di_type: variant_struct_debug,
                         layout: self.get_layout(variant.my_type_id),
                     });
@@ -2233,9 +2234,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let field_value = self.load_k1_value(field_type, field_pointer, name, true);
                     Ok(field_value.into())
                 }
-            }
-            TypedExpr::Array(_array) => {
-                todo!("nocommit(0) llvm new fixed array literals")
             }
             TypedExpr::ArrayGetElement(array_get) => {
                 // `base` can be a pointer to an array or an array value proper, just like
@@ -3712,6 +3710,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             Vec::with_capacity(function_type.physical_params.len());
 
+        let llvm_linkage = match function.linkage {
+            TyperLinkage::Standard => None,
+            TyperLinkage::External { .. } => Some(LlvmLinkage::External),
+            TyperLinkage::Intrinsic => None,
+        };
+        let llvm_name = match function.linkage {
+            TyperLinkage::External { link_name: Some(link_name), .. } => {
+                self.k1.ident_str(link_name)
+            }
+            _ => &self.k1.make_qualified_name(function.scope, function.name, ".", true),
+        };
+        if self.llvm_module.get_function(llvm_name).is_some() {
+            if let Some(LlvmLinkage::External) = llvm_linkage {
+                eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
+            } else {
+                return failf!(
+                    self.k1.ast.get_span_for_id(function.parsed_id),
+                    "Dupe function name: {}",
+                    llvm_name
+                );
+            }
+        }
+
         let llvm_function_type = self.make_llvm_function_type(function_type_id)?;
         let is_sret = llvm_function_type.is_sret;
 
@@ -3732,22 +3753,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             param_types.push(res);
         }
 
-        let llvm_name = match function.linkage {
-            TyperLinkage::External(Some(name)) => self.k1.ident_str(name),
-            _ => &self.k1.make_qualified_name(function.scope, function.name, ".", true),
-        };
-        let llvm_linkage = match function.linkage {
-            TyperLinkage::Standard => None,
-            TyperLinkage::External(_name) => Some(LlvmLinkage::External),
-            TyperLinkage::Intrinsic => None,
-        };
-        if self.llvm_module.get_function(llvm_name).is_some() {
-            return failf!(
-                self.k1.ast.get_span_for_id(function.parsed_id),
-                "Dupe function name: {}",
-                llvm_name
-            );
-        }
         let function_value = self.llvm_module.add_function(
             llvm_name,
             llvm_function_type.llvm_function_type,
@@ -3778,7 +3783,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         );
         self.llvm_function_to_k1.insert(function_value, function_id);
 
-        if matches!(function.linkage, TyperLinkage::External(_)) {
+        if function.linkage.is_external() {
             return Ok(function_value);
         }
 
@@ -3894,9 +3899,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let llvm_int_ty = llvm_ty.rich_repr_type().into_int_type();
         let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
-            llvm_int_ty.const_int(integer.to_u64(), true)
+            llvm_int_ty.const_int(integer.to_u64_unconditional(), true)
         } else {
-            llvm_int_ty.const_int(integer.to_u64(), false)
+            llvm_int_ty.const_int(integer.to_u64_unconditional(), false)
         };
         Ok(llvm_value.as_basic_value_enum())
     }
@@ -3998,8 +4003,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // Hack to guarantee presence of required extern declarations
         for (id, function) in self.k1.function_iter() {
-            if let TyperLinkage::External(Some(ident)) = function.linkage {
-                match self.k1.ident_str(ident) {
+            if let TyperLinkage::External { link_name: Some(link_name) } = function.linkage {
+                match self.k1.ident_str(link_name) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
                         self.codegen_function_or_get(id)?;
                     }

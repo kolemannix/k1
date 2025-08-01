@@ -4,6 +4,7 @@ pub(crate) mod infer;
 pub(crate) mod scopes;
 pub(crate) mod static_value;
 pub(crate) mod synth;
+pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
@@ -20,6 +21,7 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use synth::synth_static_option;
+pub use typed_int_value::TypedIntValue;
 
 use crate::{DepEq, DepHash};
 use ahash::HashMapExt;
@@ -75,8 +77,14 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External(Option<Ident>),
+    External { link_name: Option<Ident> },
     Intrinsic,
+}
+
+impl Linkage {
+    pub fn is_external(&self) -> bool {
+        matches!(self, Linkage::External { .. })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1156,322 +1164,6 @@ pub struct TypedMatchArm {
     pub consequent_expr: TypedExprId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypedIntValue {
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    UWord32(u32),
-    UWord64(u64),
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    IWord32(i32),
-    IWord64(i64),
-}
-
-#[macro_export]
-macro_rules! int_binop {
-    ($self:expr, $other:expr, $method:ident) => {
-        match ($self, $other) {
-            (TypedIntValue::U8(a), TypedIntValue::U8(b)) => TypedIntValue::U8(a.$method(*b)),
-            (TypedIntValue::U16(a), TypedIntValue::U16(b)) => TypedIntValue::U16(a.$method(*b)),
-            (TypedIntValue::U32(a), TypedIntValue::U32(b)) => TypedIntValue::U32(a.$method(*b)),
-            (TypedIntValue::U64(a), TypedIntValue::U64(b)) => TypedIntValue::U64(a.$method(*b)),
-            (TypedIntValue::UWord32(a), TypedIntValue::UWord32(b)) => {
-                TypedIntValue::UWord32(a.$method(*b))
-            }
-            (TypedIntValue::UWord64(a), TypedIntValue::UWord64(b)) => {
-                TypedIntValue::UWord64(a.$method(*b))
-            }
-            (TypedIntValue::I8(a), TypedIntValue::I8(b)) => TypedIntValue::I8(a.$method(*b)),
-            (TypedIntValue::I16(a), TypedIntValue::I16(b)) => TypedIntValue::I16(a.$method(*b)),
-            (TypedIntValue::I32(a), TypedIntValue::I32(b)) => TypedIntValue::I32(a.$method(*b)),
-            (TypedIntValue::I64(a), TypedIntValue::I64(b)) => TypedIntValue::I64(a.$method(*b)),
-            (TypedIntValue::IWord32(a), TypedIntValue::IWord32(b)) => {
-                TypedIntValue::IWord32(a.$method(*b))
-            }
-            (TypedIntValue::IWord64(a), TypedIntValue::IWord64(b)) => {
-                TypedIntValue::IWord64(a.$method(*b))
-            }
-            _ => panic!("mismatched int binop types"),
-        }
-    };
-}
-
-impl TypedIntValue {
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            TypedIntValue::U8(_) => "u8",
-            TypedIntValue::U16(_) => "u16",
-            TypedIntValue::U32(_) => "u32",
-            TypedIntValue::U64(_) => "u64",
-            TypedIntValue::UWord32(_) => "uword",
-            TypedIntValue::UWord64(_) => "uword",
-            TypedIntValue::I8(_) => "i8",
-            TypedIntValue::I16(_) => "i16",
-            TypedIntValue::I32(_) => "i32",
-            TypedIntValue::I64(_) => "i64",
-            TypedIntValue::IWord32(_) => "iword",
-            TypedIntValue::IWord64(_) => "iword",
-        }
-    }
-
-    pub fn get_type(&self) -> TypeId {
-        self.get_integer_type().type_id()
-    }
-
-    pub fn bit_not(&self) -> Self {
-        use std::ops::Not;
-
-        match *self {
-            TypedIntValue::U8(x) => TypedIntValue::U8(x.not()),
-            TypedIntValue::U16(x) => TypedIntValue::U16(x.not()),
-            TypedIntValue::U32(x) => TypedIntValue::U32(x.not()),
-            TypedIntValue::U64(x) => TypedIntValue::U64(x.not()),
-            TypedIntValue::UWord32(x) => TypedIntValue::UWord32(x.not()),
-            TypedIntValue::UWord64(x) => TypedIntValue::UWord64(x.not()),
-            TypedIntValue::I8(x) => TypedIntValue::I8(x.not()),
-            TypedIntValue::I16(x) => TypedIntValue::I16(x.not()),
-            TypedIntValue::I32(x) => TypedIntValue::I32(x.not()),
-            TypedIntValue::I64(x) => TypedIntValue::I64(x.not()),
-            TypedIntValue::IWord32(x) => TypedIntValue::IWord32(x.not()),
-            TypedIntValue::IWord64(x) => TypedIntValue::IWord64(x.not()),
-        }
-    }
-
-    pub fn bit_and(&self, other: &Self) -> Self {
-        use std::ops::BitAnd;
-        int_binop!(self, other, bitand)
-    }
-
-    pub fn bit_or(&self, other: &Self) -> Self {
-        use std::ops::BitOr;
-        int_binop!(self, other, bitor)
-    }
-
-    pub fn bit_xor(&self, other: &Self) -> Self {
-        use std::ops::BitXor;
-        int_binop!(self, other, bitxor)
-    }
-
-    pub fn to_u64(&self) -> u64 {
-        match self {
-            TypedIntValue::U8(v) => *v as u64,
-            TypedIntValue::U16(v) => *v as u64,
-            TypedIntValue::U32(v) => *v as u64,
-            TypedIntValue::U64(v) => *v,
-            TypedIntValue::UWord32(v) => *v as u64,
-            TypedIntValue::UWord64(v) => *v,
-            TypedIntValue::I8(v) => *v as u64,
-            TypedIntValue::I16(v) => *v as u64,
-            TypedIntValue::I32(v) => *v as u64,
-            TypedIntValue::I64(v) => *v as u64,
-            TypedIntValue::IWord32(v) => *v as u64,
-            TypedIntValue::IWord64(v) => *v as u64,
-        }
-    }
-
-    // Used for truncation/extension in vm
-    pub fn to_u32(&self) -> u32 {
-        match self {
-            TypedIntValue::U8(v) => *v as u32,
-            TypedIntValue::U16(v) => *v as u32,
-            TypedIntValue::U32(v) => *v,
-            TypedIntValue::U64(v) => *v as u32,
-            TypedIntValue::UWord32(v) => *v,
-            TypedIntValue::UWord64(v) => *v as u32,
-            TypedIntValue::I8(v) => *v as u32,
-            TypedIntValue::I16(v) => *v as u32,
-            TypedIntValue::I32(v) => *v as u32,
-            TypedIntValue::I64(v) => *v as u32,
-            TypedIntValue::IWord32(v) => *v as u32,
-            TypedIntValue::IWord64(v) => *v as u32,
-        }
-    }
-
-    // Used for truncation/extension in vm
-    pub fn to_u16(&self) -> u16 {
-        match self {
-            TypedIntValue::U8(v) => *v as u16,
-            TypedIntValue::U16(v) => *v,
-            TypedIntValue::U32(v) => *v as u16,
-            TypedIntValue::U64(v) => *v as u16,
-            TypedIntValue::UWord32(v) => *v as u16,
-            TypedIntValue::UWord64(v) => *v as u16,
-            TypedIntValue::I8(v) => *v as u16,
-            TypedIntValue::I16(v) => *v as u16,
-            TypedIntValue::I32(v) => *v as u16,
-            TypedIntValue::I64(v) => *v as u16,
-            TypedIntValue::IWord32(v) => *v as u16,
-            TypedIntValue::IWord64(v) => *v as u16,
-        }
-    }
-
-    // Used for truncation/extension in vm
-    pub fn to_u8(&self) -> u8 {
-        match self {
-            TypedIntValue::U8(v) => *v,
-            TypedIntValue::U16(v) => *v as u8,
-            TypedIntValue::U32(v) => *v as u8,
-            TypedIntValue::U64(v) => *v as u8,
-            TypedIntValue::UWord32(v) => *v as u8,
-            TypedIntValue::UWord64(v) => *v as u8,
-            TypedIntValue::I8(v) => *v as u8,
-            TypedIntValue::I16(v) => *v as u8,
-            TypedIntValue::I32(v) => *v as u8,
-            TypedIntValue::I64(v) => *v as u8,
-            TypedIntValue::IWord32(v) => *v as u8,
-            TypedIntValue::IWord64(v) => *v as u8,
-        }
-    }
-
-    pub fn to_i32(&self) -> i32 {
-        match self {
-            TypedIntValue::U8(v) => *v as i32,
-            TypedIntValue::U16(v) => *v as i32,
-            TypedIntValue::U32(v) => *v as i32,
-            TypedIntValue::U64(v) => *v as i32,
-            TypedIntValue::UWord32(v) => *v as i32,
-            TypedIntValue::UWord64(v) => *v as i32,
-            TypedIntValue::I8(v) => *v as i32,
-            TypedIntValue::I16(v) => *v as i32,
-            TypedIntValue::I32(v) => *v,
-            TypedIntValue::I64(v) => *v as i32,
-            TypedIntValue::IWord32(v) => *v,
-            TypedIntValue::IWord64(v) => *v as i32,
-        }
-    }
-
-    pub fn to_i64(&self) -> i64 {
-        match self {
-            TypedIntValue::U8(v) => *v as i64,
-            TypedIntValue::U16(v) => *v as i64,
-            TypedIntValue::U32(v) => *v as i64,
-            TypedIntValue::U64(v) => *v as i64,
-            TypedIntValue::UWord32(v) => *v as i64,
-            TypedIntValue::UWord64(v) => *v as i64,
-            TypedIntValue::I8(v) => *v as i64,
-            TypedIntValue::I16(v) => *v as i64,
-            TypedIntValue::I32(v) => *v as i64,
-            TypedIntValue::I64(v) => *v,
-            TypedIntValue::IWord32(v) => *v as i64,
-            TypedIntValue::IWord64(v) => *v,
-        }
-    }
-
-    pub fn get_integer_type(&self) -> IntegerType {
-        match self {
-            TypedIntValue::U8(_) => IntegerType::U8,
-            TypedIntValue::U16(_) => IntegerType::U16,
-            TypedIntValue::U32(_) => IntegerType::U32,
-            TypedIntValue::U64(_) => IntegerType::U64,
-            TypedIntValue::UWord32(_) => IntegerType::UWord(WordSize::W32),
-            TypedIntValue::UWord64(_) => IntegerType::UWord(WordSize::W64),
-            TypedIntValue::I8(_) => IntegerType::I8,
-            TypedIntValue::I16(_) => IntegerType::I16,
-            TypedIntValue::I32(_) => IntegerType::I32,
-            TypedIntValue::I64(_) => IntegerType::I64,
-            TypedIntValue::IWord32(_) => IntegerType::IWord(WordSize::W32),
-            TypedIntValue::IWord64(_) => IntegerType::IWord(WordSize::W64),
-        }
-    }
-
-    pub fn expect_uword(&self) -> usize {
-        match self {
-            TypedIntValue::UWord64(v) => *v as usize,
-            TypedIntValue::UWord32(v) => *v as usize,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn expect_u64(&self) -> u64 {
-        match self {
-            TypedIntValue::U64(v) => *v,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn is_signed(&self) -> bool {
-        match self {
-            TypedIntValue::I8(_)
-            | TypedIntValue::I16(_)
-            | TypedIntValue::I32(_)
-            | TypedIntValue::I64(_)
-            | TypedIntValue::IWord32(_)
-            | TypedIntValue::IWord64(_) => true,
-            TypedIntValue::U8(_)
-            | TypedIntValue::U16(_)
-            | TypedIntValue::U32(_)
-            | TypedIntValue::U64(_)
-            | TypedIntValue::UWord32(_)
-            | TypedIntValue::UWord64(_) => false,
-        }
-    }
-}
-
-impl From<u64> for TypedIntValue {
-    fn from(value: u64) -> Self {
-        TypedIntValue::U64(value)
-    }
-}
-impl From<u32> for TypedIntValue {
-    fn from(value: u32) -> Self {
-        TypedIntValue::U32(value)
-    }
-}
-impl From<u16> for TypedIntValue {
-    fn from(value: u16) -> Self {
-        TypedIntValue::U16(value)
-    }
-}
-impl From<u8> for TypedIntValue {
-    fn from(value: u8) -> Self {
-        TypedIntValue::U8(value)
-    }
-}
-impl From<i64> for TypedIntValue {
-    fn from(value: i64) -> Self {
-        TypedIntValue::I64(value)
-    }
-}
-impl From<i32> for TypedIntValue {
-    fn from(value: i32) -> Self {
-        TypedIntValue::I32(value)
-    }
-}
-impl From<i16> for TypedIntValue {
-    fn from(value: i16) -> Self {
-        TypedIntValue::I16(value)
-    }
-}
-impl From<i8> for TypedIntValue {
-    fn from(value: i8) -> Self {
-        TypedIntValue::I8(value)
-    }
-}
-
-impl Display for TypedIntValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypedIntValue::U8(v) => write!(f, "{}u8", v),
-            TypedIntValue::U16(v) => write!(f, "{}u16", v),
-            TypedIntValue::U32(v) => write!(f, "{}u32", v),
-            TypedIntValue::U64(v) => write!(f, "{}u64", v),
-            TypedIntValue::UWord32(v) => write!(f, "{}uword", v),
-            TypedIntValue::UWord64(v) => write!(f, "{}uword", v),
-            TypedIntValue::I8(v) => write!(f, "{}i8", v),
-            TypedIntValue::I16(v) => write!(f, "{}i16", v),
-            TypedIntValue::I32(v) => write!(f, "{}i32", v),
-            TypedIntValue::I64(v) => write!(f, "{}i64", v),
-            TypedIntValue::IWord32(v) => write!(f, "{}iword", v),
-            TypedIntValue::IWord64(v) => write!(f, "{}iword", v),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct TypedIntegerExpr {
     pub value: TypedIntValue,
@@ -1706,7 +1398,6 @@ pub enum TypedExpr {
     String(StringId, SpanId),
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
-    Array(ArrayLiteral),
     ArrayGetElement(ArrayGetElement),
     Variable(VariableExpr),
     UnaryOp(UnaryOp),
@@ -1770,7 +1461,6 @@ impl TypedExpr {
             TypedExpr::Bool(_, _) => "bool",
             TypedExpr::Struct(_) => "struct",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
-            TypedExpr::Array(_) => "array_literal",
             TypedExpr::ArrayGetElement(_) => "array_get_element",
             TypedExpr::Variable(_) => "variable",
             TypedExpr::UnaryOp(_) => "unary_op",
@@ -1805,7 +1495,6 @@ impl TypedExpr {
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
-            TypedExpr::Array(a) => a.type_id,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
@@ -1840,7 +1529,6 @@ impl TypedExpr {
             TypedExpr::String(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
-            TypedExpr::Array(a) => a.span,
             TypedExpr::ArrayGetElement(ag) => ag.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
@@ -4164,13 +3852,16 @@ impl TypedProgram {
     /// Size type can be a type parameter, in which case its 0
     /// But it can also be a known static uword, in which case its the value of it
     pub fn get_concrete_size_of_array(&self, size_type: TypeId) -> Option<u64> {
-        match self.types.get_no_follow_static(size_type) {
+        match self.get_value_of_static_type(size_type) {
+            Some(sv) => sv.as_uword().map(|s| s as u64),
+            None => None,
+        }
+    }
+
+    pub fn get_value_of_static_type(&self, type_id: TypeId) -> Option<&StaticValue> {
+        match self.types.get_no_follow_static(type_id) {
             Type::Static(StaticType { value_id: Some(value_id), .. }) => {
-                match self.static_values.get(*value_id) {
-                    StaticValue::Int(TypedIntValue::UWord32(u)) => Some(*u as u64),
-                    StaticValue::Int(TypedIntValue::UWord64(u)) => Some(*u),
-                    _ => None,
-                }
+                Some(self.static_values.get(*value_id))
             }
             _ => None,
         }
@@ -9794,9 +9485,28 @@ impl TypedProgram {
                 } else {
                     array_type.element_type
                 };
-                // nocommit(1): Attempt static lift of index and try a static bounds check
-                // nocommit(0): Add bounds check to vm ArrayGetElement
-                // nocommit(0): Add bounds check to codegen_llvm ArrayGetElement
+                // nocommit(0): make this terser; find other places we look at static values
+                //              and make them terser
+                if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
+                    let static_index_type = self.exprs.get(static_index_expr).get_type();
+                    if let Some(index_usize) = self
+                        .get_value_of_static_type(static_index_type)
+                        .and_then(|sv| sv.as_uword())
+                    {
+                        if let Some(concrete_size) = array_type.concrete_size {
+                            if index_usize as u64 >= concrete_size {
+                                return failf!(
+                                    span,
+                                    "Array index out of bounds: {} >= {}",
+                                    index_usize,
+                                    concrete_size
+                                );
+                            }
+                        }
+                    }
+                }
+                // nocommit(0): Add runtime bounds check to vm ArrayGetElement
+                // nocommit(0): Add runtime bounds check to codegen_llvm ArrayGetElement
                 Ok(Either::Left(self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
                     base,
                     index: index_expr,
@@ -12836,7 +12546,7 @@ impl TypedProgram {
         let function_name = function.name;
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
-        let is_extern = matches!(function.linkage, Linkage::External(_));
+        let is_extern = matches!(function.linkage, Linkage::External { .. });
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         let is_intrinsic = function.intrinsic_type.is_some();
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));

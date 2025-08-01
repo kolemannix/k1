@@ -96,6 +96,13 @@ impl StaticValue {
             _ => None,
         }
     }
+
+    pub fn as_uword(&self) -> Option<usize> {
+        match self {
+            StaticValue::Int(int) => int.as_uword(),
+            _ => None,
+        }
+    }
 }
 
 // StaticValue deduplication ensures identical values share the same ID.

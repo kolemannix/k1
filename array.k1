@@ -69,5 +69,17 @@ fn main(): i32 {
   testLiterals();
   testFilled();
 
+
+  assert(testCompile(array.get(11)) is .Some(_));
+
+  let* array: Array[10 x f32]* = mem/zeroed();
+  array.set(0, 3.14);
+  let buf = bufferFromArray(array);
+  assert(buf.get(0) == array.get(0));
+  assertEquals(buf.get(0), array.get(0));
+  let x = buf.get(0);
+  println("first elem is: {x}");
+  println("first elem is: {array.get(0)}");
+
   0
 }
