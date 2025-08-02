@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 deftype StringBuilder = { charList: List[char]* }
 ns StringBuilder {
   deftype alias Part = StringBuilder.charList.value.T

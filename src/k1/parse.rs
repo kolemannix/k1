@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::fmt::{Display, Formatter, Write};
 use std::num::NonZeroU32;
 

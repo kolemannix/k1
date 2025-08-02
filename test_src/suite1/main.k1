@@ -81,11 +81,11 @@ fn coreLib(): unit {
 fn main(): i32 {
   // Low
   low();
-  // #static low();
+  #static low();
 
   // Moderate
   moderate();
-  // #static moderate();
+  #static moderate();
 
   static_parameter/test();
   static_run/test();
@@ -93,7 +93,7 @@ fn main(): i32 {
   test_meta/test();
 
   coreLib();
-  // #static coreLib();
+  #static coreLib();
 
   println("All tests passed!");
 

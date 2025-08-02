@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 /// Inference in the `typer` phase.
 ///
 /// Obviously the lines are really blurry, and I honestly might just prefer to leave everything in

@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 knix
+ * All rights reserved.
+ */
+
 #include <stdio.h>
 
 // TODO(rt) switch to stb's snprintf

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::fs;
 use std::fs::File;
 use std::io::Write;

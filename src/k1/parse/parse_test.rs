@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use crate::{
     compiler::detect_host_target,
     parse::{self, *},

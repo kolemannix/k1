@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::collections::hash_map::Entry;
 
 use crate::nz_u32_id;

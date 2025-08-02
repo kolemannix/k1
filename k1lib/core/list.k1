@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 // A growable, ordered collection of elements.
 // Backed by an efficient, contiguously allocated buffer
 //

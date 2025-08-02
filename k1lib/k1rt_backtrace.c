@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 knix
+ * All rights reserved.
+ */
+
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
 #include <stdio.h>
