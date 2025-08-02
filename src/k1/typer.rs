@@ -4669,15 +4669,22 @@ impl TypedProgram {
 
         vm.allow_emits = static_ctx.is_metaprogram;
 
-        let value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters)?;
+        let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
+            |mut e| {
+                let stack_trace = vm::make_stack_trace(self, &vm.stack);
+                e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                e
+            },
+        )?;
 
         if cfg!(debug_assertions) {
-            if let Err(msg) = self.check_types(required_type_id, value.get_type(), ctx.scope_id) {
+            if let Err(msg) = self.check_types(required_type_id, vm_value.get_type(), ctx.scope_id)
+            {
                 return failf!(span, "static value type mismatch: {msg}");
             }
         }
 
-        let static_value_id = vm::vm_value_to_static_value(self, vm, value, span)?;
+        let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
 
         let emits = vm.emits.clone();
 

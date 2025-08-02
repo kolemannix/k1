@@ -134,7 +134,7 @@ fn test(): unit {
   }, "Hello");
 
   assertEquals[string?](
-    testCompile( #static assert(false) ),
+    testCompile( #static assert(false) ).map(\(s) s.take(38)),
     some("Static execution exited with code: 111")
   );
 
