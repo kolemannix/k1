@@ -21,6 +21,13 @@ ns Opt {
     }
   }
 
+  fn map[T, U](self: Opt[T], f: some \T -> U): Opt[U] {
+    switch self {
+      .None -> .None,
+      .Some(t) -> .Some(f(t))
+    }
+  }
+
 }
 
 // Convenience constructors in the global scope for Opt instances

@@ -1579,7 +1579,11 @@ impl Types {
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Layout {
-        *self.layouts.get(type_id)
+        let root_type_id = match self.get_no_follow(type_id) {
+            Type::RecursiveReference(rr) => rr.root_type_id,
+            _ => type_id,
+        };
+        *self.layouts.get(root_type_id)
     }
 
     pub fn get_ast_node(&self, type_id: TypeId) -> Option<ParsedId> {
