@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use itertools::Itertools;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};

@@ -44,10 +44,9 @@ fn testArray(): unit {
 }
 
 fn test(): unit {
-  // nocommit(0); commit array test
   assertEquals(types/sizeOf[Thing](), 9216);
 
-  #static testArray();
+  testArray();
   testArray();
 
   testLiterals();

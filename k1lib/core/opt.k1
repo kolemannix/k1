@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 ns Opt {
   fn isSome[T](self: T?): bool { self is .Some(_) }
   fn isNone[T](self: T?): bool { self is .None }

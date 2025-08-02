@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 // Represents a contiguously allocated segment of memory that
 // is alleged to store values of type T. This is an inherently
 // unsafe type as all of the memory is not guaranteed to be populated

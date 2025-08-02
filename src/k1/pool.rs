@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;

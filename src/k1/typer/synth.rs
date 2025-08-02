@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 /// `synth`, synthesis, aka Spitting out typed code, used for features that desugar, as well
 /// as some general lowering
 use super::*;

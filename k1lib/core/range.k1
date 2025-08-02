@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 deftype IntRange = { start: int, end: int }
 ns IntRange {
   fn make(start: int, end: int): IntRange { { start, end } }

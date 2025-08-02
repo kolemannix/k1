@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 impl Bitwise for u8 {
   intern fn bitNot(self: u8): u8
   intern fn bitAnd(self: u8, other: u8): u8

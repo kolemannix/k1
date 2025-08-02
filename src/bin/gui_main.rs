@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::{
     ffi::{CStr, CString},
     sync::{Arc, RwLock, mpsc},

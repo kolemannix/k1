@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use smallvec::SmallVec;

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use smallvec::SmallVec;
 
 pub mod codegen_llvm;

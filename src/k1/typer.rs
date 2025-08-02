@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 pub(crate) mod derive;
 pub(crate) mod dump;
 pub(crate) mod infer;

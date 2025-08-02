@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 #[cfg(test)]
 mod stack_tests {
     use ecow::eco_vec;

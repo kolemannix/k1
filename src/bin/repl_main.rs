@@ -1,3 +1,6 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
 use std::process::ExitCode;
 
 use k1::compiler::CompilerConfig;
