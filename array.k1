@@ -21,9 +21,7 @@ fn testLiterals(): unit {
 fn testFilled(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let buffer: Buffer[u8] = Buffer/filledIn(size = 64, value = 3);
-  // this doesnt infer because we don't look at the return type first
-  // let array: Array[64 x u8] = Array/filledIn(3, (64: uword).toStatic());
-  let array: Array[64 x u8] = Array/filledIn(3: u8, (64: uword).toStatic());
+  let array: Array[64 x u8]* = Array/filledIn(3, 64);
   let list: List[u8] = List/filledIn(size = 64, value = 3);
   assertEquals(buffer.len, 64);
   assertEquals(array.len(), 64);
