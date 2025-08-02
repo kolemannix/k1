@@ -1569,7 +1569,7 @@ impl TypedExpr {
 enum CheckExprTypeResult {
     Ok,
     Err(String),
-    Coerce(TypedExprId),
+    Coerce(TypedExprId, &'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -4248,51 +4248,81 @@ impl TypedProgram {
     ) -> CheckExprTypeResult {
         let actual_type_id = self.exprs.get(expr).get_type();
 
-        if let Err(msg) = self.check_types(expected, actual_type_id, scope_id) {
-            let result = match (
-                self.types.get_no_follow_static(expected),
-                self.types.get_static_type_of_type(actual_type_id),
-            ) {
-                // If we failed typechecking, and passed a static, then see
-                // whether the type inside this static would pass muster under the 'expected type',
-                // If so, erase the static
-                (_, Some(actual_static))
-                    if self
-                        .check_types(expected, actual_static.inner_type_id, scope_id)
-                        .is_ok() =>
-                {
-                    CheckExprTypeResult::Coerce(self.synth_cast(
-                        expr,
-                        expected,
-                        CastType::StaticErase,
-                        None,
-                    ))
-                }
-                // If we failed typechecking, and we expected a static, and we passed a non-static
-                // Try to lift it
-                (Type::Static(expected_static), None) => {
-                    if expected_static.inner_type_id == actual_type_id {
-                        if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                            CheckExprTypeResult::Coerce(static_lifted)
-                        } else {
-                            CheckExprTypeResult::Err(msg)
-                        }
-                    } else {
-                        CheckExprTypeResult::Err(msg)
-                    }
-                }
-                _ => CheckExprTypeResult::Err(msg),
-            };
-            if let CheckExprTypeResult::Coerce(coerced_expr) = result {
-                debug!(
-                    "Coercing {} to {}",
-                    self.expr_to_string(expr),
-                    self.expr_to_string(coerced_expr),
+        let check_result = self.check_types(expected, actual_type_id, scope_id);
+        let Err(msg) = check_result else { return CheckExprTypeResult::Ok };
+
+        // Static lifting and erasing
+        match (
+            self.types.get_no_follow_static(expected),
+            self.types.get_static_type_of_type(actual_type_id),
+        ) {
+            // If we failed typechecking, and passed a static, then see
+            // whether the type inside this static would pass muster under the 'expected type',
+            // If so, erase the static
+            (_, Some(actual_static))
+                if self.check_types(expected, actual_static.inner_type_id, scope_id).is_ok() =>
+            {
+                return CheckExprTypeResult::Coerce(
+                    self.synth_cast(expr, expected, CastType::StaticErase, None),
+                    "static_erase",
                 );
             }
-            result
-        } else {
-            CheckExprTypeResult::Ok
+            // If we failed typechecking, and we expected a static, and we passed a non-static
+            // Try to lift it
+            (Type::Static(expected_static), None) => {
+                if expected_static.inner_type_id == actual_type_id {
+                    if let Ok(static_lifted) = self.attempt_static_lift(expr) {
+                        return CheckExprTypeResult::Coerce(static_lifted, "static_lift");
+                    }
+                }
+            }
+            _ => {}
+        };
+
+        // If we expect a lambda object and you pass a lambda
+        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
+            if let Type::Lambda(lambda_type) = self.get_expr_type(expr) {
+                let span = self.exprs.get(expr).get_span();
+                let lambda_object_type = self.types.add_lambda_object(
+                    &self.ast.idents,
+                    lambda_type.function_type,
+                    lambda_type.parsed_id,
+                );
+                return CheckExprTypeResult::Coerce(
+                    self.exprs.add(TypedExpr::Cast(TypedCast {
+                        cast_type: CastType::LambdaToLambdaObject,
+                        base_expr: expr,
+                        target_type_id: lambda_object_type,
+                        span,
+                    })),
+                    "lam->lamobj",
+                );
+            }
+        }
+
+        CheckExprTypeResult::Err(msg)
+    }
+
+    pub fn check_and_coerce_expr(
+        &mut self,
+        expected: TypeId,
+        expr: TypedExprId,
+        scope_id: ScopeId,
+    ) -> TyperResult<TypedExprId> {
+        match self.check_expr_type(expected, expr, scope_id) {
+            CheckExprTypeResult::Err(msg) => {
+                let span = self.exprs.get(expr).get_span();
+                Err(TyperError { message: msg, span, level: ErrorLevel::Error })
+            }
+            CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
+                debug!(
+                    "Coerced with rule {rule_kind} {} -> {}",
+                    self.expr_to_string(expr),
+                    self.expr_to_string(new_expr)
+                );
+                Ok(new_expr)
+            }
+            CheckExprTypeResult::Ok => Ok(expr),
         }
     }
 
@@ -6146,27 +6176,6 @@ impl TypedProgram {
         scope_id: ScopeId,
         _parsed_id: ParsedId,
     ) -> CoerceResult {
-        // If we expect a lambda object and you pass a lambda
-        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
-            if let Type::Lambda(lambda_type) = self.get_expr_type(expression) {
-                let span = self.exprs.get(expression).get_span();
-                let lambda_object_type = self.types.add_lambda_object(
-                    &self.ast.idents,
-                    lambda_type.function_type,
-                    lambda_type.parsed_id,
-                );
-                return CoerceResult::Coerced(
-                    "lam->lamobj",
-                    self.exprs.add(TypedExpr::Cast(TypedCast {
-                        cast_type: CastType::LambdaToLambdaObject,
-                        base_expr: expression,
-                        target_type_id: lambda_object_type,
-                        span,
-                    })),
-                );
-            }
-        }
-
         // If we expect a lambda object and you pass a function reference... (optimized lambda)
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
             if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expression) {
@@ -6292,7 +6301,9 @@ impl TypedProgram {
             ) {
                 CoerceResult::Fail(base_result) => base_result,
                 CoerceResult::Coerced(reason, new_expr) => {
-                    debug!(
+                    let span = self_.ast.exprs.get_span(expr_id);
+                    // self_.write_location(&mut stderr(), span);
+                    eprintln!(
                         "coerce succeeded with rule {reason} and resulted in expr {}",
                         self_.expr_to_string_with_type(new_expr),
                     );
@@ -6595,19 +6606,24 @@ impl TypedProgram {
         let elements: Vec<TypedExprId> = {
             let mut elements = Vec::with_capacity(element_count);
             for elem in parsed_elements.iter() {
+                let current_expected_type = element_type.or(expected_element_type);
                 let element_expr = self.eval_expr(
                     *elem,
                     ctx.with_expected_type(element_type.or(expected_element_type)),
                 )?;
-                let this_element_type = self.exprs.get(element_expr).get_type();
+                let element_expr_checked = match current_expected_type {
+                    None => element_expr,
+                    Some(current_expected_type) => self
+                        .check_and_coerce_expr(current_expected_type, element_expr, list_lit_scope)
+                        .map_err(|e| {
+                            errf!(e.span, "List element had incorrect type: {}", e.message)
+                        })?,
+                };
+                let this_element_type = self.exprs.get(element_expr_checked).get_type();
                 if element_type.is_none() {
                     element_type = Some(this_element_type)
-                } else if let Err(msg) =
-                    self.check_types(element_type.unwrap(), this_element_type, list_lit_scope)
-                {
-                    return failf!(span, "List element had incorrect type: {msg}");
                 };
-                elements.push(element_expr);
+                elements.push(element_expr_checked);
             }
             elements
         };
@@ -9475,14 +9491,9 @@ impl TypedProgram {
                 let index_arg = self.ast.p_call_args.get_nth(call.args, 1);
                 let index_expr =
                     self.eval_expr(index_arg.value, ctx.with_expected_type(Some(UWORD_TYPE_ID)))?;
-                let index_expr = match self.check_expr_type(UWORD_TYPE_ID, index_expr, ctx.scope_id)
-                {
-                    CheckExprTypeResult::Err(msg) => {
-                        return failf!(span, "Array get index type error: {}", msg);
-                    }
-                    CheckExprTypeResult::Coerce(new_expr) => new_expr,
-                    CheckExprTypeResult::Ok => index_expr,
-                };
+                let index_expr = self
+                    .check_and_coerce_expr(UWORD_TYPE_ID, index_expr, ctx.scope_id)
+                    .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
                 let is_referencing = n == self.ast.idents.builtins.getRef;
                 if is_referencing
@@ -9962,7 +9973,8 @@ impl TypedProgram {
         ).map_err(|msg| {
            errf!(
                call_span,
-               "Call to `{}` with type Self = {} does not work, since it does not implement ability {}. {}",
+               "Call to `{}`: {} with type Self = {} does not work, since it does not implement ability {}. {}",
+               self.namespaced_identifier_to_string(&fn_call.name),
                self.type_id_to_string(function_type_id),
                self.type_id_to_string(solved_self),
                self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
@@ -10427,22 +10439,20 @@ impl TypedProgram {
         param: &FnParamType,
         arg: TypedExprId,
         calling_scope: ScopeId,
-    ) -> TyperResult<Option<TypedExprId>> {
+    ) -> TyperResult<TypedExprId> {
         debug!(
             "Checking that argument {} has type {}",
             self.expr_to_string(arg),
             self.type_id_to_string(param.type_id)
         );
-        match self.check_expr_type(param.type_id, arg, calling_scope) {
-            CheckExprTypeResult::Coerce(new_expr_id) => Ok(Some(new_expr_id)),
-            CheckExprTypeResult::Ok => Ok(None),
-            CheckExprTypeResult::Err(msg) => failf!(
-                self.exprs.get(arg).get_span(),
+        self.check_and_coerce_expr(param.type_id, arg, calling_scope).map_err(|e| {
+            errf!(
+                e.span,
                 "Invalid type for parameter {}: {}",
                 self.ident_str(param.name),
-                msg
-            ),
-        }
+                e.message
+            )
+        })
     }
 
     pub fn is_callee_generic(&self, callee: &Callee) -> bool {
@@ -10544,10 +10554,7 @@ impl TypedProgram {
                             self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
                         }
                     };
-                    let checked_expr = match self.check_call_argument(param, expr, ctx.scope_id)? {
-                        None => expr,
-                        Some(coerced_expr) => coerced_expr,
-                    };
+                    let checked_expr = self.check_call_argument(param, expr, ctx.scope_id)?;
                     typechecked_args.push(checked_expr);
                 }
                 (callee, typechecked_args, SliceHandle::Empty)
@@ -10657,19 +10664,15 @@ impl TypedProgram {
                         }
                     };
 
-                    let checked_expr = match self
-                        .check_call_argument(param, expr, ctx.scope_id)
-                        .map_err(|err| {
+                    let checked_expr =
+                        self.check_call_argument(param, expr, ctx.scope_id).map_err(|err| {
                             errf!(
                                 err.span,
                                 "Invalid call to {}. {}",
                                 self.namespaced_identifier_to_string(&fn_call.name),
                                 err.message
                             )
-                        })? {
-                        None => expr,
-                        Some(coerced_expr) => coerced_expr,
-                    };
+                        })?;
                     typechecked_args.push(checked_expr);
                 }
 
@@ -11353,19 +11356,11 @@ impl TypedProgram {
                     self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_rhs_type))?;
                 let value_expr = match expected_rhs_type {
                     None => value_expr,
-                    Some(expected_type) => {
-                        match self.check_expr_type(expected_type, value_expr, ctx.scope_id) {
-                            CheckExprTypeResult::Ok => value_expr,
-                            CheckExprTypeResult::Err(msg) => {
-                                return failf!(
-                                    parsed_let.span,
-                                    "Local variable type mismatch: {}",
-                                    msg
-                                );
-                            }
-                            CheckExprTypeResult::Coerce(new_expr) => new_expr,
-                        }
-                    }
+                    Some(expected_type) => self
+                        .check_and_coerce_expr(expected_type, value_expr, ctx.scope_id)
+                        .map_err(|e| {
+                            errf!(e.span, "Local variable type mismatch: {}", e.message)
+                        })?,
                 };
                 let actual_type = self.exprs.get(value_expr).get_type();
 
