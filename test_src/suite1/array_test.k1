@@ -1,9 +1,4 @@
-fn listToArray[N: static uword, T](list: List[T], count: N): Array[N x T]* {
-  let countVal = count.fromStatic();
-  assertEquals(list.len, countVal);
-  let base: Pointer = list.toBuffer().cloned().dataPointer();
-  base as Array[N x T]*
-}
+ns array_test;
 
 deftype Thing = {
   data: Array[1024 x u8],
@@ -37,7 +32,7 @@ fn testArray(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
-  let a: Array[10 x u8]* = listToArray(ls, 10);
+  let a: Array[10 x u8]* = List/toArray(ls, 10);
   let* w = List/empty[char]();
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
@@ -48,7 +43,7 @@ fn testArray(): unit {
 
 }
 
-fn main(): i32 {
+fn test(): unit {
   // nocommit(0); commit array test
   assertEquals(types/sizeOf[Thing](), 9216);
 
@@ -58,19 +53,12 @@ fn main(): i32 {
   testLiterals();
   testFilled();
 
-  assert(testCompile(array.get(11)) is .Some(_));
-
   let* array: Array[10 x f32]* = mem/zeroed();
+  assert(testCompile(array.get(11)) is .Some(_));
   array.set(0, 3.14);
   let buf = Buffer/fromArray(array);
   assert(buf.get(0) == array.get(0));
   assertEquals(buf.get(0), array.get(0));
 
-  println("first elem is: {buf.get(0)}");
-  println("first elem is: {array.get(0)}");
-
-  let x = 44: uword;
-  array.get(x);
-
-  0
+  ()
 }

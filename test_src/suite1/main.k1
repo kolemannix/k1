@@ -51,6 +51,7 @@ fn moderate(): unit {
   enum_fail/inner/test();
   match_fails/test();
   require_test/test();
+  array_test/test();
   matching_if/test();
   lambdas/test();
   condcomp/test();

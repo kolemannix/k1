@@ -16,6 +16,9 @@ ns List {
     withCapacity[T](0)
   }
 
+  fn len[T](self: List[T]): uword { self.len }
+  fn cap[T](self: List[T]): uword { self.buffer.len }
+
   fn filled[T](size: uword, value: T): List[T] {
     let buffer = Buffer/filled(size, value);
     { len: size, buffer: buffer }
@@ -50,21 +53,30 @@ ns List {
     self.buffer.slice(0, self.len)
   }
 
+  fn toArray[N: static uword, T](self: List[T], count: N): Array[N x T]* {
+    let countVal = count.fromStatic();
+    assertEquals(self.len, countVal);
+    let base: Pointer = self.toBuffer().cloned().dataPointer();
+    base as Array[N x T]*
+  }
+
+  // The possibly-uninitialized backing buffer of this List
   fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
 
-  fn cap[T](self: List[T]): uword { self.buffer.len }
-
   fn getRef[T](self: List[T]*, index: uword): T* {
-    self.*.buffer.getRef[T](index)
+    if index >= self.len {
+      crash("List index out of bounds: {index} >= {self.len}")
+    };
+    self.buffer.getRef[T](index)
   }
 
   fn set[T](self: List[T]*, index: uword, elem: T): unit {
-    self.*.buffer.set(index, elem);
+    self.buffer.set(index, elem);
   }
 
   fn get[T](self: List[T], index: uword): T {
     if index >= self.len {
-      crash("List index out of bounds")
+      crash("List index out of bounds: {index} >= {self.len}")
     };
     self.buffer.get(index)
   }
