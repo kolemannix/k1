@@ -68,11 +68,7 @@ fn main(): i32 {
   assert(buf.get(0) == array.get(0));
   assertEquals(buf.get(0), array.get(0));
 
-  // nocommit(1) Whats happening here?!
-  // println("first elem is: {buf.get(0)}");
-
-  let x = buf.get(0);
-  println("first elem is: {x}");
+  println("first elem is: {buf.get(0)}");
   println("first elem is: {array.get(0)}");
 
   let x = 44: uword;

@@ -202,6 +202,7 @@ void _k1_show_backtrace(void) {
     unw_get_reg(&cursor, UNW_REG_SP, &sp);
 
     source_location_t loc;
+    // nocommit: its megaslow, maybe see if claude can fix
     resolve_source_location(ip, &loc);
 
     if (loc.found && loc.line_number > 0) {
