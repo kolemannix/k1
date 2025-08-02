@@ -126,7 +126,7 @@ ns sys {
     if k1/IS_STATIC {
       println("<todo: static backtrace intrinsic>");
     } else {
-      k1rt/_k1_show_backtrace_with_lines();
+      k1rt/_k1_show_backtrace();
     }
   }
 
@@ -399,8 +399,7 @@ ns u8 {
 }
 
 ns k1rt {
-  extern(_k1_show_backtrace) fn _k1_show_backtrace_libunwind(): unit
-  extern(_k1_show_backtrace_with_lines) fn _k1_show_backtrace_with_lines(): unit
+  extern(_k1_show_backtrace) fn _k1_show_backtrace(): unit
   // int _k1_sprintf_f32(char *buf, size_t size, const char *fmt, float arg)
   extern(_k1_snprintf_f64) fn snprintf_f32(buf: Pointer, size: uword, float: f32): i32
   extern(_k1_snprintf_f64) fn snprintf_f64(buf: Pointer, size: uword, float: f64): i32

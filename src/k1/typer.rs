@@ -7255,10 +7255,14 @@ impl TypedProgram {
                 let print_expr = match part {
                     parse::InterpolatedStringPart::String(s) => {
                         let string_expr = self.exprs.add(TypedExpr::String(s, span));
-                        self.synth_printto_call(string_expr, string_builder_var.variable_expr, ctx)?
+                        self.synth_printto_call(
+                            string_expr,
+                            string_builder_var.variable_expr,
+                            block_ctx,
+                        )?
                     }
                     parse::InterpolatedStringPart::Expr(expr_id) => {
-                        let typed_expr_to_stringify = self.eval_expr(expr_id, ctx)?;
+                        let typed_expr_to_stringify = self.eval_expr(expr_id, block_ctx)?;
                         self.synth_printto_call(
                             typed_expr_to_stringify,
                             string_builder_var.variable_expr,
