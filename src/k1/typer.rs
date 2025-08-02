@@ -2905,10 +2905,13 @@ impl TypedProgram {
                         self.type_id_to_string(static_type.inner_type_id)
                     );
                 }
-                let concrete_size = self.get_concrete_size_of_array(size_type_id);
+                let concrete_size = self.get_concrete_count_of_array(size_type_id);
 
-                let array_type =
-                    Type::Array(ArrayType { element_type, size_type: size_type_id, concrete_size });
+                let array_type = Type::Array(ArrayType {
+                    element_type,
+                    size_type: size_type_id,
+                    concrete_count: concrete_size,
+                });
                 let type_id = self.types.add_anon(array_type);
                 Ok(type_id)
             }
@@ -3829,11 +3832,11 @@ impl TypedProgram {
                     type_id // No change needed
                 } else {
                     // Create new Array type with substituted element type
-                    let concrete_size = self.get_concrete_size_of_array(new_size_type);
+                    let concrete_size = self.get_concrete_count_of_array(new_size_type);
                     let new_array_type = Type::Array(ArrayType {
                         element_type: new_element_type,
                         size_type: new_size_type,
-                        concrete_size,
+                        concrete_count: concrete_size,
                     });
                     self.types.add_anon(new_array_type)
                 }
@@ -3848,10 +3851,10 @@ impl TypedProgram {
         res
     }
 
-    /// Based on the 'size_type' of an array, determine what its concrete size is
+    /// Based on the 'size_type' of an array, determine what its concrete count is
     /// Size type can be a type parameter, in which case its 0
     /// But it can also be a known static uword, in which case its the value of it
-    pub fn get_concrete_size_of_array(&self, size_type: TypeId) -> Option<u64> {
+    pub fn get_concrete_count_of_array(&self, size_type: TypeId) -> Option<u64> {
         match self.get_value_of_static_type(size_type) {
             Some(sv) => sv.as_uword().map(|s| s as u64),
             None => None,
@@ -5534,7 +5537,14 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedIntValue> {
         let default = IntegerType::IWord(self.target_word_size());
-        let expected_int_type = match ctx.expected_type_id {
+        let expected_type_id = match ctx.expected_type_id {
+            None => None,
+            Some(t) => Some(match self.types.get_no_follow_static(t) {
+                Type::Static(stat) => stat.inner_type_id,
+                _ => t,
+            }),
+        };
+        let expected_int_type = match expected_type_id {
             None => default,
             Some(U8_TYPE_ID) => IntegerType::U8,
             Some(U16_TYPE_ID) => IntegerType::U16,
@@ -9439,7 +9449,7 @@ impl TypedProgram {
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         match call.name.name {
             n if n == self.ast.idents.builtins.len => {
-                let array_length = match array_type.concrete_size {
+                let array_length = match array_type.concrete_count {
                     None => {
                         // We have some generic Array type like arr: Array[N, T] where N is a type
                         // parameter
@@ -9485,15 +9495,13 @@ impl TypedProgram {
                 } else {
                     array_type.element_type
                 };
-                // nocommit(0): make this terser; find other places we look at static values
-                //              and make them terser
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get(static_index_expr).get_type();
                     if let Some(index_usize) = self
                         .get_value_of_static_type(static_index_type)
                         .and_then(|sv| sv.as_uword())
                     {
-                        if let Some(concrete_size) = array_type.concrete_size {
+                        if let Some(concrete_size) = array_type.concrete_count {
                             if index_usize as u64 >= concrete_size {
                                 return failf!(
                                     span,
@@ -9505,16 +9513,44 @@ impl TypedProgram {
                         }
                     }
                 }
-                // nocommit(0): Add runtime bounds check to vm ArrayGetElement
-                // nocommit(0): Add runtime bounds check to codegen_llvm ArrayGetElement
-                Ok(Either::Left(self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
-                    base,
-                    index: index_expr,
-                    result_type,
-                    array_type: array_type_id,
-                    is_referencing,
+                let get_element_expr =
+                    self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
+                        base,
+                        index: index_expr,
+                        result_type,
+                        array_type: array_type_id,
+                        is_referencing,
+                        span,
+                    }));
+                let array_length_expr = self.synth_typed_method_call(
+                    qident!(self, span, "len"),
+                    &[],
+                    &[base],
+                    ctx.with_no_expected_type(),
+                )?;
+                let is_in_bounds = self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
+                    kind: BinaryOpKind::Less,
+                    ty: BOOL_TYPE_ID,
+                    lhs: index_expr,
+                    rhs: array_length_expr,
                     span,
-                }))))
+                }));
+                let crash_message = self.synth_string_literal("Array index out of bounds", span);
+                let crash_oob = self.synth_typed_function_call(
+                    qident!(self, span, ["core"], "crashBounds"),
+                    &[],
+                    &[array_length_expr, index_expr, crash_message],
+                    ctx.with_no_expected_type(),
+                )?;
+                let if_else_expr = self.synth_if_else(
+                    smallvec![],
+                    result_type,
+                    is_in_bounds,
+                    get_element_expr,
+                    crash_oob,
+                    span,
+                );
+                Ok(Either::Left(if_else_expr))
             }
             _ => {
                 let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
@@ -14110,7 +14146,7 @@ impl TypedProgram {
                 let element_type_id_value_id = self.static_values.add(StaticValue::Int(
                     TypedIntValue::U64(array_type.element_type.as_u32() as u64),
                 ));
-                let maybe_concrete_size_value_id = match array_type.concrete_size {
+                let maybe_concrete_size_value_id = match array_type.concrete_count {
                     None => None,
                     Some(size) => {
                         Some(self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(size))))

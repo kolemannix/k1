@@ -434,3 +434,8 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     sys/exit(1)
   }
 }
+
+fn crashBounds(size: uword, index: uword, msg: string): never {
+  crash("{msg}: {index} >= {size}")
+}
+

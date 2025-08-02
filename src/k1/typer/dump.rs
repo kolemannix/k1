@@ -364,7 +364,7 @@ impl TypedProgram {
             }
             Type::Array(array_type) => {
                 w.write_str("Array[")?;
-                if let Some(size) = array_type.concrete_size {
+                if let Some(size) = array_type.concrete_count {
                     write!(w, "{}", size)?;
                 } else {
                     self.display_type_id(array_type.size_type, expand, w)?;

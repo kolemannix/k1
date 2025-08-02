@@ -346,6 +346,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedProgram, CompileM
 
 pub fn write_executable(
     debug: bool,
+    target: Target,
     k1_lib_dir: &Path,
     out_dir: &Path,
     module_name: &Path,
@@ -365,8 +366,17 @@ pub fn write_executable(
     let out_name = out_dir.join(module_name);
     let out_file = out_name.to_str().unwrap();
     let k1rt_c_path = k1_lib_dir.join("k1rt.c");
-    // Note: Could we do this a lot more efficiently by just feeding the in-memory LLVM IR to libclang or whatever the library version is called.
-    build_cmd.args([
+    let k1rt_backtrace_path = k1_lib_dir.join("k1rt_backtrace.c");
+
+    let llvm_include_path = llvm_base.join("include");
+    let llvm_include_str = llvm_include_path.to_str().unwrap();
+    let macos_version_flag = if target.target_os() == TargetOs::MacOs {
+        Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
+    } else {
+        None
+    };
+
+    let mut build_args = vec![
         // "-v",
         if debug { "-g" } else { "" },
         if debug { "-fsanitize=address,undefined" } else { "" },
@@ -374,14 +384,35 @@ pub fn write_executable(
         "-L",
         llvm_lib_base.to_str().unwrap(),
         "-I",
-        llvm_base.join("include").to_str().unwrap(),
-        &format!("-mmacosx-version-min={}", MAC_SDK_VERSION),
-        "-lunwind",
+        llvm_include_str,
+    ];
+
+    match target.target_os() {
+        TargetOs::MacOs => {
+            build_args.push(macos_version_flag.as_ref().unwrap());
+            build_args.push("-lunwind");
+        }
+        TargetOs::Linux => {
+            build_args.push("-lunwind");
+            if debug {
+                // Requires: sudo apt-get install libdw-dev (or equivalent)
+                // Alternative: Use -static flag to statically link for distribution
+                build_args.push("-ldw");
+                build_args.push("-DHAVE_LIBDW");
+            }
+        }
+        TargetOs::Wasm => {}
+    }
+
+    build_args.extend_from_slice(&[
         k1rt_c_path.to_str().unwrap(),
+        k1rt_backtrace_path.to_str().unwrap(),
         ll_file,
         "-o",
         out_file,
     ]);
+
+    build_cmd.args(build_args);
     build_cmd.args(extra_options);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
@@ -441,6 +472,7 @@ pub fn codegen_module<'ctx, 'module>(
     if do_write_executable {
         write_executable(
             args.debug,
+            typed_module.ast.config.target,
             &k1_lib_dir,
             &out_dir,
             &module_name_path,

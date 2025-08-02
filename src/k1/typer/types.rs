@@ -144,7 +144,7 @@ pub struct ReferenceType {
 pub struct ArrayType {
     pub element_type: TypeId,
     pub size_type: TypeId,
-    pub concrete_size: Option<u64>,
+    pub concrete_count: Option<u64>,
 }
 impl_copy_if_small!(24, ArrayType);
 
@@ -618,7 +618,7 @@ impl std::hash::Hash for Type {
                 "array".hash(state);
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
-                arr.concrete_size.hash(state);
+                arr.concrete_count.hash(state);
             }
         }
     }
@@ -1560,7 +1560,7 @@ impl Types {
             Type::RecursiveReference(_) => Z,
             Type::Array(arr) => {
                 let element_layout = self.compute_type_layout(arr.element_type);
-                match arr.concrete_size {
+                match arr.concrete_count {
                     None => Z,
                     Some(size) => Layout::array_me(&element_layout, size as usize),
                 }
