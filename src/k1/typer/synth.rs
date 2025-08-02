@@ -252,6 +252,7 @@ impl TypedProgram {
         name: NamespacedIdentifier,
         type_args: &[ParsedTypeExprId],
         args: &[ParsedExprId],
+        is_method: bool,
     ) -> ParsedExprId {
         let span = name.span;
         let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id, span));
@@ -265,7 +266,7 @@ impl TypedProgram {
             type_args,
             args,
             span,
-            is_method: false,
+            is_method,
             id: ParsedExprId::PENDING,
         }))
     }
@@ -277,7 +278,19 @@ impl TypedProgram {
         args: &[TypedExprId],
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, &[], &[]);
+        let call_id = self.synth_parsed_function_call(name, &[], &[], false);
+        let call = self.ast.exprs.get(call_id).expect_call().clone();
+        self.eval_function_call(&call, Some((type_args, args)), ctx, None)
+    }
+
+    pub(super) fn synth_typed_method_call(
+        &mut self,
+        name: NamespacedIdentifier,
+        type_args: &[TypeId],
+        args: &[TypedExprId],
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let call_id = self.synth_parsed_function_call(name, &[], &[], true);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx, None)
     }
@@ -293,7 +306,12 @@ impl TypedProgram {
 
     pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
-        self.synth_parsed_function_call(qident!(self, span, ["bool"], "negated"), &[], &[base])
+        self.synth_parsed_function_call(
+            qident!(self, span, ["bool"], "negated"),
+            &[],
+            &[base],
+            false,
+        )
     }
 
     pub(super) fn synth_printto_call(
@@ -335,6 +353,15 @@ impl TypedProgram {
             fields.push(StructField { name: field.name, expr: field_expr });
         }
         self.exprs.add(TypedExpr::Struct(StructLiteral { fields, type_id: struct_type_id, span }))
+    }
+
+    pub(super) fn synth_string_literal(
+        &mut self,
+        msg: impl AsRef<str>,
+        span: SpanId,
+    ) -> TypedExprId {
+        let string_id = self.ast.strings.intern(msg);
+        self.exprs.add(TypedExpr::String(string_id, span))
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {

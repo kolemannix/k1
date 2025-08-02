@@ -22,6 +22,12 @@ ns Buffer {
     { len: len, data }
   }
 
+  fn fromArray[N: static uword, T](array: Array[N x T]*): Buffer[T] {
+    let base = array.getBase();
+    let l = array.len();
+    fromBaseAndCount(l, array.getBase()).cloned()
+  }
+
   fn _allocateIn[T](context alloc: mem/AllocMode)(count: uword): Buffer[T] {
     let ptr = if count == 0 {
       Pointer/NULL

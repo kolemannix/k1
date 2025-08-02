@@ -222,6 +222,8 @@ struct LlvmStructType<'ctx> {
 #[derive(Debug, Clone)]
 struct LlvmArrayType<'ctx> {
     type_id: TypeId,
+    #[allow(unused)]
+    count: u64,
     array_type: ArrayType<'ctx>,
     element_type: Box<K1LlvmType<'ctx>>,
     di_type: DIType<'ctx>,
@@ -1122,8 +1124,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::Array(array_type) => {
                 let element_type = self.codegen_type_inner(array_type.element_type, depth + 1)?;
                 let element_basic_type = element_type.rich_repr_type();
-                let Some(size) = array_type.concrete_size else {
-                    self.k1.ice("codegen_type_inner: expected concrete size for array type", None);
+                let Some(size) = array_type.concrete_count else {
+                    self.k1.ice("codegen_type_inner: expected concrete count for array type", None);
                 };
                 let llvm_array_type = element_basic_type.array_type(size as u32);
 
@@ -1142,6 +1144,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(K1LlvmType::ArrayType(LlvmArrayType {
                     type_id,
+                    count: size,
                     array_type: llvm_array_type,
                     element_type: Box::new(element_type),
                     di_type,

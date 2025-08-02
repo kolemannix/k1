@@ -1,9 +1,3 @@
-fn bufferFromArray[N: static uword, T](array: Array[N x T]*): Buffer[T] {
-  let base = array.getBase();
-  let l = array.len();
-  Buffer/fromBaseAndCount(l, array.getBase()).cloned()
-}
-
 fn listToArray[N: static uword, T](list: List[T], count: N): Array[N x T]* {
   let countVal = count.fromStatic();
   assertEquals(list.len, countVal);
@@ -44,11 +38,8 @@ fn testFilled(): unit {
 fn testArray(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
-  let ten = (10: uword).toStatic();
 
-  for ls do { println("{it}") };
-
-  let a: Array[10 x u8]* = listToArray(ls, ten);
+  let a: Array[10 x u8]* = listToArray(ls, 10);
   let* w = List/empty[char]();
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
@@ -69,17 +60,23 @@ fn main(): i32 {
   testLiterals();
   testFilled();
 
-
   assert(testCompile(array.get(11)) is .Some(_));
 
   let* array: Array[10 x f32]* = mem/zeroed();
   array.set(0, 3.14);
-  let buf = bufferFromArray(array);
+  let buf = Buffer/fromArray(array);
   assert(buf.get(0) == array.get(0));
   assertEquals(buf.get(0), array.get(0));
+
+  // nocommit(1) Whats happening here?!
+  // println("first elem is: {buf.get(0)}");
+
   let x = buf.get(0);
   println("first elem is: {x}");
   println("first elem is: {array.get(0)}");
+
+  let x = 44: uword;
+  array.get(x);
 
   0
 }
