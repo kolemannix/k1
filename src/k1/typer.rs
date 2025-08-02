@@ -10560,9 +10560,6 @@ impl TypedProgram {
                     ctx.scope_id,
                     true,
                 )?;
-                // If a function is generic, we have a function id. Lambdas and function pointer
-                // calls can't take type arguments
-                // let function_id = callee.maybe_function_id().unwrap();
 
                 // We infer the type arguments, or just use them if the user has supplied them
                 let type_args = match &known_args {

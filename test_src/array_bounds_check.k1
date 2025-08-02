@@ -1,0 +1,8 @@
+fn main(): i32 {
+  let* array: Array[10 x f32]* = mem/zeroed();
+  // Variable to bypass our advanced static analysis
+  let x = 44: uword;
+  array.get(x);
+
+  0
+}

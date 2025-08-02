@@ -192,34 +192,126 @@ void _k1_show_backtrace(void) {
   unw_getcontext(&uc);
   unw_init_local(&cursor, &uc);
 
-  printf("Backtrace (most recent call first):\n");
+  printf("Backtrace:\n");
 
-  int frame_num = 0;
-  while (unw_step(&cursor) > 0) {
-    char symbol[256] = {"<unknown>"};
-    unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off);
-    unw_get_reg(&cursor, UNW_REG_IP, &ip);
-    unw_get_reg(&cursor, UNW_REG_SP, &sp);
+  // First pass: collect all addresses and symbols
+  typedef struct {
+    unw_word_t ip;
+    char symbol[256];
+  } frame_info_t;
 
+  frame_info_t frames[50];
+  int frame_count = 0;
+
+  while (unw_step(&cursor) > 0 && frame_count < 50) {
+    unw_get_proc_name(&cursor, frames[frame_count].symbol,
+                      sizeof(frames[frame_count].symbol), &off);
+    unw_get_reg(&cursor, UNW_REG_IP, &frames[frame_count].ip);
+    frame_count++;
+  }
+
+#ifdef __APPLE__
+  // Second pass: batch resolve all addresses with single atos call
+  if (frame_count > 0) {
+    char exe_path[1024];
+    uint32_t size = sizeof(exe_path);
+    if (_NSGetExecutablePath(exe_path, &size) == 0) {
+      Dl_info info;
+      if (dladdr((void *)frames[0].ip, &info)) {
+        uintptr_t load_addr = (uintptr_t)info.dli_fbase;
+
+        // Build atos command with all addresses
+        char atos_cmd[4096];
+        int cmd_len = snprintf(atos_cmd, sizeof(atos_cmd),
+                               "atos -o '%s' -l 0x%lx", exe_path, load_addr);
+
+        for (int i = 0; i < frame_count && cmd_len < sizeof(atos_cmd) - 20;
+             i++) {
+          cmd_len += snprintf(atos_cmd + cmd_len, sizeof(atos_cmd) - cmd_len,
+                              " 0x%lx", (unsigned long)frames[i].ip);
+        }
+
+        strcat(atos_cmd, " 2>/dev/null");
+
+        FILE *fp = popen(atos_cmd, "r");
+        if (fp) {
+          char result[1024];
+          int result_idx = 0;
+
+          while (fgets(result, sizeof(result), fp) &&
+                 result_idx < frame_count) {
+            char *newline = strchr(result, '\n');
+            if (newline)
+              *newline = '\0';
+
+            source_location_t loc = {0};
+            strcpy(loc.filename, "<unknown>");
+            strcpy(loc.function, "<unknown>");
+
+            // Parse atos output for file:line pattern
+            char *colon = strrchr(result, ':');
+            if (colon && *(colon + 1) >= '0' && *(colon + 1) <= '9') {
+              loc.line_number = atoi(colon + 1);
+              loc.found = 1;
+
+              // Extract filename
+              char *open_paren = strrchr(result, '(');
+              if (open_paren && open_paren < colon) {
+                char *filename_start = open_paren + 1;
+                int filename_len = colon - filename_start;
+                if (filename_len > 0 && filename_len < sizeof(loc.filename)) {
+                  strncpy(loc.filename, filename_start, filename_len);
+                  loc.filename[filename_len] = '\0';
+                }
+              }
+
+              // Extract function name
+              char *first_space = strchr(result, ' ');
+              if (first_space) {
+                int func_len = first_space - result;
+                if (func_len > 0 && func_len < sizeof(loc.function)) {
+                  strncpy(loc.function, result, func_len);
+                  loc.function[func_len] = '\0';
+                }
+              }
+
+              printf("  %2d: %s at %s:%d\n", result_idx, loc.function,
+                     loc.filename, loc.line_number);
+            } else {
+              // Fallback format
+              printf("  %2d: %s [0x%lx]\n", result_idx,
+                     frames[result_idx].symbol, (long)frames[result_idx].ip);
+            }
+
+            result_idx++;
+          }
+          pclose(fp);
+        } else {
+          // Fallback if atos fails
+          for (int i = 0; i < frame_count; i++) {
+            printf("  %2d: %s [0x%lx]\n", i, frames[i].symbol,
+                   (long)frames[i].ip);
+          }
+        }
+      }
+    }
+  }
+#else
+  // Non-macOS: resolve each frame individually (unchanged behavior)
+  for (int i = 0; i < frame_count; i++) {
     source_location_t loc;
-    // nocommit: its megaslow, maybe see if claude can fix
-    resolve_source_location(ip, &loc);
+    resolve_source_location(frames[i].ip, &loc);
 
     if (loc.found && loc.line_number > 0) {
-      // Rust-like format: "   0: function_name at file.k1:line:column"
-      printf("  %2d: %s at %s:%d\n", frame_num, loc.function, loc.filename,
+      printf("  %2d: %s at %s:%d\n", i, loc.function, loc.filename,
              loc.line_number);
     } else {
-      // Fallback format when we can't resolve line numbers
-      printf("  %2d: %s [0x%lx]\n", frame_num, symbol, (long)ip);
+      printf("  %2d: %s [0x%lx]\n", i, frames[i].symbol, (long)frames[i].ip);
     }
+  }
+#endif
 
-    frame_num++;
-
-    // Limit backtrace depth to avoid overwhelming output
-    if (frame_num >= 50) {
-      printf("  ... (backtrace truncated)\n");
-      break;
-    }
+  if (frame_count >= 50) {
+    printf("  ... (backtrace truncated)\n");
   }
 }
