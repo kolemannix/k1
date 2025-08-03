@@ -42,7 +42,7 @@ fn test(): unit {
   let d: u32 = combine(identity(4000), get(some(5000)));
   let d2: u32 = combine(identity(8000), identity(get(some(9000))));
 
-  assert(getOrElse(some(1000), -1) == 1000);
+  assertEquals(getOrElse(some(1000), -1), 1000);
 
   occursCheckTest(42);
 
@@ -52,8 +52,8 @@ fn test(): unit {
   let* x = Opt.Some(42);
 
   let withNever = testCompile(
-    combine3(x, core/sys/exit(1), { one: some(-1), two: some(3), })
+    combine3(x.*, core/sys/exit(1), { one: some(-1), two: some(3), })
   );
-  assert(withNever is .None);
+  assertEquals(withNever, .None);
   ()
 }

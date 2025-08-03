@@ -209,6 +209,8 @@ void _k1_show_backtrace(void) {
   int frame_count = 0;
 
   while (unw_step(&cursor) > 0 && frame_count < 50) {
+    // Initialize symbol buffer to empty string
+    frames[frame_count].symbol[0] = '\0';
     unw_get_proc_name(&cursor, frames[frame_count].symbol,
                       sizeof(frames[frame_count].symbol), &off);
     unw_get_reg(&cursor, UNW_REG_IP, &frames[frame_count].ip);
@@ -283,9 +285,9 @@ void _k1_show_backtrace(void) {
               printf("  %2d: %s at %s:%d\n", result_idx, loc.function,
                      loc.filename, loc.line_number);
             } else {
-              // Fallback format
-              printf("  %2d: %s [0x%lx]\n", result_idx,
-                     frames[result_idx].symbol, (long)frames[result_idx].ip);
+              // Fallback format - check for valid symbol name
+              const char* symbol_name = frames[result_idx].symbol[0] ? frames[result_idx].symbol : "<no symbol>";
+              printf("  %2d: %s [0x%lx]\n", result_idx, symbol_name, (long)frames[result_idx].ip);
             }
 
             result_idx++;
@@ -294,8 +296,8 @@ void _k1_show_backtrace(void) {
         } else {
           // Fallback if atos fails
           for (int i = 0; i < frame_count; i++) {
-            printf("  %2d: %s [0x%lx]\n", i, frames[i].symbol,
-                   (long)frames[i].ip);
+            const char* symbol_name = frames[i].symbol[0] ? frames[i].symbol : "<no symbol>";
+            printf("  %2d: %s [0x%lx]\n", i, symbol_name, (long)frames[i].ip);
           }
         }
       }
@@ -311,7 +313,8 @@ void _k1_show_backtrace(void) {
       printf("  %2d: %s at %s:%d\n", i, loc.function, loc.filename,
              loc.line_number);
     } else {
-      printf("  %2d: %s [0x%lx]\n", i, frames[i].symbol, (long)frames[i].ip);
+      const char* symbol_name = frames[i].symbol[0] ? frames[i].symbol : "<no symbol>";
+      printf("  %2d: %s [0x%lx]\n", i, symbol_name, (long)frames[i].ip);
     }
   }
 #endif

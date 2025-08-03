@@ -57,7 +57,7 @@ fn runThings(thunks: List[dyn[\()-> unit]]): unit {
 
 fn thunksTest(): unit {
   let* counter = 0;
-  let thunks: List[dyn[\() -> unit]] = @debug [
+  let thunks: List[dyn[\() -> unit]] = [
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },

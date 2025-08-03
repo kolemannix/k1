@@ -4243,6 +4243,8 @@ impl TypedProgram {
     ///
     /// Current coercion sites:
     /// - Function arguments
+    /// - Variable declarations
+    /// - List literal elements
     fn check_expr_type(
         &mut self,
         expected: TypeId,
@@ -4266,7 +4268,7 @@ impl TypedProgram {
                 if self.check_types(expected, actual_static.inner_type_id, scope_id).is_ok() =>
             {
                 return CheckExprTypeResult::Coerce(
-                    self.synth_cast(expr, expected, CastType::StaticErase, None),
+                    self.synth_cast(expr, actual_static.inner_type_id, CastType::StaticErase, None),
                     "static_erase",
                 );
             }
@@ -4291,17 +4293,61 @@ impl TypedProgram {
                     lambda_type.function_type,
                     lambda_type.parsed_id,
                 );
-                return CheckExprTypeResult::Coerce(
-                    self.exprs.add(TypedExpr::Cast(TypedCast {
-                        cast_type: CastType::LambdaToLambdaObject,
-                        base_expr: expr,
-                        target_type_id: lambda_object_type,
-                        span,
-                    })),
-                    "lam->lamobj",
-                );
+                if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
+                    return CheckExprTypeResult::Coerce(
+                        self.exprs.add(TypedExpr::Cast(TypedCast {
+                            cast_type: CastType::LambdaToLambdaObject,
+                            base_expr: expr,
+                            target_type_id: lambda_object_type,
+                            span,
+                        })),
+                        "lam->lamobj",
+                    );
+                }
             }
         }
+
+        // If we expect a lambda object and you pass a function reference... (optimized lambda)
+        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
+            eprintln!("funref->lamobj");
+            if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expr) {
+                eprintln!("funref->lamobj 2");
+                let lambda_object =
+                    self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
+                let lambda_object_type = self.exprs.get(lambda_object).get_type();
+                if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
+                    return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj");
+                }
+            }
+        }
+
+        let expected_resolved = self.types.get(self.get_type_id_resolved(expected, scope_id));
+        // If we don't expect a reference
+        if expected_resolved.as_reference().is_none() {
+            // And we don't expect a function-like type parameter (function pointers don't really work like references)
+            if let Type::FunctionTypeParameter(_tp) = expected_resolved {
+            } else {
+                // But you pass a reference
+                if let Some(reference) = self.get_expr_type(expr).as_reference() {
+                    let span = self.exprs.get(expr).get_span();
+
+                    if self.check_types(expected, reference.inner_type, scope_id).is_ok() {
+                        // We only do this if the expected type is not a reference at all. Meaning,
+                        // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
+                        // This rule won't help you or do anything for nested references
+                        return CheckExprTypeResult::Coerce(
+                            self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
+                                kind: UnaryOpKind::Dereference,
+                                type_id: reference.inner_type,
+                                span,
+                                expr,
+                            })),
+                            "deref",
+                        );
+                    }
+                }
+            }
+        };
 
         CheckExprTypeResult::Err(msg)
     }
@@ -4315,10 +4361,11 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get(expr).get_span();
+                eprintln!("Coerce failed on {}", self.expr_to_string(expr),);
                 Err(TyperError { message: msg, span, level: ErrorLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
-                debug!(
+                eprintln!(
                     "Coerced with rule {rule_kind} {} -> {}",
                     self.expr_to_string(expr),
                     self.expr_to_string(new_expr)
@@ -6173,58 +6220,6 @@ impl TypedProgram {
         })))
     }
 
-    // Used for
-    // - de-referencing,
-    // - lambda to lambda object conversion
-    // Probably unsound. I'd like to remove and re-introduce coercion as part of subtyping.
-    // However, not sure if we should do it for references, because I'd like to move that to an
-    // ability so that we can have different types of references written in userspace
-    fn coerce_expression_to_expected_type(
-        &mut self,
-        expected_type_id: TypeId,
-        expression: TypedExprId,
-        scope_id: ScopeId,
-        _parsed_id: ParsedId,
-    ) -> CoerceResult {
-        // If we expect a lambda object and you pass a function reference... (optimized lambda)
-        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected_type_id) {
-            if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expression) {
-                let lambda_object =
-                    self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
-                return CoerceResult::Coerced("funref->lamobj", lambda_object);
-            }
-        }
-
-        // If we don't expect a reference
-        let expected = self.types.get(self.get_type_id_resolved(expected_type_id, scope_id));
-        if expected.as_reference().is_none() {
-            // And we don't expect a function-like type parameter
-            if let Type::FunctionTypeParameter(_tp) = expected {
-                return CoerceResult::Fail(expression);
-            }
-
-            // But you pass a reference
-            if let Some(reference) = self.get_expr_type(expression).as_reference() {
-                let span = self.exprs.get(expression).get_span();
-
-                // We only do this if the expected type is not a reference at all. Meaning,
-                // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
-                // This rule won't help you or do anything for nested references
-                return CoerceResult::Coerced(
-                    "deref",
-                    self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
-                        kind: UnaryOpKind::Dereference,
-                        type_id: reference.inner_type,
-                        span,
-                        expr: expression,
-                    })),
-                );
-            }
-        };
-
-        CoerceResult::Fail(expression)
-    }
-
     fn is_inside_companion_scope(
         &self,
         companion_namespace: Option<NamespaceId>,
@@ -6273,21 +6268,21 @@ impl TypedProgram {
             return Ok(self_.exprs.add(TypedExpr::Unit(span)));
         }
 
-        let mut hinted_type = false;
+        let mut explicit_hint = false;
         ctx.expected_type_id = match self_.ast.exprs.get_type_hint(expr_id) {
             Some(t) => {
                 let type_id = self_.eval_type_expr(t, ctx.scope_id)?;
-                hinted_type = true;
+                explicit_hint = true;
                 Some(type_id)
             }
             None => ctx.expected_type_id,
         };
-        let base_result = self_.eval_expr_inner(expr_id, ctx)?;
-        if hinted_type {
+        let result_expr = self_.eval_expr_inner(expr_id, ctx)?;
+        if explicit_hint {
             if let Some(expected_type_id) = ctx.expected_type_id {
                 if let Err(msg) = self_.check_types(
                     expected_type_id,
-                    self_.exprs.get(base_result).get_type(),
+                    self_.exprs.get(result_expr).get_type(),
                     ctx.scope_id,
                 ) {
                     return failf!(
@@ -6298,42 +6293,16 @@ impl TypedProgram {
             }
         }
 
-        // FIXME: We gotta get rid of this coerce step its involved in every bug
-        //        We can do instead a principled subtyping relation where a subtype decision
-        //        is accompanied by a transformation expression
-        let result = if let Some(expected_type_id) = &ctx.expected_type_id {
-            // Try to coerce if types don't match
-            let new_expr = match self_.coerce_expression_to_expected_type(
-                *expected_type_id,
-                base_result,
-                ctx.scope_id,
-                expr_id.into(),
-            ) {
-                CoerceResult::Fail(base_result) => base_result,
-                CoerceResult::Coerced(reason, new_expr) => {
-                    let span = self_.ast.exprs.get_span(expr_id);
-                    // self_.write_location(&mut stderr(), span);
-                    eprintln!(
-                        "coerce succeeded with rule {reason} and resulted in expr {}",
-                        self_.expr_to_string_with_type(new_expr),
-                    );
-                    new_expr
-                }
-            };
-            Ok(new_expr)
-        } else {
-            Ok(base_result)
-        }?;
         if log::log_enabled!(log::Level::Debug) {
             let expr_span = self_.ast.exprs.get_span(expr_id);
             debug!(
-                "DEBUG EXPR\n{} hint {}\nRESULT\n{}",
+                "DEBUG EXPR `{}` (hint {}) -> RESULT `{}`",
                 self_.ast.get_span_content(expr_span),
                 self_.type_id_option_to_string(ctx.expected_type_id),
-                self_.expr_to_string_with_type(result)
+                self_.expr_to_string_with_type(result_expr)
             );
         };
-        Ok(result)
+        Ok(result_expr)
     }
 
     fn eval_expr_inner(
@@ -6574,6 +6543,26 @@ impl TypedProgram {
                     ctx,
                     Some(Callee::from_ability_impl_fn(impl_function)),
                 )
+            }
+        }
+    }
+
+    fn eval_expr_with_coercion(
+        &mut self,
+        expr_id: ParsedExprId,
+        ctx: EvalExprContext,
+        fail: bool,
+    ) -> TyperResult<TypedExprId> {
+        let expr = self.eval_expr(expr_id, ctx)?;
+        let expected_type = ctx.expected_type_id.unwrap();
+        match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id) {
+            Ok(expr) => Ok(expr),
+            error @ Err(_) => {
+                if fail {
+                    error
+                } else {
+                    Ok(expr)
+                }
             }
         }
     }
@@ -8418,11 +8407,10 @@ impl TypedProgram {
         };
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
         let yielded_coll_variable = if !is_do_block {
-            let iterator_deref = self.synth_dereference(iterator_variable.variable_expr);
             let size_hint_call = self.synth_typed_function_call(
                 qident!(self, body_span, ["Iterator"], "sizeHint"),
                 &[],
-                &[iterator_deref],
+                &[iterator_variable.variable_expr],
                 outer_for_expr_ctx,
             )?;
             let size_hint_ret_type = self.exprs.get(size_hint_call).get_type();
@@ -11309,6 +11297,7 @@ impl TypedProgram {
         &mut self,
         stmt: ParsedStmtId,
         ctx: EvalExprContext,
+        coerce_expr: bool,
     ) -> TyperResult<Option<TypedStmtId>> {
         match self.ast.stmts.get(stmt) {
             ParsedStmt::Use(use_stmt) => {
@@ -11498,7 +11487,11 @@ impl TypedProgram {
                 Ok(Some(stmt_id))
             }
             ParsedStmt::LoneExpression(expression) => {
-                let expr = self.eval_expr(*expression, ctx)?;
+                let expr = if coerce_expr {
+                    self.eval_expr_with_coercion(*expression, ctx, false)?
+                } else {
+                    self.eval_expr(*expression, ctx)?
+                };
                 let expr_type = self.exprs.get(expr).get_type();
                 let stmt_id = self.stmts.add(TypedStmt::Expr(expr, expr_type));
                 Ok(Some(stmt_id))
@@ -11528,7 +11521,9 @@ impl TypedProgram {
             let is_last = index == block.stmts.len() - 1;
             let expected_type = if is_last { ctx.expected_type_id } else { None };
 
-            let Some(stmt_id) = self.eval_stmt(*stmt, ctx.with_expected_type(expected_type))?
+            let coerce = expected_type.is_some();
+            let Some(stmt_id) =
+                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce)?
             else {
                 continue;
             };

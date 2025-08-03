@@ -246,7 +246,7 @@ impl[T] Iterator[Item = T] for BufferIterator[T] {
       some(item)
     } else .None
   }
-  fn sizeHint(self: Self): { atLeast: uword, atMost: uword? } { 
+  fn sizeHint(self: Self*): { atLeast: uword, atMost: uword? } { 
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
