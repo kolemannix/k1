@@ -35,7 +35,7 @@ impl Iterator[Item = int] for IntRangeIterator {
        .Some(current)
      }
   }
-  fn sizeHint(self: Self): { atLeast: uint, atMost: uint? } {
+  fn sizeHint(self: Self*): { atLeast: uint, atMost: uint? } {
     let remaining = self.range.end - self.position();
     { atLeast: remaining as uint, atMost: .Some(remaining as uint) }
   }

@@ -36,7 +36,7 @@ pub struct Spans {
 
 impl Spans {
     pub fn new() -> Spans {
-        let mut pool = Pool::with_capacity("spans", 32678 * 2);
+        let mut pool = Pool::with_capacity("spans", 130712);
         pool.add(Span::NONE);
         Spans { span_pool: pool }
     }

@@ -122,7 +122,8 @@ impl TypedProgram {
                         .with_inference(true)
                         .with_expected_type(Some(expected_type_so_far));
 
-                    let evaluation_result = self_.eval_expr(*parsed_expr, inference_context);
+                    let evaluation_result =
+                        self_.eval_expr_with_coercion(*parsed_expr, inference_context, false);
                     match evaluation_result {
                         Ok(expr_id) => {
                             let expr = self_.exprs.get(expr_id);
@@ -195,7 +196,7 @@ impl TypedProgram {
             }
 
             debug!(
-                "[infer {infer_depth}] substitutions\n\t{}",
+                "[infer {infer_depth}] all constraints\n\t{}",
                 self_.pretty_print_type_substitutions(&self_.inference_context.constraints, "\n\t"),
             );
         }
@@ -225,7 +226,7 @@ impl TypedProgram {
         if !unsolved_params.is_empty() {
             return failf!(
                 span,
-                "Could not solve for {} given arguments:\n{}",
+                "Could not solve for {} given arguments:\n{}\nSolutions:{}",
                 unsolved_params
                     .iter()
                     .map(|p| self_.ident_str(p.name()))
@@ -242,7 +243,11 @@ impl TypedProgram {
                         )
                     })
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n"),
+                self_.pretty_print_type_substitutions(
+                    &self_.inference_context.solutions_so_far,
+                    ", "
+                )
             );
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));

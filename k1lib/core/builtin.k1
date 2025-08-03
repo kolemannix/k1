@@ -196,7 +196,7 @@ ability Try[impl T, impl E] {
 
 ability Iterator[impl Item] {
   fn next(self: Self*): Item?
-  fn sizeHint(self: Self): { atLeast: uword, atMost: uword? }
+  fn sizeHint(self: Self*): { atLeast: uword, atMost: uword? }
   fn advanceBy(self: Self*, n: uword): unit
   fn nth(self: Self*, n: uword): Item?
 }
