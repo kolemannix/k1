@@ -478,7 +478,7 @@ impl TypedProgram {
                 .map_err(|e| {
                     errf!(
                         e.span,
-                        "Invalid call to {}. {}",
+                        "Invalid call to {}\n    {}",
                         self.ident_str_opt(generic_function_sig.name),
                         e.message,
                     )
@@ -621,7 +621,7 @@ impl TypedProgram {
                         let original_param_function_type = ftp.function_type;
                         let substituted_function_type =
                             self.substitute_in_type(original_param_function_type, &subst_pairs);
-                        self.types.add_reference_type(substituted_function_type)
+                        self.types.add_reference_type(substituted_function_type, false)
                     }
                     PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
                         // Replace the function type
@@ -967,6 +967,9 @@ impl TypedProgram {
                 TypeUnificationResult::Matching
             }
             (Type::Reference(passed_refer), Type::Reference(refer)) => self
+                // For the purposes of inference, we ignore the difference between
+                // write and read pointers, since they'll still fail typecheck in the end
+                // but we'd like to infer successfully to get a good message
                 .unify_and_find_substitutions_rec(
                     substitutions,
                     passed_refer.inner_type,

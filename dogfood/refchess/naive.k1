@@ -78,7 +78,7 @@ fn dump(board: List[SquareState]): unit {
 }
 
 fn startPos(): List[SquareState] {
-  let* board = List/filled[SquareState](64, .Blank);
+  let* mut board = List/filled[SquareState](64, .Blank);
   board.set(0, .WRook);
   board.set(1, .WKnight);
   board.set(2, .WBishop);

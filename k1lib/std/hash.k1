@@ -192,7 +192,7 @@ ns HashMap {
 }
 
 fn test(size: int): unit {
-  let* myMap = HashMap/new[int]();
+  let* mut myMap = HashMap/new[int]();
   let mut i = 0;
   while i < size {
     myMap.insert(i.show(), i);
@@ -225,7 +225,7 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  let* arr = List/withCapacity[char](len);
+  let* mut arr = List/withCapacity[char](len);
   let mut i: uint = 0;
   while i < len {
     arr.push(randByte() as char);

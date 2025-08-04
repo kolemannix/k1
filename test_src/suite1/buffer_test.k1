@@ -92,7 +92,7 @@ fn bufferConcat(): unit {
 }
 
 fn bufferSwap(): unit {
-  let* buf = Buffer/filled(3, 0);
+  let* mut buf = Buffer/filled(3, 0);
   buf.*.set(0, 10);
   buf.*.set(1, 20);
   buf.*.set(2, 30);

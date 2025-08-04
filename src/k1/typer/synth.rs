@@ -211,7 +211,7 @@ impl TypedProgram {
         let initializer_type = initializer.get_type();
         let span = initializer.get_span();
         let type_id = if is_referencing {
-            self.types.add_reference_type(initializer_type)
+            self.types.add_reference_type(initializer_type, is_mutable)
         } else {
             initializer_type
         };

@@ -17,7 +17,7 @@ fn assignVarRef(): unit {
 }
 
 fn complexReferences(): unit {
-  let* structRef = { x: 42 };
+  let* mut structRef = { x: 42 };
 
   let xValue: int = structRef.x*;
   let xRef: int* = structRef.x*;
@@ -32,7 +32,7 @@ fn complexReferences(): unit {
   structRef.x* <- 42;
   assert(xRef.* == 42);
 
-  let* eitherRef: (either Yes(int), No)* = .Yes(3);
+  let* mut eitherRef: (either Yes(int), No)* = .Yes(3);
 
   let yesValue: int = eitherRef.asYes().!.value;
   let yesRef: typeOf(eitherRef).value.Yes* = eitherRef.asYes().!;
@@ -53,7 +53,7 @@ fn complexReferences(): unit {
   // of assignments as a normal expression
   // <any ptr> <- <expr>
 
-  let* innerStructRef = { x: 42 };
+  let* mut innerStructRef = { x: 42 };
   let structOptRef: { x: int }*? = .Some(innerStructRef);
 
   if structOptRef is .Some(x) {

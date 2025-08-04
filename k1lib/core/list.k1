@@ -164,7 +164,7 @@ ns List {
   }
 
   fn reversed[T](self: List[T]): List[T] {
-    let* clone = self.cloned();
+    let* mut clone = self.cloned();
     clone.reverse[T]();
     clone.*
   }
@@ -180,11 +180,11 @@ ns List {
     }
   }
 
-  fn appendBuffer[T](self: List[T]*, other: Buffer[T]): unit {
+  fn appendBuffer[T](self: *write List[T], other: Buffer[T]): unit {
     self.appendBufferIn(context mem/AllocMode/CURRENT)(other)
   }
 
-  fn swap[T](self: List[T]*, indexA: uword, indexB: uword): unit {
+  fn swap[T](self: *write List[T], indexA: uword, indexB: uword): unit {
     let aRef = self.getRef(indexA);
     let bRef = self.getRef(indexB);
     let bValue = bRef.*;
@@ -199,9 +199,9 @@ ns List {
     let halfIndex = input.len / 2;
     let pivot = input.*.get(halfIndex);
   
-    let* left = List/withCapacity[T](halfIndex);
-    let* right = List/withCapacity[T](halfIndex);
-    let* equal = List/withCapacity[T](4);
+    let* mut left = List/withCapacity[T](halfIndex);
+    let* mut right = List/withCapacity[T](halfIndex);
+    let* mut equal = List/withCapacity[T](4);
   
     for item in input.* do {
       switch item.compare(pivot) {
@@ -232,7 +232,7 @@ ns List {
   }
 
   fn sorted[T](self: List[T]): List[T] where T: Comparable {
-    let* copy = self.cloned();
+    let* mut copy = self.cloned();
     copy.sort();
     copy.*
   }
@@ -250,19 +250,19 @@ ns List {
   }
 
   fn map[T, U](self: List[T], f: some \T -> U): List[U] {
-    let* us = List/withCapacity[U](self.len);
+    let* mut us = List/withCapacity[U](self.len);
     for i in self do { us.push[U](f(i)) };
     us.*
   }
   
   fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
-    let* us = List/empty[U]();
+    let* mut us = List/empty[U]();
     for i in self do { us.concat[U](f(i)) };
     us.*
   }
   
   fn filter[T](self: List[T], f: some \T -> bool): List[T] {
-    let* keep = List/empty[T]();
+    let* mut keep = List/empty[T]();
     for i in self do { if f(i) keep.push(i) };
     keep
   }
@@ -318,20 +318,17 @@ impl[T: Equals] Equals for List[T] {
   }
 }
 
-// nocommit(1): Should be Print
-impl[T: Show] Show for List[T] {
-  fn show(self: List[T]): string {
-    let b = StringBuilder/new();
-    b.putChar('[');
-    for s in self do {
-      b.putString(s.show());
+impl[T: Print] Print for List[T] {
+  fn printTo[W: Writer](self: List[T], w: W*): unit {
+    w.writeChar('[');
+    for self do {
+      it.printTo(w);
       let last = itIndex == self.len - 1;
       if not last {
-        b.putString(",");
+        w.writeString(",");
       };
     };
-    b.putChar(']');
-    b.build()
+    w.writeChar(']');
   }
 }
 

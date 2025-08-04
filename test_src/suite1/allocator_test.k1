@@ -1,7 +1,7 @@
 ns allocator_test;
 
 fn test(): unit {
-  let* a = core/Arena/new(initialMb = 1);
+  let* mut a = core/Arena/new(initialMb = 1);
 
   let b = a.push(true);
   let p = a.push({ x: 10, y: 10 });

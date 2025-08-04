@@ -63,15 +63,13 @@ fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
 }
 
 fn toJson[T](t: T): string {
-  let* w = List/empty[char]();
+  let* mut w = List/empty[char]();
   writeJson(context w)(t);
   let s = string/wrapList(w);
   s
 }
 
 fn testToJson(): unit {
-  let* w = List/empty[char]();
-
   assertEquals(toJson(true), "true");
   let json1 = toJson({ x: 1, y: 2, z: (), d: false });
   assertEquals(json1, `{{"x":1,"y":2,"z":"unit","d":false}`);
