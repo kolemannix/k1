@@ -2864,8 +2864,13 @@ impl TypedProgram {
                 Ok(optional_type)
             }
             ParsedTypeExpr::Reference(r) => {
+                let mutable = match r.kind {
+                    parse::ReferenceKind::Read => false,
+                    parse::ReferenceKind::Write => true,
+                };
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
-                let reference_type = Type::Reference(ReferenceType { inner_type: inner_ty });
+                let reference_type =
+                    Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
                 let type_id = self.types.add_anon(reference_type);
                 Ok(type_id)
             }
@@ -3730,10 +3735,11 @@ impl TypedProgram {
                 }
             }
             Type::Reference(reference) => {
-                let ref_inner = reference.inner_type;
-                let new_inner = self.substitute_in_type(ref_inner, substitution_pairs);
-                if new_inner != ref_inner {
-                    let specialized_reference = ReferenceType { inner_type: new_inner };
+                let reference = *reference;
+                let new_inner = self.substitute_in_type(reference.inner_type, substitution_pairs);
+                if new_inner != reference.inner_type {
+                    let specialized_reference =
+                        ReferenceType { inner_type: new_inner, mutable: reference.mutable };
                     self.types.add_anon(Type::Reference(specialized_reference))
                 } else {
                     type_id
@@ -4304,14 +4310,34 @@ impl TypedProgram {
 
         // If we expect a lambda object and you pass a function reference... (optimized lambda)
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
-            eprintln!("funref->lamobj");
             if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expr) {
-                eprintln!("funref->lamobj 2");
                 let lambda_object =
                     self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
                 let lambda_object_type = self.exprs.get(lambda_object).get_type();
                 if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
                     return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj");
+                }
+            }
+        }
+
+        if let Type::Reference(exp_ref) = self.types.get(expected) {
+            if let Type::Reference(actual_ref) = self.types.get(actual_type_id) {
+                // If we expect a readonly reference but have a mutable one
+                if !exp_ref.mutable && actual_ref.mutable {
+                    match self.check_types(exp_ref.inner_type, actual_ref.inner_type, scope_id) {
+                        Ok(_) => {
+                            let readonly_reference =
+                                self.types.add_reference_type(actual_ref.inner_type, false);
+                            let casted_reference = self.synth_cast(
+                                expr,
+                                readonly_reference,
+                                CastType::ReferenceToReference,
+                                None,
+                            );
+                            return CheckExprTypeResult::Coerce(casted_reference, "write->read");
+                        }
+                        Err(_) => {}
+                    }
                 }
             }
         }
@@ -4356,11 +4382,11 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get(expr).get_span();
-                eprintln!("Coerce failed on {}", self.expr_to_string(expr),);
+                eprintln!("nocommit Coerce failed on {}", self.expr_to_string(expr),);
                 Err(TyperError { message: msg, span, level: ErrorLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
-                eprintln!(
+                debug!(
                     "Coerced with rule {rule_kind} {} -> {}",
                     self.expr_to_string(expr),
                     self.expr_to_string(new_expr)
@@ -4371,6 +4397,12 @@ impl TypedProgram {
         }
     }
 
+    // nocommit(2): We're now generating errors as a matter of course in successful compilation
+    //              due to how 'coerce' works. We need to make sure generating these error strings
+    //              is performant, currently it is very much not
+    //
+    //              We could simply pass a 'no_error' flag if coercing, then call _again_ to get the error
+    //              if coerce fails
     pub fn check_types(
         &self,
         expected: TypeId,
@@ -4450,8 +4482,21 @@ impl TypedProgram {
         match (self.types.get_no_follow_static(expected), self.types.get_no_follow_static(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
-            (Type::Reference(o1), Type::Reference(o2)) => {
-                self.check_types(o1.inner_type, o2.inner_type, scope_id)
+            (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
+                match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
+                    e @ Err(_) => e,
+                    Ok(()) => {
+                        if exp_ref.mutable == act_ref.mutable {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "References differ in mutability. expected {} but got {}",
+                                if exp_ref.mutable { "write" } else { "read" },
+                                if act_ref.mutable { "write" } else { "read" }
+                            ))
+                        }
+                    }
+                }
             }
             (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => Err(format!(
                 "expected enum {} but got enum {}",
@@ -5873,24 +5918,25 @@ impl TypedProgram {
         }
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let (struct_type_id, is_reference) = match self.get_expr_type(base_expr) {
+        let (struct_type_id, base_reference_type) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
-                (inner_type, true)
+                (inner_type, Some(*reference_type))
             }
             _other => {
                 if is_assignment_lhs {
                     return failf!(base_span, "Cannot assign to member of non-reference struct");
-                } else if field_access.is_referencing && !field_access.is_coalescing {
+                }
+                if field_access.is_referencing && !field_access.is_coalescing {
                     return failf!(
                         base_span,
                         "Field access target is not a pointer, so referencing access with * cannot be used"
                     );
-                } else {
-                    (base_expr_type, false)
                 }
+                (base_expr_type, None)
             }
         };
+        let is_reference = base_reference_type.is_some();
         match self.types.get(struct_type_id) {
             Type::Struct(struct_type) => {
                 if is_assignment_lhs && !is_reference {
@@ -5917,7 +5963,8 @@ impl TypedProgram {
                     }
                 }
                 let result_type = if field_access.is_referencing {
-                    self.types.add_reference_type(target_field.type_id)
+                    let reference_type = base_reference_type.unwrap();
+                    self.types.add_reference_type(target_field.type_id, reference_type.mutable)
                 } else {
                     target_field.type_id
                 };
@@ -5951,7 +5998,8 @@ impl TypedProgram {
                 }
                 let variant_index = ev.index;
                 let result_type_id = if field_access.is_referencing {
-                    self.types.add_reference_type(payload_type_id)
+                    let reference_type = base_reference_type.unwrap();
+                    self.types.add_reference_type(payload_type_id, reference_type.mutable)
                 } else {
                     payload_type_id
                 };
@@ -6192,10 +6240,11 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         // Example:
         // let x: int = intptr.*
-        // The expected_type when we get `*intptr` is int, so
+        // The expected_type when we get `intptr.*` is int, so
         // the expected_type when we get `intptr` should be *int
         let inner_expected_type = match ctx.expected_type_id {
-            Some(expected) => Some(self.types.add_reference_type(expected)),
+            // nocommit: test around mutable = false on this hint. Worried about inference
+            Some(expected) => Some(self.types.add_reference_type(expected, false)),
             None => None,
         };
         let base_expr = self.eval_expr(operand, ctx.with_expected_type(inner_expected_type))?;
@@ -6659,7 +6708,7 @@ impl TypedProgram {
             get_ident!(self, "list_literal"),
             list_new_fn_call,
             false,
-            false,
+            true, // is_mutable
             is_referencing_let,
             list_lit_scope,
         );
@@ -6915,8 +6964,6 @@ impl TypedProgram {
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
-        // nocommit(2): Write out a file for each static emission, that way debugger can see
-        // Maybe in .k1-out?
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
         let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
         if let Err(e) = lexer.run(&mut tokens) {
@@ -7259,7 +7306,7 @@ impl TypedProgram {
                 get_ident!(self, "sb"),
                 new_string_builder,
                 false,
-                false,
+                true,
                 true,
                 block.scope_id,
             );
@@ -7311,7 +7358,7 @@ impl TypedProgram {
         ) -> TypedExpr {
             let v = module.variables.get(captured_variable_id);
             let variable_type = v.type_id;
-            let env_struct_reference_type = module.types.add_reference_type(env_struct_type);
+            let env_struct_reference_type = module.types.add_reference_type(env_struct_type, false);
             // Note: Can't capture 2 variables of the same name in a lambda. Might not
             //       actually be a problem
             let (field_index, env_struct_field) =
@@ -7494,7 +7541,9 @@ impl TypedProgram {
                 dyn_fn_id: None,
             });
             // What type of expression to return? A function reference seems perfect.
-            let function_reference_type = self.types.add_reference_type(function_type);
+            // nocommit: Representing function reference as a reference is tech debt;
+            // it can't be dereferenced or written to; its really its own atom type
+            let function_reference_type = self.types.add_reference_type(function_type, false);
             let expr_id = self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
                 function_id: body_function_id,
                 function_reference_type,
@@ -7535,7 +7584,7 @@ impl TypedProgram {
             body_span,
         );
         let environment_struct_reference_type =
-            self.types.add_reference_type(environment_struct_type);
+            self.types.add_reference_type(environment_struct_type, false);
         let environment_param = FnParamType {
             name: self.ast.idents.builtins.lambda_env_var_name,
             type_id: POINTER_TYPE_ID,
@@ -7910,13 +7959,19 @@ impl TypedProgram {
         let target_expr_type = self.exprs.get(target_expr).get_type();
         match pattern {
             TypedPattern::Struct(struct_pattern) => {
-                //let mut boolean_exprs: Vec<TypedExprId> =
-                //    Vec::with_capacity(struct_pattern.fields.len());
+                let is_referencing = is_immediately_inside_reference_pattern;
                 for pattern_field in struct_pattern.fields.iter() {
-                    let struct_type = self.types.get_type_id_dereferenced(target_expr_type);
-                    let is_referencing = is_immediately_inside_reference_pattern;
+                    let struct_reference_type = if is_referencing {
+                        Some(self.types.get(target_expr_type).expect_reference())
+                    } else {
+                        None
+                    };
+                    let struct_type = struct_pattern.struct_type_id;
                     let result_type = if is_referencing {
-                        self.types.add_reference_type(pattern_field.field_type_id)
+                        self.types.add_reference_type(
+                            pattern_field.field_type_id,
+                            struct_reference_type.unwrap().mutable,
+                        )
                     } else {
                         pattern_field.field_type_id
                     };
@@ -7930,10 +7985,10 @@ impl TypedProgram {
                             is_referencing,
                             span: struct_pattern.span,
                         }));
-                    let var_name = self
-                        .ast
-                        .idents
-                        .intern(format!("field_{}", self.ident_str(pattern_field.name)));
+                    let var_name = self.build_ident_with(|k1, s| {
+                        use std::fmt::Write;
+                        write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
+                    });
                     let struct_field_variable =
                         self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
@@ -7947,12 +8002,7 @@ impl TypedProgram {
                         is_referencing,
                         arm_scope_id,
                     )?;
-                    //boolean_exprs.push(condition);
                 }
-                //let final_condition = boolean_exprs
-                //    .into_iter()
-                //    .reduce(|a, b| self.synth_binary_bool_op(BinaryOpKind::And, a, b))
-                //    .unwrap();
                 Ok(())
             }
             TypedPattern::Enum(enum_pattern) => {
@@ -7980,7 +8030,8 @@ impl TypedProgram {
                         );
                     };
                     let result_type_id = if is_referencing {
-                        self.types.add_reference_type(payload_type_id)
+                        let mutable = self.types.get(target_expr_type).expect_reference().mutable;
+                        self.types.add_reference_type(payload_type_id, mutable)
                     } else {
                         payload_type_id
                     };
@@ -8010,7 +8061,6 @@ impl TypedProgram {
                         let_stmt: payload_variable.defn_stmt,
                         variable_id: payload_variable.variable_id,
                     });
-                    //setup_statements.push(payload_variable.defn_stmt);
                     self.compile_pattern_into_values(
                         payload_pattern,
                         payload_variable.variable_expr,
@@ -8019,30 +8069,16 @@ impl TypedProgram {
                         arm_scope_id,
                     )?;
                 };
-                //let final_condition = match inner_condition.map(|expr_id| self.exprs.get(expr_id)) {
-                //    None => is_variant_condition,
-                //    Some(TypedExpr::Bool(true, _)) => is_variant_condition,
-                //    Some(_inner_condition) => self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
-                //        kind: BinaryOpKind::And,
-                //        ty: BOOL_TYPE_ID,
-                //        lhs: is_variant_condition,
-                //        rhs: inner_condition.unwrap(),
-                //        span: enum_pattern.span,
-                //    })),
-                //};
                 Ok(())
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
                 let binding_variable =
                     self.synth_variable_defn_visible(variable_ident, target_expr, arm_scope_id);
-                //binding_statements.push(binding_variable.defn_stmt);
                 instrs.push(MatchingConditionInstr::Binding {
                     let_stmt: binding_variable.defn_stmt,
                     variable_id: binding_variable.variable_id,
                 });
-                // Don't even need a condition?!?! would just be if false goto next???
-                //Ok(self.exprs.add(TypedExpr::Bool(true, variable_pattern.span)))
                 Ok(())
             }
             TypedPattern::Wildcard(_span) => Ok(()),
@@ -8355,7 +8391,7 @@ impl TypedProgram {
             self.ast.idents.builtins.iter,
             iterator_initializer,
             false,
-            false,
+            true, //is_mutable
             true, //is_referencing
             outer_for_expr_scope,
         );
@@ -8431,7 +8467,7 @@ impl TypedProgram {
                 get_ident!(self, "yieldedColl"),
                 synth_function_call,
                 false,
-                false,
+                true, //is_mutable
                 true,
                 outer_for_expr_scope,
             ))
@@ -9493,9 +9529,8 @@ impl TypedProgram {
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
                 let is_referencing = n == self.ast.idents.builtins.getRef;
-                if is_referencing
-                    && self.types.get(self.exprs.get(base).get_type()).as_reference().is_none()
-                {
+                let array_reference_type = self.get_expr_type(base).as_reference();
+                if is_referencing && array_reference_type.is_none() {
                     return failf!(
                         span,
                         "Cannot use .getRef() on this Array since it is not a reference: {}",
@@ -9503,7 +9538,8 @@ impl TypedProgram {
                     );
                 }
                 let result_type = if is_referencing {
-                    self.types.add_reference_type(array_type.element_type)
+                    let mutable = array_reference_type.unwrap().mutable;
+                    self.types.add_reference_type(array_type.element_type, mutable)
                 } else {
                     array_type.element_type
                 };
@@ -9758,7 +9794,7 @@ impl TypedProgram {
         call_span: SpanId,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
-        let function_reference_type = self.types.add_reference_type(function.type_id);
+        let function_reference_type = self.types.add_reference_type(function.type_id, false);
         self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
             function_id,
             function_reference_type,
@@ -9819,7 +9855,7 @@ impl TypedProgram {
     ) -> TypeId {
         let mut function_type = self.types.get(function_type_id).as_function().unwrap().clone();
         let empty_env_struct_type = self.types.add_empty_struct();
-        let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type);
+        let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type, false);
         function_type.physical_params.insert(
             0,
             FnParamType {
@@ -10031,29 +10067,36 @@ impl TypedProgram {
             _ => return Ok(None),
         };
         let fn_name = self.ident_str(fn_call.name.name);
+        let base_expr_type = self.exprs.get(base_expr).get_type();
         if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
             let span = fn_call.span;
-            let Some(variant) = e.variants.iter().find(|v| {
-                let mut s = String::with_capacity(16);
+            let variants = e.variants.clone();
+            let mut s = std::mem::take(&mut self.buffers.name_builder);
+            let Some(variant) = variants.iter().find(|v| {
                 s.push_str("as");
                 let name = self.ident_str(v.name);
                 let name_capitalized = strings::capitalize_first(name);
                 s.push_str(&name_capitalized);
 
-                fn_name == s
+                let fn_name = self.ident_str(fn_call.name.name);
+                let is_match = fn_name == s;
+                s.clear();
+                is_match
             }) else {
-                let base_expr_type = self.exprs.get(base_expr).get_type();
+                self.buffers.name_builder = s;
                 return failf!(
                     span,
                     "Method '{}' does not exist on type '{}'",
-                    fn_name,
+                    self.ident_str(fn_call.name.name),
                     self.type_id_to_string(base_expr_type)
                 );
             };
+            self.buffers.name_builder = s;
             let variant_type_id = variant.my_type_id;
             let variant_index = variant.index;
             let resulting_type_id = if is_reference {
-                self.types.add_reference_type(variant_type_id)
+                let ref_type = self.types.get(base_expr_type).expect_reference();
+                self.types.add_reference_type(variant_type_id, ref_type.mutable)
             } else {
                 variant_type_id
             };
@@ -10445,7 +10488,7 @@ impl TypedProgram {
         self.check_and_coerce_expr(param.type_id, arg, calling_scope).map_err(|e| {
             errf!(
                 e.span,
-                "Invalid type for parameter {}: {}",
+                "Invalid type for parameter {}\n{}",
                 self.ident_str(param.name),
                 e.message
             )
@@ -10551,7 +10594,15 @@ impl TypedProgram {
                             self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
                         }
                     };
-                    let checked_expr = self.check_call_argument(param, expr, ctx.scope_id)?;
+                    let checked_expr =
+                        self.check_call_argument(param, expr, ctx.scope_id).map_err(|err| {
+                            errf!(
+                                err.span,
+                                "Invalid call to {}\n    {}",
+                                self.namespaced_identifier_to_string(&fn_call.name),
+                                err.message
+                            )
+                        })?;
                     typechecked_args.push(checked_expr);
                 }
                 (callee, typechecked_args, SliceHandle::Empty)
@@ -10665,7 +10716,7 @@ impl TypedProgram {
                         self.check_call_argument(param, expr, ctx.scope_id).map_err(|err| {
                             errf!(
                                 err.span,
-                                "Invalid call to {}. {}",
+                                "Invalid call to {}\n    {}",
                                 self.namespaced_identifier_to_string(&fn_call.name),
                                 err.message
                             )
@@ -11363,12 +11414,16 @@ impl TypedProgram {
                 let actual_type = self.exprs.get(value_expr).get_type();
 
                 let variable_type = if parsed_let.is_referencing() {
-                    self.types.add_reference_type(actual_type)
+                    let mutable = parsed_let.is_mutable();
+                    self.types.add_reference_type(actual_type, mutable)
                 } else {
                     actual_type
                 };
 
                 let variable_id = self.variables.add(Variable {
+                    // this is weird because for mutable referencing lets
+                    // the 'mut' controls both the mutability of the pointer
+                    // and the re-assignability of the variable
                     is_mutable: parsed_let.is_mutable(),
                     name: parsed_let.name,
                     type_id: variable_type,

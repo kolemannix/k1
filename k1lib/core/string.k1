@@ -86,9 +86,9 @@ ns string {
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
-    let* results = List/empty[List[char]]();
-    let* accum = List/empty[char]();
-    // Note(stdlib slow): TODO: use ranges instead to make this zero-copy!!
+    let* mut results = List/empty[List[char]]();
+    let* mut accum = List/empty[char]();
+    // nocommit(stdlib slow): TODO: use ranges instead to make this zero-copy!!
     //                    We can point to the old string instead of building up new ones
     for c in self do {
       if c == delim {
@@ -144,18 +144,18 @@ ns string {
   }
 
   fn fromCString(cString: Pointer): string {
-    let* self = List/empty[char]();
-    let mut i = 0: uword;
+    let* mut chars = List/empty[char]();
+    let* mut i = 0: uword;
     loop {
       let c = cString.refAtIndex[char](i);
       if c.* == '\0' {
         break();
       } else {
-        self.push(c);
-        i = i + 1;
+        chars.push(c);
+        i <- i.* + 1;
       }
     };
-    wrapList(self)
+    wrapList(chars)
   }
 
   fn toInt(self: string): int? {

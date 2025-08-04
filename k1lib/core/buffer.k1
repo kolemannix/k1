@@ -207,7 +207,7 @@ ns Buffer {
   }
 
   fn sorted[T](self: Buffer[T]): Buffer[T] where T: Comparable {
-    let* list = List/wrapBuffer(self);
+    let* mut list = List/wrapBuffer(self);
     list.sort();
     list.*.toBuffer()
   }
@@ -239,21 +239,21 @@ ns BufferIterator {
 }
 
 impl[T] Iterator[Item = T] for BufferIterator[T] {
-  fn next(self: BufferIterator[T]*): Item? { 
+  fn next(self: *write BufferIterator[T]): Item? { 
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
       self.pos* <- self.pos + 1;
       some(item)
     } else .None
   }
-  fn sizeHint(self: Self*): { atLeast: uword, atMost: uword? } { 
+  fn sizeHint(self: *read Self): { atLeast: uword, atMost: uword? } { 
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
-  fn advanceBy(self: Self*, n: uword): unit {
+  fn advanceBy(self: *write Self, n: uword): unit {
     self.pos* <- self.pos + n
   }
-  fn nth(self: Self*, n: uword): Item? {
+  fn nth(self: *write Self, n: uword): Item? {
     self.advanceBy(n);
     self.next()
   }

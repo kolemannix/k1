@@ -1143,10 +1143,17 @@ pub struct ParsedOptional {
     pub span: SpanId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceKind {
+    Read,
+    Write,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedReference {
     pub base: ParsedTypeExprId,
     pub span: SpanId,
+    pub kind: ReferenceKind,
 }
 
 #[derive(Debug, Clone)]
@@ -2739,6 +2746,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     result = self.ast.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
                         base: result,
                         span: next.span,
+                        kind: ReferenceKind::Write,
                     }));
                 } else {
                     panic!("unhandled postfix type operator {:?}", next.kind);
@@ -2769,6 +2777,31 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::BackSlash {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
+        } else if first.kind == K::Asterisk {
+            // Reference/Pointer notation: *<ty>
+            self.advance();
+            let next = self.peek();
+            let reference_kind = if next.kind == K::Ident && !next.is_whitespace_preceeded() {
+                let chars = self.token_chars(next);
+                if chars == "write" {
+                    self.advance();
+                    ReferenceKind::Write
+                } else if chars == "read" {
+                    self.advance();
+                    ReferenceKind::Read
+                } else {
+                    ReferenceKind::Read
+                }
+            } else {
+                ReferenceKind::Read
+            };
+            let type_expr = self.expect_type_expression()?;
+            let span = self.extend_to_here(first.span);
+            Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
+                base: type_expr,
+                span,
+                kind: reference_kind,
+            }))))
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));

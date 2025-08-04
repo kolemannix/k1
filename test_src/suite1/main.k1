@@ -44,6 +44,7 @@ fn moderate(): unit {
   generic_struct/test();
   context_params/test();
   context_generic/test();
+  static_literals/test();
   inference/test();
   is_patterns/test();
   struct_anon_nomethod/test();

@@ -1,12 +1,13 @@
-fn main(): i32 {
-
+ns static_literals;
+fn test(): unit {
   let a: 1 = 1;
-  let a: 1 = 1;
+  let a: -3 = -3;
   let c: 'c' = 'c';
+  let pi: 3.14 = 3.14;
   let hello: "hello" = "hello";
 
   let hello: "hello!" = #static {
-    let* bytes = [104: u8];
+    let* mut bytes = [104: u8];
     println("Hello, world!");
     bytes.push(101);
     bytes.push(108);
@@ -16,8 +17,5 @@ fn main(): i32 {
     string/wrapBytes(bytes.toBuffer())
   };
 
-  let statStr: static string = #static "(?,?,?)";
-  (statStr as string).splitByChar('?');
-
-  0
+  ()
 }

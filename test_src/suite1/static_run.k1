@@ -150,7 +150,7 @@ fn test(): unit {
   };
   assert(buf.fromStatic() == [1,2,3,4,5].toBuffer());
   let bufFromStatic = #static {
-    let* l = List/wrapBuffer(INT_BUFFER.cloned());
+    let* mut l = List/wrapBuffer(INT_BUFFER.cloned());
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));

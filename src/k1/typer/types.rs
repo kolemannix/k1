@@ -138,9 +138,19 @@ pub struct OptionalType {
     pub inner_type: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ReferenceType {
     pub inner_type: TypeId,
+    pub mutable: bool,
+}
+impl ReferenceType {
+    pub fn is_read_only(&self) -> bool {
+        !self.mutable
+    }
+
+    pub fn is_mutable(&self) -> bool {
+        self.mutable
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -438,7 +448,9 @@ impl PartialEq for Type {
                 }
                 true
             }
-            (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
+            (Type::Reference(r1), Type::Reference(r2)) => {
+                r1.inner_type == r2.inner_type && r1.mutable == r2.mutable
+            }
             (Type::Array(a1), Type::Array(a2)) => {
                 a1.element_type == a2.element_type && a1.size_type == a2.size_type
             }
@@ -509,24 +521,14 @@ impl Eq for Type {}
 
 impl std::hash::Hash for Type {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        use std::mem::discriminant;
+        discriminant(self).hash(state);
         match self {
-            Type::Unit => "unit".hash(state),
-            Type::Char => "char".hash(state),
-            Type::Integer(int1) => match int1 {
-                IntegerType::U8 => "u8".hash(state),
-                IntegerType::U16 => "u16".hash(state),
-                IntegerType::U32 => "u32".hash(state),
-                IntegerType::U64 => "u64".hash(state),
-                IntegerType::UWord(_) => "uword".hash(state),
-                IntegerType::I8 => "i8".hash(state),
-                IntegerType::I16 => "i16".hash(state),
-                IntegerType::I32 => "i32".hash(state),
-                IntegerType::I64 => "i64".hash(state),
-                IntegerType::IWord(_) => "iword".hash(state),
-            },
-            Type::Bool => "bool".hash(state),
+            Type::Unit => {}
+            Type::Char => {}
+            Type::Integer(int) => discriminant(int).hash(state),
+            Type::Bool => {}
             Type::Struct(s) => {
-                "struct".hash(state);
                 s.defn_id.hash(state);
                 s.fields.len().hash(state);
                 for f in &s.fields {
@@ -535,26 +537,22 @@ impl std::hash::Hash for Type {
                 }
             }
             Type::Reference(r) => {
-                "ref".hash(state);
                 r.inner_type.hash(state);
+                r.mutable.hash(state);
             }
             Type::TypeParameter(t_param) => {
-                "tvar".hash(state);
                 t_param.name.hash(state);
                 t_param.scope_id.hash(state);
             }
             Type::FunctionTypeParameter(ftp) => {
-                "ftp".hash(state);
                 ftp.name.hash(state);
                 ftp.scope_id.hash(state);
                 ftp.function_type.hash(state);
             }
             Type::InferenceHole(hole) => {
-                "hole".hash(state);
                 hole.index.hash(state);
             }
             Type::Enum(e) => {
-                "enum".hash(state);
                 e.defn_id.hash(state);
                 e.variants.len().hash(state);
                 for v in e.variants.iter() {
@@ -564,20 +562,17 @@ impl std::hash::Hash for Type {
             }
             // We never really want to de-dupe this type as its inherently unique
             Type::EnumVariant(variant) => {
-                "variant".hash(state);
                 variant.enum_type_id.hash(state);
                 variant.name.hash(state);
                 variant.payload.hash(state);
             }
             // Inherently unique as well
             Type::Generic(generic) => {
-                "gen".hash(state);
                 generic.inner.hash(state);
                 generic.params.index().hash(state);
                 generic.params.len().hash(state);
             }
             Type::Function(fun) => {
-                "fun".hash(state);
                 fun.return_type.hash(state);
                 for param in &fun.physical_params {
                     param.name.hash(state);
@@ -587,38 +582,29 @@ impl std::hash::Hash for Type {
                 }
             }
             Type::Lambda(c) => {
-                "lambda".hash(state);
                 c.parsed_id.hash(state);
                 c.function_type.hash(state)
             }
             Type::Float(ft) => {
-                "float".hash(state);
                 ft.size().bits().hash(state);
             }
-            Type::Pointer => {
-                "ptr".hash(state);
-            }
-            Type::Never => "never".hash(state),
+            Type::Pointer => {}
+            Type::Never => {}
             Type::LambdaObject(co) => {
-                "lambda_object".hash(state);
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
             Type::Static(stat) => {
-                "stat".hash(state);
                 stat.inner_type_id.hash(state);
                 stat.value_id.hash(state)
             }
             Type::Unresolved(id) => {
-                "unresolved".hash(state);
                 id.hash(state);
             }
             Type::RecursiveReference(rr) => {
-                "recurse".hash(state);
                 rr.root_type_id.hash(state);
             }
             Type::Array(arr) => {
-                "array".hash(state);
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
                 arr.concrete_count.hash(state);
@@ -701,17 +687,17 @@ impl Type {
         }
     }
 
-    pub fn as_reference(&self) -> Option<&ReferenceType> {
+    pub fn as_reference(&self) -> Option<ReferenceType> {
         match self {
-            Type::Reference(r) => Some(r),
+            Type::Reference(r) => Some(*r),
             _ => None,
         }
     }
 
     #[track_caller]
-    pub fn expect_reference(&self) -> &ReferenceType {
+    pub fn expect_reference(&self) -> ReferenceType {
         match self {
-            Type::Reference(r) => r,
+            Type::Reference(r) => *r,
             _ => panic!("expect_reference called on: {:?}", self),
         }
     }
@@ -1120,8 +1106,8 @@ impl Types {
         unsafe { TypeId(NonZeroU32::new_unchecked(self.types.len() as u32 + 1)) }
     }
 
-    pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.add_anon(Type::Reference(ReferenceType { inner_type }))
+    pub fn add_reference_type(&mut self, inner_type: TypeId, mutable: bool) -> TypeId {
+        self.add_anon(Type::Reference(ReferenceType { inner_type, mutable }))
     }
 
     pub fn add_static_type(
@@ -1302,7 +1288,7 @@ impl Types {
         function_type_id: TypeId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let fn_ptr_type = self.add_reference_type(function_type_id);
+        let fn_ptr_type = self.add_reference_type(function_type_id, false);
         let fields = eco_vec![
             StructTypeField {
                 name: identifiers.builtins.fn_ptr,

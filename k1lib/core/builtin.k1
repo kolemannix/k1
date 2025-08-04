@@ -197,10 +197,10 @@ ability Try[impl T, impl E] {
 }
 
 ability Iterator[impl Item] {
-  fn next(self: Self*): Item?
-  fn sizeHint(self: Self*): { atLeast: uword, atMost: uword? }
-  fn advanceBy(self: Self*, n: uword): unit
-  fn nth(self: Self*, n: uword): Item?
+  fn next(self: *write Self): Item?
+  fn sizeHint(self: *read Self): { atLeast: uword, atMost: uword? }
+  fn advanceBy(self: *write Self, n: uword): unit
+  fn nth(self: *write Self, n: uword): Item?
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
@@ -313,6 +313,26 @@ ns sys {
   intern fn exit(code: i32): never
 }
 
+ns Pointer {
+  let NULL: Pointer = 0: uword as Pointer;
+
+  fn isNull(self: Pointer): bool {
+    self as uword == 0
+  }
+
+  // This is an intrinsic so that we can codegen a getelementptr
+  // instruction in LLVM rather than a pointer cast.
+  // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
+  intern fn refAtIndex[T](self: Pointer, index: uword): T*
+
+}
+
+impl Equals for Pointer {
+  fn equals(self: Pointer, other: Pointer): bool {
+    self as uword == other as uword
+  }
+}
+
 ns bool {
   intern fn negated(self: bool): bool
 }
@@ -369,7 +389,7 @@ ns Array {
     arrayUninit
   }
 
-  fn toBuffer[N: static uword, T](array: Array[N x T]*): Buffer[T] {
+  fn toBuffer[N: static uword, T](array: *write Array[N x T]): Buffer[T] {
     let len: uword = array.len();
     { len, data: array.getBase() }
   }
