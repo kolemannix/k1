@@ -105,6 +105,8 @@ New tagline? "C with typeclasses and tagged unions"
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
+- [ ] Consider a rename of 'uword/iword'. What about `word` and `sword`.
+      Then we go n8/n16/n32/n64/s8/s16/s32/s64
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
@@ -138,12 +140,12 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Define clear 'platform layer' (crash, assert, mem, other?).
       Then we could do an LLVM interp platform and a rust interpreter platform
   - [x] All tests passing in #static mode
-  - [ ] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
+  - [x] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
   - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 ## Project: Mutable and non-mutable reference types
-- [ ] Determine syntax
+- [ ] Determine syntax: @read <ty>, @<ty>, @write <ty>
 - [ ] Convert all type syntax to prefix for better chaining
 - [ ] Prevent writes to non-mutable references
 - [ ] Update stdlib
@@ -166,13 +168,13 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Multiline string literals,
 - [x] #code directive
 - [x] static type universe: `static T`
-- [ ] A syntax for talking about a certain impl of an ability: `Show::bool/show(b: bool)` or `(Allocator for T)/supportsFree()`
+- [x] A syntax for talking about a certain impl of an ability: `Show::bool/show(b: bool)` or `(Allocator for T)/supportsFree()`
 - [ ] Upgrade Allocator api in std/mem to use static and metaprogramming
+      (this causes some issues because we need to use the context allocator to know the type, but if there is none because we're using the threadlocal current system, we have no place to get the type param from!')
 
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
 - [ ] implement iterator for them
-- [ ] 
 
 ## Project
 - [ ] Defer

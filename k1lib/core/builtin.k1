@@ -32,6 +32,8 @@ deftype f64 = builtin
 
 deftype Buffer[T] = { len: uword, data: T* }
 
+// deftype View[T] = { len: uword, data: T* }
+
 deftype List[T] = { len: uword, private buffer: Buffer[T] }
 deftype string = { buffer: Buffer[char] }
 

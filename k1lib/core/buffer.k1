@@ -8,7 +8,7 @@
 // I'm going to introduce a safe wrapper around it that is meant to be used
 // as your 'slice' type, and we'll rename this, perhaps, to RawBuffer
 // It'll be the same thing except for a 'Promise' from the creator that
-// its fully populated
+// it's fully populated
 ns Buffer {
 
   fn bufferSizeBytes[T](count: uword): uword {
