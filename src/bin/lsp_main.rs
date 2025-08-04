@@ -2,7 +2,7 @@
 // All rights reserved.
 
 use itertools::Itertools;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
@@ -122,9 +122,10 @@ impl Backend {
     }
 
     fn compile(&self) -> u32 {
+        let out_dir: PathBuf = ".k1-out/lsp".into();
         info!("compiling version {}", self.compile_iteration.load(Ordering::Relaxed));
         let root_uri = self.workspace_uri.read().unwrap();
-        let compile_result = k1::compiler::compile_module(&k1::compiler::Args {
+        let args = k1::compiler::Args {
             no_std: false,
             write_llvm: false,
             no_llvm_opt: false,
@@ -136,7 +137,8 @@ impl Backend {
                 file: root_uri.as_ref().unwrap().path().into(),
             },
             clang_options: vec![],
-        });
+        };
+        let compile_result = k1::compiler::compile_module(&args, &out_dir);
         let compiled_module = match compile_result {
             Ok(module) => CompiledModule::Typed(Box::new(module)),
             Err(CompileModuleError::TyperFailure(module)) => CompiledModule::Typed(module),

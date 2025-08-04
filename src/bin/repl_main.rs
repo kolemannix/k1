@@ -24,13 +24,14 @@ fn main() -> anyhow::Result<ExitCode> {
     info!("k1 repl v0.1.0");
 
     let mut ast = ParsedProgram::make(
-        "parse_test".to_string(),
+        "repl".to_string(),
         CompilerConfig {
             is_test_build: false,
             no_std: false,
             target: k1::compiler::detect_host_target()
                 .unwrap_or(k1::compiler::Target::LinuxIntel64),
             debug: true,
+            out_dir: ".k1-out/repl".into(),
         },
     );
     let name = "repl.k1";

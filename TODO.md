@@ -78,12 +78,13 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Change FieldAccess semantics to work on struct references, and copy only the field out
       This saves copying the entire aggregate first with a Dereference instruction
 - [ ] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
+      This is basically an interpreter; what we have now with the vm solves this problem a bit
+      But not entirely because it only checks the code that runs!
 - [ ] Represent payload-less `either` types as ints not structs
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [ ] ThreadLocal globals
 - [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
-- [ ] profiling notes: find_abilities_in_scope, infer_types, 
 - [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
 - [ ] Use `perf` to look at branch info, cache info
 - [ ] Compile switches with no patterns or guards to LLVM switch
@@ -91,7 +92,6 @@ New tagline? "C with typeclasses and tagged unions"
       type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] Private functions?
 - [ ] Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
-- [ ] Rename 'Buffer' to ... Slice?
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [ ] A clone ability. Clone and Copy are not good enough words for this; the distinct meanings are completely imposed rather than intrinsic
       What about: Value for Copy; Entity for "not copy"
@@ -145,9 +145,10 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 ## Project: Mutable and non-mutable reference types
-- [ ] Determine syntax: @read <ty>, @<ty>, @write <ty>
+- [ ] Change pointer syntax: @read <ty>, @<ty>, @write <ty>
+- [ ] Rename 'Buffer' to ... View?
 - [ ] Convert all type syntax to prefix for better chaining
-- [ ] Prevent writes to non-mutable references
+- [ ] Add mutable/const bool to ReferenceType
 - [ ] Update stdlib
 
 ## Project: static reflection

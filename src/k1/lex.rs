@@ -91,6 +91,10 @@ impl<'toks> TokenIter<'toks> {
         self.cursor
     }
 
+    pub fn advance_n(&mut self, n: usize) {
+        self.cursor += n
+    }
+
     #[inline]
     pub fn advance(&mut self) {
         self.cursor += 1;
