@@ -10,7 +10,6 @@ use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
-use fxhash::FxHashMap;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;
@@ -64,12 +63,6 @@ nz_u32_id!(ParsedTypeExprId);
 pub struct ParsedPatternId(u32);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedUseId(u32);
-
-#[derive(Debug, Clone)]
-pub enum ParsedDirective {
-    ConditionalCompile { condition: ParsedExprId, span: SpanId },
-    CompilerDebug { span: SpanId },
-}
 
 #[derive(Debug, Clone)]
 pub struct ParsedUse {
@@ -1357,7 +1350,7 @@ pub struct ParsedFunction {
     pub signature_span: SpanId,
     pub span: SpanId,
     pub linkage: Linkage,
-    pub directives: EcoVec<ParsedDirective>,
+    pub compiler_debug: bool,
     pub additional_where_constraints: EcoVec<ParsedTypeConstraint>,
     pub condition: Option<ParsedExprId>,
     pub id: ParsedFunctionId,
@@ -1480,44 +1473,53 @@ pub struct ParsedNamespace {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy)]
+pub struct ParsedExprMetadata {
+    pub is_debug: bool,
+    pub type_hint: Option<ParsedTypeExprId>,
+}
+
 pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
     expressions: Pool<ParsedExpr, ParsedExprId>,
-    type_hints: Pool<Option<ParsedTypeExprId>, ParsedExprId>,
-    directives: FxHashMap<ParsedExprId, EcoVec<ParsedDirective>>,
+    metadata: Pool<ParsedExprMetadata, ParsedExprId>,
 }
 impl ParsedExpressionPool {
     pub fn new(capacity: usize) -> Self {
         ParsedExpressionPool {
             expressions: Pool::with_capacity("parsed_expr", capacity),
-            type_hints: Pool::with_capacity("parsed_expr_type_hint", capacity),
-            directives: FxHashMap::default(),
+            metadata: Pool::with_capacity("parsed_expr_metadata", capacity),
         }
     }
 
     pub fn set_type_hint(&mut self, id: ParsedExprId, ty: ParsedTypeExprId) {
-        *self.type_hints.get_mut(id) = Some(ty)
+        self.metadata.get_mut(id).type_hint = Some(ty)
     }
 
     pub fn get_type_hint(&self, id: ParsedExprId) -> Option<ParsedTypeExprId> {
-        *self.type_hints.get(id)
+        self.metadata.get(id).type_hint
     }
 
-    pub fn add_directives(&mut self, id: ParsedExprId, directives: EcoVec<ParsedDirective>) {
-        self.directives.insert(id, directives);
+    pub fn get_metadata(&self, id: ParsedExprId) -> ParsedExprMetadata {
+        *self.metadata.get(id)
     }
 
-    pub fn get_directives(&self, id: ParsedExprId) -> &[ParsedDirective] {
-        self.directives.get(&id).map(|v| &v[..]).unwrap_or(&[])
+    pub fn get_metadata_mut(&mut self, id: ParsedExprId) -> &mut ParsedExprMetadata {
+        self.metadata.get_mut(id)
     }
 
-    pub fn add_expression(&mut self, mut expression: ParsedExpr) -> ParsedExprId {
+    pub fn add_expression(
+        &mut self,
+        mut expression: ParsedExpr,
+        is_debug: bool,
+        type_hint: Option<ParsedTypeExprId>,
+    ) -> ParsedExprId {
         let id: ParsedExprId = self.expressions.next_id();
         if let ParsedExpr::Call(call) = &mut expression {
             call.id = id;
         }
         self.expressions.add(expression);
-        self.type_hints.add(None);
+        self.metadata.add(ParsedExprMetadata { is_debug, type_hint });
         id
     }
 
@@ -2374,6 +2376,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     #[inline]
+    fn advance_n(&mut self, n: usize) {
+        self.tokens.advance_n(n);
+    }
+
+    #[inline]
     fn peek(&self) -> Token {
         self.tokens.peek()
     }
@@ -2459,16 +2466,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn add_expression(&mut self, expression: ParsedExpr) -> ParsedExprId {
-        self.ast.exprs.add_expression(expression)
+        self.ast.exprs.add_expression(expression, false, None)
     }
 
-    pub fn add_expression_with_directives(
+    pub fn add_expression_with_metadata(
         &mut self,
         expression: ParsedExpr,
-        directives: EcoVec<ParsedDirective>,
+        is_debug: bool,
+        type_hint: Option<ParsedTypeExprId>,
     ) -> ParsedExprId {
-        let id = self.ast.exprs.add_expression(expression);
-        self.ast.exprs.add_directives(id, directives);
+        let id = self.ast.exprs.add_expression(expression, is_debug, type_hint);
         id
     }
 
@@ -3257,12 +3264,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(NamespacedIdentifier { namespaces, name: name_ident, span })
     }
 
+    pub fn parse_compiler_debug(&mut self) -> bool {
+        let (first, second) = self.peek_two();
+        let is_debug = first.kind == K::Hash
+            && second.kind == K::Ident
+            && !second.is_whitespace_preceeded()
+            && self.get_token_chars(second) == "debug";
+        if is_debug {
+            self.advance_n(2);
+        }
+        is_debug
+    }
+
     /// "Base" in "base expression" simply means ignoring postfix and
     /// binary operations, in terms of recursion or induction, its an atom,
     /// or a 'base case'; it doesn't have any real meaning at the language level
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
-        let directives = self.parse_directives()?;
         let (first, second, third) = self.tokens.peek_three();
+        let compiler_debug = self.parse_compiler_debug();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         let resulting_expression = if first.kind == K::OpenParen {
             self.advance();
@@ -3576,20 +3595,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         } else {
             // More expression types
-            if directives.is_empty() {
-                Ok(None)
+            if compiler_debug {
+                Err(error_expected("expression following #debug", first))
             } else {
-                Err(error_expected("expression following directives", first))
+                Ok(None)
             }
         }?;
         if let Some(expression_id) = resulting_expression {
-            self.ast.exprs.add_directives(expression_id, directives);
-
             if self.peek().kind == K::Colon {
                 self.advance();
                 let type_hint = self.expect_type_expression()?;
                 self.ast.exprs.set_type_hint(expression_id, type_hint);
             }
+            self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
         }
         Ok(resulting_expression)
     }
@@ -4004,28 +4022,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedTypeParam { name, span, constraints })
     }
 
-    /// Directives look like this: @<directive kind: ident>(<directive arg>, ...)
-    fn parse_directives(&mut self) -> ParseResult<EcoVec<ParsedDirective>> {
-        let mut directives: EcoVec<ParsedDirective> = eco_vec![];
-        while let Some(_at) = self.maybe_consume_next(K::At) {
-            let directive = {
-                let kind_token = self.expect_eat_token(K::Ident)?;
-                match self.token_chars(kind_token) {
-                    "debug" => ParsedDirective::CompilerDebug { span: kind_token.span },
-                    s => return Err(error(format!("Invalid directive kind: '{s}'"), kind_token)),
-                }
-            };
-            directives.push(directive)
-        }
-        Ok(directives)
-    }
-
     fn parse_function(
         &mut self,
         preexisting_condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedFunctionId>> {
         trace!("parse_function");
-        let directives = self.parse_directives()?;
+        let is_debug = self.parse_compiler_debug();
         let condition = match preexisting_condition {
             None => {
                 if self.maybe_consume_next(K::Hash).is_some() {
@@ -4122,7 +4124,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             signature_span,
             span,
             linkage,
-            directives,
+            compiler_debug: is_debug,
             additional_where_constraints: additional_type_constraints,
             condition,
             id: ParsedFunctionId(u32::MAX),
@@ -4767,6 +4769,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
             no_std: true,
             target: crate::compiler::detect_host_target().unwrap(),
             debug: true,
+            out_dir: ".k1-out-unit-test".into(),
         },
     );
 

@@ -1,14 +1,9 @@
-fn makeByteArray[N: static uword](): Array[N x uword] {
-  let x = (#static "hi"): "hi";
-  crash("unimplemented");
-}
-
 fn main(): i32 {
 
-  let a: 1 = 1.toStatic();
-  let a: 1 = 1.toStatic();
-  let c: 'c' = 'c'.toStatic();
-  let hello: "hello" = "hello".toStatic();
+  let a: 1 = 1;
+  let a: 1 = 1;
+  let c: 'c' = 'c';
+  let hello: "hello" = "hello";
 
   let hello: "hello!" = #static {
     let* bytes = [104: u8];

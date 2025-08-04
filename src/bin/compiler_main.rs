@@ -1,6 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -39,10 +40,12 @@ fn run() -> anyhow::Result<ExitCode> {
 
     info!("k1 Compiler v0.1.0");
 
-    let out_dir = ".k1-out";
-    std::fs::create_dir_all(out_dir)?;
+    let out_dir: PathBuf = ".k1-out".into();
+    std::fs::create_dir_all(&out_dir)?;
 
-    let Ok(program) = compiler::compile_module(&args) else { return Ok(ExitCode::FAILURE) };
+    let Ok(program) = compiler::compile_module(&args, &out_dir) else {
+        return Ok(ExitCode::FAILURE);
+    };
     let program_name = program.program_name();
     info!("done waiting on compile thread");
     if matches!(args.command, Command::Check { .. }) {
@@ -52,12 +55,12 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &program, out_dir, true) {
+    return match compiler::codegen_module(&args, &llvm_ctx, &program, &out_dir, true) {
         Ok(_codegen) => {
             if matches!(args.command, Command::Build { .. }) {
                 Ok(ExitCode::SUCCESS)
             } else {
-                compiler::run_compiled_program(out_dir, program_name);
+                compiler::run_compiled_program(&out_dir, program_name);
                 Ok(ExitCode::SUCCESS)
             }
         }

@@ -242,10 +242,13 @@ impl TypedProgram {
             is_referencing,
             span,
         }));
-        let parsed_expr =
-            self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
+        let parsed_expr = self.ast.exprs.add_expression(
+            ParsedExpr::Variable(parse::ParsedVariable {
                 name: NamespacedIdentifier::naked(name, span),
-            }));
+            }),
+            false,
+            None,
+        );
         self.scopes.add_variable(owner_scope, new_ident, variable_id);
         SynthedVariable { variable_id, defn_stmt, variable_expr, parsed_expr }
     }
@@ -264,14 +267,18 @@ impl TypedProgram {
             .ast
             .p_call_args
             .add_slice_from_iter(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
-        self.ast.exprs.add_expression(ParsedExpr::Call(ParsedCall {
-            name,
-            type_args,
-            args,
-            span,
-            is_method,
-            id: ParsedExprId::PENDING,
-        }))
+        self.ast.exprs.add_expression(
+            ParsedExpr::Call(ParsedCall {
+                name,
+                type_args,
+                args,
+                span,
+                is_method,
+                id: ParsedExprId::PENDING,
+            }),
+            false,
+            None,
+        )
     }
 
     pub(super) fn synth_typed_function_call(

@@ -15,6 +15,7 @@ fn make_test_module() -> ParsedProgram {
             no_std: true,
             target: detect_host_target().unwrap(),
             debug: true,
+            out_dir: ".k1-out-parse-test".into(),
         },
     )
 }

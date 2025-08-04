@@ -231,6 +231,7 @@ pub struct CompilerConfig {
     pub no_std: bool,
     pub target: Target,
     pub debug: bool,
+    pub out_dir: PathBuf,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -289,7 +290,10 @@ fn write_program_dump(p: &TypedProgram) {
 /// If `args.file` points to a file,
 /// - compile that file only.
 /// - module name is the name of the file.
-pub fn compile_module(args: &Args) -> std::result::Result<TypedProgram, CompileModuleError> {
+pub fn compile_module(
+    args: &Args,
+    out_dir: &Path,
+) -> std::result::Result<TypedProgram, CompileModuleError> {
     let src_path = &args
         .file()
         .canonicalize()
@@ -306,6 +310,7 @@ pub fn compile_module(args: &Args) -> std::result::Result<TypedProgram, CompileM
         no_std: args.no_std,
         target,
         debug: args.debug,
+        out_dir: out_dir.to_owned(),
     };
 
     let module_name = if src_path.is_dir() {
@@ -434,11 +439,10 @@ pub fn codegen_module<'ctx, 'module>(
     args: &Args,
     ctx: &'ctx Context,
     typed_module: &'module TypedProgram,
-    out_dir: impl AsRef<str>,
+    out_dir: &Path,
     do_write_executable: bool,
 ) -> Result<Codegen<'ctx, 'module>> {
     let llvm_optimize = !args.no_llvm_opt;
-    let out_dir = PathBuf::from(out_dir.as_ref());
 
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
     let module_name = codegen.name().to_string();
@@ -477,7 +481,7 @@ pub fn codegen_module<'ctx, 'module>(
             args.debug,
             typed_module.ast.config.target,
             &k1_lib_dir,
-            &out_dir,
+            out_dir,
             &module_name_path,
             &args.clang_options,
         )?;
@@ -501,8 +505,8 @@ pub fn codegen_module<'ctx, 'module>(
 }
 
 // Eventually, we want to return output and exit code to the application
-pub fn run_compiled_program(out_dir: &str, module_name: &str) {
-    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir, module_name));
+pub fn run_compiled_program(out_dir: &Path, module_name: &str) {
+    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir.display(), module_name));
     log::debug!("Run Command: {:?}", run_cmd);
     let run_status = run_cmd.status().unwrap();
 

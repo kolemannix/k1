@@ -2,7 +2,7 @@
 // All rights reserved.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -99,8 +99,8 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
 }
 
 fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<()> {
-    let out_dir = ".k1-out/test_suite";
-    std::fs::create_dir_all(out_dir)?;
+    let out_dir: PathBuf = ".k1-out/test_suite".into();
+    std::fs::create_dir_all(&out_dir)?;
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
         no_llvm_opt: true,
@@ -113,7 +113,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         command: Command::Build { file: path.as_ref().to_owned() },
         clang_options: vec![],
     };
-    let compile_result = compiler::compile_module(&args);
+    let compile_result = compiler::compile_module(&args, &out_dir);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileModuleError::TyperFailure(module)) => {
@@ -161,7 +161,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                     &args,
                     ctx,
                     &typed_program,
-                    out_dir,
+                    &out_dir,
                     output_executable,
                 )?;
 
@@ -179,7 +179,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                         }
                     }
                 } else {
-                    let mut run_cmd = std::process::Command::new(format!("{}/{}", out_dir, name));
+                    let mut run_cmd =
+                        std::process::Command::new(format!("{}/{}", out_dir.display(), name));
                     let run_result = run_cmd.output();
                     match run_result {
                         Err(e) => {

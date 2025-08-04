@@ -44,9 +44,9 @@ use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, FileId, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId,
     NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
-    ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedDirective, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
+    ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
+    ParsedId, ParsedIfExpr, ParsedList, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
+    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
     ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
     ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, Sources, StringId,
     StructValueField,
@@ -206,11 +206,6 @@ impl EvalExprContext {
     pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
         EvalExprContext { is_generic_pass, ..*self }
     }
-}
-
-enum CoerceResult {
-    Fail(TypedExprId),
-    Coerced(&'static str, TypedExprId),
 }
 
 #[derive(Debug, Clone)]
@@ -6242,14 +6237,8 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         mut ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let directives = self.ast.exprs.get_directives(expr_id);
-        let debug_directive =
-            directives.iter().find(|p| matches!(p, ParsedDirective::CompilerDebug { .. }));
-        let is_debug = debug_directive.is_some();
-        let conditional_compile_expr = directives.iter().find_map(|p| match p {
-            ParsedDirective::ConditionalCompile { condition, .. } => Some(*condition),
-            _ => None,
-        });
+        let expr_metadata = self.ast.exprs.get_metadata(expr_id);
+        let is_debug = expr_metadata.is_debug;
         if is_debug {
             self.push_debug_level();
         }
@@ -6258,18 +6247,9 @@ impl TypedProgram {
                 s.pop_debug_level()
             }
         });
-        let should_compile = match conditional_compile_expr {
-            None => true,
-            Some(condition) => self_.execute_static_bool(condition, ctx)?,
-        };
-        if !should_compile {
-            eprintln!("#if was false; yeeting in a unit for now");
-            let span = self_.ast.exprs.get_span(expr_id);
-            return Ok(self_.exprs.add(TypedExpr::Unit(span)));
-        }
 
         let mut explicit_hint = false;
-        ctx.expected_type_id = match self_.ast.exprs.get_type_hint(expr_id) {
+        ctx.expected_type_id = match expr_metadata.type_hint {
             Some(t) => {
                 let type_id = self_.eval_type_expr(t, ctx.scope_id)?;
                 explicit_hint = true;
@@ -6424,12 +6404,16 @@ impl TypedProgram {
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
-                let true_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
-                    parse::ParsedLiteral::Bool(true, is_expr.span),
-                ));
-                let false_expression = self.ast.exprs.add_expression(parse::ParsedExpr::Literal(
-                    parse::ParsedLiteral::Bool(false, is_expr.span),
-                ));
+                let true_expression = self.ast.exprs.add_expression(
+                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true, is_expr.span)),
+                    false,
+                    None,
+                );
+                let false_expression = self.ast.exprs.add_expression(
+                    parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(false, is_expr.span)),
+                    false,
+                    None,
+                );
                 let true_case = parse::ParsedMatchCase {
                     patterns: smallvec![is_expr.pattern],
                     guard_condition_expr: None,
@@ -6447,8 +6431,11 @@ impl TypedProgram {
                     cases: vec![true_case, false_case],
                     span: is_expr.span,
                 };
-                let match_expr_id =
-                    self.ast.exprs.add_expression(parse::ParsedExpr::Match(as_match_expr));
+                let match_expr_id = self.ast.exprs.add_expression(
+                    parse::ParsedExpr::Match(as_match_expr),
+                    false,
+                    None,
+                );
                 let partial_match = true;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
@@ -6721,7 +6708,7 @@ impl TypedProgram {
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
     fn eval_static_expr(
         &mut self,
-        expr_id: ParsedExprId,
+        _expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
@@ -6764,10 +6751,13 @@ impl TypedProgram {
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.p_idents.copy_slice_sv::<4>(stat.parameter_names) {
-            let variable_expr =
-                self.ast.exprs.add_expression(ParsedExpr::Variable(ParsedVariable {
+            let variable_expr = self.ast.exprs.add_expression(
+                ParsedExpr::Variable(ParsedVariable {
                     name: NamespacedIdentifier::naked(param, span),
-                }));
+                }),
+                false,
+                None,
+            );
             let (variable_id, variable_expr) =
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get(variable_expr).get_type();
@@ -6801,7 +6791,7 @@ impl TypedProgram {
                 _ => {
                     return failf!(
                         span,
-                        "Non-static parameters aren't supported yet: {}: {}",
+                        "Non-static parameters aren't supported: {}: {}",
                         self.ident_str(param),
                         self.type_id_to_string(variable_type)
                     );
@@ -6840,20 +6830,22 @@ impl TypedProgram {
                     // Then we typecheck the code and emit a block in place of this #meta
                     // invocation
                     let mut content = std::mem::take(&mut self.buffers.emitted_code);
-
-                    {
-                        let (source, line) = self.get_span_location(span);
-                        use std::fmt::Write;
-                        writeln!(
-                            &mut content,
-                            "// generated by #meta block at {}/{}:{}",
-                            source.directory,
-                            source.filename,
-                            line.line_number(),
-                        )
-                        .unwrap();
-                    }
+                    let (source, line) = self.get_span_location(span);
+                    use std::fmt::Write;
+                    writeln!(
+                        &mut content,
+                        "// generated by #meta block at {}/{}:{}",
+                        source.directory,
+                        source.filename,
+                        line.line_number(),
+                    )
+                    .unwrap();
                     content.push_str("{\n");
+                    // FIXME: generated_filename is not unique if we specialized on multiple types
+                    //        We need a specialization context, for both debugging and logging
+                    //        and for this
+                    let generated_filename =
+                        format!("meta_{}_{}.k1", source.filename, line.line_number());
 
                     // TODO: if specializing, say what the types are. I think this is actually
                     // really important debugging context
@@ -6869,7 +6861,7 @@ impl TypedProgram {
                         "Emitted raw content after {} emits:\n---\n{content}\n---",
                         vm_result.emits.len()
                     );
-                    let generated_filename = format!("static_{}.k1g", expr_id.as_u32());
+                    let generated_path = self.ast.config.out_dir.join(&generated_filename);
                     let origin_file = self.ast.spans.get(span).file_id;
                     let origin_source = self.ast.sources.get_source(origin_file);
                     let source_for_emission =
@@ -6879,6 +6871,12 @@ impl TypedProgram {
                             generated_filename,
                             content.clone(),
                         ));
+                    if let Err(e) = std::fs::write(&generated_path, &content) {
+                        eprintln!(
+                            "Failed to write out generated metaprogram at {}. {e}",
+                            generated_path.display()
+                        )
+                    }
 
                     let parsed_metaprogram_result =
                         self.parse_ad_hoc_expr(source_for_emission, &content);
@@ -6887,8 +6885,6 @@ impl TypedProgram {
                     let parsed_metaprogram = parsed_metaprogram_result?;
                     let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
                     debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
-
-                    // Typecheck the metaprogram!
 
                     Ok(typed_metaprogram)
                 }
@@ -6966,11 +6962,13 @@ impl TypedProgram {
         let ast_struct = parsed_struct.clone();
         for ast_field in ast_struct.fields.iter() {
             let parsed_expr = match ast_field.expr.as_ref() {
-                None => {
-                    self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
+                None => self.ast.exprs.add_expression(
+                    ParsedExpr::Variable(parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
-                    }))
-                }
+                    }),
+                    false,
+                    None,
+                ),
                 Some(expr) => *expr,
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
@@ -7028,11 +7026,13 @@ impl TypedProgram {
                 );
             };
             let parsed_expr = match passed_field.expr.as_ref() {
-                None => {
-                    self.ast.exprs.add_expression(ParsedExpr::Variable(parse::ParsedVariable {
+                None => self.ast.exprs.add_expression(
+                    ParsedExpr::Variable(parse::ParsedVariable {
                         name: NamespacedIdentifier::naked(passed_field.name, passed_field.span),
-                    }))
-                }
+                    }),
+                    false,
+                    None,
+                ),
                 Some(expr) => *expr,
             };
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
@@ -7055,23 +7055,21 @@ impl TypedProgram {
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(expected_struct.fields.iter())
         {
-            let expr =
-                self.eval_expr(*passed_expr, ctx.with_expected_type(Some(expected_field.type_id)))?;
+            let expr = self
+                .eval_expr_with_coercion(
+                    *passed_expr,
+                    ctx.with_expected_type(Some(expected_field.type_id)),
+                    true,
+                )
+                .map_err(|e| {
+                    errf!(
+                        passed_field.span,
+                        "Field '{}' has incorrect type: {}",
+                        self.ident_str(passed_field.name),
+                        e.message
+                    )
+                })?;
             let expr_type = self.exprs.get(expr).get_type();
-            if ctx.is_inference {
-                debug!(
-                    "[infer] Checking struct field {} against {}",
-                    self.type_id_to_string(expr_type),
-                    self.type_id_to_string(expected_field.type_id)
-                );
-            }
-            if let Err(msg) = self.check_types(expected_field.type_id, expr_type, ctx.scope_id) {
-                return failf!(
-                    passed_field.span,
-                    "Field '{}' has incorrect type: {msg}",
-                    self.ident_str(passed_field.name)
-                );
-            }
             field_types.push(StructTypeField {
                 name: expected_field.name,
                 type_id: expr_type,
@@ -9136,7 +9134,8 @@ impl TypedProgram {
                 );
             }
         };
-        let new_fn_call_id = self.ast.exprs.add_expression(ParsedExpr::Call(new_fn_call));
+        let new_fn_call_id =
+            self.ast.exprs.add_expression(ParsedExpr::Call(new_fn_call), false, None);
         let new_fn_call_clone = self.ast.exprs.get(new_fn_call_id).expect_call().clone();
         self.eval_function_call(&new_fn_call_clone, None, ctx, None)
     }
@@ -12146,6 +12145,7 @@ impl TypedProgram {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
+        let is_debug = parsed_function.compiler_debug;
         if let Some(condition_expr) = parsed_function.condition {
             let condition_value =
                 self.execute_static_bool(condition_expr, EvalExprContext::make(parent_scope_id))?;
@@ -12153,11 +12153,6 @@ impl TypedProgram {
                 return Ok(None);
             }
         }
-        let debug_directive = parsed_function
-            .directives
-            .iter()
-            .find(|p| matches!(p, ParsedDirective::CompilerDebug { .. }));
-        let is_debug = debug_directive.is_some();
         if is_debug {
             self.push_debug_level();
         }
