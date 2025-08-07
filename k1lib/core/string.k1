@@ -9,47 +9,49 @@ ns CString {
 ns string {
 
   fn get(self: string, index: uword): char {
-    self.buffer.get(index)
+    self.view.get(index)
   }
 
-  fn innerBuffer(self: string): Buffer[char] { self.buffer }
 
-  fn innerBufferBytes(self: string): Buffer[byte] {
-    self.innerBuffer().toByteBuffer()
+  fn viewBytes(self: string): View[byte] {
+    self.view().toByteView()
   }
 
   fn clone(self: string): string {
-    let newBuffer = self.buffer.cloned();
-    wrapBuffer(newBuffer)
+    fromView(self.view.cloned())
   }
 
-  fn cloneToList(self: string): List[char] {
-    List/wrapBuffer(self.clone().buffer)
+  fn fromView(view: View[char]): string {
+    { view }
+  }
+
+  fn fromBytes(view: View[byte]): string {
+    { view: view.toCharView() }
   }
 
   fn wrapList(list: List[char]): string {
-    { buffer: list.toBuffer() }
+    { view: list.asView() }
   }
 
   fn wrapBuffer(buffer: Buffer[char]): string {
-    { buffer: buffer }
+    { view: View/wrapBuffer(buffer) }
   }
 
-  fn wrapBytes(buffer: Buffer[byte]): string {
-    { buffer: buffer.toCharBuffer() }
+  fn wrapByteBuffer(buffer: Buffer[byte]): string {
+    { view: View/wrapBuffer(buffer.toCharBuffer()) }
   }
 
-  fn fromBytes(buffer: Buffer[byte]): string {
+  fn copyFromBytes(buffer: Buffer[byte]): string {
     let copied: Buffer[byte] = buffer.cloned();
-    wrapBytes(copied)
+    wrapByteBuffer(copied)
   }
 
-  fn fromBuffer(buffer: Buffer[char]): string {
+  fn copyFromBuffer(buffer: Buffer[char]): string {
     let copied = buffer.cloned();
-    { buffer: copied }
+    wrapBuffer(copied)
   }
 
-  fn len(self: string): uword { self.buffer.len }
+  fn len(self: string): uword { self.view.len() }
 
   fn isEmpty(self: string): bool { self.len() == 0 }
   fn nonEmpty(self: string): bool { self.len() != 0 }
@@ -75,14 +77,14 @@ ns string {
   }
 
   fn concat(self: string, other: string): string {
-    fromBuffer(self.buffer.concat(other.buffer))
+    fromView(self.view.concat(other.view))
   }
 
   fn appendChar(self: string, c: char): string {
     let newLength = self.len() + 1;
-    let newBuffer = self.buffer._enlargedClone(newLength);
+    let newBuffer = self.view.innerBuffer()._enlargedClone(newLength);
     newBuffer.set(self.len(), c);
-    fromBuffer(newBuffer)
+    wrapBuffer(newBuffer)
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
@@ -123,7 +125,7 @@ ns string {
   }
 
   fn substring(self: string, start: uword, end: uword): string {
-    { buffer: self.buffer.slice(start, end) }
+    { view: self.view.slice(start, end) }
   }
 
   fn take(self: string, count: uword): string { self.substring(0,     count) }
@@ -134,7 +136,7 @@ ns string {
   }
 
   fn dataPointer(self: string): Pointer {
-    self.buffer.dataPointer()
+    self.view.dataPointer()
   }
 
   fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: Pointer, len: uword } {
@@ -187,7 +189,8 @@ impl Show for string {
 }
 
 impl Iterable[Item = char, I = BufferIterator[char]] for string {
-  fn iterator(self: string): I { BufferIterator/fromBuffer(self.buffer) }
+  // nocommit(1): Allow private field access when Self = the type, or *read/write the type
+  fn iterator(self: string): I { self.view().iterator() }
 }
 
 impl Iterable[Item = char, I = BufferIterator[char]] for string* {

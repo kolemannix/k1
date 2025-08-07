@@ -1,5 +1,5 @@
 ns static_run;
-let INT_BUFFER: Buffer[int] = [1,2,3,4,5].toBuffer();
+let INT_BUFFER: Buffer[int] = [1,2,3,4,5].asBuffer();
 
 fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
@@ -144,11 +144,12 @@ fn test(): unit {
   #static bar(2);
 
   // Buffer
+  // nocommit(0): Switch to View, not Buffer, for StaticValues
   let buf = #static {
     let xs = [1,2,3,4,5];
-    xs.toBuffer()
+    xs.asBuffer()
   };
-  assert(buf.fromStatic() == [1,2,3,4,5].toBuffer());
+  assert(buf.fromStatic() == [1,2,3,4,5].asBuffer());
   let bufFromStatic = #static {
     let* mut l = List/wrapBuffer(INT_BUFFER.cloned());
     l.push(9);
@@ -164,7 +165,7 @@ fn test(): unit {
   }, 2);
 
   // Buffer of buffers!
-  let bob = #static [[1,2,3].toBuffer(), [4,5,6].toBuffer()].toBuffer();
+  let bob = #static [[1,2,3].asBuffer(), [4,5,6].asBuffer()].asBuffer();
   assertEquals(bob.len, 2);
   assertEquals(bob.get(0).get(0), 1);
   assertEquals(bob.get(0).get(1), 2);

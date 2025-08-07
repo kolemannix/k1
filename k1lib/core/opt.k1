@@ -11,6 +11,13 @@ ns Opt {
     }
   }
 
+  fn contains[T: Equals](self: T?, t: T): bool {
+    switch self {
+      .None -> false,
+      .Some(v) -> v == t
+    }
+  }
+
   // I'm leaving this separate function here 
   // because at one point it exercised a really weird compiler bug
   fn opt_equals[T](a: Opt[T], b: Opt[T]): bool where T: Equals {

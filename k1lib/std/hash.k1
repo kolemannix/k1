@@ -225,11 +225,11 @@ fn randByte(): u8 {
 }
 
 fn randString(len: uint): string {
-  let* mut arr = List/withCapacity[char](len);
+  let* mut chars = List/withCapacity[char](len);
   let mut i: uint = 0;
   while i < len {
-    arr.push(randByte() as char);
+    chars.push(randByte() as char);
     i = i + 1;
   };
-  string/fromBuffer(arr.toBuffer())
+  string/wrapList(chars.*)
 }

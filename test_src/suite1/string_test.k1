@@ -29,7 +29,7 @@ fn test(): unit {
 
   let x = "a.".splitByChar('.');
   let y = ["a"];
-  assert("a.".splitByChar('.') == ["a"]);
+  assertEquals("a.".splitByChar('.'), ["a"]);
   assert("bbb.".splitByChar('.') == ["bbb"]);
   assert("a.b.cc.d".splitByChar('.') == ["a", "b", "cc", "d"]);
   assert("a...".splitByChar('.') == ["a"]);

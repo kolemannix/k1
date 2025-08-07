@@ -99,11 +99,13 @@ pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
 pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
+pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(24).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Debug, Clone)]
@@ -667,6 +669,16 @@ impl Type {
         if let Type::Struct(s) = self {
             s.generic_instance_info.as_ref().and_then(|spec_info| {
                 if spec_info.generic_parent == BUFFER_TYPE_ID { Some(spec_info) } else { None }
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn as_view_instance(&self) -> Option<&GenericInstanceInfo> {
+        if let Type::Struct(s) = self {
+            s.generic_instance_info.as_ref().and_then(|spec_info| {
+                if spec_info.generic_parent == VIEW_TYPE_ID { Some(spec_info) } else { None }
             })
         } else {
             None

@@ -9,8 +9,8 @@ fn testLiterals(): unit {
   let* mut array: Array[3 x bool]* = [false, true, true];
   let buffer: Buffer[bool] = [false, true, true];
   let list: List[bool] = [false, true, true];
-  assertEquals(array.toBuffer(), buffer);
-  assertEquals(list.toBuffer(), buffer);
+  assertEquals(array.asBuffer(), buffer);
+  assertEquals(list.asBuffer(), buffer);
 }
 
 fn testFilled(): unit {
@@ -32,13 +32,18 @@ fn testArray(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
-  let a: Array[10 x u8]* = List/toArray(ls, 10);
+  let a: Array[10 x u8]* = List/copyToArray(ls, 10);
   let* w = List/empty[char]();
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
   };
   for core/IntRange/upTo(a.len() as iword) do {
     println("{it}: {a.get(it as uword)}");
+    if it % 2 == 0 {
+      assertEquals(a.get(it as uword), 1);
+    } else {
+      assertEquals(a.get(it as uword), 3);
+    }
   };
 
 }
@@ -55,7 +60,7 @@ fn test(): unit {
   let* mut array: Array[10 x f32]* = mem/zeroed();
   assert(testCompile(array.get(11)) is .Some(_));
   array.set(0, 3.14);
-  let buf = Buffer/fromArray(array);
+  let buf = Buffer/wrapArray(array);
   assert(buf.get(0) == array.get(0));
   assertEquals(buf.get(0), array.get(0));
 

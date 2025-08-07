@@ -49,7 +49,9 @@ fn printIt[T: Print](value: T): unit {
 
 fn print(s: string): unit {
   if k1/IS_STATIC {
-    k1/emitCompilerMessage(compiler/location(), .Info, s)
+    if s != "\n" {
+      k1/emitCompilerMessage(compiler/location(), .Info, s)
+    }
   } else {
     io/STDOUT.writeString(s)
   };
@@ -93,11 +95,15 @@ ns io {
       ()
     }
     fn writeString(self: Self*, s: string): unit {
-      posix/write(fileNo = self.fileNo, data = s.buffer.data as Pointer, count = s.len());
+      posix/write(fileNo = self.fileNo, data = s.view().dataPointer(), count = s.len());
       ()
     }
-    fn writeBytes(self: Self*, buffer: Buffer[byte]): unit {
-      posix/write(fileNo = self.fileNo, data = buffer.data as Pointer, count = buffer.len);
+    fn writeBytes(self: Self*, bytes: View[byte]): unit {
+      posix/write(
+        fileNo = self.fileNo,
+        data = bytes.dataPointer(),
+        count = bytes.len()
+      );
       ()
     }
   }
@@ -122,14 +128,17 @@ ns sys {
     else crash("unreachable os")
   }
 
-  fn parseMainArgs(argCount: u32, args: Pointer): Buffer[string] {
+  fn parseMainArgs(argCount: u32, args: Pointer): View[string] {
     let mut i = 0: uword;
-    let buf = Buffer/fromRawParts[CString](argCount as uword, args);
+    let buf = Buffer/fromRawPointerAndCount[CString](
+      count = argCount as uword,
+      pointer = args
+    );
     let* strings = List/withCapacity[string](argCount as uword);
     let strings = for cstr in buf yield {
       string/fromCString(cstr)
     };
-    strings.toBuffer()
+    strings.asView()
   }
 
   fn readLine(maxLengthBytes: uword): Result[string, string] {
@@ -143,12 +152,12 @@ ns sys {
     let length = bytesRead as uword - 1;
 
     // Remove trailing newline if present
-    if bytesRead > 0 and buffer.get(length) == ('\n' as u8) {
+    if buffer.last().contains('\n' as u8) {
       buffer.set(length, 0);
       buffer.len* <- length;
     };
 
-    let result = string/wrapBytes(buffer);
+    let result = string/wrapByteBuffer(buffer);
     .Ok(result)
   }
 
@@ -175,7 +184,9 @@ ns files {
 
     files/unix/fseek(file, 0, unix/SEEK_SET);
     files/unix/fread(buf, fileSizeBytes, 1, file);
-    let string = string/wrapBuffer(Buffer/fromRawParts(fileSizeBytes, buf));
+    let string = string/wrapBuffer(
+      Buffer/fromRawPointerAndCount(count = fileSizeBytes, pointer = buf)
+    );
     files/unix/fclose(file);
 
     mem/freeIn(alloc, ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
@@ -246,7 +257,7 @@ fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
 
     digits.reverse();
 
-    w.writeBytes(digits.toBuffer().toByteBuffer());
+    w.writeBytes(digits.asView().toByteView());
 
     ()
   }
@@ -393,7 +404,7 @@ ns f64 {
     let* mut stackBuf: Array[32 x u8]* = mem/zeroed();
     let writtenLen = k1rt/snprintf_f64(stackBuf.getBase() as Pointer, 32, f);
     if writtenLen <= 0  crash("snprintf_f32 returned {writtenLen}");
-    w.writeBytes(stackBuf.toBuffer().slice(0, writtenLen as uword))
+    w.writeBytes(stackBuf.asView().slice(0, writtenLen as uword))
   }
 }
 
