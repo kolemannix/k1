@@ -7111,7 +7111,7 @@ impl TypedProgram {
                 .map_err(|e| {
                     errf!(
                         passed_field.span,
-                        "Field '{}' has incorrect type: {}",
+                        "Field '{}' has an issue\n    {}",
                         self.ident_str(passed_field.name),
                         e.message
                     )
@@ -8342,7 +8342,8 @@ impl TypedProgram {
                     Err(_not_iterator) => {
                         return failf!(
                             iterable_span,
-                            "`for` loop target must be Iterable or an Iterator"
+                            "for loop target {} must be Iterable or an Iterator",
+                            self.type_id_to_string(iterable_type)
                         );
                     }
                     Ok(iterator_impl) => {
@@ -14031,6 +14032,7 @@ impl TypedProgram {
             qident!(self, span, ["core"], "f32"),
             qident!(self, span, ["core"], "f64"),
             qident!(self, span, ["core"], "Buffer"),
+            qident!(self, span, ["core"], "View"),
             qident!(self, span, ["core"], "Array"),
             qident!(self, span, ["core"], "List"),
             qident!(self, span, ["core"], "string"),

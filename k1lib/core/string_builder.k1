@@ -1,7 +1,11 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-deftype StringBuilder = { charList: List[char]* }
+// This is an interesting pattern that may or may not hold up
+// over time, of wrapping the pointer in a struct
+// so that we can just pass around a StringBuilder
+// which is of course always mutable and always 'by reference'
+deftype StringBuilder = { charList: *write List[char] }
 ns StringBuilder {
   deftype alias Part = StringBuilder.charList.value.T
 
@@ -20,7 +24,9 @@ ns StringBuilder {
   fn putString(self: StringBuilder, s: string): unit {
     // TODO(stdlib): Need an appendBufferCopy, or similarly
     // to solve for the 'copy' vs 'non-copy' problem
-    self.charList.appendBuffer(s.innerBuffer())
+    self.charList.appendView(
+      s.view()
+    )
   }
   fn putByte(self: StringBuilder, b: byte): unit {
     self.charList.push(b as char)

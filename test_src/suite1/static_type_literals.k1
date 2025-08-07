@@ -14,7 +14,7 @@ fn test(): unit {
     bytes.push(108);
     bytes.push(111);
     bytes.push(33);
-    string/wrapBytes(bytes.toBuffer())
+    string/fromBytes(bytes.asView())
   };
 
   ()

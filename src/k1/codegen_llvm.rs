@@ -2048,16 +2048,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         global_str_data.set_unnamed_addr(true);
         global_str_data.set_constant(true);
 
-        let char_buffer_type_id =
-            self.k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
-
-        let string_type = self.codegen_type(STRING_TYPE_ID)?.expect_struct();
-        let char_buffer_struct_type = (string_type.fields[0].clone()).expect_struct().struct_type;
-        let string_wrapper_struct_type = string_type.struct_type;
         // Ensure the string layout is what we expect
-        // deftype string = { buffer: Buffer[char] }
+        // deftype string = { private view: View[char] }
+        let string_type = self.codegen_type(STRING_TYPE_ID)?.expect_struct();
+        let string_wrapper_struct_type = string_type.struct_type;
+
+        let char_view_struct = (string_type.fields[0].clone()).expect_struct();
+        let char_buffer_struct = (char_view_struct.fields[0].clone()).expect_struct();
+        let char_buffer_type_id = char_buffer_struct.type_id;
         debug_assert!(
-            char_buffer_struct_type
+            char_buffer_struct
+                .struct_type
                 .get_field_type_at_index(0)
                 .unwrap()
                 .into_int_type()
@@ -2065,17 +2066,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 == 64
         );
         debug_assert!(
-            char_buffer_struct_type.get_field_type_at_index(1).unwrap().is_pointer_type()
+            char_buffer_struct.struct_type.get_field_type_at_index(1).unwrap().is_pointer_type()
         );
-        debug_assert!(char_buffer_struct_type.count_fields() == 2);
+        debug_assert!(char_buffer_struct.struct_type.count_fields() == 2);
 
         let char_buffer_struct_value = self.make_buffer_struct(
             char_buffer_type_id,
             rust_str.len() as u64,
             global_str_data.as_pointer_value(),
         )?;
-        let string_wrapper_struct = string_wrapper_struct_type
+        let char_view_struct_value = char_view_struct
+            .struct_type
             .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
+        let string_wrapper_struct = string_wrapper_struct_type
+            .const_named_struct(&[char_view_struct_value.as_basic_value_enum()]);
 
         let global_str_struct =
             self.llvm_module.add_global(string_wrapper_struct_type, None, name.unwrap_or(""));

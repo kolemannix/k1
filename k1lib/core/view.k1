@@ -1,0 +1,132 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+// Represents a contiguously allocated segment of memory that
+// stores values of type T.
+
+// Views are read-only.
+
+// You should never modify the contents
+// of the data pointed to by a View unless you know you own the
+// backing data and are doing it on purpose
+ns View {
+  
+  ////////////////////////
+  // Constructor functions
+
+  fn wrapBuffer[T](buffer: Buffer[T]): View[T] {
+    { buffer }
+  }
+
+  fn innerBuffer[T](self: View[T]): Buffer[T] {
+    self.buffer
+  }
+
+  fn dataPointer[T](self: View[T]): Pointer {
+    self.buffer.dataPointer()
+  }
+
+  fn copyFromArray[N: static uword, T](array: Array[N x T]*): View[T] {
+    let buffer = Buffer/copyFromArray[N, T](array);
+    { buffer }
+  }
+
+  fn cloned[T](self: View[T]): View[T] {
+    { buffer: self.buffer.cloned() }
+  }
+
+  fn len[T](self: View[T]): uword { self.buffer.len }
+
+  fn getRef[T](self: View[T], index: uword): *read T {
+    self.buffer.getRefRead[T](index)
+  }
+
+  fn get[T](self: View[T], index: uword): T {
+    let tRef = self.getRef(index);
+    tRef.*
+  }
+
+  fn slice[T](self: View[T], start: uword, end: uword): View[T] {
+    { buffer: self.buffer.slice(start, end) }
+  }
+
+  fn take[T](self: View[T], count: uword): View[T] { self.slice(0,     count) }
+  fn drop[T](self: View[T], count: uword): View[T] { self.slice(count, self.len()) }
+
+  fn isEmpty[T](self: View[T]): bool {
+    self.len() == 0
+  }
+
+  fn nonEmpty[T](self: View[T]): bool {
+    self.len() > 0
+  }
+
+  fn firstRef[T](self: View[T]): (*read T)? {
+    if not self.isEmpty() {
+      .Some(self.getRef(0))
+    } else {
+      .None
+    }
+  }
+
+  fn first[T](self: View[T]): T? {
+    switch self.firstRef() {
+      .None -> .None,
+      .Some(firstRef) -> .Some(firstRef.*)
+    }
+  }
+
+  fn lastRef[T](self: View[T]): (*read T)? {
+    if not self.isEmpty() {
+      .Some(self.getRef(self.len() - 1))
+    } else {
+      .None
+    }
+  }
+
+  fn last[T](self: View[T]): T? {
+    switch self.lastRef() {
+      .None -> .None,
+      .Some(lastRef) -> .Some(lastRef.*)
+    }
+  }
+
+  fn concat[T](self: View[T], other: View[T]): View[T] {
+    let concatedBuffer = self.innerBuffer().concat(other.innerBuffer());
+    wrapBuffer(concatedBuffer)
+  }
+
+  fn sorted[T](self: View[T]): View[T] where T: Comparable {
+    let newBuffer = self.buffer.cloned();
+    wrapBuffer(newBuffer.sorted())
+  }
+
+  fn toCharView(self: View[byte]): View[char] {
+    { buffer: self.buffer.toCharBuffer() }
+  }
+
+  fn toByteView(self: View[char]): View[byte] {
+    { buffer: self.buffer.toByteBuffer() }
+  }
+
+}
+
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for View[T] {
+  fn iterator(self: Self): I {
+    BufferIterator/fromBuffer(self.innerBuffer())
+  }
+}
+
+impl[T: Print] Print for View[T] {
+  fn printTo[W: Writer](self: Self, w: W*): unit {
+    w.writeChar('[');
+    for self do {
+      it.printTo(w);
+      let last = itIndex == self.len() - 1;
+      if not last {
+        w.writeChar(',');
+      };
+    };
+    w.writeChar(']');
+  }
+}
