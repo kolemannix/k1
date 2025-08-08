@@ -195,7 +195,7 @@ impl Vm {
         for (k, v) in locals.into_iter() {
             let var = k1.variables.get(k);
             let v_name = var.name;
-            let hidden = var.user_hidden;
+            let hidden = var.user_hidden();
             if hidden {
                 continue;
             }

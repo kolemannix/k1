@@ -18,6 +18,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::error::Error;
+use std::fmt::Write;
 use std::fmt::{Display, Formatter};
 use std::io::stderr;
 use std::num::NonZeroU32;
@@ -885,7 +886,6 @@ impl BinaryOpKind {
 
 impl Display for BinaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use std::fmt::Write;
         match self {
             BinaryOpKind::Add => f.write_char('+'),
             BinaryOpKind::Subtract => f.write_char('-'),
@@ -980,7 +980,6 @@ pub enum UnaryOpKind {
 
 impl Display for UnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use std::fmt::Write;
         match self {
             UnaryOpKind::Dereference => f.write_char('*'),
         }
@@ -1672,15 +1671,56 @@ struct SynthedVariable {
     pub parsed_expr: ParsedExprId,
 }
 
+pub struct VariableFlags(u32);
+impl VariableFlags {
+    fn all<const N: usize>(arr: [VariableFlag; N]) -> VariableFlags {
+        let mut f = 0u32;
+        for fl in arr {
+            f |= fl
+        }
+        VariableFlags(f)
+    }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub enum VariableFlag {
+    Mutable = 1 << 0,
+    Context = 1 << 1,
+    UserHidden = 1 << 2,
+}
+
+impl VariableFlag {
+    fn mutable(b: bool) -> VariableFlags {
+        (b as u32) & Self::Mutable as u32
+    }
+    fn context(b: bool) -> VariableFlags {
+        ((b as u32) << 1) & Self::Context as u32
+    }
+    fn user_hidden(b: bool) -> VariableFlags {
+        ((b as u32) << 2) & Self::UserHidden as u32
+    }
+}
+
 #[derive(Debug)]
 pub struct Variable {
     pub name: Ident,
     pub type_id: TypeId,
-    pub is_mutable: bool,
     pub owner_scope: ScopeId,
-    pub is_context: bool,
     pub global_id: Option<TypedGlobalId>,
-    pub user_hidden: bool,
+    pub flags: u32,
+}
+
+impl Variable {
+    pub fn mutable(&self) -> bool {
+        self.flags & VariableFlag::Mutable as u32 != 0
+    }
+    pub fn context(&self) -> bool {
+        self.flags & VariableFlag::Context as u32 != 0
+    }
+    pub fn user_hidden(&self) -> bool {
+        self.flags & VariableFlag::UserHidden as u32 != 0
+    }
 }
 
 #[derive(Debug)]
@@ -1914,7 +1954,6 @@ macro_rules! failf {
 macro_rules! format_ident {
     ($self: ident, $($format_args:expr),* $(,)?) => {
         {
-            use std::fmt::Write;
             let mut s = std::mem::take(&mut $self.buffers.name_builder);
             s.write_fmt(format_args!($($format_args),*)).unwrap();
             let ident = $self.ast.idents.intern(&s);
@@ -4217,7 +4256,7 @@ impl TypedProgram {
         if let Type::TypeParameter(tvar) = lookup_result {
             match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
-                    eprintln!(
+                    debug!(
                         "*********************\nUnresolved type parameter. {} in {}",
                         self.ident_str(tvar.name),
                         self.scope_id_to_string(scope_id)
@@ -4382,7 +4421,6 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get(expr).get_span();
-                eprintln!("nocommit Coerce failed on {}", self.expr_to_string(expr),);
                 Err(TyperError { message: msg, span, level: ErrorLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
@@ -4868,11 +4906,9 @@ impl TypedProgram {
         let variable_id = self.variables.add(Variable {
             name: global_name,
             type_id,
-            is_mutable: false,
             owner_scope: scope_id,
-            is_context: false,
             global_id: Some(global_id),
-            user_hidden: false,
+            flags: 0,
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
@@ -5801,7 +5837,7 @@ impl TypedProgram {
                 };
 
                 let v = self.variables.get(variable_id);
-                if is_assignment_lhs && !v.is_mutable {
+                if is_assignment_lhs && !v.mutable() {
                     return failf!(
                         variable_name_span,
                         "Cannot assign to immutable variable {}",
@@ -6243,7 +6279,6 @@ impl TypedProgram {
         // The expected_type when we get `intptr.*` is int, so
         // the expected_type when we get `intptr` should be *int
         let inner_expected_type = match ctx.expected_type_id {
-            // nocommit: test around mutable = false on this hint. Worried about inference
             Some(expected) => Some(self.types.add_reference_type(expected, false)),
             None => None,
         };
@@ -6880,7 +6915,6 @@ impl TypedProgram {
                     // invocation
                     let mut content = std::mem::take(&mut self.buffers.emitted_code);
                     let (source, line) = self.get_span_location(span);
-                    use std::fmt::Write;
                     writeln!(
                         &mut content,
                         "// generated by #meta block at {}/{}:{}",
@@ -7454,11 +7488,9 @@ impl TypedProgram {
             let variable_id = self.variables.add(Variable {
                 name,
                 type_id: typed_arg.type_id,
-                is_mutable: false,
                 owner_scope: lambda_scope_id,
-                is_context: false,
                 global_id: None,
-                user_hidden: false,
+                flags: 0,
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push(variable_id)
@@ -7595,11 +7627,9 @@ impl TypedProgram {
         let environment_param_variable_id = self.variables.add(Variable {
             name: environment_param.name,
             type_id: POINTER_TYPE_ID,
-            is_mutable: false,
             owner_scope: lambda_scope_id,
-            is_context: false,
             global_id: None,
-            user_hidden: false,
+            flags: 0,
         });
         typed_params.push_front(environment_param);
         param_variables.insert(0, environment_param_variable_id);
@@ -7986,7 +8016,6 @@ impl TypedProgram {
                             span: struct_pattern.span,
                         }));
                     let var_name = self.build_ident_with(|k1, s| {
-                        use std::fmt::Write;
                         write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
                     });
                     let struct_field_variable =
@@ -9817,12 +9846,10 @@ impl TypedProgram {
             let empty_env_variable = self.variables.add(Variable {
                 name: self.ast.idents.builtins.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
-                is_mutable: false,
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
-                is_context: false,
                 global_id: None,
-                user_hidden: false,
+                flags: 0,
             });
             new_function.param_variables.insert(0, empty_env_variable);
             let new_function_type =
@@ -11149,7 +11176,6 @@ impl TypedProgram {
             self.type_id_to_string(specialized_function_type_id)
         );
         let specialized_name_ident = self.build_ident_with(|m, s| {
-            use std::fmt::Write;
             let generic_function = m.get_function(generic_function_id);
             let spec_num = generic_function.child_specializations.len() + 1;
             write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
@@ -11182,11 +11208,9 @@ impl TypedProgram {
                 let variable_id = self.variables.add(Variable {
                     type_id: specialized_param_type.type_id,
                     name,
-                    is_mutable: false,
                     owner_scope: spec_fn_scope,
-                    is_context: specialized_param_type.is_context,
                     global_id: None,
-                    user_hidden: false,
+                    flags: VariableFlag::context(specialized_param_type.is_context),
                 });
                 if specialized_param_type.is_context {
                     self.scopes.add_context_variable(
@@ -11422,17 +11446,18 @@ impl TypedProgram {
                 };
 
                 let variable_id = self.variables.add(Variable {
-                    // this is weird because for mutable referencing lets
-                    // the 'mut' controls both the mutability of the pointer
-                    // and the re-assignability of the variable
-                    is_mutable: parsed_let.is_mutable(),
                     name: parsed_let.name,
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
-                    is_context: parsed_let.is_context(),
                     global_id: None,
-                    user_hidden: false,
+                    // this is weird because for mutable referencing lets
+                    // the 'mut' controls both the mutability of the pointer
+                    // and the re-assignability of the variable
+                    flags: VariableFlag::mutable(parsed_let.is_mutable())
+                        | VariableFlag::context(parsed_let.is_context())
+                        | VariableFlag::user_hidden(false),
                 });
+                eprintln!("Flags are: {:0b}", self.variables.get(variable_id).flags);
                 let val_def_stmt = TypedStmt::Let(LetStmt {
                     variable_type,
                     variable_id,
@@ -11470,7 +11495,7 @@ impl TypedProgram {
                         let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
                         let variable = self.variables.get(stmt.variable_id);
 
-                        if !variable.user_hidden {
+                        if !variable.user_hidden() {
                             let else_scope = self.scopes.get_scope_mut(else_scope);
                             else_scope.mask_variable(variable.name);
                         }
@@ -12242,7 +12267,6 @@ impl TypedProgram {
 
         let name = match impl_info.as_ref() {
             Some(impl_info) => {
-                use std::fmt::Write;
                 let mut s = String::with_capacity(256);
                 write!(
                     &mut s,
@@ -12425,11 +12449,9 @@ impl TypedProgram {
             let variable = Variable {
                 name: fn_param.name,
                 type_id,
-                is_mutable: false,
                 owner_scope: fn_scope_id,
-                is_context,
                 global_id: None,
-                user_hidden: false,
+                flags: VariableFlag::context(is_context),
             };
 
             let variable_id = self_.variables.add(variable);

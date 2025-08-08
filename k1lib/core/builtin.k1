@@ -34,8 +34,8 @@ deftype Buffer[T] = { len: uword, data: *write T }
 
 deftype View[T] = { private buffer: Buffer[T] }
 
-deftype List[T] = { len: uword, private buffer: Buffer[T] }
-deftype string = { private view: View[char] }
+deftype List[T] = { len: uword, buffer: Buffer[T] }
+deftype string = { view: View[char] }
 
 deftype Opt[T] = either None, Some(T)
 
@@ -274,15 +274,9 @@ impl Equals for View[bool] {
   }
 }
 
-// nocommit(1) This would not be necessary if we could access the
-//             struct member from the impl
-ns string {
-  fn view(self: string): View[char] { self.view }
-}
-
 impl Equals for string {
   fn equals(self: string, that: string): bool {
-    self.view() == that.view()
+    self.view == that.view
   }
 }
 

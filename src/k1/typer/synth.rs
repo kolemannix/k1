@@ -218,19 +218,16 @@ impl TypedProgram {
         let new_ident = if no_mangle {
             name
         } else {
-            // TODO(perf): this registers on flamegraph. Re-use a buffer for it
-            let new_ident_name =
-                format!("__{}_{}", self.ast.idents.get_name(name), self.variables.len());
-            self.ast.idents.intern(new_ident_name)
+            self.build_ident_with(|k1, s| {
+                write!(s, "__{}_{}", k1.ast.idents.get_name(name), k1.variables.len()).unwrap();
+            })
         };
         let variable = Variable {
             name: new_ident,
-            is_mutable,
             owner_scope,
             type_id,
-            is_context: false,
             global_id: None,
-            user_hidden: !no_mangle,
+            flags: VariableFlag::mutable(is_mutable) | VariableFlag::user_hidden(!no_mangle),
         };
         let variable_id = self.variables.add(variable);
         let variable_expr =

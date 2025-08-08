@@ -359,3 +359,9 @@ impl[T] Iterable[Item = T, I = BufferIterator[T]] for List[T] {
     self.asBuffer().iterator()
   }
 }
+
+impl[T] Iterable[Item = T, I = BufferIterator[T]] for *read List[T] {
+  fn iterator(self: Self): I {
+    self.*.iterator()
+  }
+}

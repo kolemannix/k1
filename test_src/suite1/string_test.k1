@@ -31,7 +31,7 @@ fn test(): unit {
   let y = ["a"];
   assertEquals("a.".splitByChar('.'), ["a"]);
   assert("bbb.".splitByChar('.') == ["bbb"]);
-  assert("a.b.cc.d".splitByChar('.') == ["a", "b", "cc", "d"]);
+  assertEquals("a.b.cc.d".splitByChar('.'), ["a", "b", "cc", "d"]);
   assert("a...".splitByChar('.') == ["a"]);
   assert("..".splitByChar('.') == []);
 
