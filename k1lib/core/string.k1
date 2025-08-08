@@ -7,11 +7,12 @@ ns CString {
 }
 
 ns string {
+  
+  fn view(self: string): View[char] { self.view }
 
   fn get(self: string, index: uword): char {
     self.view.get(index)
   }
-
 
   fn viewBytes(self: string): View[byte] {
     self.view().toByteView()
@@ -88,26 +89,27 @@ ns string {
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
-    let* mut results = List/empty[List[char]]();
-    let* mut accum = List/empty[char]();
-    // nocommit(stdlib slow): TODO: use ranges instead to make this zero-copy!!
-    //                    We can point to the old string instead of building up new ones
+    let* mut ranges = List/empty[{ start: uword, len: uword }]();
+    let* mut r = { start: 0: uword, len: 0: uword };
+
     for c in self do {
       if c == delim {
-        if accum.*.nonEmpty() {
-          results.push(accum);
-          accum <- List/empty[char]()
+        if r.len != 0 {
+          ranges.push(r);
+          r <- { start: itIndex + 1, len: 0 };
         }
       } else {
-        accum.push(c);
+        r.len* <- r.len + 1
       };
     };
-    if accum.*.nonEmpty() {
-      results.push(accum);
+
+    if r.len != 0 {
+      ranges.push(r);
     };
 
-    for list in results.* yield {
-      string/wrapList(list)
+    for range in ranges yield {
+      let end = range.start + range.len;
+      self.substring(range.start, end)
     }
   }
 

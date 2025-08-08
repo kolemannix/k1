@@ -116,7 +116,7 @@ impl TypedProgram {
     }
 
     fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
-        if var.is_mutable {
+        if var.mutable() {
             writ.write_str("mut ")?;
         }
         writ.write_str(self.ident_str(var.name))?;

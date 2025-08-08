@@ -4,11 +4,6 @@ ability Num {
   fn num(self: Self): i32
 }
 
-// One day, generic abilities
-// ability To<T> {
-//   fn to(self: Self): T
-// }
-
 deftype Point = { x: i32, y: i32 }
 
 impl Num for Point {

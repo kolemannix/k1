@@ -244,7 +244,7 @@ fn debugLog(context eng: Engine)(s: string): unit {
   }
 }
 
-fn run(args: Buffer[string]): Result[i32, string] {
+fn run(args: View[string]): Result[i32, string] {
   let context eng: Engine = { game: GameState/startPos() };
   loop {
     // TODO(dogfood): easy mapError before try

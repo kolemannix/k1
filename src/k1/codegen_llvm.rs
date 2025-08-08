@@ -1494,7 +1494,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.k1.variables.get(let_stmt.variable_id);
-        let mutable = variable.is_mutable;
+        let mutable = variable.mutable();
         let name = self.get_ident_name(variable.name).to_string();
 
         let local_variable = self.debug.debug_builder.create_auto_variable(
