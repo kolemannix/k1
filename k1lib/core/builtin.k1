@@ -32,7 +32,7 @@ deftype f64 = builtin
 
 deftype Buffer[T] = { len: uword, data: *write T }
 
-deftype View[T] = { private buffer: Buffer[T] }
+deftype View[T] = { buffer: Buffer[T] }
 
 deftype List[T] = { len: uword, buffer: Buffer[T] }
 deftype string = { view: View[char] }
@@ -84,7 +84,7 @@ ns types {
       size: uword?
     }),
     Struct({
-      fields: Buffer[{
+      fields: View[{
         name: string,
         typeId: u64,
         offset: uword
@@ -92,7 +92,7 @@ ns types {
     }),
     Either({
       tagType: IntKind,
-      variants: Buffer[{
+      variants: View[{
         name: string,
         tag: IntValue,
         payload: { typeId: u64, offset: uword }?

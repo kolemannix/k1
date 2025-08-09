@@ -41,7 +41,7 @@ ns type_schema {
     assert(getTypeSchema[i64]()  is .Int(.I64));
     let pointByteSchema = getTypeSchema[Point3[u8]]();
     require pointByteSchema is .Struct({ fields }) else { crash("") };
-    assertEquals(fields.len, 3);
+    assertEquals(fields.len(), 3);
     assert(getTypeSchema[i32*]() is .Reference(_));
     assertEquals(
       getTypeSchema[i32*]().asReference().!.value.innerTypeId,
@@ -56,7 +56,7 @@ ns type_schema {
 
     require getTypeSchema[either Yes, No, MaybeSo(string)]()
       is .Either({ variants })
-      and variants.len == 3
+      and variants.len() == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"

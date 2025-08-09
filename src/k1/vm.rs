@@ -12,7 +12,7 @@ use colored::Colorize;
 use ecow::EcoVec;
 use fxhash::FxHashMap;
 use itertools::Itertools;
-use k1_types::{CompilerMessageLevel, K1Buffer, K1SourceLocation};
+use k1_types::{CompilerMessageLevel, K1SourceLocation, K1ViewLike};
 use log::debug;
 use smallvec::{SmallVec, smallvec};
 
@@ -25,8 +25,8 @@ use crate::{
     pool::SliceHandle,
     typer::{
         self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
-        MatchingCondition, MatchingConditionInstr, NameAndTypeId, StaticBuffer, StaticEnum,
-        StaticStruct, StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue,
+        MatchingCondition, MatchingConditionInstr, NameAndTypeId, StaticEnum, StaticStruct,
+        StaticValue, StaticValueId, StaticView, TypedExpr, TypedExprId, TypedFloatValue,
         TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult,
         VariableExpr, VariableId, make_fail_span,
         types::{
@@ -49,13 +49,15 @@ pub mod k1_types {
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct K1SourceLocation {
-        pub filename: K1Buffer,
+        pub filename: K1ViewLike,
         pub line: u64,
     }
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct K1Buffer {
+    /// Encompasses all 3 'core' contiguous buffer types in k1:
+    /// - Buffer, View, and string, same layout
+    pub struct K1ViewLike {
         pub len: usize,
         pub data: *const u8,
     }
@@ -67,7 +69,7 @@ pub mod k1_types {
         Error = 2,
     }
 
-    impl K1Buffer {
+    impl K1ViewLike {
         ///# Safety
         /// None of this is safe
         pub unsafe fn to_slice<'a, T>(self) -> &'a [T] {
@@ -1142,29 +1144,29 @@ pub fn static_value_to_vm_value(
             };
             Ok(Value::Agg { type_id, ptr: enum_ptr })
         }
-        StaticValue::Buffer(buf) => {
-            let elements = buf.elements.clone();
-            let element_type = k1.types.get(buf.type_id).as_buffer_instance().unwrap().type_args[0];
+        StaticValue::View(view) => {
+            let elements = view.elements.clone();
+            let element_type = k1.types.get(view.type_id).as_view_instance().unwrap().type_args[0];
 
             let layout = k1.types.get_layout(element_type);
-            let buffer_allocation_layout = layout.array_me(buf.len());
+            let view_allocation_layout = layout.array_me(view.len());
 
             debug!(
-                "Pushing {} bytes for Buffer {}",
-                buffer_allocation_layout.size,
+                "Pushing {} bytes for View {}",
+                view_allocation_layout.size,
                 k1.static_value_to_string(static_value_id)
             );
-            let base_mem = vm.static_stack.push_layout_uninit(buffer_allocation_layout);
+            let base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
 
             for (index, elem_value_id) in elements.iter().enumerate() {
                 let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
                 let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size as usize) };
                 store_value(&k1.types, elem_dst_ptr, elem_value);
             }
-            let buffer = K1Buffer { len: elements.len(), data: base_mem.cast_const() };
-            let buffer_struct_ptr = vm.get_destination_stack(dst_stack).push_t(buffer);
+            let rust_view = K1ViewLike { len: elements.len(), data: base_mem.cast_const() };
+            let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
 
-            Ok(Value::Agg { type_id: buf.type_id, ptr: buffer_struct_ptr })
+            Ok(Value::Agg { type_id: view.type_id, ptr: view_struct_ptr })
         }
     }
 }
@@ -2311,7 +2313,7 @@ fn execute_matching_condition(
 /// Please don't hang on to this reference for very long
 pub fn value_to_rust_str(value: Value) -> &'static str {
     let ptr = value.expect_agg();
-    let k1_string = unsafe { (ptr as *const k1_types::K1Buffer).read() };
+    let k1_string = unsafe { (ptr as *const k1_types::K1ViewLike).read() };
     unsafe { k1_string.to_str() }
 }
 
@@ -2331,12 +2333,12 @@ pub fn string_id_to_value(
     k1: &TypedProgram,
     string_id: StringId,
 ) -> Value {
-    let char_buffer_type_id = k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
+    let char_view_type_id = k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
     let string_layout = k1.types.get_layout(STRING_TYPE_ID);
-    debug_assert_eq!(string_layout, k1.types.get_layout(char_buffer_type_id));
+    debug_assert_eq!(string_layout, k1.types.get_layout(char_view_type_id));
 
     let s = k1.get_string(string_id);
-    let k1_string = k1_types::K1Buffer { len: s.len(), data: s.as_ptr() };
+    let k1_string = k1_types::K1ViewLike { len: s.len(), data: s.as_ptr() };
     debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
 
     let string_stack_addr = vm.get_destination_stack(dst_stack).push_t(k1_string);
@@ -2391,21 +2393,34 @@ pub fn vm_value_to_static_value(
             if type_id == STRING_TYPE_ID {
                 let box_str = value_to_string_id(m, vm_value);
                 StaticValue::String(box_str)
-            } else if m.types.get(type_id).as_buffer_instance().is_some() {
-                let (buffer, element_type) = value_as_buffer(m, vm_value);
-                let mut elements = EcoVec::with_capacity(buffer.len);
-                for index in 0..buffer.len {
-                    let elem_vm = get_buffer_element(vm, m, buffer, element_type, index)
+            } else if m.types.get(type_id).as_view_instance().is_some() {
+                let (view, element_type) = value_as_view(m, vm_value);
+                let mut elements = EcoVec::with_capacity(view.len);
+                for index in 0..view.len {
+                    let elem_vm = get_view_element(vm, m, view, element_type, index)
                         .unwrap_or_else(|e| {
                             m.ice_with_span(
-                                format!("Failed to load buffer element {index}: {}", e),
+                                format!("Failed to load view element {index}: {}", e),
                                 span,
                             )
                         });
                     let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                     elements.push(elem_static);
                 }
-                StaticValue::Buffer(StaticBuffer { elements, type_id })
+                StaticValue::View(StaticView { elements, type_id })
+            } else if m.types.get(type_id).as_list_instance().is_some() {
+                #[allow(clippy::if_same_then_else)]
+                return failf!(
+                    span,
+                    "{} cannot be converted to static value; convert to a View first",
+                    m.type_id_to_string(type_id)
+                );
+            } else if m.types.get(type_id).as_buffer_instance().is_some() {
+                return failf!(
+                    span,
+                    "{} cannot be converted to static value; convert to a View first",
+                    m.type_id_to_string(type_id)
+                );
             } else {
                 let typ = m.types.get(type_id);
                 match typ {
@@ -2459,23 +2474,22 @@ pub fn vm_value_to_static_value(
     Ok(id)
 }
 
-pub fn value_as_buffer(k1: &TypedProgram, buffer_value: Value) -> (k1_types::K1Buffer, TypeId) {
-    let element_type =
-        k1.types.get(buffer_value.get_type()).as_buffer_instance().unwrap().type_args[0];
-    let ptr = buffer_value.expect_agg();
-    let buffer_ptr = ptr as *const k1_types::K1Buffer;
+pub fn value_as_view(k1: &TypedProgram, view_value: Value) -> (k1_types::K1ViewLike, TypeId) {
+    let element_type = k1.types.get(view_value.get_type()).as_view_instance().unwrap().type_args[0];
+    let ptr = view_value.expect_agg();
+    let buffer_ptr = ptr as *const k1_types::K1ViewLike;
     let buffer = unsafe { buffer_ptr.read() };
     (buffer, element_type)
 }
 
-pub fn get_buffer_element(
+pub fn get_view_element(
     vm: &mut Vm,
     k1: &TypedProgram,
-    buffer: K1Buffer,
+    view: K1ViewLike,
     elem_type: TypeId,
     index: usize,
 ) -> TyperResult<Value> {
-    let data_ptr = buffer.data;
+    let data_ptr = view.data;
 
     let elem_offset = offset_at_index(&k1.types, elem_type, index);
     let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
@@ -2542,11 +2556,11 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, k1: &TypedProgr
             match k1.types.get(type_id) {
                 st @ Type::Struct(struct_type) => {
                     if let Some(buffer_type) = st.as_buffer_instance() {
-                        let buffer_ptr = ptr as *const k1_types::K1Buffer;
+                        let buffer_ptr = ptr as *const k1_types::K1ViewLike;
                         let buffer = unsafe { buffer_ptr.read() };
                         let len = buffer.len;
                         let data_ptr = buffer.data;
-                        write!(w, "<buffer len={len} ").unwrap();
+                        write!(w, "<view len={len} ").unwrap();
 
                         let preview_count = std::cmp::min(len, 10);
                         w.write_str("[").unwrap();

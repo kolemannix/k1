@@ -821,11 +821,11 @@ impl TypedProgram {
                 };
                 Ok(())
             }
-            StaticValue::Buffer(buf) => {
+            StaticValue::View(view) => {
                 write!(w, "[")?;
-                for (index, elem) in buf.elements.iter().enumerate() {
+                for (index, elem) in view.elements.iter().enumerate() {
                     self.display_static_value(w, *elem)?;
-                    let last = index == buf.elements.len() - 1;
+                    let last = index == view.elements.len() - 1;
                     if !last {
                         write!(w, ", ")?;
                     }

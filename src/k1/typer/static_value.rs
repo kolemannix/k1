@@ -23,12 +23,12 @@ pub struct StaticEnum {
 }
 
 #[derive(Debug, Clone)]
-pub struct StaticBuffer {
+pub struct StaticView {
     pub elements: EcoVec<StaticValueId>,
     pub type_id: TypeId,
 }
 
-impl StaticBuffer {
+impl StaticView {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -52,7 +52,7 @@ pub enum StaticValue {
     NullPointer,
     Struct(StaticStruct),
     Enum(StaticEnum),
-    Buffer(StaticBuffer),
+    View(StaticView),
 }
 
 impl StaticValue {
@@ -67,7 +67,7 @@ impl StaticValue {
             StaticValue::NullPointer => "nullptr",
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
-            StaticValue::Buffer(_) => "buffer",
+            StaticValue::View(_) => "view",
         }
     }
 
@@ -82,7 +82,7 @@ impl StaticValue {
             StaticValue::NullPointer => POINTER_TYPE_ID,
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Enum(e) => e.variant_type_id,
-            StaticValue::Buffer(b) => b.type_id,
+            StaticValue::View(v) => v.type_id,
         }
     }
 
@@ -106,10 +106,15 @@ impl StaticValue {
             _ => None,
         }
     }
+
+    pub fn as_view(&self) -> Option<&StaticView> {
+        match self {
+            StaticValue::View(view) => Some(view),
+            _ => None,
+        }
+    }
 }
 
-// StaticValue deduplication ensures identical values share the same ID.
-// For example, there should be only one static `true` and one static `false` in the entire program.
 impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
     fn dep_hash<H: std::hash::Hasher>(&self, d: &Pool<StaticValue, StaticValueId>, state: &mut H) {
         use std::hash::Hash;
@@ -131,7 +136,6 @@ impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
             StaticValue::Struct(s) => {
                 s.type_id.hash(state);
                 s.fields.len().hash(state);
-                // Recursive hashing: struct identity includes field content, not just IDs
                 for &field_id in &s.fields {
                     d.get(field_id).dep_hash(d, state);
                 }
@@ -144,10 +148,10 @@ impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
                     d.get(payload_id).dep_hash(d, state);
                 }
             }
-            StaticValue::Buffer(b) => {
-                b.type_id.hash(state);
-                b.elements.len().hash(state);
-                for &element_id in &b.elements {
+            StaticValue::View(v) => {
+                v.type_id.hash(state);
+                v.elements.len().hash(state);
+                for &element_id in &v.elements {
                     d.get(element_id).dep_hash(d, state);
                 }
             }
@@ -184,7 +188,7 @@ impl DepEq<Pool<StaticValue, StaticValueId>> for StaticValue {
                         _ => false,
                     }
             }
-            (StaticValue::Buffer(a), StaticValue::Buffer(b)) => {
+            (StaticValue::View(a), StaticValue::View(b)) => {
                 a.type_id == b.type_id
                     && a.elements.len() == b.elements.len()
                     && a.elements

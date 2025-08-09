@@ -1121,7 +1121,6 @@ pub struct ParsedBlock {
 pub struct StructTypeField {
     pub name: Ident,
     pub ty: ParsedTypeExprId,
-    pub private: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2694,19 +2693,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_struct_type_field(&mut self) -> ParseResult<Option<StructTypeField>> {
-        let peeked = self.peek();
-        let private = if peeked.kind == K::Ident && self.get_token_chars(self.peek()) == "private" {
-            self.advance();
-            true
-        } else {
-            false
-        };
         let name_token = self.expect_eat_token(K::Ident)?;
         let ident_id = self.intern_ident_token(name_token);
         self.expect_eat_token(K::Colon)?;
         let typ_expr =
             Parser::expect("Type expression", self.peek(), self.parse_type_expression())?;
-        Ok(Some(StructTypeField { name: ident_id, ty: typ_expr, private }))
+        Ok(Some(StructTypeField { name: ident_id, ty: typ_expr }))
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExprId> {

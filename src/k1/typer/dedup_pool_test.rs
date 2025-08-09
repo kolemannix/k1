@@ -171,24 +171,24 @@ fn test_buffer() {
     let elem2 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(2)));
     let elem3 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(1)));
 
-    let buffer1 = system.add_static_value(StaticValue::Buffer(StaticBuffer {
+    let buffer1 = system.add_static_value(StaticValue::View(StaticView {
         type_id: TypeId::from(crate::nzu32_increment(1)),
         elements: eco_vec![elem1, elem2],
     }));
 
-    let buffer2 = system.add_static_value(StaticValue::Buffer(StaticBuffer {
+    let buffer2 = system.add_static_value(StaticValue::View(StaticView {
         type_id: TypeId::from(crate::nzu32_increment(1)),
         elements: eco_vec![elem3, elem2],
     }));
 
-    let buffer3 = system.add_static_value(StaticValue::Buffer(StaticBuffer {
+    let buffer3 = system.add_static_value(StaticValue::View(StaticView {
         type_id: TypeId::from(crate::nzu32_increment(1)),
         elements: eco_vec![elem2, elem1],
     }));
 
     assert_eq!(elem1, elem3, "Elements should deduplicate first");
-    assert_eq!(buffer1, buffer2, "Buffers with equivalent elements should deduplicate");
-    assert_ne!(buffer1, buffer3, "Buffers with different element order should be different");
+    assert_eq!(buffer1, buffer2, "Views with equivalent elements should deduplicate");
+    assert_ne!(buffer1, buffer3, "Views with different element order should be different");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn test_recurse() {
         payload: Some(int_val),
     }));
 
-    let buffer_val = system.add_static_value(StaticValue::Buffer(StaticBuffer {
+    let buffer_val = system.add_static_value(StaticValue::View(StaticView {
         type_id: TypeId::from(crate::nzu32_increment(20)),
         elements: eco_vec![enum_val, enum_val],
     }));
@@ -225,7 +225,7 @@ fn test_recurse() {
         payload: Some(int_val2),
     }));
 
-    let buffer_val2 = system.add_static_value(StaticValue::Buffer(StaticBuffer {
+    let buffer_val2 = system.add_static_value(StaticValue::View(StaticView {
         type_id: TypeId::from(crate::nzu32_increment(20)),
         elements: eco_vec![enum_val2, enum_val2],
     }));

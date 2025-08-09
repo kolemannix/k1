@@ -11,6 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
+use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
 use static_value::StaticValuePool;
@@ -35,7 +36,7 @@ use either::Either;
 use fxhash::FxHashMap;
 use log::{debug, error, trace};
 use smallvec::{SmallVec, smallvec};
-pub(crate) use static_value::{StaticBuffer, StaticEnum, StaticStruct, StaticValue, StaticValueId};
+pub(crate) use static_value::{StaticEnum, StaticStruct, StaticValue, StaticValueId, StaticView};
 
 use scopes::*;
 use types::*;
@@ -1671,34 +1672,13 @@ struct SynthedVariable {
     pub parsed_expr: ParsedExprId,
 }
 
-pub struct VariableFlags(u32);
-impl VariableFlags {
-    fn all<const N: usize>(arr: [VariableFlag; N]) -> VariableFlags {
-        let mut f = 0u32;
-        for fl in arr {
-            f |= fl
-        }
-        VariableFlags(f)
-    }
-}
-
-#[repr(u32)]
-#[derive(Clone, Copy)]
-pub enum VariableFlag {
-    Mutable = 1 << 0,
-    Context = 1 << 1,
-    UserHidden = 1 << 2,
-}
-
-impl VariableFlag {
-    fn mutable(b: bool) -> VariableFlags {
-        (b as u32) & Self::Mutable as u32
-    }
-    fn context(b: bool) -> VariableFlags {
-        ((b as u32) << 1) & Self::Context as u32
-    }
-    fn user_hidden(b: bool) -> VariableFlags {
-        ((b as u32) << 2) & Self::UserHidden as u32
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct VariableFlags: u16 {
+        const Mutable = 1;
+        const Context = 1 << 1;
+        const UserHidden = 1 << 2;
     }
 }
 
@@ -1708,18 +1688,18 @@ pub struct Variable {
     pub type_id: TypeId,
     pub owner_scope: ScopeId,
     pub global_id: Option<TypedGlobalId>,
-    pub flags: u32,
+    pub flags: VariableFlags,
 }
 
 impl Variable {
     pub fn mutable(&self) -> bool {
-        self.flags & VariableFlag::Mutable as u32 != 0
+        self.flags.contains(VariableFlags::Mutable)
     }
     pub fn context(&self) -> bool {
-        self.flags & VariableFlag::Context as u32 != 0
+        self.flags.contains(VariableFlags::Context)
     }
     pub fn user_hidden(&self) -> bool {
-        self.flags & VariableFlag::UserHidden as u32 != 0
+        self.flags.contains(VariableFlags::UserHidden)
     }
 }
 
@@ -2871,11 +2851,7 @@ impl TypedProgram {
                     //         );
                     //     }
                     // }
-                    fields.push(StructTypeField {
-                        name: ast_field.name,
-                        type_id: ty,
-                        private: ast_field.private,
-                    })
+                    fields.push(StructTypeField { name: ast_field.name, type_id: ty })
                 }
 
                 let defn_id = context
@@ -4604,43 +4580,13 @@ impl TypedProgram {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
-            // (Type::TypeParameter(exp_static_tparam), Type::Static(_act_static)) => {
-            //     eprintln!("this one");
-            //     self.check_types(exp_static_tparam.static_constraint.unwrap(), actual, scope_id)
-            // }
-            // (Type::Static(_exp_static_type), Type::TypeParameter(act_static_tparam))
-            //     if act_static_tparam.static_constraint.is_some() =>
-            // {
-            //     eprintln!("that one");
-            //     self.check_types(expected, act_static_tparam.static_constraint.unwrap(), scope_id)
-            //     // If both have no values, we're ok. This is generic static stuff
-            //     // let actual_static_type_id = act_static_tparam.static_constraint.unwrap();
-            //     // let actual_static_type =
-            //     //     self.types.get_no_follow_static(actual_static_type_id).as_static().unwrap();
-            //     // if exp_static_type.value_id.is_none() && actual_static_type.value_id.is_none() {
-            //     //     match self.check_types(
-            //     //         exp_static_type.inner_type_id,
-            //     //         actual_static_type.inner_type_id,
-            //     //         scope_id,
-            //     //     ) {
-            //     //         Ok(()) => Ok(()),
-            //     //         Err(msg) => Err(format!("Mismatching types inside statics: {msg}")),
-            //     //     }
-            //     // } else {
-            //     //     Err(format!(
-            //     //         "Expected static type {}, or constrained param {}, had values, which is unexpected",
-            //     //         self.type_id_to_string(expected),
-            //     //         self.type_id_to_string(actual)
-            //     //     ))
-            //     // }
-            // }
             (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
                 if exp_static_type.inner_type_id == act_static_type.inner_type_id {
                     match (exp_static_type.value_id, act_static_type.value_id) {
                         (None, None) => Ok(()),    // Both unresolved
                         (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
                         (Some(exp_value_id), Some(act_value_id)) => {
-                            if self.static_value_eq(exp_value_id, act_value_id) {
+                            if exp_value_id == act_value_id {
                                 Ok(())
                             } else {
                                 Err(format!(
@@ -4683,31 +4629,6 @@ impl TypedProgram {
                 self.type_id_to_string_ext(expected, false),
                 self.type_id_to_string_ext(actual, false),
             )),
-        }
-    }
-
-    fn static_value_eq(&self, va: StaticValueId, vb: StaticValueId) -> bool {
-        match (self.static_values.get(va), self.static_values.get(vb)) {
-            (StaticValue::Unit, StaticValue::Unit) => true,
-            (StaticValue::Boolean(b1), StaticValue::Boolean(b2)) => b1 == b2,
-            (StaticValue::Char(c1), StaticValue::Char(c2)) => c1 == c2,
-            (StaticValue::Int(i1), StaticValue::Int(i2)) => i1 == i2,
-            (StaticValue::Float(f1), StaticValue::Float(f2)) => f1 == f2,
-            (StaticValue::String(s1), StaticValue::String(s2)) => s1 == s2,
-            (StaticValue::NullPointer, StaticValue::NullPointer) => true,
-            (StaticValue::Struct(_s1), StaticValue::Struct(_s2)) => {
-                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
-                false
-            }
-            (StaticValue::Enum(_e1), StaticValue::Enum(_e2)) => {
-                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
-                false
-            }
-            (StaticValue::Buffer(_b1), StaticValue::Buffer(_b2)) => {
-                eprintln!("WARNING STATIC EQ TODO; RETURNING FALSE");
-                false
-            }
-            _ => self.ice("Comparing statics of different, or unhandled, kinds", None),
         }
     }
 
@@ -4908,7 +4829,7 @@ impl TypedProgram {
             type_id,
             owner_scope: scope_id,
             global_id: Some(global_id),
-            flags: 0,
+            flags: VariableFlags::empty(),
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
@@ -5987,17 +5908,6 @@ impl TypedProgram {
                             self.type_id_to_string(struct_type_id)
                         )
                     })?;
-                if target_field.private {
-                    let companion_namespace = self.types.get_companion_namespace(struct_type_id);
-
-                    if !self.is_inside_companion_scope(companion_namespace, ctx.scope_id) {
-                        return failf!(
-                            span,
-                            "Field {} is inaccessible from here",
-                            self.ident_str(target_field.name)
-                        );
-                    }
-                }
                 let result_type = if field_access.is_referencing {
                     let reference_type = base_reference_type.unwrap();
                     self.types.add_reference_type(target_field.type_id, reference_type.mutable)
@@ -6299,6 +6209,7 @@ impl TypedProgram {
         })))
     }
 
+    #[allow(unused)]
     fn is_inside_companion_scope(
         &self,
         companion_namespace: Option<NamespaceId>,
@@ -6311,6 +6222,7 @@ impl TypedProgram {
         }
     }
 
+    #[allow(unused)]
     fn is_scope_inside_namespace(&self, namespace_id: NamespaceId, scope_id: ScopeId) -> bool {
         let ns_scope_id = self.namespaces.get_scope(namespace_id);
         self.scopes.scope_has_ancestor(scope_id, ns_scope_id)
@@ -6644,10 +6556,11 @@ impl TypedProgram {
         list_expr: &ParsedList,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        // List literals can become Arrays, Buffers, or Lists, depending on what is expected
+        // List literals can become Arrays, Buffers, Views, or Lists, depending on what is expected
         enum ListKind {
             Array(TypeId),
             Buffer,
+            View,
             List,
         }
         let (expected_element_type, list_kind) = match &ctx.expected_type_id {
@@ -6657,6 +6570,9 @@ impl TypedProgram {
                 }
                 s @ Type::Struct(_) if s.as_buffer_instance().is_some() => {
                     (Some(s.as_buffer_instance().unwrap().type_args[0]), ListKind::Buffer)
+                }
+                s @ Type::Struct(_) if s.as_view_instance().is_some() => {
+                    (Some(s.as_view_instance().unwrap().type_args[0]), ListKind::View)
                 }
                 Type::Array(array_type) => {
                     (Some(array_type.element_type), ListKind::Array(*type_id))
@@ -6713,14 +6629,14 @@ impl TypedProgram {
         };
         let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
         let count_expr = self.synth_uword(element_count, span);
-        let list_new_fn_call = match list_kind {
+        let make_dest_coll = match list_kind {
             ListKind::List => self.synth_typed_function_call(
                 qident!(self, span, ["List"], "withCapacity"),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
             )?,
-            ListKind::Buffer => self.synth_typed_function_call(
+            ListKind::Buffer | ListKind::View => self.synth_typed_function_call(
                 qident!(self, span, ["Buffer"], "_allocate"),
                 &[element_type],
                 &[count_expr],
@@ -6736,12 +6652,12 @@ impl TypedProgram {
         };
         let is_referencing_let = match list_kind {
             ListKind::Array(_) => true,
-            ListKind::Buffer => false,
+            ListKind::Buffer | ListKind::View => false,
             ListKind::List => true,
         };
         let dest_coll_variable = self.synth_variable_defn(
-            get_ident!(self, "list_literal"),
-            list_new_fn_call,
+            get_ident!(self, "dest"),
+            make_dest_coll,
             false,
             true, // is_mutable
             is_referencing_let,
@@ -6757,7 +6673,7 @@ impl TypedProgram {
                     &[dest_coll_variable.variable_expr, element_value_expr],
                     list_lit_ctx,
                 )?,
-                ListKind::Buffer => self.synth_typed_function_call(
+                ListKind::Buffer | ListKind::View => self.synth_typed_function_call(
                     qident!(self, span, ["Buffer"], "set"),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
@@ -6783,6 +6699,12 @@ impl TypedProgram {
         let final_expression = match list_kind {
             ListKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ListKind::Buffer => dest_coll_variable.variable_expr,
+            ListKind::View => self.synth_typed_function_call(
+                qident!(self, span, ["View"], "wrapBuffer"),
+                &[element_type],
+                &[dest_coll_variable.variable_expr],
+                ctx.with_no_expected_type(),
+            )?,
             ListKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
         self.add_expr_id_to_block(&mut list_lit_block, final_expression);
@@ -7054,11 +6976,7 @@ impl TypedProgram {
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get(expr).get_type();
-            field_defns.push(StructTypeField {
-                name: ast_field.name,
-                type_id: expr_type,
-                private: false,
-            });
+            field_defns.push(StructTypeField { name: ast_field.name, type_id: expr_type });
             field_values.push(StructField { name: ast_field.name, expr });
         }
 
@@ -7151,11 +7069,7 @@ impl TypedProgram {
                     )
                 })?;
             let expr_type = self.exprs.get(expr).get_type();
-            field_types.push(StructTypeField {
-                name: expected_field.name,
-                type_id: expr_type,
-                private: expected_field.private,
-            });
+            field_types.push(StructTypeField { name: expected_field.name, type_id: expr_type });
             field_values.push(StructField { name: expected_field.name, expr });
         }
 
@@ -7490,7 +7404,7 @@ impl TypedProgram {
                 type_id: typed_arg.type_id,
                 owner_scope: lambda_scope_id,
                 global_id: None,
-                flags: 0,
+                flags: VariableFlags::empty(),
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push(variable_id)
@@ -7589,7 +7503,7 @@ impl TypedProgram {
             .iter()
             .map(|captured_variable_id| {
                 let v = self.variables.get(*captured_variable_id);
-                StructTypeField { type_id: v.type_id, name: v.name, private: false }
+                StructTypeField { type_id: v.type_id, name: v.name }
             })
             .collect();
         let env_field_exprs = lambda_info
@@ -7629,7 +7543,7 @@ impl TypedProgram {
             type_id: POINTER_TYPE_ID,
             owner_scope: lambda_scope_id,
             global_id: None,
-            flags: 0,
+            flags: VariableFlags::empty(),
         });
         typed_params.push_front(environment_param);
         param_variables.insert(0, environment_param_variable_id);
@@ -9849,7 +9763,7 @@ impl TypedProgram {
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
                 global_id: None,
-                flags: 0,
+                flags: VariableFlags::empty(),
             });
             new_function.param_variables.insert(0, empty_env_variable);
             let new_function_type =
@@ -11205,12 +11119,14 @@ impl TypedProgram {
             .zip(generic_function_param_variables.iter())
             .map(|(specialized_param_type, generic_param)| {
                 let name = self.variables.get(*generic_param).name;
+                let mut flags = VariableFlags::empty();
+                flags.set(VariableFlags::Context, specialized_param_type.is_context);
                 let variable_id = self.variables.add(Variable {
                     type_id: specialized_param_type.type_id,
                     name,
                     owner_scope: spec_fn_scope,
                     global_id: None,
-                    flags: VariableFlag::context(specialized_param_type.is_context),
+                    flags,
                 });
                 if specialized_param_type.is_context {
                     self.scopes.add_context_variable(
@@ -11445,19 +11361,21 @@ impl TypedProgram {
                     actual_type
                 };
 
+                let mut flags = VariableFlags::empty();
+
+                // Setting Mutable is weird because, for mutable referencing lets,
+                // the 'mut' controls both the mutability of the pointer
+                // and the re-assignability of the variable
+                flags.set(VariableFlags::Mutable, parsed_let.is_mutable());
+
+                flags.set(VariableFlags::Context, parsed_let.is_context());
                 let variable_id = self.variables.add(Variable {
                     name: parsed_let.name,
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
                     global_id: None,
-                    // this is weird because for mutable referencing lets
-                    // the 'mut' controls both the mutability of the pointer
-                    // and the re-assignability of the variable
-                    flags: VariableFlag::mutable(parsed_let.is_mutable())
-                        | VariableFlag::context(parsed_let.is_context())
-                        | VariableFlag::user_hidden(false),
+                    flags,
                 });
-                eprintln!("Flags are: {:0b}", self.variables.get(variable_id).flags);
                 let val_def_stmt = TypedStmt::Let(LetStmt {
                     variable_type,
                     variable_id,
@@ -12451,7 +12369,7 @@ impl TypedProgram {
                 type_id,
                 owner_scope: fn_scope_id,
                 global_id: None,
-                flags: VariableFlag::context(is_context),
+                flags: if is_context { VariableFlags::Context } else { VariableFlags::empty() },
             };
 
             let variable_id = self_.variables.add(variable);
@@ -14138,21 +14056,19 @@ impl TypedProgram {
             Type::Struct(struct_type) => {
                 let struct_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Struct")).payload.unwrap();
-                // { fields: Buffer[{}] }
+                // { fields: View[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
-                // { fields: Buffer[{ ... }] }
-                let struct_schema_fields_buffer_type_id =
+                // { fields: View[{ ... }] }
+                let struct_schema_fields_view_type_id =
                     struct_schema_payload_struct.fields[0].type_id;
                 let struct_schema_field_item_struct_type_id = self
                     .types
-                    .get(struct_schema_fields_buffer_type_id)
-                    .as_buffer_instance()
+                    .get(struct_schema_fields_view_type_id)
+                    .as_view_instance()
                     .unwrap()
                     .type_args[0];
                 // { name: string), typeId: u64, offset: uword }
-                // let struct_schema_field_item_struct =
-                //     self.types.get(struct_schema_field_item_struct_type_id).expect_struct();
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: EcoVec<StaticValueId> =
                     EcoVec::with_capacity(struct_type.fields.len());
@@ -14186,12 +14102,12 @@ impl TypedProgram {
                     });
                     field_values.push(self.static_values.add(field_struct));
                 }
-                let buffer = self.static_values.add(StaticValue::Buffer(StaticBuffer {
+                let view = self.static_values.add(StaticValue::View(StaticView {
                     elements: field_values,
-                    type_id: struct_schema_fields_buffer_type_id,
+                    type_id: struct_schema_fields_view_type_id,
                 }));
                 let payload = self.static_values.add(StaticValue::Struct(StaticStruct {
-                    fields: eco_vec![buffer],
+                    fields: eco_vec![view],
                     type_id: struct_schema_payload_type_id,
                 }));
                 make_variant(get_ident!(self, "Struct"), Some(payload))
@@ -14244,10 +14160,9 @@ impl TypedProgram {
                 let either_payload_type_id =
                     get_schema_variant(get_ident!(self, "Either")).payload.unwrap();
                 let either_payload_struct = self.types.get(either_payload_type_id).expect_struct();
-                let variants_buffer_type_id = either_payload_struct.fields[1].type_id;
+                let variants_view_type_id = either_payload_struct.fields[1].type_id;
                 let variant_struct_type_id =
-                    self.types.get(variants_buffer_type_id).as_buffer_instance().unwrap().type_args
-                        [0];
+                    self.types.get(variants_view_type_id).as_view_instance().unwrap().type_args[0];
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
                 let tag_type_value_id = self.static_values.add(StaticValue::Enum(
                     TypedProgram::make_int_kind(int_kind_enum, word_enum, *tag_type),
@@ -14321,14 +14236,14 @@ impl TypedProgram {
                         ],
                     })))
                 }
-                let variants_buffer_value_id =
-                    self.static_values.add(StaticValue::Buffer(StaticBuffer {
+                let variants_view_value_id =
+                    self.static_values.add(StaticValue::View(StaticView {
                         elements: variant_values,
-                        type_id: variants_buffer_type_id,
+                        type_id: variants_view_type_id,
                     }));
                 let payload_value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id: either_payload_type_id,
-                    fields: eco_vec![tag_type_value_id, variants_buffer_value_id],
+                    fields: eco_vec![tag_type_value_id, variants_view_value_id],
                 }));
                 make_variant(get_ident!(self, "Either"), Some(payload_value_id))
             }

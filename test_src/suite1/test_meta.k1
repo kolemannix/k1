@@ -33,7 +33,7 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
        ); //" fix quote
 
         _writeJsonFromSchema(fieldLetName, f.typeId);
-        let last = itIndex == s.fields.len - 1;
+        let last = itIndex == s.fields.len() - 1;
         if not last {
           emitLine(#code w.writeString(","));
         }

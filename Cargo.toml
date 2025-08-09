@@ -20,6 +20,7 @@ colored = "2"
 env_logger = "0.10.0"
 log = "0.4.17"
 itertools = "0.13.0"
+bitflags = { version = "2.9.1" }
 smallvec = "1.13.2"
 string-interner = "0.17.0"
 either = "1.9.0"

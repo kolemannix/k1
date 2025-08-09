@@ -53,7 +53,7 @@ ns mem {
       .Gc -> "gc"
     } }
   }
-  
+
   fn resolveMode(mode: AllocMode): AllocMode {
     switch mode.kind {
       .Current -> {
@@ -64,7 +64,7 @@ ns mem {
       _ -> mode,
     }
   }
-  
+
   // FIXME: Runtime branching.
   // We need more language enhancements to make this all
   // compile-time branching
@@ -73,7 +73,7 @@ ns mem {
     switch mode.kind {
       .Current -> { crash("unreachable") },
       .SystemHeap -> mem/allocZeroed(size, align),
-      .CustomHeap(alloc) -> { 
+      .CustomHeap(alloc) -> {
         let zalloc = alloc.*.zalloc;
         zalloc(size, align)
       },
@@ -105,7 +105,7 @@ ns mem {
     switch mode.kind {
       .Current -> { crash("unreachable") },
       .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
-      .CustomHeap(alloc) -> { 
+      .CustomHeap(alloc) -> {
         let realloc = alloc.*.realloc;
         realloc(oldPtr, oldSize, align, newSize)
       },
@@ -126,7 +126,7 @@ ns mem {
     switch mode.kind {
       .Current -> { crash("unreachable") },
       .SystemHeap -> mem/free(ptr, size, align),
-      .CustomHeap(alloc) -> { 
+      .CustomHeap(alloc) -> {
         let free = alloc.*.free;
         free(ptr, size, align)
       },
@@ -153,7 +153,7 @@ ns mem {
   fn defaultAllocMode(): mem/AllocMode {
     _k1_currentAllocMode.*
   }
-  
+
   // Initialize on first get() is perfect
   fn initTempArena(maxMb: uint): unit {
     if not _k1_tempArena.basePtr.isNull() {
@@ -162,7 +162,7 @@ ns mem {
     let a = Arena/new(initialMb = maxMb);
     _k1_tempArena <- a;
   }
-  
+
   // TODO: Figure out when temp aliasing occurs, and avoid that
   // ideally without requiring people to pass an array in
   fn getTempArena(): Arena* {
