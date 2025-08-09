@@ -49,6 +49,10 @@ ns Buffer {
     wrapped.cloned();
   }
 
+  fn copyFromView[T](view: View[T]): Buffer[T] {
+    view.innerBuffer().cloned()
+  }
+
   fn cloned[T](self: Buffer[T]): Buffer[T] {
     let clone = self._enlargedClone(newCount = self.len);
     clone

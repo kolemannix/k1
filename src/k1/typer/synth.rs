@@ -222,13 +222,10 @@ impl TypedProgram {
                 write!(s, "__{}_{}", k1.ast.idents.get_name(name), k1.variables.len()).unwrap();
             })
         };
-        let variable = Variable {
-            name: new_ident,
-            owner_scope,
-            type_id,
-            global_id: None,
-            flags: VariableFlag::mutable(is_mutable) | VariableFlag::user_hidden(!no_mangle),
-        };
+        let mut flags = VariableFlags::empty();
+        flags.set(VariableFlags::Mutable, is_mutable);
+        flags.set(VariableFlags::UserHidden, !no_mangle);
+        let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
         let variable_id = self.variables.add(variable);
         let variable_expr =
             self.exprs.add(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));

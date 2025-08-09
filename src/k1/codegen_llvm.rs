@@ -1837,13 +1837,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 enum_value.as_basic_value_enum()
             }
-            StaticValue::Buffer(buf) => {
-                let buffer_type = self.k1.types.get(buf.type_id);
-                let element_type = buffer_type.as_buffer_instance().unwrap().type_args[0];
+            StaticValue::View(view) => {
+                let view_type = self.k1.types.get(view.type_id);
+                let element_type = view_type.as_view_instance().unwrap().type_args[0];
                 let element_backend_type = self.codegen_type(element_type)?;
                 let element_basic_type = element_backend_type.rich_repr_type();
                 let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
-                for elem in buf.elements.iter() {
+                for elem in view.elements.iter() {
                     let elem_basic_value = self.codegen_static_value_as_const(*elem)?;
                     values.push(elem_basic_value);
                 }
@@ -1868,21 +1868,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let data_global = self.llvm_module.add_global(
                     array_value.get_type(),
                     None,
-                    &format!("buffer_data_{}", static_value_id),
+                    &format!("view_data_{}", static_value_id),
                 );
                 data_global.set_constant(true);
                 data_global.set_unnamed_addr(true);
                 data_global.set_initializer(&array_value);
 
-                let buffer_struct = self
-                    .make_buffer_struct(
-                        buf.type_id,
-                        buf.len() as u64,
+                let view_struct = self
+                    .make_view_struct(
+                        view.type_id,
+                        view.len() as u64,
                         data_global.as_pointer_value(),
                     )
                     .unwrap();
 
-                buffer_struct.as_basic_value_enum()
+                view_struct.as_basic_value_enum()
             }
         };
         Ok(result)
@@ -1985,20 +1985,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 enum_ptr.into()
             }
-            StaticValue::Buffer(buf) => {
-                let buffer_type = self.k1.types.get(buf.type_id);
-                let element_type = buffer_type.as_buffer_instance().unwrap().type_args[0];
+            StaticValue::View(view) => {
+                let view_type = self.k1.types.get(view.type_id);
+                let element_type = view_type.as_view_instance().unwrap().type_args[0];
                 let element_backend_type = self.codegen_type(element_type)?;
                 let element_basic_type = element_backend_type.rich_repr_type();
 
-                let array_type = element_basic_type.array_type(buf.len() as u32);
+                let array_type = element_basic_type.array_type(view.len() as u32);
                 let data_global = self.llvm_module.add_global(array_type, None, "");
                 data_global.set_constant(false);
                 data_global.set_unnamed_addr(true);
                 data_global.set_initializer(&array_type.const_zero());
 
                 let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
-                for (index, elem) in buf.elements.iter().enumerate() {
+                for (index, elem) in view.elements.iter().enumerate() {
                     let elem_basic_value = self.codegen_static_value_as_code(*elem)?;
                     let array_offset_ptr = unsafe {
                         self.builder
@@ -2014,20 +2014,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     values.push(elem_basic_value);
                 }
 
-                let buffer_struct = self
-                    .make_buffer_struct(
-                        buf.type_id,
-                        buf.len() as u64,
+                let view_struct = self
+                    .make_view_struct(
+                        view.type_id,
+                        view.len() as u64,
                         data_global.as_pointer_value(),
                     )
                     .unwrap();
 
-                let buffer_ptr =
-                    self.builder.build_alloca(buffer_struct.get_type(), "static_buf").unwrap();
+                let view_ptr =
+                    self.builder.build_alloca(view_struct.get_type(), "static_view").unwrap();
 
                 // Ok to store an aggregate since it's known to have just the 2 fields
-                self.builder.build_store(buffer_ptr, buffer_struct).unwrap();
-                buffer_ptr.as_basic_value_enum()
+                self.builder.build_store(view_ptr, view_struct).unwrap();
+                view_ptr.as_basic_value_enum()
             }
         };
         Ok(result)
@@ -2115,6 +2115,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             data.as_basic_value_enum(),
         ]);
         Ok(buffer_struct_value)
+    }
+
+    fn make_view_struct(
+        &self,
+        view_type_id: TypeId,
+        len: u64,
+        data: PointerValue<'ctx>,
+    ) -> CodegenResult<StructValue<'ctx>> {
+        let view_type = self.codegen_type(view_type_id)?.expect_struct();
+        let buffer_type_id = view_type.fields[0].type_id();
+        self.make_buffer_struct(buffer_type_id, len, data)
     }
 
     fn get_insert_function(&self) -> &CodegenedFunction<'ctx> {
@@ -4196,6 +4207,8 @@ fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueI
             None => true,
             Some(payload_id) => is_llvm_const_representable(static_values, payload_id),
         },
-        StaticValue::Buffer(b) => b.is_empty(),
+        StaticValue::View(v) => {
+            v.elements.iter().all(|elem_id| is_llvm_const_representable(static_values, *elem_id))
+        }
     }
 }

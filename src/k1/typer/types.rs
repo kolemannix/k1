@@ -18,7 +18,6 @@ nz_u32_id!(TypeId);
 pub struct StructTypeField {
     pub name: Ident,
     pub type_id: TypeId,
-    pub private: bool,
 }
 impl_copy_if_small!(12, StructTypeField);
 
@@ -1302,16 +1301,8 @@ impl Types {
     ) -> TypeId {
         let fn_ptr_type = self.add_reference_type(function_type_id, false);
         let fields = eco_vec![
-            StructTypeField {
-                name: identifiers.builtins.fn_ptr,
-                type_id: fn_ptr_type,
-                private: false,
-            },
-            StructTypeField {
-                name: identifiers.builtins.env_ptr,
-                type_id: POINTER_TYPE_ID,
-                private: false,
-            },
+            StructTypeField { name: identifiers.builtins.fn_ptr, type_id: fn_ptr_type },
+            StructTypeField { name: identifiers.builtins.env_ptr, type_id: POINTER_TYPE_ID },
         ];
         let struct_representation = self.add_anon(Type::Struct(StructType {
             fields,

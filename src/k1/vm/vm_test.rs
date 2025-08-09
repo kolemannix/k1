@@ -156,8 +156,8 @@ mod stack_tests {
         let mut stack = test_stack();
         let struct_type = types.add_anon(Type::Struct(StructType {
             fields: eco_vec![
-                StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID, private: false },
-                StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID, private: false }
+                StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID },
+                StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID }
             ],
             defn_id: None,
             generic_instance_info: None,
