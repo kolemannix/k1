@@ -124,8 +124,8 @@ impl TypedProgram {
             TypedExpr::Call(call) => {
                 match call.callee {
                     Callee::DynamicLambda(callee_expr) => recurse!(callee_expr),
-                    Callee::DynamicFunction { function_reference_expr } => {
-                        recurse!(function_reference_expr)
+                    Callee::DynamicFunction { function_pointer_expr } => {
+                        recurse!(function_pointer_expr)
                     }
                     _ => {}
                 };
@@ -177,7 +177,7 @@ impl TypedProgram {
                 let function = self.get_function(lambda_type.body_function_id);
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }
-            TypedExpr::FunctionReference(_) => {}
+            TypedExpr::FunctionPointer(_) => {}
             TypedExpr::FunctionToLambdaObject(_) => {}
             TypedExpr::PendingCapture(_) => {}
             TypedExpr::StaticValue(_, _, _) => {}

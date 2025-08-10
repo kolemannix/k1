@@ -17,7 +17,8 @@ use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
-    DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
+    DISubprogram, DISubroutineType, DIType, DWARFEmissionKind, DWARFSourceLanguage,
+    DebugInfoBuilder,
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
@@ -1093,36 +1094,51 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Type::InferenceHole(h) => {
                 failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
             }
-            Type::Reference(reference) => {
-                if let Type::Function(_function_type) = self.k1.types.get(reference.inner_type) {
-                    let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?;
-                    // TODO: Dwarf info for function pointers
-                    Ok(LlvmReferenceType {
-                        type_id,
-                        pointer_type: self.builtin_types.ptr,
-                        di_type: self.debug.create_pointer_type(
-                            &format!("fn_ptr_{}", type_id),
-                            placeholder_pointee.debug_type(),
-                        ),
-                        pointee_type: Box::new(placeholder_pointee),
-                        layout: Layout::from_scalar_bits(self.word_size().bits()),
-                    }
-                    .into())
-                } else {
-                    let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
-                    let inner_debug_type = inner_type.debug_type();
-                    Ok(LlvmReferenceType {
-                        type_id,
-                        pointer_type: self.builtin_types.ptr,
-                        pointee_type: Box::new(inner_type),
-                        di_type: self.debug.create_pointer_type(
-                            &format!("reference_{}", type_id),
-                            inner_debug_type,
-                        ),
-                        layout: Layout::from_scalar_bits(self.word_size().bits()),
-                    }
-                    .into())
+            Type::FunctionPointer(fp) => {
+                let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?;
+                // TODO: Dwarf info for function pointers
+                let llvm_function_type = self.make_llvm_function_type(fp.function_type_id)?;
+                let subroutine_type = self.debug.debug_builder.create_subroutine_type(
+                    self.debug.current_file(),
+                    Some(llvm_function_type.return_type.debug_type()),
+                    &llvm_function_type
+                        .param_types
+                        .iter()
+                        .map(|t| t.debug_type())
+                        .collect::<Vec<_>>(),
+                    0,
+                );
+
+                Ok(LlvmReferenceType {
+                    type_id,
+                    pointer_type: self.builtin_types.ptr,
+                    di_type: self.debug.create_pointer_type(
+                        &format!("fn_ptr_{}", type_id),
+                        // Safety: DISubroutineType and DIType are both just LLVMMetadataRefs
+                        unsafe {
+                            core::mem::transmute::<DISubroutineType<'ctx>, DIType<'ctx>>(
+                                subroutine_type,
+                            )
+                        },
+                    ),
+                    pointee_type: Box::new(placeholder_pointee),
+                    layout: Layout::from_scalar_bits(self.word_size().bits()),
                 }
+                .into())
+            }
+            Type::Reference(reference) => {
+                let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
+                let inner_debug_type = inner_type.debug_type();
+                Ok(LlvmReferenceType {
+                    type_id,
+                    pointer_type: self.builtin_types.ptr,
+                    pointee_type: Box::new(inner_type),
+                    di_type: self
+                        .debug
+                        .create_pointer_type(&format!("reference_{}", type_id), inner_debug_type),
+                    layout: Layout::from_scalar_bits(self.word_size().bits()),
+                }
+                .into())
             }
             Type::Array(array_type) => {
                 let element_type = self.codegen_type_inner(array_type.element_type, depth + 1)?;
@@ -2464,12 +2480,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(environment_struct_value.as_basic_value_enum().into())
             }
-            TypedExpr::FunctionReference(function_reference_expr) => {
+            TypedExpr::FunctionPointer(function_pointer_expr) => {
                 let function_value =
-                    self.codegen_function_or_get(function_reference_expr.function_id)?;
+                    self.codegen_function_or_get(function_pointer_expr.function_id)?;
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
-                self.set_debug_location_from_span(function_reference_expr.span);
+                self.set_debug_location_from_span(function_pointer_expr.span);
                 Ok(function_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
@@ -3062,9 +3078,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
             }
-            Callee::DynamicFunction { function_reference_expr } => {
+            Callee::DynamicFunction { function_pointer_expr } => {
                 let function_ptr =
-                    self.codegen_expr_basic_value(*function_reference_expr)?.into_pointer_value();
+                    self.codegen_expr_basic_value(*function_pointer_expr)?.into_pointer_value();
 
                 self.set_debug_location_from_span(call.span);
 

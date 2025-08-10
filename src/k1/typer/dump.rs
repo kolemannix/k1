@@ -320,6 +320,11 @@ impl TypedProgram {
                 w.write_str(") -> ")?;
                 self.display_type_id(fun.return_type, expand, w)
             }
+            Type::FunctionPointer(fp) => {
+                w.write_str("*")?;
+                self.display_type_id(fp.function_type_id, expand, w)?;
+                Ok(())
+            }
             Type::Lambda(lam) => {
                 write!(w, "lambda#{}(", lam.parsed_id)?;
                 self.display_type_id(lam.function_type, expand, w)?;
@@ -594,8 +599,8 @@ impl TypedProgram {
                     Callee::Abstract { .. } => {
                         w.write_str("<abstract>")?;
                     }
-                    Callee::DynamicFunction { function_reference_expr } => {
-                        self.display_expr_id(*function_reference_expr, w, indentation)?;
+                    Callee::DynamicFunction { function_pointer_expr } => {
+                        self.display_expr_id(*function_pointer_expr, w, indentation)?;
                     }
                     Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, w, indentation)?;
@@ -736,7 +741,7 @@ impl TypedProgram {
                 self.display_expr_id(*lambda_body, w, indentation)?;
                 Ok(())
             }
-            TypedExpr::FunctionReference(fr) => {
+            TypedExpr::FunctionPointer(fr) => {
                 let fun = self.get_function(fr.function_id);
                 w.write_str(self.ident_str(fun.name))?;
                 w.write_str(".toRef()")

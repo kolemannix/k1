@@ -558,7 +558,7 @@ impl TypedProgram {
 
                 enum PhysicalPassedFunction {
                     Lambda(TypeId),
-                    FunctionReference,
+                    FunctionPointer,
                     LambdaObject(TypeId),
                 }
                 let physical_passed_function = match corresponding_arg {
@@ -590,9 +590,9 @@ impl TypedProgram {
                                     debug!("Using a LambdaObject as an ftp");
                                     PhysicalPassedFunction::LambdaObject(type_id)
                                 }
-                                Type::Reference(_) => {
-                                    debug!("Using a LambdaObject as an ftp");
-                                    PhysicalPassedFunction::FunctionReference
+                                Type::FunctionPointer(_) => {
+                                    debug!("Using a FunctionPointer as an ftp");
+                                    PhysicalPassedFunction::FunctionPointer
                                 }
                                 _ => {
                                     let span = self.exprs.get(t).get_span();
@@ -612,7 +612,7 @@ impl TypedProgram {
                         // Can use as-is since we rebuilt this lambda already
                         lambda
                     }
-                    PhysicalPassedFunction::FunctionReference => {
+                    PhysicalPassedFunction::FunctionPointer => {
                         let ftp = self
                             .types
                             .get(function_type_param.type_id)
@@ -621,7 +621,7 @@ impl TypedProgram {
                         let original_param_function_type = ftp.function_type;
                         let substituted_function_type =
                             self.substitute_in_type(original_param_function_type, &subst_pairs);
-                        self.types.add_reference_type(substituted_function_type, false)
+                        self.types.add_function_pointer_type(substituted_function_type)
                     }
                     PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
                         // Replace the function type

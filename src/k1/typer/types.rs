@@ -378,6 +378,11 @@ pub struct StaticType {
     pub value_id: Option<StaticValueId>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionPointerType {
+    pub function_type_id: TypeId,
+}
+
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
@@ -405,6 +410,10 @@ pub enum Type {
     /// The 'bottom', uninhabited type; used to indicate exits of the program
     Never,
     Function(FunctionType),
+    /// Function pointers deserve to be represented differently than just a Reference to a function type
+    /// Otherwise, function pointers become a special case of references almost
+    /// everywhere, since they can't be de-referenced and don't point to a physical k1 type
+    FunctionPointer(FunctionPointerType),
     Lambda(LambdaType),
     LambdaObject(LambdaObjectType),
 
@@ -497,6 +506,9 @@ impl PartialEq for Type {
                     false
                 }
             }
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
+                fp1.function_type_id == fp2.function_type_id
+            }
             (Type::Lambda(c1), Type::Lambda(c2)) => {
                 // The function type is key here so that we _dont_ equate 'inference artifact' lambdas
                 // with real ones: '0 -> '1 vs int -> bool
@@ -582,6 +594,7 @@ impl std::hash::Hash for Type {
                     param.type_id.hash(state);
                 }
             }
+            Type::FunctionPointer(fp) => fp.function_type_id.hash(state),
             Type::Lambda(c) => {
                 c.parsed_id.hash(state);
                 c.function_type.hash(state)
@@ -633,6 +646,7 @@ impl Type {
             Type::Never => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
+            Type::FunctionPointer(_) => "function_ptr",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
             Type::Static(_) => "static",
@@ -710,6 +724,13 @@ impl Type {
         match self {
             Type::Reference(r) => *r,
             _ => panic!("expect_reference called on: {:?}", self),
+        }
+    }
+
+    pub fn as_function_pointer(&self) -> Option<FunctionPointerType> {
+        match self {
+            Type::FunctionPointer(fp) => Some(*fp),
+            _ => None,
         }
     }
 
@@ -911,7 +932,9 @@ pub struct TypesConfig {
     pub ptr_size_bits: u32,
 }
 
-pub struct Types {
+// nocommit(2): Switch to the other de-duping method that doesn't need to Clone, and has access to
+// the pool
+pub struct TypePool {
     pub types: Vec<Type>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
@@ -938,9 +961,9 @@ pub struct Types {
     pub config: TypesConfig,
 }
 
-impl Types {
-    pub fn empty() -> Types {
-        Types {
+impl TypePool {
+    pub fn empty() -> TypePool {
+        TypePool {
             types: Vec::new(),
             layouts: Pool::new("layouts"),
             types_to_defns: FxHashMap::default(),
@@ -956,8 +979,8 @@ impl Types {
     }
 
     #[cfg(test)]
-    pub fn with_builtin_types() -> Types {
-        let mut this = Types::empty();
+    pub fn with_builtin_types() -> TypePool {
+        let mut this = TypePool::empty();
         this.add_anon(Type::Integer(IntegerType::U8));
         this.add_anon(Type::Integer(IntegerType::U16));
         this.add_anon(Type::Integer(IntegerType::U32));
@@ -1121,6 +1144,10 @@ impl Types {
         self.add_anon(Type::Reference(ReferenceType { inner_type, mutable }))
     }
 
+    pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
+        self.add_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
+    }
+
     pub fn add_static_type(
         &mut self,
         inner_type_id: TypeId,
@@ -1241,6 +1268,7 @@ impl Types {
             Type::Never => None,
             Type::Generic(_gen) => None,
             Type::Function(_) => None,
+            Type::FunctionPointer(_) => None,
             Type::Lambda(_) => None,
             Type::LambdaObject(_) => None,
             Type::Unresolved(_) => None,
@@ -1299,7 +1327,7 @@ impl Types {
         function_type_id: TypeId,
         parsed_id: ParsedId,
     ) -> TypeId {
-        let fn_ptr_type = self.add_reference_type(function_type_id, false);
+        let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = eco_vec![
             StructTypeField { name: identifiers.builtins.fn_ptr, type_id: fn_ptr_type },
             StructTypeField { name: identifiers.builtins.env_ptr, type_id: POINTER_TYPE_ID },
@@ -1437,6 +1465,7 @@ impl Types {
                 result = result.add(self.count_type_variables(fun.return_type));
                 result
             }
+            Type::FunctionPointer(fp) => self.count_type_variables(fp.function_type_id),
             Type::Lambda(lambda) => self
                 .count_type_variables(lambda.function_type)
                 .add(self.count_type_variables(lambda.env_type)),
@@ -1487,7 +1516,9 @@ impl Types {
             Type::Integer(integer_type) => Layout::from_scalar_bits(integer_type.width().bits()),
             Type::Float(float_type) => Layout::from_scalar_bits(float_type.size().bits()),
             Type::Bool => Layout::from_scalar_bytes(1),
-            Type::Pointer => Layout::from_scalar_bits(self.word_size_bits()),
+            Type::Pointer | Type::FunctionPointer(_) => {
+                Layout::from_scalar_bits(self.word_size_bits())
+            }
             Type::Struct(struct_type) => {
                 let mut layout = Layout::ZERO;
                 for field in &struct_type.fields {
@@ -1601,6 +1632,7 @@ impl Types {
             Type::Reference(_) => false,
             Type::Never => false,
             Type::Function(_) => false,
+            Type::FunctionPointer(_) => false,
             Type::Generic(_) => false,
             Type::TypeParameter(_) => false,
             Type::FunctionTypeParameter(_) => false,

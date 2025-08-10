@@ -417,7 +417,7 @@ impl TypedProgram {
 }
 
 pub(super) fn synth_static_option(
-    types: &Types,
+    types: &TypePool,
     static_values: &mut StaticValuePool,
     option_type_id: TypeId,
     value_id: Option<StaticValueId>,

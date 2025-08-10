@@ -71,8 +71,6 @@ ns type_schema {
       and v.name == "Yes"
       else crash("");
 
-    assert(getTypeSchema[\(int) -> int]() is .Other("function"));
-
     // Test Array types
     assert(getTypeSchema[Array[10 x i32]]() is .Array(_));
     require getTypeSchema[Array[5 x string]]()
@@ -85,6 +83,21 @@ ns type_schema {
     println(printStructShape[TypeSchema.Struct.value]());
     println(printStructShape[TypeSchema.Either]());
 
+    let isZeroPtr: *\(int) -> bool = isZero.toRef();
+    let incr2: *\int -> int = ( \(x) x + 2 );
+    require getTypeSchema[typeOf(isZeroPtr)]()
+      is .FunctionPointer({ functionTypeId }) else crash("");
+
+    require typeSchema(functionTypeId)
+      is .Function({ params, returnTypeId }) else crash("");
+    
+    assert(typeSchema(returnTypeId) is .Bool);
+    assertEquals(params.get(0).name, "x");
+    assert(typeSchema(params.get(0).typeId) is .Int(_));
+
     ()
   }
+
+  fn isZero(x: int): bool { x == 0 }
 }
+
