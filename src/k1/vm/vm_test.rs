@@ -87,7 +87,7 @@ mod stack_tests {
     #[test]
     fn test_push_value_basic() {
         let mut stack = test_stack();
-        let types = Types::with_builtin_types();
+        let types = TypePool::with_builtin_types();
 
         // Test basic value types
         stack.push_value_no_align(&types, Value::Unit);
@@ -112,7 +112,7 @@ mod stack_tests {
     #[test]
     fn test_push_value_float() {
         let mut stack = test_stack();
-        let types = Types::with_builtin_types();
+        let types = TypePool::with_builtin_types();
 
         let f32_val = Value::Float(TypedFloatValue::F32(std::f32::consts::PI));
         let f32ptr = stack.push_value_no_align(&types, f32_val) as *const f32;
@@ -152,7 +152,7 @@ mod stack_tests {
 
     #[test]
     fn test_push_struct() {
-        let mut types = Types::with_builtin_types();
+        let mut types = TypePool::with_builtin_types();
         let mut stack = test_stack();
         let struct_type = types.add_anon(Type::Struct(StructType {
             fields: eco_vec![

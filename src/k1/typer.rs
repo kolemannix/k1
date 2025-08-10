@@ -1011,9 +1011,9 @@ pub enum Callee {
     },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
-    /// Must contain a Function reference
+    /// Must contain a Function pointer
     DynamicFunction {
-        function_reference_expr: TypedExprId,
+        function_pointer_expr: TypedExprId,
     },
     /// Used by function type parameters
     DynamicAbstract {
@@ -1313,9 +1313,9 @@ pub struct FunctionToLambdaObjectExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionReferenceExpr {
+pub struct FunctionPointerExpr {
     pub function_id: FunctionId,
-    pub function_reference_type: TypeId,
+    pub function_pointer_type: TypeId,
     pub span: SpanId,
 }
 
@@ -1427,8 +1427,8 @@ pub enum TypedExpr {
     /// - An expression is returned that is really just a pointer to the unique Closure it points
     ///   to; this can either be called directly or turned into a dynamic function object if needed
     Lambda(LambdaExpr),
-    /// Calling .toDyn() on a function by name
-    FunctionReference(FunctionReferenceExpr),
+    /// Calling .toRef() on a function by name
+    FunctionPointer(FunctionPointerExpr),
     /// # Evaluation
     /// To evaluate a FunctionToLambdaObject,
     /// you must create an empty struct of the specified type
@@ -1476,7 +1476,7 @@ impl TypedExpr {
             TypedExpr::Return(_) => "return",
             TypedExpr::Break(_) => "break",
             TypedExpr::Lambda(_) => "lambda",
-            TypedExpr::FunctionReference(_) => "function_reference",
+            TypedExpr::FunctionPointer(_) => "function_pointer",
             TypedExpr::FunctionToLambdaObject(_) => "function_to_lambda_object",
             TypedExpr::PendingCapture(_) => "pending_capture",
             TypedExpr::StaticValue(_, _, _) => "static_value",
@@ -1510,7 +1510,7 @@ impl TypedExpr {
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
             TypedExpr::Lambda(lambda) => lambda.lambda_type,
-            TypedExpr::FunctionReference(f) => f.function_reference_type,
+            TypedExpr::FunctionPointer(f) => f.function_pointer_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
             TypedExpr::StaticValue(_, type_id, _) => *type_id,
@@ -1544,7 +1544,7 @@ impl TypedExpr {
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
             TypedExpr::Lambda(lambda) => lambda.span,
-            TypedExpr::FunctionReference(f) => f.span,
+            TypedExpr::FunctionPointer(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
             TypedExpr::StaticValue(_, _, span) => *span,
@@ -2219,7 +2219,7 @@ pub struct TypedProgram {
     pub ast: ParsedProgram,
     functions: Pool<TypedFunction, FunctionId>,
     pub variables: Pool<Variable, VariableId>,
-    pub types: Types,
+    pub types: TypePool,
     pub globals: Pool<TypedGlobal, TypedGlobalId>,
     pub exprs: Pool<TypedExpr, TypedExprId>,
     pub stmts: Pool<TypedStmt, TypedStmtId>,
@@ -2272,7 +2272,7 @@ pub struct TypedProgram {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let types = Types {
+        let types = TypePool {
             types: Vec::with_capacity(8192),
             existing_types_mapping: FxHashMap::new(),
             layouts: Pool::with_capacity("type_layouts", 8192),
@@ -2879,15 +2879,27 @@ impl TypedProgram {
                 Ok(optional_type)
             }
             ParsedTypeExpr::Reference(r) => {
+                let span = r.span;
                 let mutable = match r.kind {
                     parse::ReferenceKind::Read => false,
                     parse::ReferenceKind::Write => true,
                 };
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
-                let reference_type =
-                    Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
-                let type_id = self.types.add_anon(reference_type);
-                Ok(type_id)
+                match self.types.get(inner_ty) {
+                    Type::Function(_) => {
+                        if mutable {
+                            return failf!(span, "Function pointers cannot be *write");
+                        }
+                        let type_id = self.types.add_function_pointer_type(inner_ty);
+                        Ok(type_id)
+                    }
+                    _ => {
+                        let reference_type =
+                            Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
+                        let type_id = self.types.add_anon(reference_type);
+                        Ok(type_id)
+                    }
+                }
             }
             ParsedTypeExpr::Array(arr) => {
                 let arr = *arr;
@@ -3805,6 +3817,15 @@ impl TypedProgram {
                     type_id
                 }
             }
+            Type::FunctionPointer(fp) => {
+                let fp = *fp;
+                let new_fn_type = self.substitute_in_type(fp.function_type_id, substitution_pairs);
+                if new_fn_type != fp.function_type_id {
+                    self.types.add_function_pointer_type(new_fn_type)
+                } else {
+                    type_id
+                }
+            }
             Type::Lambda(_) => {
                 unreachable!("substitute_in_type is not expected to be called on a Lambda")
             }
@@ -4100,9 +4121,10 @@ impl TypedProgram {
                     None => None,
                     Some(payload_expr) => {
                         let payload_type_id = matching_variant.payload.ok_or_else(|| {
-                            make_error(
-                                "Impossible pattern: Enum variant has no payload",
+                            errf!(
                                 enum_pattern.span,
+                                "Impossible pattern: Variant '{}' has no payload",
+                                self.ident_str(matching_variant.name)
                             )
                         })?;
                         let payload_pattern = self.eval_pattern(
@@ -4325,7 +4347,7 @@ impl TypedProgram {
 
         // If we expect a lambda object and you pass a function reference... (optimized lambda)
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
-            if let TypedExpr::FunctionReference(fun_ref) = self.exprs.get(expr) {
+            if let TypedExpr::FunctionPointer(fun_ref) = self.exprs.get(expr) {
                 let lambda_object =
                     self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
                 let lambda_object_type = self.exprs.get(lambda_object).get_type();
@@ -4559,6 +4581,9 @@ impl TypedProgram {
                     }
                     Ok(())
                 }
+            }
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
+                self.check_types(fp1.function_type_id, fp2.function_type_id, scope_id)
             }
             (Type::Lambda(expected_lambda), Type::Lambda(actual_lambda)) => {
                 if expected_lambda.parsed_id == actual_lambda.parsed_id
@@ -7486,13 +7511,10 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
-            // What type of expression to return? A function reference seems perfect.
-            // nocommit: Representing function reference as a reference is tech debt;
-            // it can't be dereferenced or written to; its really its own atom type
-            let function_reference_type = self.types.add_reference_type(function_type, false);
-            let expr_id = self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
+            let function_pointer_type = self.types.add_function_pointer_type(function_type);
+            let expr_id = self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
                 function_id: body_function_id,
-                function_reference_type,
+                function_pointer_type,
                 span,
             }));
             return Ok(expr_id);
@@ -8218,6 +8240,14 @@ impl TypedProgram {
                 _ => failf!(
                     cast.span,
                     "Cannot cast reference to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
+            Type::FunctionPointer(_fp) => match self.types.get(target_type) {
+                Type::Pointer => Ok(CastType::ReferenceToPointer),
+                _ => failf!(
+                    cast.span,
+                    "Cannot cast Function Pointer to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
             },
@@ -9242,25 +9272,14 @@ impl TypedProgram {
                                 };
                                 Ok(Either::Right(callee))
                             }
-                            Type::Reference(function_reference) => {
-                                if self
-                                    .types
-                                    .get(function_reference.inner_type)
-                                    .as_function()
-                                    .is_some()
-                                {
-                                    let function_reference_expr =
-                                        self.exprs.add(TypedExpr::Variable(VariableExpr {
-                                            variable_id,
-                                            type_id: function_variable.type_id,
-                                            span: fn_call.name.span,
-                                        }));
-                                    Ok(Either::Right(Callee::DynamicFunction {
-                                        function_reference_expr,
-                                    }))
-                                } else {
-                                    fn_not_found()
-                                }
+                            Type::FunctionPointer(_function_pointer) => {
+                                let function_pointer_expr =
+                                    self.exprs.add(TypedExpr::Variable(VariableExpr {
+                                        variable_id,
+                                        type_id: function_variable.type_id,
+                                        span: fn_call.name.span,
+                                    }));
+                                Ok(Either::Right(Callee::DynamicFunction { function_pointer_expr }))
                             }
                             _ => fn_not_found(),
                         }
@@ -9593,10 +9612,10 @@ impl TypedProgram {
                 // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
                 //       if you literally name the function on the lhs of the dot; you can't store
                 //       it in a variable, because the function name on its own isn't a valid
-                //       expression. So it's not the most satisfying, but it works for now. Easy to
-                //       clean up by making function expressions a thing of their own, typed
-                //       uniquely as the function's type, but having no physical representation;
-                //       (consider it an abstract type)
+                //       expression. So it's not the most satisfying, but it works for now.
+                //
+                //       I think this is a fair compromise; I don't see the value in putting a
+                //       'function' in a variable abstractly only to toRef() it later
                 if let ParsedExpr::Variable(v) = self.ast.exprs.get(base_arg.value) {
                     let function_name = &v.name;
                     let function_id = self.scopes.find_function_namespaced(
@@ -9610,13 +9629,13 @@ impl TypedProgram {
                         if function.is_generic() {
                             return failf!(
                                 call_span,
-                                "Cannot do toDyn or toRef with a generic function"
+                                "Cannot call toDyn or toRef with a generic function"
                             );
                         }
                         if function.intrinsic_type.is_some_and(|t| t.is_inlined()) {
                             return failf!(
                                 call_span,
-                                "Cannot do toDyn or toRef with an intrinsic operation"
+                                "Cannot call toDyn or toRef with an intrinsic operation"
                             );
                         }
                         return if fn_name == self.ast.idents.builtins.toDyn {
@@ -9738,10 +9757,10 @@ impl TypedProgram {
         call_span: SpanId,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
-        let function_reference_type = self.types.add_reference_type(function.type_id, false);
-        self.exprs.add(TypedExpr::FunctionReference(FunctionReferenceExpr {
+        let function_pointer_type = self.types.add_function_pointer_type(function.type_id);
+        self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
             function_id,
-            function_reference_type,
+            function_pointer_type,
             span: call_span,
         }))
     }
@@ -10473,10 +10492,10 @@ impl TypedProgram {
                 self.get_function(*function_id).type_id
             }
             Callee::Abstract { function_sig, .. } => function_sig.function_type,
-            Callee::DynamicFunction { function_reference_expr } => {
-                let function_reference_type =
-                    self.get_expr_type(*function_reference_expr).expect_reference().inner_type;
-                function_reference_type
+            Callee::DynamicFunction { function_pointer_expr } => {
+                let function_pointer_type =
+                    self.get_expr_type(*function_pointer_expr).as_function_pointer().unwrap();
+                function_pointer_type.function_type_id
             }
             Callee::DynamicLambda(dynamic) => match self.get_expr_type(*dynamic) {
                 Type::LambdaObject(lambda_object) => lambda_object.function_type,
@@ -10936,18 +10955,12 @@ impl TypedProgram {
 
     fn extract_function_type_from_functionlike(&self, typ: &Type) -> Option<TypeId> {
         // What can we pass when we expect a function type parameter?
-        // A Function reference: fn_name.pointer()
+        // A FunctionPointer: fn_name.toRef()
         // A lambda: \x -> x + 1
         // A lambda-object: dyn[A -> B]
         // A function-type-parameter, written 'some \A -> B'
         match typ {
-            Type::Reference(r) => {
-                if self.types.get(r.inner_type).as_function().is_some() {
-                    Some(r.inner_type)
-                } else {
-                    None
-                }
-            }
+            Type::FunctionPointer(fp) => Some(fp.function_type_id),
             Type::Lambda(lam) => Some(lam.function_type),
             Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
             Type::FunctionTypeParameter(ftp) => Some(ftp.function_type),
@@ -13807,19 +13820,12 @@ impl TypedProgram {
             }
             Type::Pointer => vec![PatternCtor::Pointer], // Just an opaque atom
             Type::Reference(refer) => {
-                match self.types.get(refer.inner_type).as_function() {
-                    Some(_) => vec![PatternCtor::FunctionReference], // Function Reference, opaque atom
-                    None => {
-                        // Follow the pointer
-                        let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
-                        inner
-                            .into_iter()
-                            .map(|pointee_pattern| {
-                                PatternCtor::Reference(Box::new(pointee_pattern))
-                            })
-                            .collect()
-                    }
-                }
+                // Follow the pointer
+                let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
+                inner
+                    .into_iter()
+                    .map(|pointee_pattern| PatternCtor::Reference(Box::new(pointee_pattern)))
+                    .collect()
             }
             Type::Enum(enum_type) => enum_type
                 .variants
@@ -13893,6 +13899,9 @@ impl TypedProgram {
             Type::Function(_f) => {
                 debug!("function is probably unmatchable");
                 vec![]
+            }
+            Type::FunctionPointer(_) => {
+                vec![PatternCtor::FunctionReference] // FunctionReference is an opaque atom pattern
             }
             _ => {
                 eprintln!(
@@ -14074,59 +14083,54 @@ impl TypedProgram {
                     EcoVec::with_capacity(struct_type.fields.len());
                 for (index, f) in struct_type.fields.clone().iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
-                    let name_string_value_id =
-                        self.static_values.add(StaticValue::String(name_string_id));
-                    let type_id_u32 = f.type_id.as_u32();
+                    let name_string_value_id = self.static_values.add_string(name_string_id);
 
                     // We need to ensure that any and all typeIds that we share with the user
                     // are available at runtime, by calling these functions at least once.
                     self.register_type_metainfo(f.type_id, span);
 
-                    let type_id_value_id = self
-                        .static_values
-                        .add(StaticValue::Int(TypedIntValue::U64(type_id_u32 as u64)));
+                    let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
                     let offset_u32 = struct_layout.field_offsets[index];
                     let offset_value_id = self
                         .static_values
                         .add(StaticValue::Int(TypedIntValue::UWord64(offset_u32 as u64)));
-                    let field_struct = StaticValue::Struct(StaticStruct {
-                        type_id: struct_schema_field_item_struct_type_id,
-                        fields: eco_vec![
-                            // name: string
-                            name_string_value_id,
-                            // typeId: u64
-                            type_id_value_id,
-                            // offset: uword
-                            offset_value_id
-                        ],
-                    });
-                    field_values.push(self.static_values.add(field_struct));
+                    let field_struct_fields = eco_vec![
+                        // name: string
+                        name_string_value_id,
+                        // typeId: u64
+                        type_id_value_id,
+                        // offset: uword
+                        offset_value_id
+                    ];
+                    field_values.push(
+                        self.static_values.add_struct(
+                            struct_schema_field_item_struct_type_id,
+                            field_struct_fields,
+                        ),
+                    );
                 }
                 let view = self.static_values.add(StaticValue::View(StaticView {
                     elements: field_values,
                     type_id: struct_schema_fields_view_type_id,
                 }));
-                let payload = self.static_values.add(StaticValue::Struct(StaticStruct {
-                    fields: eco_vec![view],
-                    type_id: struct_schema_payload_type_id,
-                }));
+                let payload =
+                    self.static_values.add_struct(struct_schema_payload_type_id, eco_vec![view]);
                 make_variant(get_ident!(self, "Struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Reference")).payload.unwrap();
                 // { innerTypeId: u64 }
-                let inner_type_id_value_id = self.static_values.add(StaticValue::Int(
-                    TypedIntValue::U64(reference_type.inner_type.as_u32() as u64),
-                ));
+                let inner_type_id_value_id =
+                    self.static_values.add_type_id_int_value(reference_type.inner_type);
+
                 // We need to ensure that any and all typeIds that we share with the user
                 // are available at runtime, by calling these functions at least once.
                 self.register_type_metainfo(reference_type.inner_type, span);
 
-                let payload_struct_id = self.static_values.add(StaticValue::Struct(StaticStruct {
-                    type_id: reference_schema_payload_type_id,
-                    fields: eco_vec![inner_type_id_value_id],
-                }));
+                let payload_struct_id = self
+                    .static_values
+                    .add_struct(reference_schema_payload_type_id, eco_vec![inner_type_id_value_id]);
                 make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
             }
             Type::Array(array_type) => {
@@ -14134,26 +14138,22 @@ impl TypedProgram {
                 let array_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Array")).payload.unwrap();
                 // { elementTypeId: u64, size: uword }
-                let element_type_id_value_id = self.static_values.add(StaticValue::Int(
-                    TypedIntValue::U64(array_type.element_type.as_u32() as u64),
-                ));
+                let element_type_id_value_id =
+                    self.static_values.add_type_id_int_value(array_type.element_type);
+                self.register_type_metainfo(array_type.element_type, span);
+
                 let maybe_concrete_size_value_id = match array_type.concrete_count {
                     None => None,
-                    Some(size) => {
-                        Some(self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(size))))
-                    }
+                    Some(size) => Some(self.static_values.add_int(TypedIntValue::UWord64(size))),
                 };
                 let option_uword = self.synth_optional_type(UWORD_TYPE_ID);
                 let size_value_id =
                     self.synth_static_option(option_uword, maybe_concrete_size_value_id);
-                // We need to ensure that any and all typeIds that we share with the user
-                // are available at runtime, by calling these functions at least once.
-                self.register_type_metainfo(array_type.element_type, span);
 
-                let payload_struct_id = self.static_values.add(StaticValue::Struct(StaticStruct {
-                    type_id: array_schema_payload_type_id,
-                    fields: eco_vec![element_type_id_value_id, size_value_id],
-                }));
+                let payload_struct_id = self.static_values.add_struct(
+                    array_schema_payload_type_id,
+                    eco_vec![element_type_id_value_id, size_value_id],
+                );
                 make_variant(get_ident!(self, "Array"), Some(payload_struct_id))
             }
             Type::Enum(typed_enum) => {
@@ -14171,7 +14171,7 @@ impl TypedProgram {
                 for variant in typed_enum.variants.clone().iter() {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
-                    let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
+                    let name_value_id = self.static_values.add_string(name_string_id);
 
                     let int_value_enum =
                         self.types.get(self.types.builtins.types_int_value.unwrap()).expect_enum();
@@ -14199,9 +14199,8 @@ impl TypedProgram {
                             None,
                         ),
                         Some(payload_type_id) => {
-                            let type_id_value_id = self.static_values.add(StaticValue::Int(
-                                TypedIntValue::U64(payload_type_id.as_u32() as u64),
-                            ));
+                            let type_id_value_id =
+                                self.static_values.add_type_id_int_value(payload_type_id);
                             // We need to ensure that any and all typeIds that we share with the user
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id, span);
@@ -14210,11 +14209,10 @@ impl TypedProgram {
                                 self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(
                                     self.types.enum_variant_payload_offset_bytes(variant) as u64,
                                 )));
-                            let payload_info_struct_id =
-                                self.static_values.add(StaticValue::Struct(StaticStruct {
-                                    type_id: payload_info_struct_id,
-                                    fields: eco_vec![type_id_value_id, payload_offset_value_id],
-                                }));
+                            let payload_info_struct_id = self.static_values.add_struct(
+                                payload_info_struct_id,
+                                eco_vec![type_id_value_id, payload_offset_value_id],
+                            );
                             synth_static_option(
                                 &self.types,
                                 &mut self.static_values,
@@ -14224,9 +14222,9 @@ impl TypedProgram {
                         }
                     };
 
-                    variant_values.push(self.static_values.add(StaticValue::Struct(StaticStruct {
-                        type_id: variant_struct_type_id,
-                        fields: eco_vec![
+                    variant_values.push(self.static_values.add_struct(
+                        variant_struct_type_id,
+                        eco_vec![
                             // name: string,
                             name_value_id,
                             // tag: IntValue,
@@ -14234,7 +14232,7 @@ impl TypedProgram {
                             // payload: { typeId: u64, offset: uword }?,
                             payload_info_value_id,
                         ],
-                    })))
+                    ))
                 }
                 let variants_view_value_id =
                     self.static_values.add(StaticValue::View(StaticView {
@@ -14255,9 +14253,8 @@ impl TypedProgram {
                 let variant_payload_type_id =
                     get_schema_variant(get_ident!(self, "Variant")).payload.unwrap();
                 let variant_name = variant.name;
-                let enum_type_id_value_id = self.static_values.add(StaticValue::Int(
-                    TypedIntValue::U64(variant.enum_type_id.as_u32() as u64),
-                ));
+                let enum_type_id_value_id =
+                    self.static_values.add_type_id_int_value(variant.enum_type_id);
 
                 // We need to ensure that any and all typeIds that we share with the user
                 // are available at runtime, by calling these functions at least once.
@@ -14265,18 +14262,95 @@ impl TypedProgram {
 
                 let name_string_id =
                     self.ast.strings.intern(self.ast.idents.get_name(variant_name));
-                let name_value_id = self.static_values.add(StaticValue::String(name_string_id));
-                let payload_value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
-                    type_id: variant_payload_type_id,
-                    fields: eco_vec![enum_type_id_value_id, name_value_id],
-                }));
+                let name_value_id = self.static_values.add_string(name_string_id);
+                let payload_value_id = self.static_values.add_struct(
+                    variant_payload_type_id,
+                    eco_vec![enum_type_id_value_id, name_value_id],
+                );
                 make_variant(get_ident!(self, "Variant"), Some(payload_value_id))
             }
             Type::Never => make_variant(get_ident!(self, "Never"), None),
-            Type::Function(_)
-            | Type::Lambda(_)
-            | Type::LambdaObject(_)
-            | Type::TypeParameter(_) => make_variant(
+            Type::Function(fn_type) => {
+                let fn_type = fn_type.clone();
+                let function_schema_payload_type_id =
+                    get_schema_variant(get_ident!(self, "Function")).payload.unwrap();
+                //Function({
+                //  params: View[{ name: string, typeId: u64 }],
+                //  returnTypeId: u64,
+                //}),
+                let function_schema_payload_struct =
+                    self.types.get(function_schema_payload_type_id).expect_struct();
+                let function_params_view_field = &function_schema_payload_struct.fields[0];
+                let function_params_view_type_id = function_params_view_field.type_id;
+                let function_param_struct_type_id = self
+                    .types
+                    .get(function_params_view_type_id)
+                    .as_view_instance()
+                    .unwrap()
+                    .type_args[0];
+                let mut params_value_ids = eco_vec![];
+                // Skipping lambda environment parameters;
+                // knowing what is a lambda is covered by the type
+                // kind the function appears within
+                // <C-e> / <C-y>
+                // one-shot undo <C-o>u
+
+                for param in fn_type.logical_params() {
+                    self.register_type_metainfo(param.type_id, span);
+
+                    let param_name_string_id =
+                        self.ast.strings.intern(self.ast.idents.get_name(param.name));
+                    let param_name_value_id =
+                        self.static_values.add(StaticValue::String(param_name_string_id));
+                    let param_type_id_value_id =
+                        self.static_values.add_type_id_int_value(param.type_id);
+                    let param_struct_value_id = self.static_values.add_struct(
+                        function_param_struct_type_id,
+                        eco_vec![
+                            // name: string
+                            param_name_value_id,
+                            // typeId: u64
+                            param_type_id_value_id
+                        ],
+                    );
+                    params_value_ids.push(param_struct_value_id)
+                }
+
+                let params_view_value_id = self.static_values.add(StaticValue::View(StaticView {
+                    type_id: function_params_view_type_id,
+                    elements: params_value_ids,
+                }));
+
+                self.register_type_metainfo(fn_type.return_type, span);
+                let return_type_id_value_id =
+                    self.static_values.add_type_id_int_value(fn_type.return_type);
+
+                let payload = self.static_values.add_struct(
+                    function_schema_payload_type_id,
+                    eco_vec![
+                        // params
+                        params_view_value_id,
+                        // returnTypeId
+                        return_type_id_value_id
+                    ],
+                );
+                make_variant(get_ident!(self, "Function"), Some(payload))
+            }
+            Type::FunctionPointer(fp) => {
+                let function_pointer_schema_payload_type_id =
+                    get_schema_variant(get_ident!(self, "FunctionPointer")).payload.unwrap();
+
+                let function_type_id_value_id =
+                    self.static_values.add_type_id_int_value(fp.function_type_id);
+                self.register_type_metainfo(fp.function_type_id, span);
+
+                let payload = self.static_values.add_struct(
+                    function_pointer_schema_payload_type_id,
+                    eco_vec![function_type_id_value_id],
+                );
+                make_variant(get_ident!(self, "FunctionPointer"), Some(payload))
+            }
+            Type::Lambda(_) | Type::LambdaObject(_) | Type::TypeParameter(_) => make_variant(
                 get_ident!(self, "Other"),
                 Some(
                     self.static_values

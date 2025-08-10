@@ -102,11 +102,12 @@ ns types {
       enumTypeId: u64,
       name: string,
     }),
-    // TODO: Function schema, lambda schema, lambda object schema
-    // Function({
-    //   returnTypeId: u64,
-    //   params: [{ name: string, typeId: u64 }],
-    // }),
+    Function({
+      params: View[{ name: string, typeId: u64 }],
+      returnTypeId: u64,
+    }),
+    FunctionPointer({ functionTypeId: u64 }),
+    // TODO: lambda schema, lambda object schema
     // Lambda({ typeId: u64, functionTypeId: u64 }),
     // LambdaObject({ functionTypeId: u64 }),
     Never,

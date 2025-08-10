@@ -236,6 +236,22 @@ impl StaticValuePool {
         hash
     }
 
+    pub fn add_type_id_int_value(&mut self, type_id: TypeId) -> StaticValueId {
+        self.add(StaticValue::Int(TypedIntValue::U64(type_id.as_u32() as u64)))
+    }
+
+    pub fn add_string(&mut self, string_id: StringId) -> StaticValueId {
+        self.add(StaticValue::String(string_id))
+    }
+
+    pub fn add_struct(&mut self, type_id: TypeId, fields: EcoVec<StaticValueId>) -> StaticValueId {
+        self.add(StaticValue::Struct(StaticStruct { type_id, fields }))
+    }
+
+    pub fn add_int(&mut self, value: TypedIntValue) -> StaticValueId {
+        self.add(StaticValue::Int(value))
+    }
+
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
         let hash = self.hash(&value);
         if let Entry::Occupied(entry) = self.hashes.entry(hash) {

@@ -32,7 +32,7 @@ use crate::{
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, FloatType, I32_TYPE_ID,
             I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
-            STRING_TYPE_ID, Type, TypeId, TypedEnumVariant, Types, U32_TYPE_ID, U64_TYPE_ID,
+            STRING_TYPE_ID, Type, TypeId, TypePool, TypedEnumVariant, U32_TYPE_ID, U64_TYPE_ID,
             UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
     },
@@ -913,11 +913,11 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
 
                     let lambda_obj_struct_type =
                         m.types.get(obj_type.struct_representation).expect_struct();
-                    let function_reference_type = lambda_obj_struct_type.fields
-                        [crate::typer::types::Types::LAMBDA_OBJECT_FN_PTR_INDEX]
+                    let function_pointer_type = lambda_obj_struct_type.fields
+                        [crate::typer::types::TypePool::LAMBDA_OBJECT_FN_PTR_INDEX]
                         .type_id;
                     let environment_ref_type = lambda_obj_struct_type.fields
-                        [crate::typer::types::Types::LAMBDA_OBJECT_ENV_PTR_INDEX]
+                        [crate::typer::types::TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX]
                         .type_id;
                     let environment_struct = base_value.expect_agg();
 
@@ -927,7 +927,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                         Value::Reference { type_id: environment_ref_type, ptr: environment_struct };
                     let function_ref_value = function_id_to_ref_value(
                         lambda_type.body_function_id,
-                        function_reference_type,
+                        function_pointer_type,
                     );
                     let mut lambda_object = vm.stack.push_struct_values(
                         &m.types,
@@ -963,9 +963,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             env_struct.set_type_id(lambda_type_id);
             Ok(VmResult::Value(env_struct))
         }
-        TypedExpr::FunctionReference(fun_ref) => {
+        TypedExpr::FunctionPointer(fun_ref) => {
             let function_ref_value =
-                function_id_to_ref_value(fun_ref.function_id, fun_ref.function_reference_type);
+                function_id_to_ref_value(fun_ref.function_id, fun_ref.function_pointer_type);
             Ok(VmResult::Value(function_ref_value))
         }
         TypedExpr::FunctionToLambdaObject(f_to_lam) => {
@@ -977,15 +977,15 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
 
             let lambda_obj_struct_type =
                 m.types.get(obj_type.struct_representation).expect_struct();
-            let function_reference_type = lambda_obj_struct_type.fields
-                [crate::typer::types::Types::LAMBDA_OBJECT_FN_PTR_INDEX]
+            let function_pointer_type = lambda_obj_struct_type.fields
+                [crate::typer::types::TypePool::LAMBDA_OBJECT_FN_PTR_INDEX]
                 .type_id;
 
             // This is a pointer to a zero-sized environment struct since this is a function
             // not a lambda
             let env_ptr = Value::Reference { type_id: POINTER_TYPE_ID, ptr: vm.stack.cursor };
             let function_ref_value =
-                function_id_to_ref_value(f_to_lam.function_id, function_reference_type);
+                function_id_to_ref_value(f_to_lam.function_id, function_pointer_type);
             let mut lambda_object = vm.stack.push_struct_values(
                 &m.types,
                 obj_type.struct_representation,
@@ -1083,14 +1083,14 @@ fn execute_variable_expr(
     Ok(v.into())
 }
 
-fn function_id_to_ref_value(function_id: FunctionId, function_reference_type_id: TypeId) -> Value {
+fn function_id_to_ref_value(function_id: FunctionId, function_pointer_type_id: TypeId) -> Value {
     let function_id_u32 = function_id.as_u32();
     let function_id_as_ptr = function_id_u32 as usize as *const u8;
     debug!(
         "Encoding function id {function_id_u32} into the pointer address of a Reference value {:?}",
         function_id_as_ptr
     );
-    let value = Value::Reference { type_id: function_reference_type_id, ptr: function_id_as_ptr };
+    let value = Value::Reference { type_id: function_pointer_type_id, ptr: function_id_as_ptr };
     value
 }
 
@@ -1297,7 +1297,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
                 m,
                 struct_type,
                 lambda_object_struct_ptr,
-                Types::LAMBDA_OBJECT_FN_PTR_INDEX,
+                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX,
                 true,
             )?
             .expect_ref();
@@ -1306,16 +1306,15 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
                 m,
                 struct_type,
                 lambda_object_struct_ptr,
-                Types::LAMBDA_OBJECT_ENV_PTR_INDEX,
+                TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX,
                 true,
             )?;
             let function_id = NonZeroU32::new(function_ptr.addr() as u32).unwrap();
             let function_id = FunctionId::from_nzu32(function_id);
             (function_id, Some(env_ref_value))
         }
-        typer::Callee::DynamicFunction { function_reference_expr } => {
-            let callee_ref =
-                execute_expr_return_exit!(vm, m, function_reference_expr)?.expect_ref();
+        typer::Callee::DynamicFunction { function_pointer_expr } => {
+            let callee_ref = execute_expr_return_exit!(vm, m, function_pointer_expr)?.expect_ref();
             // We stuff function ids into the pointers for dynamic dispatch in the VM
             let function_id = NonZeroU32::new(callee_ref.addr() as u32).unwrap();
             let function_id = FunctionId::from_nzu32(function_id);
@@ -1477,7 +1476,9 @@ fn execute_intrinsic(
                     Value::Int(zero_value)
                 }
                 Type::Float(float_type) => Value::Float(float_type.zero()),
-                Type::Reference(_) => Value::Reference { type_id, ptr: core::ptr::null() },
+                Type::Reference(_) | Type::FunctionPointer(_) => {
+                    Value::Reference { type_id, ptr: core::ptr::null() }
+                }
                 Type::Struct(_)
                 | Type::Enum(_)
                 | Type::EnumVariant(_)
@@ -1715,7 +1716,7 @@ fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn store_value(types: &Types, dst: *mut u8, value: Value) -> usize {
+pub fn store_value(types: &TypePool, dst: *mut u8, value: Value) -> usize {
     //eprintln!("store value to = {:?}", dst);
     unsafe {
         match value {
@@ -1888,7 +1889,7 @@ pub fn load_value(
             let value = unsafe { *(ptr as *const usize) };
             Ok(Value::Pointer(value))
         }
-        Type::Reference(_reference_type) => {
+        Type::Reference(_) | Type::FunctionPointer(_) => {
             debug_assert_eq!(layout.size as usize, size_of::<usize>());
 
             // We're loading a reference, which means we are loading a usize
@@ -1919,7 +1920,7 @@ pub fn load_value(
         | Type::FunctionTypeParameter(_)
         | Type::InferenceHole(_)
         | Type::Unresolved(_)
-        | Type::RecursiveReference(_) => unreachable!("Not a value type"),
+        | Type::RecursiveReference(_) => vm_crash(k1, vm, "Attempt to load a non-value type"),
     }
 }
 
@@ -1935,7 +1936,7 @@ fn aligned_to_mut(ptr: *mut u8, align_bytes: usize) -> *mut u8 {
 
 pub fn build_enum_at_location(
     dst: *mut u8,
-    types: &Types,
+    types: &TypePool,
     variant_type_id: TypeId,
     payload_value: Option<Value>,
 ) -> (*const u8, Layout) {
@@ -1959,7 +1960,12 @@ pub fn build_enum_at_location(
     (start_dst, enum_layout)
 }
 
-fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, members: &[Value]) {
+fn build_struct_unaligned(
+    dst: *mut u8,
+    types: &TypePool,
+    struct_type_id: TypeId,
+    members: &[Value],
+) {
     let struct_layout = &types.get_struct_layout(struct_type_id);
 
     for (value, field_offset) in members.iter().zip(struct_layout.field_offsets.iter()) {
@@ -1969,14 +1975,14 @@ fn build_struct_unaligned(dst: *mut u8, types: &Types, struct_type_id: TypeId, m
     }
 }
 
-pub fn offset_at_index(types: &Types, type_id: TypeId, index: usize) -> usize {
+pub fn offset_at_index(types: &TypePool, type_id: TypeId, index: usize) -> usize {
     let size_bytes = types.get_layout(type_id).size as usize;
     index * size_bytes
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn gep_struct_field(
-    types: &Types,
+    types: &TypePool,
     struct_type: TypeId,
     struct_ptr: *const u8,
     field_index: usize,
@@ -2018,7 +2024,7 @@ pub fn load_struct_field(
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn gep_enum_payload(
-    types: &Types,
+    types: &TypePool,
     variant_type: &TypedEnumVariant,
     enum_ptr: *const u8,
 ) -> *const u8 {
@@ -2167,7 +2173,7 @@ impl Stack {
 
     pub fn push_struct_values(
         &mut self,
-        types: &Types,
+        types: &TypePool,
         struct_type_id: TypeId,
         members: &[Value],
     ) -> Value {
@@ -2180,7 +2186,7 @@ impl Stack {
 
     pub fn push_enum(
         &mut self,
-        types: &Types,
+        types: &TypePool,
         variant_type_id: TypeId,
         payload_value: Option<Value>,
     ) -> *const u8 {
@@ -2191,7 +2197,7 @@ impl Stack {
         enum_base
     }
 
-    pub fn push_value(&mut self, types: &Types, value: Value) -> *const u8 {
+    pub fn push_value(&mut self, types: &TypePool, value: Value) -> *const u8 {
         let layout = types.get_layout(value.get_type());
         self.align_to_bytes(layout.align as usize);
         self.push_value_no_align(types, value)
@@ -2199,7 +2205,7 @@ impl Stack {
 
     // We may not want to align, in case we're pushing this value as part of a packed struct.
     // Or if our caller already aligned us
-    pub fn push_value_no_align(&mut self, types: &Types, value: Value) -> *const u8 {
+    pub fn push_value_no_align(&mut self, types: &TypePool, value: Value) -> *const u8 {
         let dst: *mut u8 = self.cursor_mut();
 
         let written: usize = store_value(types, dst, value);
@@ -2615,7 +2621,7 @@ fn debug_value_to_string(vm: &mut Vm, k1: &TypedProgram, value: Value) -> String
 }
 
 fn integer_cast(
-    types: &Types,
+    types: &TypePool,
     int_to_cast: TypedIntValue,
     target_type_id: TypeId,
 ) -> TypedIntValue {

@@ -5,10 +5,10 @@ ns mem {
 
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
-    malloc:  (\(uword, uword) -> Pointer)*,
-    zalloc:  (\(uword, uword) -> Pointer)*,
-    realloc: (\(Pointer, uword, uword, uword) -> Pointer)*,
-    free:    (\(Pointer, uword, uword) -> unit)*,
+    malloc:  *(\(uword, uword) -> Pointer),
+    zalloc:  *(\(uword, uword) -> Pointer),
+    realloc: *(\(Pointer, uword, uword, uword) -> Pointer),
+    free:    *(\(Pointer, uword, uword) -> unit),
   }
 
   deftype AllocMode = {

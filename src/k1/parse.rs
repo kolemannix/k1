@@ -3305,8 +3305,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// binary operations, in terms of recursion or induction, its an atom,
     /// or a 'base case'; it doesn't have any real meaning at the language level
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
-        let (first, second, third) = self.tokens.peek_three();
         let compiler_debug = self.parse_compiler_debug();
+        let (first, second, third) = self.tokens.peek_three();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
         let resulting_expression = if first.kind == K::OpenParen {
             self.advance();
