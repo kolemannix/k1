@@ -6,14 +6,14 @@ ns raylib {
   deftype Rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
-  extern(InitWindow) fn InitWindow(width: i32, height: i32, name: Pointer): unit
-  extern(CloseWindow) fn CloseWindow(): unit
-  extern(WindowShouldClose) fn WindowShouldClose(): bool
+  extern("InitWindow") fn InitWindow(width: i32, height: i32, name: Pointer): unit
+  extern("CloseWindow") fn CloseWindow(): unit
+  extern("WindowShouldClose") fn WindowShouldClose(): bool
 
-  extern(BeginDrawing) fn BeginDrawing(): unit
-  extern(EndDrawing) fn EndDrawing(): unit
-  extern(ClearBackground) fn ClearBackground(color: Color): unit
-  extern(DrawText) fn DrawText(text: Pointer, posX: i32, posY: i32, color: Color): unit
+  extern("BeginDrawing") fn BeginDrawing(): unit
+  extern("EndDrawing") fn EndDrawing(): unit
+  extern("ClearBackground") fn ClearBackground(color: Color): unit
+  extern("DrawText") fn DrawText(text: Pointer, posX: i32, posY: i32, color: Color): unit
 
 }
 // TODO: We need a good 'void' return because if you try to access the unit

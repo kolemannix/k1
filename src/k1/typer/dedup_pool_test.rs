@@ -48,10 +48,10 @@ fn test_basic() {
     assert_eq!(id1, id2, "Identical values should deduplicate");
     assert_eq!(system.static_values.len(), 1, "Should only have one instance");
 
-    let true1 = system.add_static_value(StaticValue::Boolean(true));
-    let true2 = system.add_static_value(StaticValue::Boolean(true));
-    let false1 = system.add_static_value(StaticValue::Boolean(false));
-    let false2 = system.add_static_value(StaticValue::Boolean(false));
+    let true1 = system.add_static_value(StaticValue::Bool(true));
+    let true2 = system.add_static_value(StaticValue::Bool(true));
+    let false1 = system.add_static_value(StaticValue::Bool(false));
+    let false2 = system.add_static_value(StaticValue::Bool(false));
 
     assert_eq!(true1, true2, "True values should deduplicate");
     assert_eq!(false1, false2, "False values should deduplicate");

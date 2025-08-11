@@ -44,7 +44,7 @@ static_assert_size!(StaticValue, 32);
 #[derive(Debug, Clone)]
 pub enum StaticValue {
     Unit,
-    Boolean(bool),
+    Bool(bool),
     Char(u8),
     Int(TypedIntValue),
     Float(TypedFloatValue),
@@ -59,7 +59,7 @@ impl StaticValue {
     pub fn kind_name(&self) -> &'static str {
         match self {
             StaticValue::Unit => "unit",
-            StaticValue::Boolean(_) => "bool",
+            StaticValue::Bool(_) => "bool",
             StaticValue::Char(_) => "char",
             StaticValue::Int(i) => i.kind_name(),
             StaticValue::Float(_) => "float",
@@ -74,7 +74,7 @@ impl StaticValue {
     pub fn get_type(&self) -> TypeId {
         match self {
             StaticValue::Unit => UNIT_TYPE_ID,
-            StaticValue::Boolean(_) => BOOL_TYPE_ID,
+            StaticValue::Bool(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
             StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
@@ -88,7 +88,7 @@ impl StaticValue {
 
     pub fn as_boolean(&self) -> Option<bool> {
         match self {
-            StaticValue::Boolean(b) => Some(*b),
+            StaticValue::Bool(b) => Some(*b),
             _ => None,
         }
     }
@@ -121,7 +121,7 @@ impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
         std::mem::discriminant(self).hash(state);
         match self {
             StaticValue::Unit => {}
-            StaticValue::Boolean(b) => b.hash(state),
+            StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
             StaticValue::Float(f) => {
@@ -163,7 +163,7 @@ impl DepEq<Pool<StaticValue, StaticValueId>> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &Pool<StaticValue, StaticValueId>) -> bool {
         match (self, other) {
             (StaticValue::Unit, StaticValue::Unit) => true,
-            (StaticValue::Boolean(a), StaticValue::Boolean(b)) => a == b,
+            (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
             (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
             (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
             (StaticValue::Float(a), StaticValue::Float(b)) => a == b,

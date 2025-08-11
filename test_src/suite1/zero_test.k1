@@ -31,9 +31,9 @@ fn test(): unit {
   let vf64: f64 = zeroed();
   assert(vf64 == 0.0);
 
-  let* i32Ptr: i32* = zeroed();
+  let* i32Ptr: *i32 = zeroed();
   assertEquals(i32Ptr.*, 0);
-  let i32Null: i32* = zeroed();
+  let i32Null: *i32 = zeroed();
   assert(i32Null as Pointer == Pointer/NULL);
 
   let point: { x: u8, y: u8, z: i32 } = zeroed();

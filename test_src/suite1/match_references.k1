@@ -1,7 +1,7 @@
 ns match_references;
 
 fn test(): unit {
-  let* x = some(42);
+  let* mut x = some(42);
   while x.* is .Some(xx) {
     println("{xx}");
     if xx == 0 break()
@@ -25,7 +25,7 @@ fn test(): unit {
   };
 
   use core/mem/new;
-  let b: bool*** = new[bool**](new[bool*](new[bool](true)));
+  let b: *mut *mut *mut bool = new[*mut *mut bool](new[*mut bool](new[bool](true)));
   if not b is true*** { crash("b was false!") };
   assert(b.*.*.* == true);
 

@@ -325,11 +325,10 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.exprs.get(to_print).get_span();
-        let writer_type_id_deref =
-            self.types.get_type_id_dereferenced(self.exprs.get(writer).get_type());
+        let writer_type_id = self.exprs.get(writer).get_type();
         self.synth_typed_function_call(
             qident!(self, span, ["core", "Print"], "printTo"),
-            &[writer_type_id_deref],
+            &[writer_type_id],
             &[to_print, writer],
             ctx.with_no_expected_type(),
         )

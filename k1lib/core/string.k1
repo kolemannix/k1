@@ -194,6 +194,6 @@ impl Iterable[Item = char, I = BufferIterator[char]] for string {
   fn iterator(self: string): I { self.view().iterator() }
 }
 
-impl Iterable[Item = char, I = BufferIterator[char]] for string* {
-  fn iterator(self: string*): I { self.*.iterator() }
+impl Iterable[Item = char, I = BufferIterator[char]] for *string {
+  fn iterator(self: *string): I { self.*.iterator() }
 }

@@ -117,7 +117,13 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileModuleError::TyperFailure(module)) => {
-            let err = &module.errors[0];
+            let Some(err) = module.errors.first() else {
+                if let Some(parse_error) = module.ast.errors.first() {
+                    bail!("{filename}: Failed parsing: {}", parse_error)
+                } else {
+                    bail!("{filename}: Failed but had no errors")
+                }
+            };
             match expectation {
                 TestExpectation::CompileErrorMessage { message } => {
                     // Check for message!

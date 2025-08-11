@@ -15,12 +15,12 @@ fn basicStruct(): int {
 deftype Foo = { x: int, y: bool }
 ns Foo {
   fn getValue(self: Foo): int { self.x }
-  fn setValue(self: *write Foo, x: int): unit { self.x* <- x; }
+  fn setValue(self: *mut Foo, x: int): unit { self.x* <- x; }
   fn new(x: int): Foo { { x: x, y: false } }
 }
 
 fn structArgMut(): unit {
-  let* mut x: *write Foo = Foo/new(42);
+  let* mut x = Foo/new(42);
   assert(x.x == 42);
   assert(x.getValue() == 42);
   x.setValue(41);

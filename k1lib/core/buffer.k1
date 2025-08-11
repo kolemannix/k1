@@ -24,28 +24,29 @@ ns Buffer {
   // Constructor functions
 
   fn empty[T](): Buffer[T] {
-    { len: 0, data: Pointer/NULL as T* }
+    { len: 0, data: Pointer/NULL as *mut T }
   }
 
   fn fromRawPointerAndCount[T](count: uword, pointer: Pointer): Buffer[T] {
-    { len: count, data: pointer as T* }
+    { len: count, data: pointer as *mut T }
   }
 
-  fn fromRawBaseAndCount[T](len: uword, data: T*): Buffer[T] {
+  fn fromRawBaseAndCount[T](len: uword, data: *mut T): Buffer[T] {
     { len: len, data }
   }
 
-  fn wrapArray[N: static uword, T](array: Array[N x T]*): Buffer[T] {
+  fn wrapArray[N: static uword, T](array: *mut Array[N x T]): Buffer[T] {
     let base = array.getBase();
     let l = array.len();
     let wrapped = fromRawBaseAndCount(l, array.getBase());
     wrapped
   }
 
-  fn copyFromArray[N: static uword, T](array: Array[N x T]*): Buffer[T] {
-    let base = array.getBase();
+  fn copyFromArray[N: static uword, T](array: *Array[N x T]): Buffer[T] {
+    let base = array.getBaseRead();
     let l = array.len();
-    let wrapped = wrapArray[N, T](array);
+    // nocommit(1): unsafe cast. Need methods on references for changing mutability
+    let wrapped = wrapArray[N, T](array as *mut Array[N x T]);
     wrapped.cloned();
   }
 
@@ -80,7 +81,7 @@ ns Buffer {
       let sizeBytes = bufferSizeBytes[T](count);
       mem/allocIn(alloc, sizeBytes, core/types/alignOf[T]())
     };
-    let data = ptr as T*;
+    let data = ptr as *mut T;
     { len: count, data }
   }
 
@@ -91,7 +92,7 @@ ns Buffer {
   ////////////////////////
   // Modification
 
-  fn _growTo[T](context alloc: mem/AllocMode)(self: Buffer[T]*, newCount: uword): unit {
+  fn _growTo[T](context alloc: mem/AllocMode)(self: *mut Buffer[T], newCount: uword): unit {
     if mem/resolveMode(alloc).supportsRealloc() {
       let newSize = bufferSizeBytes[T](newCount);
       let oldSize = bufferSizeBytes[T](self.len);
@@ -101,7 +102,7 @@ ns Buffer {
         align = core/types/alignOf[T](),
         newSize = newSize,
       );
-      self <- { len: newCount, data: newPtr as T* }
+      self <- { len: newCount, data: newPtr as *mut T }
     } else {
       let newBuffer = _allocate[T](newCount);
       _copyFrom[T](self, newBuffer, self.len);
@@ -139,11 +140,11 @@ ns Buffer {
   ///////////////////////////
   // Accessor functions
 
-  fn getRefRead[T](self: Buffer[T], index: uword): *read T {
-    self.getRef[T](index) as *read T
+  fn getRefRead[T](self: Buffer[T], index: uword): *T {
+    self.getRef[T](index) as *T
   }
 
-  fn getRef[T](self: Buffer[T], index: uword): T* {
+  fn getRef[T](self: Buffer[T], index: uword): *mut T {
     if index >= self.len {
       crash("index out of bounds: {index} >= {self.len}")
     };
@@ -185,7 +186,7 @@ ns Buffer {
     self.len > 0
   }
 
-  fn firstRef[T](self: Buffer[T]): T*? {
+  fn firstRef[T](self: Buffer[T]): (*mut T)? {
     if not self.isEmpty() {
       .Some(self.getRef(0))
     } else {
@@ -200,7 +201,7 @@ ns Buffer {
     }
   }
 
-  fn lastRef[T](self: Buffer[T]): T*? {
+  fn lastRef[T](self: Buffer[T]): (*mut T)? {
     if not self.isEmpty() {
       .Some(self.getRef(self.len - 1))
     } else {
@@ -225,7 +226,7 @@ ns Buffer {
     new
   }
 
-  fn swap[T](self: Buffer[T]*, indexA: uword, indexB: uword): unit {
+  fn swap[T](self: *mut Buffer[T], indexA: uword, indexB: uword): unit {
     let aRef = self.*.getRef(indexA);
     let bRef = self.*.getRef(indexB);
     let bValue = bRef.*;
@@ -266,21 +267,21 @@ ns BufferIterator {
 }
 
 impl[T] Iterator[Item = T] for BufferIterator[T] {
-  fn next(self: *write BufferIterator[T]): Item? { 
+  fn next(self: *mut BufferIterator[T]): Item? { 
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
       self.pos* <- self.pos + 1;
       some(item)
     } else .None
   }
-  fn sizeHint(self: *read Self): { atLeast: uword, atMost: uword? } { 
+  fn sizeHint(self: *Self): { atLeast: uword, atMost: uword? } { 
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
-  fn advanceBy(self: *write Self, n: uword): unit {
+  fn advanceBy(self: *mut Self, n: uword): unit {
     self.pos* <- self.pos + n
   }
-  fn nth(self: *write Self, n: uword): Item? {
+  fn nth(self: *mut Self, n: uword): Item? {
     self.advanceBy(n);
     self.next()
   }
@@ -293,7 +294,7 @@ impl[T] Iterable[Item = T, I = BufferIterator[T]] for Buffer[T] {
 }
 
 impl[T: Print] Print for Buffer[T] {
-  fn printTo[W: Writer](self: Self, w: W*): unit {
+  fn printTo[W: Writer](self: Self, w: W): unit {
     w.writeChar('[');
     for self do {
       it.printTo(w);

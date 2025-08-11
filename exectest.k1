@@ -1,0 +1,90 @@
+// Process execution wrapper for K1  
+// Raw execve-based implementation
+
+fn test(): unit {
+    #if core/k1/OS_POSIX {
+        testPosix()
+    } else {
+        println("Process execution only supported on POSIX systems")
+    }
+}
+
+#if core/k1/OS_POSIX
+
+// POSIX system call extern declarations
+extern("fork") fn fork(): i32
+extern("execve") fn execve(path: Pointer, argv: **char, envp: **char): i32
+extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
+
+// Convert View[string] to null-terminated **char array for execve  
+fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): **char {
+    let totalArgs = 1 + (args.len() as iword) + 1; // program + args + null terminator
+    let argv = mem/allocIn(
+      alloc,
+      size = (totalArgs as uword) * types/sizeOf[Pointer](),
+      align = types/alignOf[Pointer]()
+    ) as **char;
+    
+    // Set program name as argv[0] 
+    let progCStr = program.toCString();
+    let argv_ptr = argv as *mut Pointer;
+    argv_ptr <- progCStr.ptr;
+    
+    // Set arguments
+    let mut i: uword = 0;
+    while i < args.len() {
+        let argCStr = args.get(i).toCString();
+        let arg_slot = Pointer/refAtIndex[Pointer](argv as Pointer, i + 1);
+        arg_slot <- argCStr.ptr;
+        i = i + 1;
+    };
+    
+    // Null terminate
+    let null_slot = Pointer/refAtIndex[Pointer](argv as Pointer, (totalArgs - 1) as uword);
+    null_slot <- Pointer/NULL;
+    
+    argv
+}
+
+fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string]): Result[i32, unit] {
+    let progCStr = program.toCString();
+    let argv = makeArgv(program, args);
+    let envp = Pointer/NULL as **char; // Use current environment
+    
+    let pid = fork();
+    
+    if pid == 0 {
+        // Child process - exec the command
+        execve(progCStr.ptr, argv, envp);
+        crash("execve failed; TODO check errno");
+    } else if pid > 0 {
+        // Parent process - wait for child
+        let* mut status: *mut i32 = 0;
+        waitpid(pid, status, 0);
+        .Ok(status.*);
+    } else {
+        // Fork failed
+        .Err(())
+    }
+}
+
+fn testPosix(): unit {
+    println("Testing process execution...");
+    let context temp = mem/AllocMode/TEMP;
+    
+    // Test 1: Simple echo command
+    let echoStatus = runCommand(program = "/bin/echo", args = ["hello", "world"]).!;
+    println("Echo exit status: {echoStatus}");
+    
+    // Test 2: List current directory  
+    let lsStatus = runCommand(program = "/bin/ls", args = []).!;
+    println("Ls exit status: {lsStatus}");
+    
+    // Test 3: Test command that should fail
+    let failStatus = runCommand(program = "/nonexistent", args = []);
+    println("Nonexistent command isOk(): {failStatus.isOk()}");
+}
+
+fn main(): unit {
+    test();
+}

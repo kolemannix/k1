@@ -80,25 +80,25 @@ fn eprintln(s: string): unit {
 #if k1/OS_POSIX
 ns io {
   deftype OutStream = { fileNo: i32 }
-  let* STDOUT: OutStream* = { fileNo: posix/STDOUT };
-  let* STDERR: OutStream* = { fileNo: posix/STDERR };
+  let STDOUT: OutStream = { fileNo: posix/STDOUT };
+  let STDERR: OutStream = { fileNo: posix/STDERR };
 
   impl Writer for OutStream {
-    fn writeChar(self: Self*, value: char): unit {
-      let* valueRef: char* = value;
+    fn writeChar(self: Self, value: char): unit {
+      let* valueRef: *char = value;
       posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
       ()
     }
-    fn writeByte(self: Self*, value: u8): unit {
-      let* valueRef: u8* = value;
+    fn writeByte(self: Self, value: u8): unit {
+      let* valueRef: *u8 = value;
       posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
       ()
     }
-    fn writeString(self: Self*, s: string): unit {
+    fn writeString(self: Self, s: string): unit {
       posix/write(fileNo = self.fileNo, data = s.view().dataPointer(), count = s.len());
       ()
     }
-    fn writeBytes(self: Self*, bytes: View[byte]): unit {
+    fn writeBytes(self: Self, bytes: View[byte]): unit {
       posix/write(
         fileNo = self.fileNo,
         data = bytes.dataPointer(),
@@ -119,7 +119,7 @@ ns sys {
     }
   }
 
-  #if k1/OS_MACOS extern(arc4random_uniform) fn arc4random_uniform(upperBound: u32): u32
+  #if k1/OS_MACOS extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
 
   fn random(upperBound: u32): u32 {
     #if k1/OS == "macos" arc4random_uniform(upperBound)
@@ -134,7 +134,6 @@ ns sys {
       count = argCount as uword,
       pointer = args
     );
-    let* strings = List/withCapacity[string](argCount as uword);
     let strings = for cstr in buf yield {
       string/fromCString(cstr)
     };
@@ -142,7 +141,7 @@ ns sys {
   }
 
   fn readLine(maxLengthBytes: uword): Result[string, string] {
-    let* buffer = Buffer/_allocate[byte](maxLengthBytes);
+    let* mut buffer = Buffer/_allocate[byte](maxLengthBytes);
     let bytesRead = posix/read(0, buffer.data as Pointer, buffer.len);
 
     if bytesRead < 0 {
@@ -167,11 +166,11 @@ ns files {
   ns unix {
     let SEEK_END: i32 = 2;
     let SEEK_SET: i32 = 0;
-    extern(fopen)  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
-    extern(fseek)  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
-    extern(fread)  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
-    extern(fclose) fn fclose(fileDesc: Pointer): i32
-    extern(ftell)  fn ftell(fileDesc: Pointer): i64
+    extern("fopen")  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
+    extern("fseek")  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
+    extern("fread")  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
+    extern("fclose") fn fclose(fileDesc: Pointer): i32
+    extern("ftell")  fn ftell(fileDesc: Pointer): i64
   }
 
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
@@ -225,14 +224,14 @@ impl[T: Print] Show for T {
 }
 
 
-impl Print for bool { fn printTo[W: Writer](self: bool, w: W*): unit { w.writeString(if self "true" else "false") } }
+impl Print for bool { fn printTo[W: Writer](self: bool, w: W): unit { w.writeString(if self "true" else "false") } }
 // Direct specialized 'show' impl to avoid going through a buffer
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
-impl Print for char { fn printTo[W: Writer](self: char, w: W*): unit { w.writeChar(self) } }
+impl Print for char { fn printTo[W: Writer](self: char, w: W): unit { w.writeChar(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
 impl Show for char { fn show(self: char): string { self.toString() } }
 
-fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
+fn formatUInt[W: Writer](context w: W)(value: uword, base: uword): unit {
   if value == 0 { w.writeChar('0'); return(()) }
   else if value < base {
     let digit = u8/toAsciiDigitBase(value as u8, base);
@@ -264,61 +263,61 @@ fn formatUInt[W: Writer](context w: W*)(value: uword, base: uword): unit {
 }
 
 impl Print for i64 {
-  fn printTo[W: Writer](self: i64, w: W*): unit {
+  fn printTo[W: Writer](self: i64, w: W): unit {
     (self as iword).printTo(w)
   }
 }
 
 impl Print for u64 {
-  fn printTo[W: Writer](self: u64, w: W*): unit {
+  fn printTo[W: Writer](self: u64, w: W): unit {
     formatUInt(context w)(self as uword, base =10);
   }
 }
 
 impl Print for u8 {
-  fn printTo[W: Writer](self: u8, w: W*): unit {
+  fn printTo[W: Writer](self: u8, w: W): unit {
     (self as uword).printTo(w)
   }
 }
 
 impl Print for u16 {
-  fn printTo[W: Writer](self: u16, w: W*): unit {
+  fn printTo[W: Writer](self: u16, w: W): unit {
     (self as uword).printTo(w)
   }
 }
 
 impl Print for u32 {
-  fn printTo[W: Writer](self: u32, w: W*): unit {
+  fn printTo[W: Writer](self: u32, w: W): unit {
     (self as uword).printTo(w)
   }
 }
 
 impl Print for uword {
-  fn printTo[W: Writer](self: uword, w: W*): unit {
+  fn printTo[W: Writer](self: uword, w: W): unit {
     formatUInt(context w)(value = self, base = 10)
   }
 }
 
 impl Print for i8 {
-  fn printTo[W: Writer](self: i8, w: W*): unit {
+  fn printTo[W: Writer](self: i8, w: W): unit {
     (self as iword).printTo(w)
   }
 }
 
 impl Print for i16 {
-  fn printTo[W: Writer](self: i16, w: W*): unit {
+  fn printTo[W: Writer](self: i16, w: W): unit {
     (self as iword).printTo(w)
   }
 }
 
 impl Print for i32 {
-  fn printTo[W: Writer](self: i32, w: W*): unit {
+  fn printTo[W: Writer](self: i32, w: W): unit {
     (self as iword).printTo(w)
   }
 }
 
 impl Print for iword {
-  fn printTo[W: Writer](self: iword, w: W*): unit {
+  fn printTo[W: Writer](self: iword, w: W): unit {
     let neg = self < 0;
     if neg {
       w.writeChar('-');
@@ -393,15 +392,15 @@ ns u8 {
 }
 
 ns k1rt {
-  extern(_k1_show_backtrace) fn _k1_show_backtrace(): unit
+  extern("_k1_show_backtrace") fn _k1_show_backtrace(): unit
   // int _k1_sprintf_f32(char *buf, size_t size, const char *fmt, float arg)
-  extern(_k1_snprintf_f64) fn snprintf_f32(buf: Pointer, size: uword, float: f32): i32
-  extern(_k1_snprintf_f64) fn snprintf_f64(buf: Pointer, size: uword, float: f64): i32
+  extern("_k1_snprintf_f64") fn snprintf_f32(buf: Pointer, size: uword, float: f32): i32
+  extern("_k1_snprintf_f64") fn snprintf_f64(buf: Pointer, size: uword, float: f64): i32
 }
 
 ns f64 {
-  fn format[W: Writer](f: f64, w: W*): unit {
-    let* mut stackBuf: Array[32 x u8]* = mem/zeroed();
+  fn format[W: Writer](f: f64, w: W): unit {
+    let* mut stackBuf: *mut Array[32 x u8] = mem/zeroed();
     let writtenLen = k1rt/snprintf_f64(stackBuf.getBase() as Pointer, 32, f);
     if writtenLen <= 0  crash("snprintf_f32 returned {writtenLen}");
     w.writeBytes(stackBuf.asView().slice(0, writtenLen as uword))
@@ -417,13 +416,13 @@ impl Equals for f64 {
 }
 
 impl Print for f32 {
-  fn printTo[W: Writer](self: f32, w: W*): unit {
+  fn printTo[W: Writer](self: f32, w: W): unit {
     f64/format(self as f64, w);
   }
 }
 
 impl Print for f64 {
-  fn printTo[W: Writer](self: f64, w: W*): unit {
+  fn printTo[W: Writer](self: f64, w: W): unit {
     f64/format(self, w);
   }
 }
