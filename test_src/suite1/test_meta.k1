@@ -55,7 +55,7 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
   };
 }
 
-fn writeJson[T, W: Writer](context w: W*)(t: T): unit {
+fn writeJson[T, W: Writer](context w: W)(t: T): unit {
   #meta {
     let typeId = types/typeId[T]();
     _writeJsonFromSchema("t", typeId);

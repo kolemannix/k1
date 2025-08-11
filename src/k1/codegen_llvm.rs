@@ -1501,6 +1501,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
+        // nocommit: If non-mutable referencing, can we annotate with
+        // attributes to unlock optimizations?
         let value = self.codegen_expr(let_stmt.initializer)?;
 
         if let LlvmValue::Void(instr) = value {
@@ -1788,7 +1790,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let result = match self.k1.static_values.get(static_value_id) {
             StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
-            StaticValue::Boolean(b) => match b {
+            StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
             },
@@ -1927,7 +1929,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
             StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
-            StaticValue::Boolean(b) => match b {
+            StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
             },
@@ -4210,7 +4212,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueId) -> bool {
     match static_values.get(id) {
         StaticValue::Unit => true,
-        StaticValue::Boolean(_) => true,
+        StaticValue::Bool(_) => true,
         StaticValue::Char(_) => true,
         StaticValue::Int(_) => true,
         StaticValue::Float(_) => true,

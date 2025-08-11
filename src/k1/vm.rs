@@ -1102,7 +1102,7 @@ pub fn static_value_to_vm_value(
 ) -> TyperResult<Value> {
     match k1.static_values.get(static_value_id) {
         StaticValue::Unit => Ok(Value::Unit),
-        StaticValue::Boolean(bv) => Ok(Value::Bool(*bv)),
+        StaticValue::Bool(bv) => Ok(Value::Bool(*bv)),
         StaticValue::Char(cb) => Ok(Value::Char(*cb)),
         StaticValue::Int(iv) => Ok(Value::Int(*iv)),
         StaticValue::Float(fv) => Ok(Value::Float(*fv)),
@@ -2371,7 +2371,7 @@ pub fn vm_value_to_static_value(
     debug!("vm_to_static: {:?}", vm_value);
     let v = match vm_value {
         Value::Unit => StaticValue::Unit,
-        Value::Bool(b) => StaticValue::Boolean(b),
+        Value::Bool(b) => StaticValue::Bool(b),
         Value::Char(c) => StaticValue::Char(c),
         Value::Int(typed_integer_value) => StaticValue::Int(typed_integer_value),
         Value::Float(typed_float_value) => StaticValue::Float(typed_float_value),

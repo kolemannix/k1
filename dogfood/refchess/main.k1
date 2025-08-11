@@ -71,7 +71,7 @@ fn printBitboard(b: Bitboard): unit {
   println(string/wrapList(l))
 }
 
-fn writeBitboard[W: Writer](writer: W*, b: Bitboard): unit {
+fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
   // Scanlines by rank backwards so it reads naturally
   let mut rank = 7;
   while rank >= 0 {

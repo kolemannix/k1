@@ -1,7 +1,7 @@
 ns string_interp_test;
 
 impl Print for { name: string, weight: int } {
-  fn printTo[W: Writer](self: Self, w: W*): unit {
+  fn printTo[W: Writer](self: Self, w: W): unit {
     let name = self.name;
     let weight = self.weight;
     w.writeString(self.name);

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-// This table exercises:
+// This simple and unfinished hash table implementation is designed
+// to exercise the language a bit. It exercises:
 // - Generics
 // - References/pointers
 // - Structs and enums, optionals
@@ -44,7 +45,7 @@ ns HashMap {
     _make(0)
   }
 
-  fn grow[V](self: HashMap[V]*): unit {
+  fn grow[V](self: *mut HashMap[V]): unit {
     let origSize = self.size;
     let oldEntries = self.entries;
     let newCap = if oldEntries.cap() == 0 1: uword else oldEntries.cap() * 2;
@@ -59,14 +60,14 @@ ns HashMap {
     };
   }
 
-  fn _computeIndex[V](self: HashMap[V]*, key: string): uword {
+  fn _computeIndex[V](self: *HashMap[V], key: string): uword {
     let hash = fnv1a_hash(key);
     let index = hash % self.entries.len;
     index
   }
 
   // Super naive fully linear probing
-  fn _probe[V](self: HashMap[V]*, startIndex: uword): Entry[V]* {
+  fn _probe[V](self: *mut HashMap[V], startIndex: uword): *mut Entry[V] {
     let mut probeIndex = startIndex;
     loop {
       probeIndex = probeIndex + 1;
@@ -87,7 +88,7 @@ ns HashMap {
     fillFactor
   }
 
-  fn insert[V](self: HashMap[V]*, key: string, value: V): unit {
+  fn insert[V](self: *mut HashMap[V], key: string, value: V): unit {
     if self.*.fillFactor() > 0.7 {
       self.grow();
     };
@@ -111,7 +112,7 @@ ns HashMap {
     };
   }
 
-  fn get[V](self: HashMap[V]*, key: string): V? {
+  fn get[V](self: *HashMap[V], key: string): V? {
     let index = self._computeIndex(key);
     let slot = self.entries.get(index);
     switch slot {
@@ -140,7 +141,7 @@ ns HashMap {
     };
   }
 
-  fn remove[V](self: HashMap[V]*, key: string): bool {
+  fn remove[V](self: *mut HashMap[V], key: string): bool {
     let index = self._computeIndex(key);
     let entryRef = self.entries*.getRef(index);
     switch entryRef.* {

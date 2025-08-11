@@ -755,7 +755,7 @@ pub struct LambdaArgDefn {
 
 #[derive(Debug, Clone)]
 pub struct ParsedLambda {
-    pub arguments: Vec<LambdaArgDefn>,
+    pub arguments: EcoVec<LambdaArgDefn>,
     pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExprId,
     pub span: SpanId,
@@ -2732,14 +2732,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         base: result,
                         span: next.span,
                     }));
-                } else if next.kind == K::Asterisk {
-                    // Reference Type
-                    self.advance();
-                    result = self.ast.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
-                        base: result,
-                        span: next.span,
-                        kind: ReferenceKind::Write,
-                    }));
                 } else {
                     panic!("unhandled postfix type operator {:?}", next.kind);
                 }
@@ -2770,20 +2762,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
         } else if first.kind == K::Asterisk {
-            // Reference/Pointer notation: *<ty>
+            // Reference/Pointer notation: *(mut)<ty>
             self.advance();
-            let next = self.peek();
-            let reference_kind = if next.kind == K::Ident && !next.is_whitespace_preceeded() {
-                let chars = self.token_chars(next);
-                if chars == "write" {
-                    self.advance();
-                    ReferenceKind::Write
-                } else if chars == "read" {
-                    self.advance();
-                    ReferenceKind::Read
-                } else {
-                    ReferenceKind::Read
-                }
+            let reference_kind = if self.maybe_consume_next(K::KeywordMut).is_some() {
+                ReferenceKind::Write
             } else {
                 ReferenceKind::Read
             };
@@ -3638,35 +3620,53 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_lambda_arg_defn(&mut self) -> ParseResult<LambdaArgDefn> {
-        let name = self.expect_eat_token(K::Ident)?;
-        let binding = self.intern_ident_token(name);
-        let ty = if self.peek().kind == K::Colon {
-            self.advance();
+        let (binding_token, binding) = self.expect_ident()?;
+        let ty = if self.maybe_consume_next(K::Colon).is_some() {
             Some(self.expect_type_expression()?)
         } else {
             None
         };
-        Ok(LambdaArgDefn { ty, binding, span: name.span })
+        Ok(LambdaArgDefn { ty, binding, span: binding_token.span })
     }
 
     fn expect_lambda(&mut self) -> ParseResult<ParsedExprId> {
         let start = self.expect_eat_token(K::BackSlash)?;
-        let _start = self.expect_eat_token(K::OpenParen)?;
-        let mut arguments: Vec<LambdaArgDefn> = Vec::with_capacity(8);
-        let (_args_span, closing_delimeter) = self.eat_delimited_ext(
-            "Lambda args",
-            &mut arguments,
-            K::Comma,
-            &[K::RThinArrow, K::CloseParen],
-            Parser::expect_lambda_arg_defn,
-        )?;
-        let return_type = if closing_delimeter.kind == K::RThinArrow {
-            let return_type_expr = self.expect_type_expression()?;
-            self.expect_eat_token(K::CloseParen)?;
-            Some(return_type_expr)
-        } else {
-            None
-        };
+        let maybe_open_paren = self.maybe_consume_next(K::OpenParen);
+        let mut arguments: EcoVec<LambdaArgDefn> = eco_vec![];
+        let mut return_type: Option<ParsedTypeExprId> = None;
+        loop {
+            let next = self.peek();
+            match next.kind {
+                K::RThinArrow => {
+                    self.advance();
+                    return_type = Some(self.expect_type_expression()?);
+                    if maybe_open_paren.is_some() {
+                        self.expect_eat_token(K::CloseParen)?;
+                    }
+                    break;
+                }
+                K::CloseParen => {
+                    if maybe_open_paren.is_some() {
+                        self.advance();
+                    } else {
+                        return Err(error_expected("close paren", next));
+                    }
+                    break;
+                }
+                K::Comma => {}
+                K::Ident => {
+                    let arg = self.expect_lambda_arg_defn()?;
+                    arguments.push(arg);
+                    let next = self.peek();
+
+                    // If we're not terminating now, expect a comma
+                    if next.kind != K::CloseParen && next.kind != K::RThinArrow {
+                        self.expect_eat_token(K::Comma)?;
+                    }
+                }
+                _ => return Err(error("Expected a comma, thin arrow, or close paren", next)),
+            }
+        }
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
@@ -4073,10 +4073,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let external_name = if self.peek().kind == K::OpenParen {
                 self.advance();
-                // Parse the external name
-                let external_name = self.expect_eat_token(K::Ident)?;
+                let external_name_token = self.expect_eat_token(K::STRING_DQ)?;
+                // Accessing the token chars this way achieves a partial borrow of self
+                // allowing us to intern the identifier
+                let string_text = Parser::tok_chars(
+                    &self.ast.spans,
+                    self.ast.sources.get_source(self.file_id),
+                    external_name_token,
+                );
+                let Some(string_text_trimmed) =
+                    string_text.strip_prefix("\"").and_then(|s| s.strip_suffix("\""))
+                else {
+                    return Err(error(
+                        "Internal Error: expected string prefix/suffix",
+                        external_name_token,
+                    ));
+                };
+                let ident = self.ast.idents.intern(string_text_trimmed);
+
                 self.expect_eat_token(K::CloseParen)?;
-                Some(self.intern_ident_token(external_name))
+                Some(ident)
             } else {
                 None
             };

@@ -56,7 +56,7 @@ fn test(): unit {
   assertEquals(padded.e, 5);
 
   let letRef = #static {
-    let* i = 10;
+    let* mut i = 10;
 
     //assert(i.* == 10);
     i <- core/identity(i.*);
@@ -83,7 +83,7 @@ fn test(): unit {
 
 
   let ptrInStructs = #static {
-    let* b: u8* = 10;
+    let* b: *u8 = 10;
     let* f = { asdf: b };
     f.asdf.*
   };

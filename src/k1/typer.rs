@@ -2435,7 +2435,7 @@ impl TypedProgram {
         log::info!("parsing took {}ms", parsing_elapsed.as_millis());
 
         if !self.ast.errors.is_empty() {
-            bail!("Parsing module {} failed", src_path_name);
+            bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
         }
 
         let module_manifest = if is_core {
@@ -3280,7 +3280,7 @@ impl TypedProgram {
         match parsed_literal {
             ParsedLiteral::Unit(_) => Ok((StaticValue::Unit, UNIT_TYPE_ID)),
             ParsedLiteral::Char(byte, _) => Ok((StaticValue::Char(*byte), CHAR_TYPE_ID)),
-            ParsedLiteral::Bool(b, _) => Ok((StaticValue::Boolean(*b), BOOL_TYPE_ID)),
+            ParsedLiteral::Bool(b, _) => Ok((StaticValue::Bool(*b), BOOL_TYPE_ID)),
             ParsedLiteral::String(s, _) => Ok((StaticValue::String(*s), STRING_TYPE_ID)),
             ParsedLiteral::Numeric(numeric) => {
                 // Parse the numeric literal and determine its type and value
@@ -4665,7 +4665,7 @@ impl TypedProgram {
         match self.exprs.get(expr_id) {
             TypedExpr::Unit(_) => Ok(Some(self.static_values.add(StaticValue::Unit))),
             TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
-            TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Boolean(*b)))),
+            TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Bool(*b)))),
             TypedExpr::Integer(typed_integer_expr) => {
                 Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
             }
@@ -4825,7 +4825,7 @@ impl TypedProgram {
             false,
             &[],
         )?;
-        let StaticValue::Boolean(condition_bool) =
+        let StaticValue::Bool(condition_bool) =
             self.static_values.get(vm_cond_result.static_value_id)
         else {
             let cond_span = self.ast.get_expr_span(cond);
@@ -7279,8 +7279,8 @@ impl TypedProgram {
                 get_ident!(self, "sb"),
                 new_string_builder,
                 false,
-                true,
-                true,
+                true, // is_mutable
+                true, // is_referencing
                 block.scope_id,
             );
             self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
@@ -10750,7 +10750,7 @@ impl TypedProgram {
                 Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
             }
             TypedExpr::Bool(b, span) => {
-                let static_value_id = self.static_values.add(StaticValue::Boolean(*b));
+                let static_value_id = self.static_values.add(StaticValue::Bool(*b));
                 let static_type = self.types.add_static_type(BOOL_TYPE_ID, Some(static_value_id));
                 Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
             }
@@ -11482,6 +11482,12 @@ impl TypedProgram {
                         self.type_id_to_string(lhs_type)
                     );
                 };
+                if lhs_type.is_read_only() {
+                    return failf!(
+                        self.ast.exprs.get_span(set_stmt.lhs),
+                        "Cannot write to a read-only reference"
+                    );
+                }
                 let expected_rhs = lhs_type.inner_type;
                 let rhs =
                     self.eval_expr(set_stmt.rhs, ctx.with_expected_type(Some(expected_rhs)))?;
@@ -13962,57 +13968,73 @@ impl TypedProgram {
     }
 
     fn add_default_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
+        let core_ns = eco_vec![get_ident!(self, "core")];
+        // Cloning the eco_vec is cheap, as long as we clone the same one not make fresh ones
+        macro_rules! core_use {
+            ($name: expr) => {
+                NamespacedIdentifier {
+                    namespaces: core_ns.clone(),
+                    name: get_ident!(self, $name),
+                    span,
+                }
+            };
+        }
+
         let default_uses = [
-            qident!(self, span, ["core"], "u8"),
-            qident!(self, span, ["core"], "u16"),
-            qident!(self, span, ["core"], "u32"),
-            qident!(self, span, ["core"], "u64"),
-            qident!(self, span, ["core"], "i8"),
-            qident!(self, span, ["core"], "i16"),
-            qident!(self, span, ["core"], "i32"),
-            qident!(self, span, ["core"], "i64"),
-            qident!(self, span, ["core"], "uword"),
-            qident!(self, span, ["core"], "iword"),
-            qident!(self, span, ["core"], "unit"),
-            qident!(self, span, ["core"], "char"),
-            qident!(self, span, ["core"], "bool"),
-            qident!(self, span, ["core"], "never"),
-            qident!(self, span, ["core"], "Pointer"),
-            qident!(self, span, ["core"], "f32"),
-            qident!(self, span, ["core"], "f64"),
-            qident!(self, span, ["core"], "Buffer"),
-            qident!(self, span, ["core"], "View"),
-            qident!(self, span, ["core"], "Array"),
-            qident!(self, span, ["core"], "List"),
-            qident!(self, span, ["core"], "string"),
-            qident!(self, span, ["core"], "Opt"),
-            qident!(self, span, ["core"], "some"),
-            qident!(self, span, ["core"], "none"),
-            qident!(self, span, ["core"], "Ordering"),
-            qident!(self, span, ["core"], "Result"),
-            qident!(self, span, ["core"], "int"),
-            qident!(self, span, ["core"], "uint"),
-            qident!(self, span, ["core"], "byte"),
-            qident!(self, span, ["core"], "Equals"),
-            qident!(self, span, ["core"], "Writer"),
-            qident!(self, span, ["core"], "Print"),
-            qident!(self, span, ["core"], "Show"),
-            qident!(self, span, ["core"], "Bitwise"),
-            qident!(self, span, ["core"], "Comparable"),
-            qident!(self, span, ["core"], "Unwrap"),
-            qident!(self, span, ["core"], "Try"),
-            qident!(self, span, ["core"], "Iterator"),
-            qident!(self, span, ["core"], "Iterable"),
-            qident!(self, span, ["core"], "println"),
-            qident!(self, span, ["core"], "print"),
-            qident!(self, span, ["core"], "printIt"),
-            qident!(self, span, ["core"], "assert"),
-            qident!(self, span, ["core"], "assertEquals"),
-            qident!(self, span, ["core"], "assertMsg"),
-            qident!(self, span, ["core"], "crash"),
             qident!(self, span, ["_root"], "core"),
-            qident!(self, span, ["core"], "mem"),
-            qident!(self, span, ["core"], "types"),
+            core_use!("u8"),
+            core_use!("u8"),
+            core_use!("u16"),
+            core_use!("u32"),
+            core_use!("u64"),
+            core_use!("i8"),
+            core_use!("i16"),
+            core_use!("i32"),
+            core_use!("i64"),
+            core_use!("uword"),
+            core_use!("iword"),
+            core_use!("unit"),
+            core_use!("char"),
+            core_use!("bool"),
+            core_use!("never"),
+            core_use!("Pointer"),
+            core_use!("f32"),
+            core_use!("f64"),
+            core_use!("Buffer"),
+            core_use!("View"),
+            core_use!("Array"),
+            core_use!("List"),
+            core_use!("string"),
+            core_use!("Opt"),
+            core_use!("some"),
+            core_use!("none"),
+            core_use!("Ordering"),
+            core_use!("Result"),
+            core_use!("int"),
+            core_use!("uint"),
+            core_use!("byte"),
+            core_use!("Equals"),
+            core_use!("Writer"),
+            core_use!("Print"),
+            core_use!("Show"),
+            core_use!("Bitwise"),
+            core_use!("Comparable"),
+            core_use!("Unwrap"),
+            core_use!("Try"),
+            core_use!("Iterator"),
+            core_use!("Iterable"),
+            core_use!("println"),
+            core_use!("print"),
+            core_use!("eprint"),
+            core_use!("eprintln"),
+            core_use!("printIt"),
+            core_use!("assert"),
+            core_use!("assertEquals"),
+            core_use!("assertMsg"),
+            core_use!("crash"),
+            core_use!("mem"),
+            core_use!("types"),
+            core_use!("k1"),
         ];
         for du in default_uses.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse { target: du, alias: None, span });
@@ -14118,9 +14140,10 @@ impl TypedProgram {
                 make_variant(get_ident!(self, "Struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
+                let reference_type = *reference_type;
                 let reference_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Reference")).payload.unwrap();
-                // { innerTypeId: u64 }
+                // { innerTypeId: u64, mutable: bool }
                 let inner_type_id_value_id =
                     self.static_values.add_type_id_int_value(reference_type.inner_type);
 
@@ -14128,9 +14151,13 @@ impl TypedProgram {
                 // are available at runtime, by calling these functions at least once.
                 self.register_type_metainfo(reference_type.inner_type, span);
 
-                let payload_struct_id = self
-                    .static_values
-                    .add_struct(reference_schema_payload_type_id, eco_vec![inner_type_id_value_id]);
+                let mutable_value_id =
+                    self.static_values.add(StaticValue::Bool(reference_type.is_mutable()));
+
+                let payload_struct_id = self.static_values.add_struct(
+                    reference_schema_payload_type_id,
+                    eco_vec![inner_type_id_value_id, mutable_value_id],
+                );
                 make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
             }
             Type::Array(array_type) => {

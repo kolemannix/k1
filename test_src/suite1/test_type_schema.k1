@@ -40,16 +40,15 @@ ns type_schema {
     assert(getTypeSchema[i32]()  is .Int(.I32));
     assert(getTypeSchema[i64]()  is .Int(.I64));
     let pointByteSchema = getTypeSchema[Point3[u8]]();
-    require pointByteSchema is .Struct({ fields }) else { crash("") };
+    require pointByteSchema is .Struct({ fields }) else crash("");
     assertEquals(fields.len(), 3);
-    assert(getTypeSchema[i32*]() is .Reference(_));
+    require getTypeSchema[*i32]()
+      is .Reference({ mutable: false, innerTypeId })
+      and innerTypeId == typeId[i32]() else crash("");
+    assert(getTypeSchema[*mut i32]() is .Reference({ mutable: true }));
     assertEquals(
-      getTypeSchema[i32*]().asReference().!.value.innerTypeId,
-      typeId[i32]()
-    );
-    assertEquals(
-      getTypeSchema[bool**]().asReference().!.value.innerTypeId,
-      typeId[bool*]()
+      getTypeSchema[**bool]().asReference().!.value.innerTypeId,
+      typeId[*bool]()
     );
 
     assert(getTypeSchema[either Yes]() is .Either(_));
@@ -71,13 +70,12 @@ ns type_schema {
       and v.name == "Yes"
       else crash("");
 
-    // Test Array types
     assert(getTypeSchema[Array[10 x i32]]() is .Array(_));
     require getTypeSchema[Array[5 x string]]()
       is .Array({ elementTypeId, size })
       and elementTypeId == typeId[string]()
       and size == .Some(5)
-      else crash("Array type schema test failed");
+      else crash("");
 
     println(printStructShape[Point3[u8]]());
     println(printStructShape[TypeSchema.Struct.value]());

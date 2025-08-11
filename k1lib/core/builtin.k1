@@ -30,7 +30,7 @@ deftype Pointer = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
-deftype Buffer[T] = { len: uword, data: *write T }
+deftype Buffer[T] = { len: uword, data: *mut T }
 
 deftype View[T] = { buffer: Buffer[T] }
 
@@ -78,7 +78,7 @@ ns types {
     Float(either F32, F64),
     Bool,
     Pointer,
-    Reference({ innerTypeId: u64 }),
+    Reference({ innerTypeId: u64, mutable: bool }),
     Array({
       elementTypeId: u64,
       size: uword?
@@ -151,18 +151,19 @@ ability Equals {
 // TODO(dogfood): Enhance with an `impl Error` type parameter
 // TODO(dogfood): Allow Error = never for infallible writes
 ability Writer {
-  fn writeChar(self: Self*, value: char): unit
-  fn writeByte(self: Self*, value: u8): unit
-  fn writeString(self: Self*, value: string): unit
-  fn writeBytes(self: Self*, bytes: View[byte]): unit
+  fn writeChar(self: Self, value: char): unit
+  fn writeByte(self: Self, value: u8): unit
+  fn writeString(self: Self, value: string): unit
+  fn writeBytes(self: Self, bytes: View[byte]): unit
 }
 
 ability Print {
-  fn printTo[W: Writer](self: Self, w: W*): unit
+  fn printTo[W: Writer](self: Self, w: W): unit
 }
 
 // Show must have ability id 4
-// TODO: Show and Writer and friends do not belong in builtin long term
+// TODO: Show does not belong in k1 long term because it says nothing about where the data
+//       is allocated, and the name is esoteric. POSSIBLY we could keep it as like To(Temp)String
 ability Show {
   fn show(self: Self): string
 }
@@ -198,10 +199,10 @@ ability Try[impl T, impl E] {
 }
 
 ability Iterator[impl Item] {
-  fn next(self: *write Self): Item?
-  fn sizeHint(self: *read Self): { atLeast: uword, atMost: uword? }
-  fn advanceBy(self: *write Self, n: uword): unit
-  fn nth(self: *write Self, n: uword): Item?
+  fn next(self: *mut Self): Item?
+  fn sizeHint(self: *Self): { atLeast: uword, atMost: uword? }
+  fn advanceBy(self: *mut Self, n: uword): unit
+  fn nth(self: *mut Self, n: uword): Item?
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
@@ -282,7 +283,7 @@ impl Equals for string {
 }
 
 impl Print for string {
-  fn printTo[W: Writer](self: string, w: W*): unit { w.writeString(self) }
+  fn printTo[W: Writer](self: string, w: W): unit { w.writeString(self) }
 }
 
 ns mem {
@@ -361,10 +362,13 @@ ns Pointer {
     self as uword == 0
   }
 
+  fn r[T](self: Pointer): *T { self as *T }
+  fn rw[T](self: Pointer): *mut T { self as *mut T }
+
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
-  intern fn refAtIndex[T](self: Pointer, index: uword): T*
+  intern fn refAtIndex[T](self: Pointer, index: uword): *mut T
 
 }
 
@@ -407,20 +411,23 @@ impl Equals for iword { fn equals(self: Self, other: Self): bool { self == other
 fn discard[T](t: T): unit { () }
 
 ns Array {
-  fn getBase[N: static uword, T](array: Array[N x T]*): T* {
+  fn getBaseRead[N: static uword, T](array: *Array[N x T]): *T {
+    array.getRef(0)
+  }
+  fn getBase[N: static uword, T](array: *mut Array[N x T]): *mut T {
     array.getRef(0)
   }
 
-  fn allocate[N: static uword, T](context alloc: mem/AllocMode)(): Array[N x T]* {
+  fn allocate[N: static uword, T](context alloc: mem/AllocMode)(): *mut Array[N x T] {
     let ptr = mem/allocIn(alloc, size = types/sizeOf[Array[N x T]](), align = types/alignOf[Array[N x T]]());
-    ptr as Array[N x T]*
+    ptr as *mut Array[N x T]
   }
 
-  fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit {
+  fn set[N: static uword, T](array: *mut Array[N x T], index: uword, value: T): unit {
     array.getRef(index) <- value
   }
 
-  fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): Array[N x T]* {
+  fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[N x T] {
     let arrayUninit = allocate[N, T]();
     let mut i: uword = 0;
     while i < n.fromStatic() {
@@ -430,13 +437,15 @@ ns Array {
     arrayUninit
   }
 
-  fn asBuffer[N: static uword, T](array: *write Array[N x T]): Buffer[T] {
+  fn asBuffer[N: static uword, T](array: *mut Array[N x T]): Buffer[T] {
     let len: uword = array.len();
     { len, data: array.getBase() }
   }
 
-  fn asView[N: static uword, T](array: *write Array[N x T]): View[T] {
-    View/wrapBuffer(array.asBuffer())
+  fn asView[N: static uword, T](array: *Array[N x T]): View[T] {
+    // nocommit safer cast
+    let tempBuffer = (array as *mut Array[N x T]).asBuffer();
+    View/wrapBuffer(tempBuffer)
   }
 
 }
@@ -448,22 +457,24 @@ ns posix {
   let STDOUT: i32 = 1;
   let STDERR: i32 = 2;
 
-  extern(read) fn read(fileNo: i32, buffer: Pointer, count: uword): iword
-  extern(write) fn write(fileNo: i32, data: Pointer, count: uword): iword
+  extern("read") fn read(fileNo: i32, buffer: Pointer, count: uword): iword
+  extern("write") fn write(fileNo: i32, data: Pointer, count: uword): iword
 
 }
 
 // Eventually: #if k1/C_RUNTIME
 ns libc {
 
-  extern(exit) fn exit(code: i32): never
+  extern("exit") fn exit(code: i32): never
 
-  extern(memcmp) fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
+  extern("memcmp") fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
 
-  extern(malloc) fn malloc(size: uword): Pointer
-  extern(calloc) fn calloc(count: uword, size: uword): Pointer
-  extern(free) fn free(ptr: Pointer): unit
-  extern(realloc) fn realloc(ptr: Pointer, size: uword): Pointer
+  extern("malloc") fn malloc(size: uword): Pointer
+  extern("calloc") fn calloc(count: uword, size: uword): Pointer
+  extern("free") fn free(ptr: Pointer): unit
+  extern("realloc") fn realloc(ptr: Pointer, size: uword): Pointer
+
+  extern("__errno_location") fn errno(): *i32
 
 }
 

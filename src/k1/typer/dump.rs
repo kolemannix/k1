@@ -775,7 +775,7 @@ impl TypedProgram {
     pub fn display_static_value(&self, w: &mut impl Write, id: StaticValueId) -> std::fmt::Result {
         match self.static_values.get(id) {
             StaticValue::Unit => w.write_str("()"),
-            StaticValue::Boolean(b) => write!(w, "{}", *b),
+            StaticValue::Bool(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(typed_integer_value) => {
                 write!(w, "{}", typed_integer_value)

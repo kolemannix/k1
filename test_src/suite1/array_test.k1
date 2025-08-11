@@ -6,7 +6,7 @@ deftype Thing = {
 }
 
 fn testLiterals(): unit {
-  let* mut array: Array[3 x bool]* = [false, true, true];
+  let* mut array: *mut Array[3 x bool] = [false, true, true];
   let buffer: Buffer[bool] = [false, true, true];
   let list: List[bool] = [false, true, true];
   assertEquals(array.asBuffer(), buffer);
@@ -16,7 +16,7 @@ fn testLiterals(): unit {
 fn testFilled(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let buffer: Buffer[u8] = Buffer/filledIn(size = 64, value = 3);
-  let array: Array[64 x u8]* = Array/filledIn(3, 64);
+  let array: *Array[64 x u8] = Array/filledIn(3, 64);
   let list: List[u8] = List/filledIn(size = 64, value = 3);
   assertEquals(buffer.len, 64);
   assertEquals(array.len(), 64);
@@ -32,7 +32,7 @@ fn testArray(): unit {
   let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
-  let a: Array[10 x u8]* = List/copyToArray(ls, 10);
+  let a: *mut Array[10 x u8] = List/copyToArray(ls, 10);
   let* w = List/empty[char]();
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
@@ -57,7 +57,7 @@ fn test(): unit {
   testLiterals();
   testFilled();
 
-  let* mut array: Array[10 x f32]* = mem/zeroed();
+  let* mut array: *Array[10 x f32] = mem/zeroed();
   assert(testCompile(array.get(11)) is .Some(_));
   array.set(0, 3.14);
   let buf = Buffer/wrapArray(array);

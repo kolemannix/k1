@@ -482,7 +482,6 @@ impl TokenKind {
     pub fn is_postfix_type_operator(&self) -> bool {
         match self {
             K::QuestionMark => true,
-            K::Asterisk => true,
             K::Dot => true,
             _ => false,
         }

@@ -1,19 +1,19 @@
 ns ability_complex;
 
-deftype Pair[PA, PB] = { a: PA*, b: PB? }
+deftype Pair[PA, PB] = { a: *PA, b: PB? }
 ability AsPair[AA, BB] {
-  fn getA(self: Self): AA*
+  fn getA(self: Self): *AA
   fn getB(self: Self): BB?
 }
 
 impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B] {
-  fn getA(self: Pair[A, B]): A* { self.a }
+  fn getA(self: Pair[A, B]): *A { self.a }
   fn getB(self: Pair[A, B]): B? { self.b }
 }
 
 // blanket impl that insanely swaps the pair for you
 impl[A, B] AsPair[AA = A, BB = B] for Pair[B, A] {
-  fn getA(self: Pair[B, A]): A* { mem/new(self.b.!) }
+  fn getA(self: Pair[B, A]): *A { mem/new(self.b.!) }
   fn getB(self: Pair[B, A]): B? { some(self.a.*) }
 }
 

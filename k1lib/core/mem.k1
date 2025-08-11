@@ -15,9 +15,9 @@ ns mem {
     kind: (either
       Current,
       SystemHeap,
-      CustomHeap(Allocator*),
+      CustomHeap(*mut Allocator),
       TempBump,
-      Bump(Arena*),
+      Bump(*mut Arena),
       Gc
     )
   }
@@ -89,14 +89,14 @@ ns mem {
     }
   }
 
-  fn newIn[T](mode: AllocMode, t: T): T* {
+  fn newIn[T](mode: AllocMode, t: T): *mut T {
     let ptr = allocIn(mode, core/types/sizeOf[T](), core/types/alignOf[T]());
-    let ref = ptr as T*;
+    let ref: *mut T = ptr.rw();
     ref <- t;
     ref
   }
 
-  fn new[T](t: T): T* {
+  fn new[T](t: T): *mut T {
     newIn[T](AllocMode/CURRENT, t)
   }
 
@@ -142,9 +142,9 @@ ns mem {
     }
   }
 
-  let* mut _k1_tempArena: Arena* = zeroed[Arena]();
+  let* mut _k1_tempArena: *mut Arena = zeroed[Arena]();
 
-  let* mut _k1_currentAllocMode: mem/AllocMode* = AllocMode/SYSTEM_HEAP;
+  let* mut _k1_currentAllocMode: *mut mem/AllocMode = AllocMode/SYSTEM_HEAP;
 
   // Eventually, we want 'push'/'pop' for allocMode
   fn setDefaultAllocMode(mode: mem/AllocMode): unit {
@@ -165,7 +165,7 @@ ns mem {
 
   // TODO: Figure out when temp aliasing occurs, and avoid that
   // ideally without requiring people to pass an array in
-  fn getTempArena(): Arena* {
+  fn getTempArena(): *mut Arena {
     if _k1_tempArena.basePtr.isNull() {
       // TODO: Make it growable internally;
       initTempArena(maxMb = 10)

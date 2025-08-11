@@ -1,6 +1,6 @@
 ns context_params;
 
-fn addTracked(context hist: List[string]*)(x: int, y: int): int {
+fn addTracked(context hist: *mut List[string])(x: int, y: int): int {
   hist.push(x.show().concat(" + ").concat(y.show()));
   x + y
 }
@@ -10,7 +10,7 @@ fn addAll(context a: u8, b: u16)(x: int, y: int): int {
 }
 
 fn test(): unit {
-  let context history: List[string]* = core/mem/new([]);
+  let context history: *mut List[string] = core/mem/new([]);
 
   assert(addTracked(context history)(1,2) == 3);
 

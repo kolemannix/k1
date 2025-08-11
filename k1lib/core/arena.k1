@@ -46,7 +46,7 @@ ns Arena {
     }
   }
 
-  fn pushRaw(self: Arena*, size: uword, align: uword): Pointer {
+  fn pushRaw(self: *mut Arena, size: uword, align: uword): Pointer {
     let dataStart = alignTo(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
@@ -57,15 +57,15 @@ ns Arena {
     dataStart as Pointer
   }
 
-  fn push[T](self: Arena*, t: T): T* {
+  fn push[T](self: *mut Arena, t: T): *mut T {
     let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
 
-    let ref: T* = dataStart as T*;
+    let ref: *mut T = dataStart.rw();
     ref <- t;
     ref
   }
 
-  fn freeAll(self: Arena*): unit {
+  fn freeAll(self: *mut Arena): unit {
     let size = self.regionSizeBytes();
     println("[arena] Freeing {size}");
     self.curAddr* <- (self.basePtr as uword);

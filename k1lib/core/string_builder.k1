@@ -5,7 +5,7 @@
 // over time, of wrapping the pointer in a struct
 // so that we can just pass around a StringBuilder
 // which is of course always mutable and always 'by reference'
-deftype StringBuilder = { charList: *write List[char] }
+deftype StringBuilder = { charList: *mut List[char] }
 ns StringBuilder {
   deftype alias Part = StringBuilder.charList.value.T
 
