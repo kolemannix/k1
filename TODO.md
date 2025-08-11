@@ -1,5 +1,6 @@
 New tagline? "C with typeclasses and tagged unions"
 
+# Bugs
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
@@ -10,6 +11,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 
+# General
 - [x] Matching push
   - [x] boolean chains w/ binding ifs
   - [x] Don't codegen conditions for arms that don't run
@@ -105,8 +107,8 @@ New tagline? "C with typeclasses and tagged unions"
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Consider a rename of 'uword/iword'. What about `word` and `sword`.
-      Then we go n8/n16/n32/n64/s8/s16/s32/s64
+- [ ] Consider a rename of 'uword/iword'. What about `word` and `iword`.
+- [ ] implement iterator for Array
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
@@ -145,11 +147,12 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 ## Project: Mutable and non-mutable reference types
-- [ ] Change pointer syntax: @read <ty>, @<ty>, @write <ty>
-- [ ] Rename 'Buffer' to ... View?
-- [ ] Convert all type syntax to prefix for better chaining
-- [ ] Add mutable/const bool to ReferenceType
-- [ ] Update stdlib
+- [x] Change pointer syntax: `*<ty>`, `*<ty>`, `*mut <ty>`
+- [x] Rename 'Buffer' to ... View?
+- [x] Convert reference type syntax to prefix for better chaining
+- [ ] Convert option to prefix syntax
+- [x] Add mutable/const bool to ReferenceType
+- [x] Update stdlib
 
 ## Project: static reflection
 - [x] Runtime type info story
@@ -159,7 +162,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] (static only?) 'Type predicate' functions as type bounds
 
-## Zero-Sized Types
+## Project: Zero-Sized Types
 - [ ] Treat Unit and empty Struct as ZSTs
 - [ ] Treat statics as ZSTs
 - [ ] Make Result[T, never] == T ?
@@ -175,15 +178,13 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
-- [ ] implement iterator for them
 
 ## Project
 - [ ] Defer
 
-## Project: Operator overloading story
-- [ ] Operator 'overloading' story. I think the story is just abilities. The question is do we move the syntax to the source: 
-      ability Equals { syntax(2, "==") fn }
-      This means that these would affect the parser. We'd have to add a new pass to find all the syntax definitions
+## Project: Operator overloading
+- [ ] Operator 'overloading' story. I think the story is just abilities.
+- [ ] Start with Add
 
 ## Project: aarch64 ABI
 ## Project: x86-64 ABI
