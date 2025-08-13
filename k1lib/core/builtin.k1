@@ -443,8 +443,7 @@ ns Array {
   }
 
   fn asView[N: static uword, T](array: *Array[N x T]): View[T] {
-    // nocommit safer cast
-    let tempBuffer = (array as *mut Array[N x T]).asBuffer();
+    let tempBuffer = array.toMut.asBuffer();
     View/wrapBuffer(tempBuffer)
   }
 

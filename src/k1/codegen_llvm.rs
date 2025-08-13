@@ -1501,8 +1501,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
-        // nocommit: If non-mutable referencing, can we annotate with
-        // attributes to unlock optimizations?
         let value = self.codegen_expr(let_stmt.initializer)?;
 
         if let LlvmValue::Void(instr) = value {
@@ -2533,6 +2531,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             CastType::EnumToVariant
             | CastType::VariantToEnum
             | CastType::ReferenceToReference
+            | CastType::ReferenceToMut
+            | CastType::ReferenceUnMut
             | CastType::IntegerCast(IntegerCastDirection::NoOp)
             | CastType::Integer8ToChar
             | CastType::StaticErase => {

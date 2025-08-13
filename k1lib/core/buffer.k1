@@ -45,8 +45,7 @@ ns Buffer {
   fn copyFromArray[N: static uword, T](array: *Array[N x T]): Buffer[T] {
     let base = array.getBaseRead();
     let l = array.len();
-    // nocommit(1): unsafe cast. Need methods on references for changing mutability
-    let wrapped = wrapArray[N, T](array as *mut Array[N x T]);
+    let wrapped = wrapArray[N, T](array.toMut);
     wrapped.cloned();
   }
 

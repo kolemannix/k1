@@ -109,6 +109,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
 - [ ] Consider a rename of 'uword/iword'. What about `word` and `iword`.
 - [ ] implement iterator for Array
+- [ ] Do safe integer coercions automatically
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules

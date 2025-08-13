@@ -1238,6 +1238,8 @@ pub enum CastType {
     IntegerExtendFromChar,
     EnumToVariant,
     VariantToEnum,
+    ReferenceToMut,
+    ReferenceUnMut,
     ReferenceToReference,
     PointerToReference,
     ReferenceToPointer,
@@ -1261,6 +1263,8 @@ impl Display for CastType {
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::EnumToVariant => write!(f, "enum2variant"),
             CastType::VariantToEnum => write!(f, "variant2enum"),
+            CastType::ReferenceToMut => write!(f, "reference2mut"),
+            CastType::ReferenceUnMut => write!(f, "referenceUnmut"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
@@ -5881,6 +5885,57 @@ impl TypedProgram {
                 return failf!(field_access.span, "Cannot assign to try operator");
             }
             return self.eval_try_operator(field_access.base, ctx, field_access.span);
+        }
+
+        // Special case: .toMut / .unMut reference unwrap operations
+        if field_access.field_name == self.ast.idents.builtins.toMut
+            || field_access.field_name == self.ast.idents.builtins.unMut
+        {
+            let to_mut = field_access.field_name == self.ast.idents.builtins.toMut;
+            let name = if to_mut { "toMut" } else { "unMut" };
+            let base_expr = self.eval_expr(field_access.base, ctx)?;
+            let reference_type = match self.get_expr_type(base_expr) {
+                Type::Reference(reference_type) => *reference_type,
+                _ => {
+                    return failf!(
+                        field_access.span,
+                        "{name} must be used on a reference; this is a {}",
+                        self.type_id_to_string(self.exprs.get(base_expr).get_type())
+                    );
+                }
+            };
+            if to_mut {
+                if reference_type.mutable {
+                    return failf!(
+                        field_access.span,
+                        "{name} must be used on a non-mutable reference"
+                    );
+                }
+                let mut_reference_type = self.types.add_anon(Type::Reference(ReferenceType {
+                    inner_type: reference_type.inner_type,
+                    mutable: true,
+                }));
+                return Ok(self.synth_cast(
+                    base_expr,
+                    mut_reference_type,
+                    CastType::ReferenceToMut,
+                    Some(field_access.span),
+                ));
+            } else {
+                if reference_type.is_read_only() {
+                    return failf!(field_access.span, "{name} must be used on a mutable reference");
+                }
+                let nonmut_reference_type = self.types.add_anon(Type::Reference(ReferenceType {
+                    inner_type: reference_type.inner_type,
+                    mutable: false,
+                }));
+                return Ok(self.synth_cast(
+                    base_expr,
+                    nonmut_reference_type,
+                    CastType::ReferenceUnMut,
+                    Some(field_access.span),
+                ));
+            }
         }
 
         let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
