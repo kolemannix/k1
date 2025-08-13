@@ -853,7 +853,9 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     Ok(Value::Pointer(ptr.addr()).into())
                 }
-                CastType::ReferenceToReference => {
+                CastType::ReferenceToReference
+                | CastType::ReferenceToMut
+                | CastType::ReferenceUnMut => {
                     let Value::Reference { ptr, .. } = base_value else {
                         m.ice_with_span("malformed reference-to-reference cast", span)
                     };
