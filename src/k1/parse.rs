@@ -368,6 +368,7 @@ pub struct BuiltinIdentifiers {
     pub Array: Ident,
     pub toMut: Ident,
     pub unMut: Ident,
+    pub data: Ident,
     pub param_0: Ident,
     pub param_1: Ident,
     pub param_2: Ident,
@@ -461,6 +462,7 @@ impl Default for Identifiers {
         let Array = Ident(pool.get_or_intern_static("Array"));
         let toMut = Ident(pool.get_or_intern_static("toMut"));
         let unMut = Ident(pool.get_or_intern_static("unMut"));
+        let data = Ident(pool.get_or_intern_static("data"));
 
         let param_0 = Ident(pool.get_or_intern_static("param_0"));
         let param_1 = Ident(pool.get_or_intern_static("param_1"));
@@ -533,6 +535,7 @@ impl Default for Identifiers {
                 Array,
                 toMut,
                 unMut,
+                data,
                 param_0,
                 param_1,
                 param_2,

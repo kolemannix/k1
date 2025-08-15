@@ -14,6 +14,7 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 use k1_types::{CompilerMessageLevel, K1SourceLocation, K1ViewLike};
 use log::debug;
+use memmap2::{MmapMut, MmapOptions};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
@@ -30,8 +31,8 @@ use crate::{
         TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult,
         VariableExpr, VariableId, make_fail_span,
         types::{
-            BOOL_TYPE_ID, CHAR_TYPE_ID, F32_TYPE_ID, F64_TYPE_ID, FloatType, I32_TYPE_ID,
-            I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
+            BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
+            I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
             STRING_TYPE_ID, Type, TypeId, TypePool, TypedEnumVariant, U32_TYPE_ID, U64_TYPE_ID,
             UNIT_TYPE_ID, UWORD_TYPE_ID,
         },
@@ -1148,7 +1149,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::View(view) => {
             let elements = view.elements.clone();
-            let element_type = k1.types.get(view.type_id).as_view_instance().unwrap().type_args[0];
+            let element_type = k1.types.get_as_view_instance(view.type_id).unwrap();
 
             let layout = k1.types.get_layout(element_type);
             let view_allocation_layout = layout.array_me(view.len());
@@ -2039,8 +2040,10 @@ pub fn gep_enum_payload(
 nz_u32_id!(FrameIndex);
 
 pub struct Stack {
-    allocation: Box<[u8]>,
+    allocation: MmapMut,
+    base_ptr: *const u8,
     frames: Vec<StackFrame>,
+    // nocommit: Unnest map
     locals: FxHashMap<u32, FxHashMap<VariableId, Value>>,
     cursor: *const u8,
 }
@@ -2067,11 +2070,14 @@ impl StackFrame {
 impl Stack {
     pub fn make(size: usize) -> Stack {
         debug!("make stack {size}");
-        let allocation: Box<[u8]> = vec![0; size].into();
-        let base_ptr = allocation.as_ptr();
+        let mut mmap_options = MmapOptions::new();
+        let mmap_mut = mmap_options.len(size).map_anon().unwrap();
+        let base_ptr = (*mmap_mut).as_ptr();
         let frames_cap = if size == 0 { 0 } else { 512 };
         Self {
-            allocation,
+            // Calls libc::munmap(ptr, len as libc::size_t) on Drop
+            allocation: mmap_mut,
+            base_ptr,
             frames: Vec::with_capacity(frames_cap),
             locals: FxHashMap::with_capacity(frames_cap),
             cursor: base_ptr,
@@ -2079,9 +2085,10 @@ impl Stack {
     }
 
     pub fn reset(&mut self) {
+        let len_to_clear = self.cursor.addr() - self.base_ptr.addr();
         self.cursor = self.base_ptr();
         unsafe {
-            core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, self.allocation.len());
+            core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, len_to_clear);
         }
         self.frames.clear();
     }
@@ -2111,7 +2118,7 @@ impl Stack {
 
     #[inline]
     pub fn base_ptr(&self) -> *const u8 {
-        self.allocation.as_ptr()
+        self.base_ptr
     }
 
     #[inline]
@@ -2401,7 +2408,7 @@ pub fn vm_value_to_static_value(
             if type_id == STRING_TYPE_ID {
                 let box_str = value_to_string_id(m, vm_value);
                 StaticValue::String(box_str)
-            } else if m.types.get(type_id).as_view_instance().is_some() {
+            } else if m.types.get_as_view_instance(type_id).is_some() {
                 let (view, element_type) = value_as_view(m, vm_value);
                 let mut elements = EcoVec::with_capacity(view.len);
                 for index in 0..view.len {
@@ -2416,14 +2423,14 @@ pub fn vm_value_to_static_value(
                     elements.push(elem_static);
                 }
                 StaticValue::View(StaticView { elements, type_id })
-            } else if m.types.get(type_id).as_list_instance().is_some() {
+            } else if m.types.get_as_list_instance(type_id).is_some() {
                 #[allow(clippy::if_same_then_else)]
                 return failf!(
                     span,
                     "{} cannot be converted to static value; convert to a View first",
                     m.type_id_to_string(type_id)
                 );
-            } else if m.types.get(type_id).as_buffer_instance().is_some() {
+            } else if m.types.get_as_buffer_instance(type_id).is_some() {
                 return failf!(
                     span,
                     "{} cannot be converted to static value; convert to a View first",
@@ -2483,7 +2490,7 @@ pub fn vm_value_to_static_value(
 }
 
 pub fn value_as_view(k1: &TypedProgram, view_value: Value) -> (k1_types::K1ViewLike, TypeId) {
-    let element_type = k1.types.get(view_value.get_type()).as_view_instance().unwrap().type_args[0];
+    let element_type = k1.types.get_as_view_instance(view_value.get_type()).unwrap();
     let ptr = view_value.expect_agg();
     let buffer_ptr = ptr as *const k1_types::K1ViewLike;
     let buffer = unsafe { buffer_ptr.read() };
@@ -2562,29 +2569,35 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, k1: &TypedProgr
         }
         Value::Agg { type_id, ptr } => {
             match k1.types.get(type_id) {
-                st @ Type::Struct(struct_type) => {
-                    if let Some(buffer_type) = st.as_buffer_instance() {
-                        let buffer_ptr = ptr as *const k1_types::K1ViewLike;
-                        let buffer = unsafe { buffer_ptr.read() };
-                        let len = buffer.len;
-                        let data_ptr = buffer.data;
-                        write!(w, "<view len={len} ").unwrap();
+                Type::Struct(struct_type) => {
+                    if let Some((elem_type, container_kind)) =
+                        k1.types.get_as_container_instance(type_id)
+                    {
+                        match container_kind {
+                            ContainerKind::Array(_array_type) => write!(w, "<todo array>").unwrap(),
+                            ContainerKind::List | ContainerKind::Buffer | ContainerKind::View => {
+                                let buffer_ptr = ptr as *const k1_types::K1ViewLike;
+                                let buffer = unsafe { buffer_ptr.read() };
+                                let len = buffer.len;
+                                let data_ptr = buffer.data;
+                                write!(w, "<buffer len={len} ").unwrap();
 
-                        let preview_count = std::cmp::min(len, 10);
-                        w.write_str("[").unwrap();
-                        let elem_type = buffer_type.type_args[0];
-                        for i in 0..preview_count {
-                            let elem_offset = offset_at_index(&k1.types, elem_type, i);
-                            let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
-                            match load_value(vm, k1, elem_type, elem_ptr, true) {
-                                Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
-                                Ok(loaded) => render_debug_value(w, vm, k1, loaded),
-                            };
-                            if i < preview_count - 1 {
-                                w.write_str(", ").unwrap();
+                                let preview_count = std::cmp::min(len, 10);
+                                w.write_str("[").unwrap();
+                                for i in 0..preview_count {
+                                    let elem_offset = offset_at_index(&k1.types, elem_type, i);
+                                    let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
+                                    match load_value(vm, k1, elem_type, elem_ptr, true) {
+                                        Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
+                                        Ok(loaded) => render_debug_value(w, vm, k1, loaded),
+                                    };
+                                    if i < preview_count - 1 {
+                                        w.write_str(", ").unwrap();
+                                    }
+                                }
+                                w.write_str("]>").unwrap();
                             }
                         }
-                        w.write_str("]>").unwrap();
                     } else {
                         w.write_str("{ ").unwrap();
                         for (field_index, f) in struct_type.fields.iter().enumerate() {

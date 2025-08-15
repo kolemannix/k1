@@ -82,6 +82,7 @@ pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     // such as appending to a list while keeping its Handles valid, that will just be a different
     // type of pool
     vec: Vec<T>,
+    #[allow(unused)]
     name: &'static str,
     _index: std::marker::PhantomData<Index>,
 }

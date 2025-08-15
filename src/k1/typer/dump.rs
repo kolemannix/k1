@@ -177,9 +177,14 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn display_type_ext(&self, ty: TypeId, expand: bool, w: &mut impl Write) -> std::fmt::Result {
-        let defn_info = self.types.get_defn_info(ty);
-        match self.types.get_no_follow(ty) {
+    fn display_type_ext(
+        &self,
+        type_id: TypeId,
+        expand: bool,
+        w: &mut impl Write,
+    ) -> std::fmt::Result {
+        let defn_info = self.types.get_defn_info(type_id);
+        match self.types.get_no_follow(type_id) {
             Type::Unit => w.write_str("unit"),
             Type::Char => w.write_str("char"),
             Type::Integer(int_type) => {
@@ -195,7 +200,7 @@ impl TypedProgram {
             Type::Struct(struc) => {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
-                    if let Some(spec_info) = struc.generic_instance_info.as_ref() {
+                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand)?;
                     }
                     if expand {
@@ -239,7 +244,7 @@ impl TypedProgram {
             Type::Enum(e) => {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
-                    if let Some(spec_info) = e.generic_instance_info.as_ref() {
+                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand)?;
                     }
                     if expand {
@@ -268,10 +273,9 @@ impl TypedProgram {
                 Ok(())
             }
             Type::EnumVariant(ev) => {
-                let e = self.types.get(ev.enum_type_id).expect_enum();
                 if let Some(defn_info) = defn_info {
                     self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = e.generic_instance_info.as_ref() {
+                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
                         self.display_instance_info(w, spec_info, expand)?;
                     }
                 }

@@ -656,6 +656,8 @@ impl VariableInScope {
     }
 }
 
+// Every scope is 288 bytes!!
+// Time for a less naive more computer-friendly representation
 pub struct Scope {
     pub variables: FxHashMap<Ident, VariableInScope>,
     pub context_variables_by_type: FxHashMap<TypeId, VariableId>,

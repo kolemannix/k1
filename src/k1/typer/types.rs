@@ -1,6 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::collections::hash_map::Entry;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
@@ -60,17 +61,9 @@ impl std::hash::Hash for TypeDefnInfo {
 #[derive(Debug, Clone)]
 pub struct StructType {
     pub fields: EcoVec<StructTypeField>,
-    pub generic_instance_info: Option<GenericInstanceInfo>,
-    pub defn_id: Option<TypeDefnId>,
 }
 
 impl StructType {
-    pub fn is_named(&self) -> bool {
-        self.defn_id.is_some()
-    }
-    pub fn is_anon(&self) -> bool {
-        self.defn_id.is_none()
-    }
     pub fn find_field(&self, field_name: Ident) -> Option<(usize, &StructTypeField)> {
         self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
     }
@@ -134,11 +127,6 @@ pub struct InferenceHoleType {
     pub index: u32,
 }
 
-#[derive(Debug, Clone)]
-pub struct OptionalType {
-    pub inner_type: TypeId,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ReferenceType {
     pub inner_type: TypeId,
@@ -175,9 +163,6 @@ pub struct TypedEnumVariant {
 #[derive(Debug, Clone)]
 pub struct TypedEnum {
     pub variants: EcoVec<TypedEnumVariant>,
-    pub defn_id: Option<TypeDefnId>,
-    /// Populated for specialized copies of generic enums, contains provenance info
-    pub generic_instance_info: Option<GenericInstanceInfo>,
     pub ast_node: ParsedId,
     pub tag_type: TypeId,
 }
@@ -386,7 +371,7 @@ pub struct FunctionPointerType {
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
-static_assert_size!(Type, 72);
+static_assert_size!(Type, 56);
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit,
@@ -433,9 +418,15 @@ pub enum Type {
     RecursiveReference(RecursiveReference),
 }
 
-impl PartialEq for Type {
-    fn eq(&self, other: &Type) -> bool {
-        match (&self, &other) {
+impl TypePool {
+    fn type_eq(
+        &self,
+        t1: &Type,
+        t2: &Type,
+        defn1: Option<&TypeDefnInfo>,
+        defn2: Option<&TypeDefnInfo>,
+    ) -> bool {
+        match (t1, t2) {
             (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
@@ -443,7 +434,7 @@ impl PartialEq for Type {
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if s1.defn_id != s2.defn_id {
+                if defn1 != defn2 {
                     return false;
                 }
                 if s1.fields.len() != s2.fields.len() {
@@ -474,7 +465,7 @@ impl PartialEq for Type {
             }
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
             (Type::Enum(e1), Type::Enum(e2)) => {
-                if e1.defn_id != e2.defn_id {
+                if defn1 != defn2 {
                     return false;
                 }
                 if e1.variants.len() != e2.variants.len() {
@@ -528,21 +519,23 @@ impl PartialEq for Type {
             }
         }
     }
-}
 
-impl Eq for Type {}
-
-impl std::hash::Hash for Type {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+    fn hash_type(&self, typ: &Type, defn: Option<TypeDefnInfo>) -> u64 {
+        use std::hash::Hash;
+        use std::hash::Hasher;
         use std::mem::discriminant;
-        discriminant(self).hash(state);
-        match self {
+
+        let mut hasher = fxhash::FxHasher::default();
+        let state = &mut hasher;
+
+        discriminant(typ).hash(state);
+        match typ {
             Type::Unit => {}
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
             Type::Bool => {}
             Type::Struct(s) => {
-                s.defn_id.hash(state);
+                defn.hash(state);
                 s.fields.len().hash(state);
                 for f in &s.fields {
                     f.name.hash(state);
@@ -566,7 +559,7 @@ impl std::hash::Hash for Type {
                 hole.index.hash(state);
             }
             Type::Enum(e) => {
-                e.defn_id.hash(state);
+                defn.hash(state);
                 e.variants.len().hash(state);
                 for v in e.variants.iter() {
                     v.name.hash(state);
@@ -624,6 +617,7 @@ impl std::hash::Hash for Type {
                 arr.concrete_count.hash(state);
             }
         }
+        state.finish()
     }
 }
 
@@ -662,54 +656,6 @@ impl Type {
     // Should Pointer be here?
     pub fn is_scalar_int_value(&self) -> bool {
         matches!(self, Type::Unit | Type::Char | Type::Integer(_) | Type::Bool)
-    }
-
-    pub fn as_list_instance(&self) -> Option<ListType> {
-        if let Type::Struct(s) = self {
-            s.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == LIST_TYPE_ID {
-                    Some(ListType { element_type: spec_info.type_args[0] })
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn as_buffer_instance(&self) -> Option<&GenericInstanceInfo> {
-        if let Type::Struct(s) = self {
-            s.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == BUFFER_TYPE_ID { Some(spec_info) } else { None }
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn as_view_instance(&self) -> Option<&GenericInstanceInfo> {
-        if let Type::Struct(s) = self {
-            s.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == VIEW_TYPE_ID { Some(spec_info) } else { None }
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn as_opt_instance(&self) -> Option<OptionalType> {
-        if let Type::Enum(e) = self {
-            e.generic_instance_info.as_ref().and_then(|spec_info| {
-                if spec_info.generic_parent == OPTIONAL_TYPE_ID {
-                    Some(OptionalType { inner_type: spec_info.type_args[0] })
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        }
     }
 
     pub fn as_reference(&self) -> Option<ReferenceType> {
@@ -778,11 +724,6 @@ impl Type {
             Type::Enum(e) => e,
             _ => panic!("expected enum on {:?}", self),
         }
-    }
-
-    #[track_caller]
-    pub fn expect_optional(&self) -> OptionalType {
-        self.as_opt_instance().unwrap()
     }
 
     pub fn as_struct(&self) -> Option<&StructType> {
@@ -932,25 +873,19 @@ pub struct TypesConfig {
     pub ptr_size_bits: u32,
 }
 
-// nocommit(2): Switch to the other de-duping method that doesn't need to Clone, and has access to
-// the pool
 pub struct TypePool {
-    pub types: Vec<Type>,
+    pub types: Pool<Type, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
-    pub existing_types_mapping: FxHashMap<Type, TypeId>,
+    pub hashes: FxHashMap<u64, TypeId>,
 
     /// AoS-style info associated with each type id
     pub layouts: Pool<Layout, TypeId>,
     pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
+    pub instance_info: Pool<Option<GenericInstanceInfo>, TypeId>,
 
-    /// Definition info for named types
-    pub types_to_defns: FxHashMap<TypeId, TypeDefnId>,
-
-    /// De-duped pool of type definitions
-    pub existing_defns: FxHashMap<TypeDefnInfo, TypeDefnId>,
-    pub defns: Pool<TypeDefnInfo, TypeDefnId>,
+    pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
 
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
@@ -964,13 +899,12 @@ pub struct TypePool {
 impl TypePool {
     pub fn empty() -> TypePool {
         TypePool {
-            types: Vec::new(),
+            types: Pool::with_capacity("types", 8192),
+            hashes: FxHashMap::default(),
             layouts: Pool::new("layouts"),
-            types_to_defns: FxHashMap::default(),
-            existing_defns: FxHashMap::default(),
-            defns: Pool::new("type_defns"),
             type_variable_counts: Pool::new("type_variable_counts"),
-            existing_types_mapping: FxHashMap::default(),
+            instance_info: Pool::new("instance_info"),
+            defn_info: FxHashMap::default(),
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
             builtins: BuiltinTypes::default(),
@@ -1001,42 +935,70 @@ impl TypePool {
         this
     }
 
-    pub fn add_type(&mut self, typ: Type) -> TypeId {
-        if let Some(&existing_type_id) = self.existing_types_mapping.get(&typ) {
-            return existing_type_id;
+    pub fn add_type(
+        &mut self,
+        typ: Type,
+        defn_info: Option<TypeDefnInfo>,
+        instance_info: Option<GenericInstanceInfo>,
+    ) -> TypeId {
+        let hash = self.hash_type(&typ, defn_info);
+        if let Entry::Occupied(entry) = self.hashes.entry(hash) {
+            let existing_id = *entry.get();
+            let existing = self.types.get(existing_id);
+            let existing_defn_info = self.defn_info.get(&existing_id);
+            if self.type_eq(&typ, existing, defn_info.as_ref(), existing_defn_info) {
+                return existing_id;
+            }
         }
 
         let t = match typ {
             Type::Enum(e) => {
                 // Enums and variants are self-referential
-                // so we handle them specially
-                let enum_type_id = self.add_or_resolve_enum(e, None);
+                // so we do extra work to ensure all the self-references are correct
+                let enum_type_id = self.add_or_resolve_enum(e, None, defn_info, instance_info);
                 enum_type_id
             }
             Type::EnumVariant(_ev) => {
                 panic!("EnumVariant cannot be directly interned; intern the Enum instead")
             }
             _ => {
-                let type_id = self.next_type_id();
-                self.types.push(typ.clone());
-                self.existing_types_mapping.insert(typ, type_id);
+                let type_id = self.types.add(typ);
+                self.hashes.insert(hash, type_id);
+
+                // 3 AoS fields to handle
+                // pub layouts: Pool<Layout, TypeId>,
+                // pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
+                // pub instance_info: Pool<Option<GenericInstanceInfo>, TypeId>,
+
+                let layout = self.compute_type_layout(type_id);
+                self.layouts.add(layout);
 
                 let variable_counts = self.count_type_variables(type_id);
                 self.type_variable_counts.add(variable_counts);
 
-                let layout = self.compute_type_layout(type_id);
-                self.layouts.add(layout);
+                self.instance_info.add(instance_info);
+
+                if let Some(defn_info) = defn_info {
+                    self.defn_info.insert(type_id, defn_info);
+                }
 
                 type_id
             }
         };
         debug_assert_eq!(self.layouts.len(), self.types.len());
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
+        debug_assert_eq!(self.instance_info.len(), self.types.len());
 
         t
     }
 
-    fn add_or_resolve_enum(&mut self, mut e: TypedEnum, type_id_to_use: Option<TypeId>) -> TypeId {
+    fn add_or_resolve_enum(
+        &mut self,
+        mut e: TypedEnum,
+        type_id_to_use: Option<TypeId>,
+        defn_info: Option<TypeDefnInfo>,
+        instance_info: Option<GenericInstanceInfo>,
+    ) -> TypeId {
         // Enums and variants are self-referential
         // so we handle them specially
         let next_type_id = self.next_type_id();
@@ -1046,38 +1008,60 @@ impl TypePool {
             Some(type_id) => type_id,
         };
 
-        let defn_id = e.defn_id;
-
         for v in e.variants.make_mut().iter_mut() {
             let variant_id = TypeId(next_type_id.0.saturating_add(v.index));
             v.my_type_id = variant_id;
             v.enum_type_id = enum_type_id;
             let variant = Type::EnumVariant(v.clone());
-            self.types.push(variant.clone());
-            self.existing_types_mapping.insert(variant, variant_id);
+            let actual_id = self.types.add(variant);
+            debug_assert_eq!(variant_id, actual_id);
+
+            // Likely unneeded since we never insert variants directly
+            // let variant_hash = self.hash(variant);
+            // self.hashes.insert(variant_hash, variant_id);
+
             let variant_variable_counts = self.count_type_variables(variant_id);
             self.type_variable_counts.add(variant_variable_counts);
 
-            if let Some(defn_id) = defn_id {
-                self.types_to_defns.insert(v.my_type_id, defn_id);
+            self.instance_info.add(instance_info.clone());
+
+            if let Some(defn_info) = defn_info {
+                self.defn_info.insert(v.my_type_id, defn_info);
             }
         }
 
-        self.existing_types_mapping.insert(Type::Enum(e.clone()), enum_type_id);
+        let enum_type = Type::Enum(e);
+        let enum_hash = self.hash_type(&enum_type, defn_info);
+        self.hashes.insert(enum_hash, enum_type_id);
         match type_id_to_use {
             None => {
                 // Inserting a new type
-                self.types.push(Type::Enum(e));
+                let type_id = self.types.add(enum_type);
 
                 let variable_counts = self.count_type_variables(enum_type_id);
                 self.type_variable_counts.add(variable_counts);
+
+                self.instance_info.add(instance_info);
+
+                if let Some(defn_info) = defn_info {
+                    self.defn_info.insert(type_id, defn_info);
+                }
             }
             Some(_unresolved_type_id) => {
                 // We're updating unresolved_type_id to point to the enum.
-                *self.get_mut(enum_type_id) = Type::Enum(e);
+
+                // Remove stale hash
+                // No real need to do this since no one will ever collide with the old 'Unresolved'
+                // type as they are hashed by their unique AST ID, basically making them unique
+                // let old = self.get(enum_type_id);
+                // let old_hash = self.hash(old);
+                // self.hashes.remove(&old_hash);
+
+                *self.get_mut(enum_type_id) = enum_type;
 
                 let variable_counts = self.count_type_variables(enum_type_id);
                 *self.type_variable_counts.get_mut(enum_type_id) = variable_counts;
+                *self.instance_info.get_mut(enum_type_id) = instance_info;
             }
         };
 
@@ -1090,11 +1074,13 @@ impl TypePool {
             Some(_) => *self.layouts.get_mut(enum_type_id) = layout,
         };
         for _ in 0..variant_count {
+            // We always add variants, even
             self.layouts.add(layout);
         }
 
         debug_assert_eq!(self.types.len(), self.layouts.len());
         debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
+        debug_assert_eq!(self.types.len(), self.instance_info.len());
 
         enum_type_id
     }
@@ -1104,30 +1090,43 @@ impl TypePool {
         parsed_id: ParsedTypeDefnId,
         info: TypeDefnInfo,
     ) -> TypeId {
-        let defn_id = self.add_defn(info);
-        let type_id = self.add_type(Type::Unresolved(parsed_id));
+        let type_id = self.add_type(Type::Unresolved(parsed_id), Some(info), None);
         self.ast_type_defn_mapping.insert(parsed_id, type_id);
-        self.types_to_defns.insert(type_id, defn_id);
         type_id
     }
 
-    pub fn resolve_unresolved(&mut self, unresolved_type_id: TypeId, type_value: Type) {
-        let typ = self.get_mut(unresolved_type_id);
-        if typ.as_unresolved().is_none() {
-            panic!("Tried to resolve a type that was not unresolved: {:?}", typ);
-        }
+    pub fn resolve_unresolved(
+        &mut self,
+        unresolved_type_id: TypeId,
+        type_value: Type,
+        instance_info: Option<GenericInstanceInfo>,
+    ) {
+        let defn_info = self.defn_info.get(&unresolved_type_id).copied();
         match type_value {
             Type::Enum(e) => {
-                self.add_or_resolve_enum(e, Some(unresolved_type_id));
+                self.add_or_resolve_enum(e, Some(unresolved_type_id), defn_info, instance_info);
             }
             _ => {
-                *typ = type_value.clone();
+                let hash = self.hash_type(&type_value, defn_info);
+                let typ = self.get_mut(unresolved_type_id);
+                if typ.as_unresolved().is_none() {
+                    panic!("Tried to resolve a type that was not unresolved: {:?}", typ);
+                }
+                *typ = type_value;
+                self.hashes.insert(hash, unresolved_type_id);
                 // FIXME: Adding a type is a mess, since we have all these places to update
                 // and we have to do it differently if we're resolving vs adding new.
-                self.existing_types_mapping.insert(type_value, unresolved_type_id);
+                // ...
+                // HARD AGREE 4 months later!
+                // Checklist is:
+                // - manage the hash
+                // - Update the 3 SoA fields: variable counts, layout, and instance_info
+                // - Manage both the resolve vs insert paths
+                // - Handle enums since they are self-referential
 
                 let variable_counts = self.count_type_variables(unresolved_type_id);
                 *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
+                *self.instance_info.get_mut(unresolved_type_id) = instance_info;
 
                 let layout = self.compute_type_layout(unresolved_type_id);
                 *self.layouts.get_mut(unresolved_type_id) = layout;
@@ -1156,28 +1155,23 @@ impl TypePool {
         self.add_anon(Type::Static(StaticType { inner_type_id, value_id }))
     }
 
-    pub fn add(&mut self, typ: Type, defn_id: Option<TypeDefnId>) -> TypeId {
-        let type_id = self.add_type(typ);
-        if let Some(defn_id) = defn_id {
-            self.types_to_defns.insert(type_id, defn_id);
-        };
+    pub fn add(
+        &mut self,
+        typ: Type,
+        defn_info: Option<TypeDefnInfo>,
+        instance_info: Option<GenericInstanceInfo>,
+    ) -> TypeId {
+        let type_id = self.add_type(typ, defn_info, instance_info);
         type_id
     }
 
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
-        self.add_type(typ)
-    }
-
-    pub fn add_defn(&mut self, info: TypeDefnInfo) -> TypeDefnId {
-        if let Some(existing) = self.existing_defns.get(&info) {
-            return *existing;
-        }
-        self.defns.add(info)
+        self.add_type(typ, None, None)
     }
 
     #[inline]
     pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
-        &self.types[type_id.0.get() as usize - 1]
+        self.types.get(type_id)
     }
 
     #[inline]
@@ -1249,43 +1243,12 @@ impl TypePool {
         }
     }
 
-    pub fn get_generic_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
-        match self.get_no_follow(type_id) {
-            Type::Enum(e) => e.generic_instance_info.as_ref(),
-            Type::EnumVariant(ev) => self.get_generic_instance_info(ev.enum_type_id),
-            Type::Struct(s) => s.generic_instance_info.as_ref(),
-            Type::Static(_stat) => None,
-            Type::Unit => None,
-            Type::Char => None,
-            Type::Integer(_) => None,
-            Type::Float(_) => None,
-            Type::Bool => None,
-            Type::Pointer => None,
-            Type::Reference(_) => None,
-            Type::TypeParameter(_) => None,
-            Type::FunctionTypeParameter(_) => None,
-            Type::InferenceHole(_) => None,
-            Type::Never => None,
-            Type::Generic(_gen) => None,
-            Type::Function(_) => None,
-            Type::FunctionPointer(_) => None,
-            Type::Lambda(_) => None,
-            Type::LambdaObject(_) => None,
-            Type::Unresolved(_) => None,
-            Type::RecursiveReference(_) => None,
-            Type::Array(_) => None,
-        }
-    }
-
-    pub fn get_defn_id(&self, type_id: TypeId) -> Option<TypeDefnId> {
-        self.types_to_defns.get(&type_id).copied()
+    pub fn get_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
+        self.instance_info.get(type_id).as_ref()
     }
 
     pub fn get_defn_info(&self, type_id: TypeId) -> Option<TypeDefnInfo> {
-        match self.types_to_defns.get(&type_id) {
-            Some(info_id) => Some(*self.defns.get(*info_id)),
-            None => None,
-        }
+        self.defn_info.get(&type_id).copied()
     }
 
     pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
@@ -1311,11 +1274,7 @@ impl TypePool {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_anon(Type::Struct(StructType {
-            fields: eco_vec![],
-            defn_id: None,
-            generic_instance_info: None,
-        }))
+        self.add_anon(Type::Struct(StructType { fields: eco_vec![] }))
     }
 
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
@@ -1332,11 +1291,7 @@ impl TypePool {
             StructTypeField { name: identifiers.builtins.fn_ptr, type_id: fn_ptr_type },
             StructTypeField { name: identifiers.builtins.env_ptr, type_id: POINTER_TYPE_ID },
         ];
-        let struct_representation = self.add_anon(Type::Struct(StructType {
-            fields,
-            defn_id: None,
-            generic_instance_info: None,
-        }));
+        let struct_representation = self.add_anon(Type::Struct(StructType { fields }));
         self.add_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
@@ -1345,11 +1300,7 @@ impl TypePool {
     }
 
     pub fn get_mut(&mut self, type_id: TypeId) -> &mut Type {
-        &mut self.types[type_id.0.get() as usize - 1]
-    }
-
-    pub fn swap(&mut self, type1: TypeId, type2: TypeId) {
-        self.types.swap(type1.0.get() as usize - 1, type2.0.get() as usize - 1);
+        self.types.get_mut(type_id)
     }
 
     pub fn iter_ids(&self) -> impl Iterator<Item = TypeId> {
@@ -1642,4 +1593,71 @@ impl TypePool {
             Type::Array(_) => true,
         }
     }
+
+    pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
+        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == LIST_TYPE_ID {
+                Some(ListType { element_type: spec_info.type_args[0] })
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
+        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == BUFFER_TYPE_ID {
+                Some(spec_info.type_args[0])
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_as_view_instance(&self, type_id: TypeId) -> Option<TypeId> {
+        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == VIEW_TYPE_ID {
+                Some(spec_info.type_args[0])
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
+        if let Some(info) = self.get_instance_info(type_id) {
+            if info.generic_parent == LIST_TYPE_ID {
+                Some((info.type_args[0], ContainerKind::List))
+            } else if info.generic_parent == BUFFER_TYPE_ID {
+                Some((info.type_args[0], ContainerKind::Buffer))
+            } else if info.generic_parent == VIEW_TYPE_ID {
+                Some((info.type_args[0], ContainerKind::View))
+            } else {
+                None
+            }
+        } else if let Type::Array(array_type) = self.types.get(type_id) {
+            Some((array_type.element_type, ContainerKind::Array(type_id)))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
+        self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
+            if spec_info.generic_parent == OPTIONAL_TYPE_ID {
+                Some(spec_info.type_args[0])
+            } else {
+                None
+            }
+        })
+    }
+}
+
+// Talks about the 4 kinds of contiguous 'collection' / 'container' types that
+// the compiler knows about
+pub enum ContainerKind {
+    Array(TypeId),
+    Buffer,
+    View,
+    List,
 }

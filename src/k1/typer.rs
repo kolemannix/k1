@@ -2277,13 +2277,12 @@ pub struct TypedProgram {
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
         let types = TypePool {
-            types: Vec::with_capacity(8192),
-            existing_types_mapping: FxHashMap::new(),
+            types: Pool::with_capacity("types", 8192),
+            hashes: FxHashMap::new(),
             layouts: Pool::with_capacity("type_layouts", 8192),
             type_variable_counts: Pool::with_capacity("type_variable_counts", 8192),
-            types_to_defns: FxHashMap::new(),
-            existing_defns: FxHashMap::new(),
-            defns: Pool::with_capacity("type_defns", 4096),
+            defn_info: FxHashMap::new(),
+            instance_info: Pool::with_capacity("instance_info", 8192),
             ast_type_defn_mapping: FxHashMap::new(),
             ast_ability_mapping: FxHashMap::new(),
             builtins: BuiltinTypes {
@@ -2328,7 +2327,7 @@ impl TypedProgram {
             types,
             globals: Pool::with_capacity("typed_globals", 4096),
             exprs: Pool::with_capacity("typed_exprs", 65536),
-            stmts: Pool::with_capacity("typed_stmts", 8192),
+            stmts: Pool::with_capacity("typed_stmts", 8192 << 1),
             static_values: StaticValuePool::with_capacity(8192),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
@@ -2743,7 +2742,8 @@ impl TypedProgram {
             _other => {
                 return failf!(
                     parsed_type_defn.span,
-                    "Non-alias type definition must be a struct or enum or builtin; perhaps you meant to create an alias `deftype alias <name> = <type>`"
+                    "Non-alias type definition must be a struct or enum or builtin; not a {}. Perhaps you meant to create an alias `deftype alias <name> = <type>`",
+                    self.type_id_to_string(rhs_type_id)
                 );
             }
         };
@@ -2768,7 +2768,7 @@ impl TypedProgram {
                 inner: rhs_type_id,
                 specializations: FxHashMap::with_capacity(16),
             };
-            self.types.resolve_unresolved(my_type_id, Type::Generic(gen_type));
+            self.types.resolve_unresolved(my_type_id, Type::Generic(gen_type), None);
             my_type_id
         } else {
             my_type_id
@@ -2826,7 +2826,7 @@ impl TypedProgram {
                     }
                     _ => return failf!(*span, "Unknown builtin type id '{}'", defn_type_id),
                 };
-                self.types.resolve_unresolved(defn_type_id, type_value);
+                self.types.resolve_unresolved(defn_type_id, type_value, None);
                 Ok(defn_type_id)
             }
             ParsedTypeExpr::Struct(struct_defn) => {
@@ -2858,14 +2858,15 @@ impl TypedProgram {
                     fields.push(StructTypeField { name: ast_field.name, type_id: ty })
                 }
 
-                let defn_id = context
-                    .direct_unresolved_target_type
-                    .and_then(|t| self.types.types_to_defns.get(&t))
-                    .copied();
-                let struct_defn =
-                    Type::Struct(StructType { fields, defn_id, generic_instance_info: None });
-                let type_id =
-                    self.add_or_resolve_type(context.direct_unresolved_target_type, struct_defn);
+                let defn_info =
+                    context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
+                let struct_defn = Type::Struct(StructType { fields });
+                let type_id = self.add_or_resolve_type(
+                    context.direct_unresolved_target_type,
+                    struct_defn,
+                    defn_info,
+                    None,
+                );
                 Ok(type_id)
             }
             ParsedTypeExpr::TypeApplication(_ty_app) => {
@@ -3026,26 +3027,23 @@ impl TypedProgram {
                     };
                     variants.push(variant);
                 }
-                let defn_id = context
-                    .direct_unresolved_target_type
-                    .and_then(|t| self.types.types_to_defns.get(&t))
-                    .copied();
-                let enum_type = Type::Enum(TypedEnum {
-                    variants,
-                    defn_id,
-                    generic_instance_info: None,
-                    ast_node: type_expr_id.into(),
-                    tag_type,
-                });
-                let enum_type_id =
-                    self.add_or_resolve_type(context.direct_unresolved_target_type, enum_type);
+                let defn_info =
+                    context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
+                let enum_type =
+                    Type::Enum(TypedEnum { variants, ast_node: type_expr_id.into(), tag_type });
+                let enum_type_id = self.add_or_resolve_type(
+                    context.direct_unresolved_target_type,
+                    enum_type,
+                    defn_info,
+                    None,
+                );
                 Ok(enum_type_id)
             }
             ParsedTypeExpr::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
                 let base_type =
                     self.eval_type_expr_ext(dot_acc.base, scope_id, context.descended())?;
-                if let Some(spec_info) = self.types.get_generic_instance_info(base_type) {
+                if let Some(spec_info) = self.types.get_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     if let Some(matching_type_var_pos) = self
                         .named_types
@@ -3306,11 +3304,17 @@ impl TypedProgram {
         }
     }
 
-    fn add_or_resolve_type(&mut self, defn_type_id: Option<TypeId>, type_value: Type) -> TypeId {
+    fn add_or_resolve_type(
+        &mut self,
+        defn_type_id: Option<TypeId>,
+        type_value: Type,
+        defn_info: Option<TypeDefnInfo>,
+        instance_info: Option<GenericInstanceInfo>,
+    ) -> TypeId {
         match defn_type_id {
-            None => self.types.add_type(type_value),
+            None => self.types.add_type(type_value, defn_info, instance_info),
             Some(t) => {
-                self.types.resolve_unresolved(t, type_value);
+                self.types.resolve_unresolved(t, type_value, instance_info);
                 t
             }
         }
@@ -3396,17 +3400,15 @@ impl TypedProgram {
                     combined_fields.push(*field);
                 }
 
-                let defn_id = context
-                    .direct_unresolved_target_type
-                    .and_then(|t| self.types.types_to_defns.get(&t))
-                    .copied();
-                let new_struct = Type::Struct(StructType {
-                    fields: combined_fields,
-                    defn_id,
-                    generic_instance_info: None,
-                });
-                let type_id =
-                    self.add_or_resolve_type(context.direct_unresolved_target_type, new_struct);
+                let defn_info =
+                    context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
+                let new_struct = Type::Struct(StructType { fields: combined_fields });
+                let type_id = self.add_or_resolve_type(
+                    context.direct_unresolved_target_type,
+                    new_struct,
+                    defn_info,
+                    None,
+                );
 
                 Ok(Some(type_id))
             }
@@ -3433,17 +3435,15 @@ impl TypedProgram {
                 let mut new_fields = struct1.fields.clone();
                 new_fields.retain(|f| !struct2.fields.iter().any(|sf| sf.name == f.name));
 
-                let defn_id = context
-                    .direct_unresolved_target_type
-                    .and_then(|t| self.types.types_to_defns.get(&t))
-                    .copied();
-                let new_struct = Type::Struct(StructType {
-                    fields: new_fields,
-                    defn_id,
-                    generic_instance_info: None,
-                });
-                let type_id =
-                    self.add_or_resolve_type(context.direct_unresolved_target_type, new_struct);
+                let defn_info =
+                    context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
+                let new_struct = Type::Struct(StructType { fields: new_fields });
+                let type_id = self.add_or_resolve_type(
+                    context.direct_unresolved_target_type,
+                    new_struct,
+                    defn_info,
+                    None,
+                );
                 Ok(Some(type_id))
             }
             _ => Ok(None),
@@ -3552,7 +3552,7 @@ impl TypedProgram {
             }
             None => {
                 debug_assert!(gen_type.params.len() == type_arguments.len());
-                let defn_id = self.types.get_defn_id(generic_type).unwrap();
+                let defn_info = self.types.get_defn_info(generic_type).unwrap();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
                 let substitution_pairs: SV8<TypeSubstitutionPair> = self
@@ -3572,7 +3572,7 @@ impl TypedProgram {
                     inner,
                     &substitution_pairs,
                     Some(generic_type),
-                    Some(defn_id),
+                    Some(defn_info),
                 );
                 //For working on recursive generics
                 //if specialized_type == inner {
@@ -3580,10 +3580,10 @@ impl TypedProgram {
                 //}
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
-                        &self.types.get_generic_instance_info(specialized_type).unwrap().type_args;
+                        &self.types.get_instance_info(specialized_type).unwrap().type_args;
                     eprintln!(
                         "instantiated {} with params {} got expanded type: {}",
-                        self.ident_str(self.types.defns.get(defn_id).name),
+                        self.ident_str(defn_info.name),
                         self.pretty_print_types(inst_info, ", "),
                         self.type_id_to_string_ext(specialized_type, true)
                     );
@@ -3609,8 +3609,8 @@ impl TypedProgram {
         type_id: TypeId,
         substitution_pairs: &[TypeSubstitutionPair],
         generic_parent_to_attach: Option<TypeId>,
-        defn_info_to_attach: Option<TypeDefnId>,
-        // TODO: full support
+        defn_info_to_attach: Option<TypeDefnInfo>,
+        // TODO: for full recursive types support, we need breadcrumbs
         // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
         // TODO: New strategy to support co-recursive types aka recursive families
@@ -3668,7 +3668,7 @@ impl TypedProgram {
         //
         // This happens when specializing a type that contains an Opt[T], for example.
         // This lets us hit our cache as well
-        if let Some(spec_info) = self.types.get_generic_instance_info(type_id) {
+        if let Some(spec_info) = self.types.get_instance_info(type_id) {
             // A,   B,    T
             // int, bool, char
             // Opt[T] -> Opt[char]
@@ -3699,9 +3699,8 @@ impl TypedProgram {
             Type::Struct(struc) => {
                 let mut new_fields = struc.fields.clone();
                 let mut any_change = false;
-                let original_defn_info = struc.defn_id;
-                let defn_id_to_use = defn_info_to_attach.or(original_defn_info);
-                let original_instance_info = struc.generic_instance_info.clone();
+                let original_defn_info = self.types.get_defn_info(type_id);
+                let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
                 for field in new_fields.make_mut().iter_mut() {
                     let new_field_type_id =
                         self.substitute_in_type(field.type_id, substitution_pairs);
@@ -3716,14 +3715,14 @@ impl TypedProgram {
                             generic_parent: parent,
                             type_args: substitution_pairs.iter().map(|p| p.to).collect(),
                         })
-                        .or(original_instance_info);
+                        .or_else(|| self.types.get_instance_info(type_id).cloned());
 
-                    let specialized_struct = StructType {
-                        fields: new_fields,
-                        defn_id: defn_id_to_use,
+                    let specialized_struct = StructType { fields: new_fields };
+                    self.types.add(
+                        Type::Struct(specialized_struct),
+                        defn_info_to_use,
                         generic_instance_info,
-                    };
-                    self.types.add(Type::Struct(specialized_struct), defn_id_to_use)
+                    )
                 } else {
                     type_id
                 }
@@ -3732,9 +3731,8 @@ impl TypedProgram {
                 let mut new_variants = e.variants.clone();
                 let mut any_changed = false;
                 let original_ast_node = e.ast_node;
-                let original_defn_info = self.types.get_defn_id(type_id);
-                let defn_id_to_use = defn_info_to_attach.or(original_defn_info);
-                let original_instance_info = e.generic_instance_info.clone();
+                let original_defn_info = self.types.get_defn_info(type_id);
+                let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
                 let original_explicit_tag_type = e.tag_type;
                 for variant in new_variants.make_mut().iter_mut() {
                     let new_payload_id = variant.payload.map(|payload_type_id| {
@@ -3751,15 +3749,17 @@ impl TypedProgram {
                             generic_parent: parent,
                             type_args: substitution_pairs.iter().map(|p| p.to).collect(),
                         })
-                        .or(original_instance_info);
+                        .or_else(|| self.types.get_instance_info(type_id).cloned());
                     let new_enum = TypedEnum {
                         variants: new_variants,
-                        defn_id: defn_id_to_use,
                         ast_node: original_ast_node,
-                        generic_instance_info,
                         tag_type: original_explicit_tag_type,
                     };
-                    let new_enum_id = self.types.add(Type::Enum(new_enum), defn_id_to_use);
+                    let new_enum_id = self.types.add(
+                        Type::Enum(new_enum),
+                        defn_info_to_use,
+                        generic_instance_info,
+                    );
                     new_enum_id
                 } else {
                     type_id
@@ -4095,11 +4095,10 @@ impl TypedProgram {
                         Some((named_type, _)) => {
                             // Consider generics: 'Opt.Some' applies to all Opt[T]s, so we consider
                             // the 'base' type
-                            let base_type =
-                                match self.types.get_generic_instance_info(target_type_id) {
-                                    Some(info) => info.generic_parent,
-                                    None => target_type_id,
-                                };
+                            let base_type = match self.types.get_instance_info(target_type_id) {
+                                Some(info) => info.generic_parent,
+                                None => target_type_id,
+                            };
                             if base_type != named_type {
                                 return failf!(
                                     enum_pattern.span,
@@ -4458,10 +4457,9 @@ impl TypedProgram {
             return Ok(());
         }
 
-        if let (Some(spec1), Some(spec2)) = (
-            self.types.get_generic_instance_info(expected),
-            self.types.get_generic_instance_info(actual),
-        ) {
+        if let (Some(spec1), Some(spec2)) =
+            (self.types.get_instance_info(expected), self.types.get_instance_info(actual))
+        {
             return if spec1.generic_parent == spec2.generic_parent {
                 for (index, (exp_param, act_param)) in
                     spec1.type_args.iter().zip(spec2.type_args.iter()).enumerate()
@@ -4986,6 +4984,8 @@ impl TypedProgram {
         id
     }
 
+    // TODO(perf) registers in profile, EcoVecs
+    // We could put ability impl functions in a pool, done, since we make so many in generic code
     fn add_constrained_ability_impl(
         &mut self,
         type_variable_id: TypeId,
@@ -6037,8 +6037,8 @@ impl TypedProgram {
                     span,
                 })))
             }
-            t @ Type::Enum(_opt_type) => {
-                if let Some(opt) = t.as_opt_instance() {
+            Type::Enum(_opt_type) => {
+                if let Some(opt_inner_type) = self.types.get_as_opt_instance(struct_type_id) {
                     if !field_access.is_coalescing {
                         return failf!(
                             span,
@@ -6064,12 +6064,12 @@ impl TypedProgram {
                     );
                     let has_value = self.synth_typed_function_call(
                         self.ident_opt_has_value(span),
-                        &[opt.inner_type],
+                        &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
                     )?;
 
-                    let Type::Struct(struct_type) = self.types.get(opt.inner_type) else {
+                    let Type::Struct(struct_type) = self.types.get(opt_inner_type) else {
                         return failf!(
                             span,
                             "?. must be used on optional structs, got {}",
@@ -6082,14 +6082,14 @@ impl TypedProgram {
                                 span,
                                 "Field {} not found on struct {}",
                                 self.ast.idents.get_name(field_access.field_name),
-                                self.type_id_to_string(opt.inner_type)
+                                self.type_id_to_string(opt_inner_type)
                             )
                         })?;
                     let field_type = target_field.type_id;
                     let field_name = target_field.name;
                     let opt_unwrap = self.synth_typed_function_call(
                         self.ident_opt_get(span),
-                        &[opt.inner_type],
+                        &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
                     )?;
@@ -6101,7 +6101,7 @@ impl TypedProgram {
                             span,
                             is_referencing: false,
                             result_type: field_type,
-                            struct_type: opt.inner_type,
+                            struct_type: opt_inner_type,
                         }));
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
@@ -6636,30 +6636,17 @@ impl TypedProgram {
         list_expr: &ParsedList,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        // List literals can become Arrays, Buffers, Views, or Lists, depending on what is expected
-        enum ListKind {
-            Array(TypeId),
-            Buffer,
-            View,
-            List,
-        }
-        let (expected_element_type, list_kind) = match &ctx.expected_type_id {
-            Some(type_id) => match self.types.get(*type_id) {
-                s @ Type::Struct(_) if s.as_list_instance().is_some() => {
-                    (Some(s.as_list_instance().unwrap().element_type), ListKind::List)
+        let (expected_element_type, list_kind) = match ctx.expected_type_id.as_ref() {
+            Some(&type_id) => {
+                if let Some((element_type, container_kind)) =
+                    self.types.get_as_container_instance(type_id)
+                {
+                    (Some(element_type), container_kind)
+                } else {
+                    (None, ContainerKind::List)
                 }
-                s @ Type::Struct(_) if s.as_buffer_instance().is_some() => {
-                    (Some(s.as_buffer_instance().unwrap().type_args[0]), ListKind::Buffer)
-                }
-                s @ Type::Struct(_) if s.as_view_instance().is_some() => {
-                    (Some(s.as_view_instance().unwrap().type_args[0]), ListKind::View)
-                }
-                Type::Array(array_type) => {
-                    (Some(array_type.element_type), ListKind::Array(*type_id))
-                }
-                _ => (None, ListKind::List),
-            },
-            None => (None, ListKind::List),
+            }
+            None => (None, ContainerKind::List),
         };
         let span = list_expr.span;
         let parsed_elements = &list_expr.elements;
@@ -6710,20 +6697,20 @@ impl TypedProgram {
         let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
         let count_expr = self.synth_uword(element_count, span);
         let make_dest_coll = match list_kind {
-            ListKind::List => self.synth_typed_function_call(
+            ContainerKind::List => self.synth_typed_function_call(
                 qident!(self, span, ["List"], "withCapacity"),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
             )?,
-            ListKind::Buffer | ListKind::View => self.synth_typed_function_call(
+            ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
                 qident!(self, span, ["Buffer"], "_allocate"),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
             )?,
             // Unlike the others, the array literal should go on the stack!
-            ListKind::Array(array_type_id) => self.synth_typed_function_call(
+            ContainerKind::Array(array_type_id) => self.synth_typed_function_call(
                 qident!(self, span, ["core", "mem"], "zeroed"),
                 &[array_type_id],
                 &[],
@@ -6731,9 +6718,9 @@ impl TypedProgram {
             )?,
         };
         let is_referencing_let = match list_kind {
-            ListKind::Array(_) => true,
-            ListKind::Buffer | ListKind::View => false,
-            ListKind::List => true,
+            ContainerKind::Array(_) => true,
+            ContainerKind::Buffer | ContainerKind::View => false,
+            ContainerKind::List => true,
         };
         let dest_coll_variable = self.synth_variable_defn(
             get_ident!(self, "dest"),
@@ -6747,19 +6734,19 @@ impl TypedProgram {
         for (index, element_value_expr) in elements.into_iter().enumerate() {
             let index_expr = self.synth_uword(index, span);
             let push_call = match list_kind {
-                ListKind::List => self.synth_typed_function_call(
+                ContainerKind::List => self.synth_typed_function_call(
                     qident!(self, span, ["List"], "push"),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, element_value_expr],
                     list_lit_ctx,
                 )?,
-                ListKind::Buffer | ListKind::View => self.synth_typed_function_call(
+                ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
                     qident!(self, span, ["Buffer"], "set"),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
                     list_lit_ctx,
                 )?,
-                ListKind::Array(array_type_id) => {
+                ContainerKind::Array(array_type_id) => {
                     // fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit
                     let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
                     self.synth_typed_function_call(
@@ -6777,15 +6764,15 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut list_lit_block, dest_coll_variable.defn_stmt);
         list_lit_block.statements.extend(set_elements_statements);
         let final_expression = match list_kind {
-            ListKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
-            ListKind::Buffer => dest_coll_variable.variable_expr,
-            ListKind::View => self.synth_typed_function_call(
+            ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
+            ContainerKind::Buffer => dest_coll_variable.variable_expr,
+            ContainerKind::View => self.synth_typed_function_call(
                 qident!(self, span, ["View"], "wrapBuffer"),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
             )?,
-            ListKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
+            ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
         self.add_expr_id_to_block(&mut list_lit_block, final_expression);
         Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
@@ -7060,8 +7047,7 @@ impl TypedProgram {
             field_values.push(StructField { name: ast_field.name, expr });
         }
 
-        let struct_type =
-            StructType { fields: field_defns, defn_id: None, generic_instance_info: None };
+        let struct_type = StructType { fields: field_defns };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct =
             StructLiteral { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
@@ -7083,7 +7069,7 @@ impl TypedProgram {
         };
         let expected_struct_id = original_expected_struct_id;
         let expected_struct = self.types.get(expected_struct_id).expect_struct().clone();
-        let expected_struct_defn_id = expected_struct.defn_id;
+        let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
         let ast_struct = parsed_struct.clone();
@@ -7153,7 +7139,7 @@ impl TypedProgram {
             field_values.push(StructField { name: expected_field.name, expr });
         }
 
-        let output_instance_info = match expected_struct.generic_instance_info {
+        let output_instance_info = match self.types.get_instance_info(expected_struct_id).cloned() {
             None => None,
             Some(mut gi) => {
                 if ctx.is_inference {
@@ -7207,13 +7193,12 @@ impl TypedProgram {
                 }
             }
         };
-        let output_struct = StructType {
-            fields: field_types,
-            defn_id: expected_struct_defn_id,
-            generic_instance_info: output_instance_info,
-        };
-        let output_struct_type_id =
-            self.types.add(Type::Struct(output_struct), expected_struct_defn_id);
+        let output_struct = StructType { fields: field_types };
+        let output_struct_type_id = self.types.add(
+            Type::Struct(output_struct),
+            expected_struct_defn_info,
+            output_instance_info,
+        );
 
         let typed_struct = StructLiteral {
             fields: field_values,
@@ -7595,11 +7580,8 @@ impl TypedProgram {
                 }))
             })
             .collect();
-        let environment_struct_type = self.types.add_anon(Type::Struct(StructType {
-            fields: env_fields,
-            defn_id: None,
-            generic_instance_info: None,
-        }));
+        let environment_struct_type =
+            self.types.add_anon(Type::Struct(StructType { fields: env_fields }));
         let environment_struct = self.synth_struct_expr(
             environment_struct_type,
             env_field_exprs,
@@ -8428,7 +8410,7 @@ impl TypedProgram {
         let loop_scope_id = loop_block.scope_id;
         let expected_block_type = ctx
             .expected_type_id
-            .and_then(|t| self.types.get(t).as_list_instance())
+            .and_then(|t| self.types.get_as_list_instance(t))
             .map(|list_type| list_type.element_type);
 
         let mut consequent_block = self.synth_block(loop_scope_id, iterable_span);
@@ -9782,6 +9764,7 @@ impl TypedProgram {
 
         // FIXME: ability call resolution is pretty expensive, it may be worth maintaining an index of function names -> ability,
         //        then if we hit, just ensure its in scope.
+        //        Seeing this again in profile; should do it; nocommit(2)
         let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
             .iter()
             .find_map(|ability_id| self.abilities.get(*ability_id).find_function_by_name(fn_name))
@@ -9882,8 +9865,8 @@ impl TypedProgram {
                 span,
             },
         );
-        let defn_info = self.types.get_defn_id(function_type_id);
-        self.types.add(Type::Function(function_type), defn_info)
+        let defn_info = self.types.get_defn_info(function_type_id);
+        self.types.add(Type::Function(function_type), defn_info, None)
     }
 
     fn resolve_ability_call(
@@ -10203,7 +10186,7 @@ impl TypedProgram {
                         ),
                     }
                 }?;
-                let base_enum_type_id = match self.types.get_generic_instance_info(enum_type_id) {
+                let base_enum_type_id = match self.types.get_instance_info(enum_type_id) {
                     None => enum_type_id,
                     Some(gi) => gi.generic_parent,
                 };
@@ -10258,10 +10241,7 @@ impl TypedProgram {
             let solved_or_passed_type_params: NamedTypeSlice = if type_args.is_empty() {
                 match payload_if_needed {
                     None => {
-                        match ctx
-                            .expected_type_id
-                            .map(|t| (t, self.types.get_generic_instance_info(t)))
-                        {
+                        match ctx.expected_type_id.map(|t| (t, self.types.get_instance_info(t))) {
                             Some((expected_type, Some(spec_info))) => {
                                 // We're expecting a specific instance of a generic enum
                                 if spec_info.generic_parent == base_type_id {
@@ -12403,7 +12383,7 @@ impl TypedProgram {
                         if self_.types.get_type_id_dereferenced(type_id) != companion_type_id {
                             match (
                                 self_.types.get(companion_type_id),
-                                self_.types.get_generic_instance_info(
+                                self_.types.get_instance_info(
                                     self_.types.get_type_id_dereferenced(type_id),
                                 ),
                             ) {
@@ -14148,12 +14128,8 @@ impl TypedProgram {
                 // { fields: View[{ ... }] }
                 let struct_schema_fields_view_type_id =
                     struct_schema_payload_struct.fields[0].type_id;
-                let struct_schema_field_item_struct_type_id = self
-                    .types
-                    .get(struct_schema_fields_view_type_id)
-                    .as_view_instance()
-                    .unwrap()
-                    .type_args[0];
+                let struct_schema_field_item_struct_type_id =
+                    self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
                 // { name: string), typeId: u64, offset: uword }
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: EcoVec<StaticValueId> =
@@ -14244,7 +14220,7 @@ impl TypedProgram {
                 let either_payload_struct = self.types.get(either_payload_type_id).expect_struct();
                 let variants_view_type_id = either_payload_struct.fields[1].type_id;
                 let variant_struct_type_id =
-                    self.types.get(variants_view_type_id).as_view_instance().unwrap().type_args[0];
+                    self.types.get_as_view_instance(variants_view_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
                 let tag_type_value_id = self.static_values.add(StaticValue::Enum(
                     TypedProgram::make_int_kind(int_kind_enum, word_enum, *tag_type),
@@ -14267,12 +14243,9 @@ impl TypedProgram {
 
                     let payload_info_opt_type_id =
                         self.types.get(variant_struct_type_id).expect_struct().fields[2].type_id;
-                    let payload_info_struct_id = self
-                        .types
-                        .get(payload_info_opt_type_id)
-                        .as_opt_instance()
-                        .unwrap()
-                        .inner_type;
+                    let payload_info_struct_id =
+                        self.types.get_as_opt_instance(payload_info_opt_type_id).unwrap();
+
                     let payload_info_value_id = match variant.payload {
                         None => synth_static_option(
                             &self.types,
@@ -14364,18 +14337,13 @@ impl TypedProgram {
                     self.types.get(function_schema_payload_type_id).expect_struct();
                 let function_params_view_field = &function_schema_payload_struct.fields[0];
                 let function_params_view_type_id = function_params_view_field.type_id;
-                let function_param_struct_type_id = self
-                    .types
-                    .get(function_params_view_type_id)
-                    .as_view_instance()
-                    .unwrap()
-                    .type_args[0];
+                let function_param_struct_type_id =
+                    self.types.get_as_view_instance(function_params_view_type_id).unwrap();
+
                 let mut params_value_ids = eco_vec![];
                 // Skipping lambda environment parameters;
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within
-                // <C-e> / <C-y>
-                // one-shot undo <C-o>u
 
                 for param in fn_type.logical_params() {
                     self.register_type_metainfo(param.type_id, span);

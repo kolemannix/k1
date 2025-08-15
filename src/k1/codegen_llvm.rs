@@ -45,10 +45,9 @@ use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValuePool;
 use crate::typer::types::{
-    BOOL_TYPE_ID, BUFFER_DATA_FIELD_NAME, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID,
-    I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
-    STRING_TYPE_ID, Type, TypeDefnInfo, TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID,
-    UNIT_TYPE_ID, UWORD_TYPE_ID,
+    BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID,
+    I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo,
+    TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId,
@@ -1032,8 +1031,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let llvm_type = self.builtin_types.ptr.as_basic_type_enum();
                 Ok(make_value_basic_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
             }
-            ts @ Type::Struct(struc) => {
-                let buffer_instance = ts.as_buffer_instance();
+            Type::Struct(struc) => {
+                let buffer_element_type = self.k1.types.get_as_buffer_instance(type_id);
                 trace!("generating llvm type for struct type {type_id}");
                 let field_count = struc.fields.len();
                 let mut field_types = Vec::with_capacity(field_count);
@@ -1042,13 +1041,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let name = self.codegen_type_name(type_id, self.k1.types.get_defn_info(type_id));
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
-                    let debug_type = if buffer_instance.is_some()
-                        && field.name == self.k1.ast.idents.get(BUFFER_DATA_FIELD_NAME).unwrap()
+                    let debug_type = if buffer_element_type.is_some()
+                        && field.name == self.k1.ast.idents.builtins.data
                     {
-                        let buffer_instance = buffer_instance.unwrap();
-                        let buffer_type_argument = buffer_instance.type_args[0];
                         let element_type =
-                            self.codegen_type_inner(buffer_type_argument, depth + 1)?;
+                            self.codegen_type_inner(buffer_element_type.unwrap(), depth + 1)?;
                         let array_ptr_di_type = self.make_pointer_type(element_type.debug_type());
                         array_ptr_di_type.di_type
                     } else {
@@ -1096,7 +1093,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             Type::FunctionPointer(fp) => {
                 let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?;
-                // TODO: Dwarf info for function pointers
                 let llvm_function_type = self.make_llvm_function_type(fp.function_type_id)?;
                 let subroutine_type = self.debug.debug_builder.create_subroutine_type(
                     self.debug.current_file(),
@@ -1854,8 +1850,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 enum_value.as_basic_value_enum()
             }
             StaticValue::View(view) => {
-                let view_type = self.k1.types.get(view.type_id);
-                let element_type = view_type.as_view_instance().unwrap().type_args[0];
+                let element_type = self.k1.types.get_as_view_instance(view.type_id).unwrap();
                 let element_backend_type = self.codegen_type(element_type)?;
                 let element_basic_type = element_backend_type.rich_repr_type();
                 let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
@@ -2002,8 +1997,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 enum_ptr.into()
             }
             StaticValue::View(view) => {
-                let view_type = self.k1.types.get(view.type_id);
-                let element_type = view_type.as_view_instance().unwrap().type_args[0];
+                let element_type = self.k1.types.get_as_view_instance(view.type_id).unwrap();
                 let element_backend_type = self.codegen_type(element_type)?;
                 let element_basic_type = element_backend_type.rich_repr_type();
 
