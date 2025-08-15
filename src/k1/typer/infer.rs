@@ -918,10 +918,9 @@ impl TypedProgram {
 
         // This special case is removable, all tests pass, but I believe its currently
         // a slight optimization, and would be more of one with more complex types
-        if let (Some(passed_info), Some(arg_info)) = (
-            self.types.get_generic_instance_info(passed_type),
-            self.types.get_generic_instance_info(slot_type),
-        ) {
+        if let (Some(passed_info), Some(arg_info)) =
+            (self.types.get_instance_info(passed_type), self.types.get_instance_info(slot_type))
+        {
             // expr: NewList[int] arg: NewList['0]
             if passed_info.generic_parent == arg_info.generic_parent {
                 debug!(

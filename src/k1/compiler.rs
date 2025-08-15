@@ -205,6 +205,9 @@ pub struct Args {
     #[arg(long)]
     pub debug: bool,
 
+    #[arg(long)]
+    pub profile: bool,
+
     /// Log LLVM Instruction Counts
     #[arg(long, default_value_t = false)]
     pub llvm_counts: bool,
@@ -294,6 +297,18 @@ pub fn compile_module(
     args: &Args,
     out_dir: &Path,
 ) -> std::result::Result<TypedProgram, CompileModuleError> {
+    let profiler_guard = if args.profile {
+        Some(
+            pprof::ProfilerGuardBuilder::default()
+                .frequency(2000)
+                .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+                .build()
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+
     let src_path = &args
         .file()
         .canonicalize()
@@ -319,7 +334,7 @@ pub fn compile_module(
         src_path.file_stem().unwrap().to_str().unwrap().to_string()
     };
 
-    let mut p = TypedProgram::new(module_name, config);
+    let mut p = TypedProgram::new(module_name.clone(), config);
 
     let lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
     let lib_dir = Path::new(&lib_dir_string);
@@ -345,6 +360,23 @@ pub fn compile_module(
         eprintln!("{}", e);
         return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
+
+    if let Some(profiler_guard) = profiler_guard {
+        if let Ok(report) = profiler_guard.report().build() {
+            let fname = format!("{}.svg", module_name);
+            eprintln!("Outputting profile flamegraph to {fname}");
+            let file = File::create(fname).unwrap();
+            let mut options = pprof::flamegraph::Options::default();
+            options.min_width = 0.02;
+            options.reverse_stack_order = true;
+            options.image_width = Some(3200);
+            options.text_truncate_direction = pprof::flamegraph::TextTruncateDirection::Left;
+            options.direction = pprof::flamegraph::Direction::Inverted;
+            options.frame_height = 20;
+            options.font_size = 10;
+            report.flamegraph_with_options(file, &mut options).unwrap();
+        }
+    }
 
     if args.dump_module {
         write_program_dump(&p);

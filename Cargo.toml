@@ -28,10 +28,11 @@ ahash = "0.8.11"
 fxhash = "0.2.1"
 scopeguard = "1.2.0"
 mimalloc = "0.1.43"
+pprof = { version = "0.15.0", features = ["flamegraph"] }
 
 # LLVM / compiler toolchain stuff
 llvm-sys = { version = "181.2.0" }
-inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.6.0", features = [ "llvm18-1"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.6.0", features = ["llvm18-1"] }
 zstd-sys = "2.0.8"
 libffi = "4.0.0"
 
@@ -47,6 +48,7 @@ tracing-appender = { version = "0.2", optional = true }
 # raylib gui only deps
 raylib = { version = "5.0.1", optional = true}
 ecow = "0.2.3"
+memmap2 = "0.9.7"
 
 [[bin]]
 name = "test_suite"

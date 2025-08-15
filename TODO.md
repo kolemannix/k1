@@ -110,6 +110,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Consider a rename of 'uword/iword'. What about `word` and `iword`.
 - [ ] implement iterator for Array
 - [ ] Do safe integer coercions automatically
+- [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
+      if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
+      either(u32, set|tagset|bitfield)?
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules

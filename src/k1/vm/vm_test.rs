@@ -159,8 +159,6 @@ mod stack_tests {
                 StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID },
                 StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID }
             ],
-            defn_id: None,
-            generic_instance_info: None,
         }));
         stack.advance_cursor(1);
         let struct_ptr = stack
