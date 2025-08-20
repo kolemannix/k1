@@ -31,12 +31,12 @@ fn test(): unit {
   assertEquals[i64](#static getPoint().z, -222);
 
   // Variable assign
-  let goodbye: static string = #static {
+  let goodbye: "Goodbye, World!" = #static {
     let mut msg = "Hello, World";
     msg = "Goodbye, World!";
     msg
   };
-  println(goodbye);
+  assertEquals[string](goodbye, "Goodbye, World!");
 
   let letAssign = #static {
     let mut i = 22;

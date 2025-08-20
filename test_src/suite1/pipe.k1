@@ -4,6 +4,6 @@ fn add(a: int, b: int): int { a + b }
 fn add1(a: int): int { a + 1 }
 
 fn test(): unit {
-  "Hello, " | string/concat("Builder!") | println;
+  "Hello, " | string/concat("Builder!") | assertEquals("Hello, Builder!");
   assert((42 | add(3) | add1 | add(4) | add1) == 51);
 }

@@ -8,7 +8,7 @@ use std::str::Chars;
 
 use crate::nz_u32_id;
 use crate::parse::FileId;
-use crate::pool::Pool;
+use crate::pool::VPool;
 use crate::typer::BinaryOpKind;
 use TokenKind as K;
 use log::debug;
@@ -31,12 +31,12 @@ impl SpanId {
 }
 
 pub struct Spans {
-    pub span_pool: Pool<Span, SpanId>,
+    pub span_pool: VPool<Span, SpanId>,
 }
 
 impl Spans {
     pub fn new() -> Spans {
-        let mut pool = Pool::with_capacity("spans", 130712);
+        let mut pool = VPool::make_mb("spans", 1024);
         pool.add(Span::NONE);
         Spans { span_pool: pool }
     }

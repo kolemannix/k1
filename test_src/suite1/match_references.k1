@@ -3,7 +3,6 @@ ns match_references;
 fn test(): unit {
   let* mut x = some(42);
   while x.* is .Some(xx) {
-    println("{xx}");
     if xx == 0 break()
     else { 
       x <- some(xx - 1);
@@ -12,17 +11,17 @@ fn test(): unit {
 
   let* point = { x: 5, y: 2 };
   if point is { x, y: 2 }* {
-    println("x is {x.*}")
+    assertEquals(x.*, 5);
   };
 
   x <- some(5);
   while x is .Some(xx)* {
-    println("{xx.*}");
     if xx.* == 0 break()
     else { 
       xx <- xx.* - 1;
     }
   };
+  assertEquals(x.*, .Some(0));
 
   use core/mem/new;
   let b: *mut *mut *mut bool = new[*mut *mut bool](new[*mut bool](new[bool](true)));

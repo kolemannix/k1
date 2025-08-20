@@ -34,7 +34,7 @@ impl TypedProgram {
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::from_ability_impl_fn(equals_implementation),
             args: smallvec![lhs, rhs],
-            type_args: SliceHandle::Empty,
+            type_args: SliceHandle::empty(),
             return_type: BOOL_TYPE_ID,
             span,
         }));

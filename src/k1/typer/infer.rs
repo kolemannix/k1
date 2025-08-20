@@ -543,7 +543,7 @@ impl TypedProgram {
                 .collect();
             for function_type_param in self
                 .existential_type_params
-                .get_slice_to_smallvec::<4>(original_function_sig.function_type_params)
+                .copy_slice_sv::<4>(original_function_sig.function_type_params)
                 .iter()
             {
                 let (corresponding_arg, corresponding_value_param) =
@@ -657,7 +657,7 @@ impl TypedProgram {
         if !original_function_sig.static_type_params.is_empty() {
             for static_type_param in self
                 .existential_type_params
-                .get_slice_to_smallvec::<4>(original_function_sig.static_type_params)
+                .copy_slice_sv::<4>(original_function_sig.static_type_params)
                 .iter()
             {
                 let (corresponding_arg, corresponding_value_param) =

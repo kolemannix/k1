@@ -56,7 +56,7 @@ use crate::parse::{
 use crate::parse::{
     Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
 };
-use crate::pool::{Pool, SliceHandle};
+use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
 use crate::{SV8, vm};
 
@@ -338,8 +338,8 @@ impl TypedAbilityKind {
     pub fn arguments(&self) -> NamedTypeSlice {
         match self {
             TypedAbilityKind::Specialized(specialization) => specialization.arguments,
-            TypedAbilityKind::Concrete => SliceHandle::Empty,
-            TypedAbilityKind::Generic { .. } => SliceHandle::Empty,
+            TypedAbilityKind::Concrete => SliceHandle::empty(),
+            TypedAbilityKind::Generic { .. } => SliceHandle::empty(),
         }
     }
 
@@ -668,9 +668,9 @@ impl FunctionSignature {
         FunctionSignature {
             name,
             function_type,
-            type_params: SliceHandle::Empty,
-            function_type_params: SliceHandle::Empty,
-            static_type_params: SliceHandle::Empty,
+            type_params: SliceHandle::empty(),
+            function_type_params: SliceHandle::empty(),
+            static_type_params: SliceHandle::empty(),
         }
     }
 
@@ -1739,7 +1739,7 @@ pub struct Namespace {
 }
 
 pub struct Namespaces {
-    pub namespaces: Pool<Namespace, NamespaceId>,
+    pub namespaces: VPool<Namespace, NamespaceId>,
 }
 
 impl Namespaces {
@@ -2219,22 +2219,22 @@ pub struct Module {
 }
 
 pub struct TypedProgram {
-    pub modules: Pool<Module, ModuleId>,
+    pub modules: VPool<Module, ModuleId>,
     pub ast: ParsedProgram,
-    functions: Pool<TypedFunction, FunctionId>,
-    pub variables: Pool<Variable, VariableId>,
+    functions: VPool<TypedFunction, FunctionId>,
+    pub variables: VPool<Variable, VariableId>,
     pub types: TypePool,
-    pub globals: Pool<TypedGlobal, TypedGlobalId>,
-    pub exprs: Pool<TypedExpr, TypedExprId>,
-    pub stmts: Pool<TypedStmt, TypedStmtId>,
+    pub globals: VPool<TypedGlobal, TypedGlobalId>,
+    pub exprs: VPool<TypedExpr, TypedExprId>,
+    pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
     pub type_names: FxHashMap<TypeId, StringId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
-    pub abilities: Pool<TypedAbility, AbilityId>,
-    pub ability_impls: Pool<TypedAbilityImpl, AbilityImplId>,
+    pub abilities: VPool<TypedAbility, AbilityId>,
+    pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
     /// Key is 'self' type
     pub ability_impl_table: FxHashMap<TypeId, Vec<AbilityImplHandle>>,
     /// Key is base ability id
@@ -2260,9 +2260,9 @@ pub struct TypedProgram {
     // Clear them after you use them, but leave the memory allocated
     buffers: TypedModuleBuffers,
 
-    pub named_types: Pool<NameAndType, NameAndTypeId>,
-    pub existential_type_params: Pool<ExistentialTypeParam, ExistentialTypeParamId>,
-    pub pattern_ctors: Pool<PatternCtor, PatternCtorId>,
+    pub named_types: VPool<NameAndType, NameAndTypeId>,
+    pub existential_type_params: VPool<ExistentialTypeParam, ExistentialTypeParamId>,
+    pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
 
     // Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
@@ -2276,13 +2276,16 @@ pub struct TypedProgram {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
+        const MAX_TYPES: usize = 131072;
         let types = TypePool {
-            types: Pool::with_capacity("types", 8192),
+            types: VPool::make_max("types", MAX_TYPES),
             hashes: FxHashMap::new(),
-            layouts: Pool::with_capacity("type_layouts", 8192),
-            type_variable_counts: Pool::with_capacity("type_variable_counts", 8192),
+
+            layouts: VPool::make_max("type_layouts", MAX_TYPES),
+            type_variable_counts: VPool::make_max("type_variable_counts", MAX_TYPES),
+            instance_info: VPool::make_max("instance_info", MAX_TYPES),
+
             defn_info: FxHashMap::new(),
-            instance_info: Pool::with_capacity("instance_info", 8192),
             ast_type_defn_mapping: FxHashMap::new(),
             ast_ability_mapping: FxHashMap::new(),
             builtins: BuiltinTypes {
@@ -2299,7 +2302,7 @@ impl TypedProgram {
         let ast = ParsedProgram::make(program_name, config);
         let root_ident = ast.idents.builtins.root_module_name;
         let mut scopes = Scopes::make(root_ident);
-        let mut namespaces = Namespaces { namespaces: Pool::with_capacity("namespaces", 256) };
+        let mut namespaces = Namespaces { namespaces: VPool::make_max("namespaces", 1024) };
         let root_namespace = Namespace {
             name: root_ident,
             scope_id: Scopes::ROOT_SCOPE_ID,
@@ -2321,21 +2324,21 @@ impl TypedProgram {
         let vm_stack_size = crate::MEGABYTE * 10;
         let vm_static_stack_size = crate::MEGABYTE;
         TypedProgram {
-            modules: Pool::with_capacity("modules", 32),
-            functions: Pool::with_capacity("typed_functions", 8192),
-            variables: Pool::with_capacity("typed_variables", 8192),
+            modules: VPool::make_max("modules", 32),
+            functions: VPool::make_max("typed_functions", 8192),
+            variables: VPool::make_max("typed_variables", 8192),
             types,
-            globals: Pool::with_capacity("typed_globals", 4096),
-            exprs: Pool::with_capacity("typed_exprs", 65536),
-            stmts: Pool::with_capacity("typed_stmts", 8192 << 1),
+            globals: VPool::make_max("typed_globals", 4096),
+            exprs: VPool::make_max("typed_exprs", 65536),
+            stmts: VPool::make_max("typed_stmts", 8192 << 1),
             static_values: StaticValuePool::with_capacity(8192),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
             errors: Vec::new(),
             namespaces,
-            abilities: Pool::with_capacity("abilities", 2048),
-            ability_impls: Pool::with_capacity("ability_impls", 4096),
+            abilities: VPool::make_max("abilities", 2048),
+            ability_impls: VPool::make_max("ability_impls", 4096),
             ability_impl_table: FxHashMap::new(),
             blanket_impls: FxHashMap::new(),
             namespace_ast_mappings: FxHashMap::with_capacity(512),
@@ -2362,9 +2365,9 @@ impl TypedProgram {
                 emitted_code: String::with_capacity(8192),
                 emit_lexer_tokens: Vec::new(),
             },
-            named_types: Pool::with_capacity("named_types", 8192),
-            existential_type_params: Pool::with_capacity("function_type_params", 4096),
-            pattern_ctors: Pool::with_capacity("pattern_ctors", 8192),
+            named_types: VPool::make_mb("named_types", 256),
+            existential_type_params: VPool::make_mb("function_type_params", 256),
+            pattern_ctors: VPool::make_max("pattern_ctors", 8192),
             vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vms: vec![
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
@@ -2479,12 +2482,14 @@ impl TypedProgram {
         //    println!("{}", typed_program);
         //}
         log::info!(
-            "typing took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
+            "module {} took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
+            src_path_name,
             typing_elapsed.as_millis(),
             self.exprs.len(),
             self.function_iter().count(),
             self.types.type_count()
         );
+
         Ok(module_id)
     }
 
@@ -5063,7 +5068,7 @@ impl TypedProgram {
         });
         self.add_ability_impl(TypedAbilityImpl {
             kind: impl_kind,
-            blanket_type_params: SliceHandle::Empty,
+            blanket_type_params: SliceHandle::empty(),
             self_type_id: type_variable_id,
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
@@ -5583,7 +5588,7 @@ impl TypedProgram {
             self.named_types.add_slice_from_copy_slice(&substituted_impl_arguments);
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind,
-            blanket_type_params: SliceHandle::Empty,
+            blanket_type_params: SliceHandle::empty(),
             self_type_id,
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
@@ -6215,7 +6220,7 @@ impl TypedProgram {
         let make_error_call = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: smallvec![get_error_call],
-            type_args: SliceHandle::Empty,
+            type_args: SliceHandle::empty(),
             return_type: block_return_type,
             span,
         }));
@@ -6466,7 +6471,7 @@ impl TypedProgram {
                     None,
                     anon_enum.variant_name,
                     anon_enum.payload,
-                    SliceHandle::Empty,
+                    SliceHandle::empty(),
                     enum_ctx,
                     span,
                 )?
@@ -7536,9 +7541,9 @@ impl TypedProgram {
                 name,
                 scope: lambda_scope_id,
                 param_variables,
-                type_params: SliceHandle::Empty,
-                function_type_params: SliceHandle::Empty,
-                static_type_params: SliceHandle::Empty,
+                type_params: SliceHandle::empty(),
+                function_type_params: SliceHandle::empty(),
+                static_type_params: SliceHandle::empty(),
                 body_block: Some(body_expr_id),
                 intrinsic_type: None,
                 linkage: Linkage::Standard,
@@ -7658,9 +7663,9 @@ impl TypedProgram {
             name,
             scope: lambda_scope_id,
             param_variables,
-            type_params: SliceHandle::Empty,
-            function_type_params: SliceHandle::Empty,
-            static_type_params: SliceHandle::Empty,
+            type_params: SliceHandle::empty(),
+            function_type_params: SliceHandle::empty(),
+            static_type_params: SliceHandle::empty(),
             body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
@@ -9153,7 +9158,7 @@ impl TypedProgram {
                     .add_slice_from_iter([ParsedCallArg::unnamed(lhs)].into_iter());
                 ParsedCall {
                     name: var.name.clone(),
-                    type_args: SliceHandle::Empty,
+                    type_args: SliceHandle::empty(),
                     args,
                     span,
                     is_method: false,
@@ -10009,7 +10014,7 @@ impl TypedProgram {
                self.namespaced_identifier_to_string(&fn_call.name),
                self.type_id_to_string(function_type_id),
                self.type_id_to_string(solved_self),
-               self.ability_impl_signature_to_string(base_ability_id, SliceHandle::Empty),
+               self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
                msg
            )
         })?;
@@ -10601,7 +10606,7 @@ impl TypedProgram {
                         })?;
                     typechecked_args.push(checked_expr);
                 }
-                (callee, typechecked_args, SliceHandle::Empty)
+                (callee, typechecked_args, SliceHandle::empty())
             }
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
@@ -11207,11 +11212,11 @@ impl TypedProgram {
             scope: spec_fn_scope,
             param_variables,
             // Must be empty for correctness; a specialized function has no type parameters!
-            type_params: SliceHandle::Empty,
+            type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
-            function_type_params: SliceHandle::Empty,
+            function_type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no static type parameters!
-            static_type_params: SliceHandle::Empty,
+            static_type_params: SliceHandle::empty(),
             body_block: None,
             intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
@@ -12561,9 +12566,9 @@ impl TypedProgram {
 
         let type_params_handle = self_.named_types.add_slice_from_copy_slice(&type_params);
         let function_type_params_handle =
-            self_.existential_type_params.add_slice_from_slice(&function_type_params);
+            self_.existential_type_params.add_slice_from_copy_slice(&function_type_params);
         let static_type_params_handle =
-            self_.existential_type_params.add_slice_from_slice(&static_type_params);
+            self_.existential_type_params.add_slice_from_copy_slice(&static_type_params);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -13746,16 +13751,10 @@ impl TypedProgram {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
         }
 
-        // let mut s = String::new();
-        // self.dump_static_values(&mut s).unwrap();
-        // eprintln!("{s}");
-
         Ok(module_id)
     }
 
     fn assert_builtin_types_correct(&self) {
-        //eprintln!("{}", self);
-
         //
         // This just ensures our BUFFER_TYPE_ID constant is correct
         // Eventually we need a better way of doing this
@@ -14063,6 +14062,7 @@ impl TypedProgram {
             core_use!("eprint"),
             core_use!("eprintln"),
             core_use!("printIt"),
+            core_use!("identity"),
             core_use!("assert"),
             core_use!("assertEquals"),
             core_use!("assertMsg"),

@@ -2086,6 +2086,10 @@ impl Stack {
 
     pub fn reset(&mut self) {
         let len_to_clear = self.cursor.addr() - self.base_ptr.addr();
+        if len_to_clear == 0 {
+            return;
+        }
+        eprintln!("stack resetting only {len_to_clear} bytes");
         self.cursor = self.base_ptr();
         unsafe {
             core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, len_to_clear);
