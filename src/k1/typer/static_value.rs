@@ -115,8 +115,8 @@ impl StaticValue {
     }
 }
 
-impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
-    fn dep_hash<H: std::hash::Hasher>(&self, d: &Pool<StaticValue, StaticValueId>, state: &mut H) {
+impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
+    fn dep_hash<H: std::hash::Hasher>(&self, d: &VPool<StaticValue, StaticValueId>, state: &mut H) {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
@@ -159,8 +159,8 @@ impl DepHash<Pool<StaticValue, StaticValueId>> for StaticValue {
     }
 }
 
-impl DepEq<Pool<StaticValue, StaticValueId>> for StaticValue {
-    fn dep_eq(&self, other: &Self, pool: &Pool<StaticValue, StaticValueId>) -> bool {
+impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
+    fn dep_eq(&self, other: &Self, pool: &VPool<StaticValue, StaticValueId>) -> bool {
         match (self, other) {
             (StaticValue::Unit, StaticValue::Unit) => true,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
@@ -202,14 +202,14 @@ impl DepEq<Pool<StaticValue, StaticValueId>> for StaticValue {
 }
 
 pub struct StaticValuePool {
-    pub pool: Pool<StaticValue, StaticValueId>,
+    pub pool: VPool<StaticValue, StaticValueId>,
     pub hashes: FxHashMap<u64, StaticValueId>,
 }
 
 impl StaticValuePool {
     pub fn with_capacity(capacity: usize) -> StaticValuePool {
         StaticValuePool {
-            pool: Pool::with_capacity("static_values", capacity),
+            pool: VPool::make_max("static_values", capacity),
             hashes: FxHashMap::with_capacity(capacity),
         }
     }

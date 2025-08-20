@@ -1,19 +1,19 @@
 ns match_exhaust;
 
-fn matchBool(b: bool): unit {
+fn matchBool(b: bool): string {
   switch b {
-    false -> println("false"),
-    true -> println("true")
+    false -> identity("false"),
+    true -> identity("true")
   }
 }
 
 deftype TriState = either Yes, No, Failure({ reason: string })
-fn matchTristateOpt(t: TriState?): unit {
+fn matchTristateOpt(t: TriState?): string {
   switch t {
-    .Some(.Yes) -> println("yes"),
-    .Some(.No) -> println("no"),
-    .Some(.Failure(s)) -> println("failure: ".concat(s.reason)),
-    .None -> println("none")
+    .Some(.Yes) -> "yes",
+    .Some(.No) -> "no",
+    .Some(.Failure(s)) -> "failure: {s.reason}",
+    .None -> "none"
   }
 }
 
@@ -25,11 +25,11 @@ fn failedWithBaz(t: TriState): bool {
   }
 }
 
-fn matchOptBool(b: bool?): unit {
+fn matchOptBool(b: bool?): string {
   switch b {
-    .None -> println("None"),
-    .Some(false) -> println("false"),
-    .Some(true) -> println("true")
+    .None -> identity("None"),
+    .Some(false) -> identity("false"),
+    .Some(true) -> identity("true")
   }
 }
 
@@ -43,20 +43,19 @@ fn bothTrue(bb: { a: bool, b: bool }): bool {
 }
 
 fn main(): i32 {
-  println("Hello, exhaustiveness!");
-
   switch 'x' {
-    'x' -> println("x"),
+    'x' -> (),
     a -> ()
   };
 
-  matchBool(false);
-  matchOptBool(.Some(false));
+  assertEquals(matchBool(false), "false");
+  assertEquals(matchOptBool(.Some(false)), "false");
+  assertEquals(matchOptBool(.None), "None");
 
   let yes: TriState = .Yes;
-  matchTristateOpt(.Some(yes));
-  matchTristateOpt(.Some(.Yes));
-  matchTristateOpt(.Some(.Failure({ reason: "because" })));
+  assertEquals(matchTristateOpt(.Some(yes)), "yes");
+  assertEquals(matchTristateOpt(.Some(.Yes)), "yes");
+  assertEquals(matchTristateOpt(.Some(.Failure({ reason: "because" }))), "failure: because");
 
   assert(not bothTrue({ a: true, b: false }));
   assert(bothTrue({ a: true, b: true }));

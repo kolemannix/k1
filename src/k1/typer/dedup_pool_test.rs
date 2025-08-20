@@ -111,17 +111,17 @@ fn test_struct() {
     let field3 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(10)));
 
     let struct1 = system.add_static_value(StaticValue::Struct(StaticStruct {
-        type_id: TypeId::from(crate::nzu32_increment(1)),
+        type_id: TypeId::from(crate::nzu32_from_incr(1)),
         fields: eco_vec![field1, field2],
     }));
 
     let struct2 = system.add_static_value(StaticValue::Struct(StaticStruct {
-        type_id: TypeId::from(crate::nzu32_increment(1)),
+        type_id: TypeId::from(crate::nzu32_from_incr(1)),
         fields: eco_vec![field3, field2],
     }));
 
     let struct3 = system.add_static_value(StaticValue::Struct(StaticStruct {
-        type_id: TypeId::from(crate::nzu32_increment(2)),
+        type_id: TypeId::from(crate::nzu32_from_incr(2)),
         fields: eco_vec![field1, field2],
     }));
 
@@ -138,21 +138,21 @@ fn test_enum() {
     let payload2 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(42)));
 
     let enum1 = system.add_static_value(StaticValue::Enum(StaticEnum {
-        variant_type_id: TypeId::from(crate::nzu32_increment(1)),
+        variant_type_id: TypeId::from(crate::nzu32_from_incr(1)),
         variant_index: 0,
         typed_as_enum: true,
         payload: Some(payload1),
     }));
 
     let enum2 = system.add_static_value(StaticValue::Enum(StaticEnum {
-        variant_type_id: TypeId::from(crate::nzu32_increment(1)),
+        variant_type_id: TypeId::from(crate::nzu32_from_incr(1)),
         variant_index: 0,
         typed_as_enum: true,
         payload: Some(payload2),
     }));
 
     let enum3 = system.add_static_value(StaticValue::Enum(StaticEnum {
-        variant_type_id: TypeId::from(crate::nzu32_increment(1)),
+        variant_type_id: TypeId::from(crate::nzu32_from_incr(1)),
         variant_index: 1,
         typed_as_enum: true,
         payload: Some(payload1),
@@ -172,17 +172,17 @@ fn test_buffer() {
     let elem3 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(1)));
 
     let buffer1 = system.add_static_value(StaticValue::View(StaticView {
-        type_id: TypeId::from(crate::nzu32_increment(1)),
+        type_id: TypeId::from(crate::nzu32_from_incr(1)),
         elements: eco_vec![elem1, elem2],
     }));
 
     let buffer2 = system.add_static_value(StaticValue::View(StaticView {
-        type_id: TypeId::from(crate::nzu32_increment(1)),
+        type_id: TypeId::from(crate::nzu32_from_incr(1)),
         elements: eco_vec![elem3, elem2],
     }));
 
     let buffer3 = system.add_static_value(StaticValue::View(StaticView {
-        type_id: TypeId::from(crate::nzu32_increment(1)),
+        type_id: TypeId::from(crate::nzu32_from_incr(1)),
         elements: eco_vec![elem2, elem1],
     }));
 
@@ -199,19 +199,19 @@ fn test_recurse() {
     let int_val = system.add_static_value(StaticValue::Int(TypedIntValue::I32(99)));
 
     let enum_val = system.add_static_value(StaticValue::Enum(StaticEnum {
-        variant_type_id: TypeId::from(crate::nzu32_increment(10)),
+        variant_type_id: TypeId::from(crate::nzu32_from_incr(10)),
         variant_index: 0,
         typed_as_enum: true,
         payload: Some(int_val),
     }));
 
     let buffer_val = system.add_static_value(StaticValue::View(StaticView {
-        type_id: TypeId::from(crate::nzu32_increment(20)),
+        type_id: TypeId::from(crate::nzu32_from_incr(20)),
         elements: eco_vec![enum_val, enum_val],
     }));
 
     let struct_val1 = system.add_static_value(StaticValue::Struct(StaticStruct {
-        type_id: TypeId::from(crate::nzu32_increment(30)),
+        type_id: TypeId::from(crate::nzu32_from_incr(30)),
         fields: eco_vec![buffer_val],
     }));
 
@@ -219,19 +219,19 @@ fn test_recurse() {
     let int_val2 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(99)));
 
     let enum_val2 = system.add_static_value(StaticValue::Enum(StaticEnum {
-        variant_type_id: TypeId::from(crate::nzu32_increment(10)),
+        variant_type_id: TypeId::from(crate::nzu32_from_incr(10)),
         variant_index: 0,
         typed_as_enum: true,
         payload: Some(int_val2),
     }));
 
     let buffer_val2 = system.add_static_value(StaticValue::View(StaticView {
-        type_id: TypeId::from(crate::nzu32_increment(20)),
+        type_id: TypeId::from(crate::nzu32_from_incr(20)),
         elements: eco_vec![enum_val2, enum_val2],
     }));
 
     let struct_val2 = system.add_static_value(StaticValue::Struct(StaticStruct {
-        type_id: TypeId::from(crate::nzu32_increment(30)),
+        type_id: TypeId::from(crate::nzu32_from_incr(30)),
         fields: eco_vec![buffer_val2],
     }));
 

@@ -38,7 +38,6 @@ fn testArray(): unit {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
   };
   for core/IntRange/upTo(a.len() as iword) do {
-    println("{it}: {a.get(it as uword)}");
     if it % 2 == 0 {
       assertEquals(a.get(it as uword), 1);
     } else {

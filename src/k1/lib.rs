@@ -1,6 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::num::NonZeroU32;
+
 use smallvec::SmallVec;
 
 pub mod codegen_llvm;
@@ -14,6 +16,7 @@ pub mod vm;
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;
+pub const GIGABYTE: usize = MEGABYTE * 1024;
 
 pub const STACK_SIZE: usize = 10 * MEGABYTE;
 
@@ -55,13 +58,22 @@ macro_rules! nz_u32_id {
                     Some(nz_u32) => Some($name(nz_u32)),
                 }
             }
+
+            pub const fn add_u32(self, value: u32) -> Self {
+                let add_result = self.0.get() + value;
+                // Safety: Cannot possibly get 0 when adding two nonzero values together
+                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
+                $name(new_result)
+            }
+
             pub const ONE: Self = $name(NonZeroU32::new(1).unwrap());
             pub const PENDING: Self = $name(NonZeroU32::MAX);
         }
 
-        impl core::ops::Add for $name {
+        impl core::ops::Add<Self> for $name {
             type Output = $name;
 
+            #[inline]
             fn add(self, rhs: Self) -> Self::Output {
                 let add_result = self.0.get() + rhs.0.get();
                 // Safety: Cannot possibly get 0 when adding two nonzero values together
@@ -69,12 +81,30 @@ macro_rules! nz_u32_id {
                 $name(new_result)
             }
         }
+
+        impl core::ops::Add<u32> for $name {
+            type Output = $name;
+
+            #[inline]
+            fn add(self, rhs: u32) -> Self::Output {
+                let add_result = self.0.get() + rhs;
+                // Safety: Cannot possibly get 0 when adding an unsigned value
+                // to a non-zero value
+                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
+                $name(new_result)
+            }
+        }
     };
 }
 
-fn nzu32_increment(n: u32) -> std::num::NonZeroU32 {
+fn nzu32_from_incr(n: u32) -> std::num::NonZeroU32 {
     // Safety: If you add one to a u32 it'll never be zero
     unsafe { std::num::NonZeroU32::new_unchecked(n + 1) }
+}
+
+fn nzu32_add(n: NonZeroU32, add: u32) -> std::num::NonZeroU32 {
+    // Safety: If you add anything to a non-zero u32 it'll never be zero
+    unsafe { std::num::NonZeroU32::new_unchecked(n.get() + add) }
 }
 
 #[macro_export]

@@ -874,16 +874,16 @@ pub struct TypesConfig {
 }
 
 pub struct TypePool {
-    pub types: Pool<Type, TypeId>,
+    pub types: VPool<Type, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
     /// and retrieve its ID if so. We used to iterate the pool but it
     /// got slow
     pub hashes: FxHashMap<u64, TypeId>,
 
     /// AoS-style info associated with each type id
-    pub layouts: Pool<Layout, TypeId>,
-    pub type_variable_counts: Pool<TypeVariableInfo, TypeId>,
-    pub instance_info: Pool<Option<GenericInstanceInfo>, TypeId>,
+    pub layouts: VPool<Layout, TypeId>,
+    pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
+    pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
 
@@ -898,16 +898,22 @@ pub struct TypePool {
 
 impl TypePool {
     pub fn empty() -> TypePool {
+        const MAX_TYPES: usize = 131072;
         TypePool {
-            types: Pool::with_capacity("types", 8192),
+            types: VPool::make_max("types", MAX_TYPES),
             hashes: FxHashMap::default(),
-            layouts: Pool::new("layouts"),
-            type_variable_counts: Pool::new("type_variable_counts"),
-            instance_info: Pool::new("instance_info"),
+
+            layouts: VPool::make_max("layouts", MAX_TYPES),
+            type_variable_counts: VPool::make_max("type_variable_counts", MAX_TYPES),
+            instance_info: VPool::make_max("instance_info", MAX_TYPES),
+
             defn_info: FxHashMap::default(),
+
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
+
             builtins: BuiltinTypes::default(),
+
             config: TypesConfig { ptr_size_bits: 64 },
         }
     }

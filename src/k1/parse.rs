@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Write};
 use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
-use crate::pool::{Pool, SliceHandle};
+use crate::pool::{SliceHandle, VPool};
 use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
@@ -45,8 +45,7 @@ nz_u32_id!(CallArgId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedTypeDefnId(u32);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedFunctionId(u32);
+nz_u32_id!(ParsedFunctionId);
 nz_u32_id!(ParsedGlobalId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
@@ -61,8 +60,7 @@ nz_u32_id!(ParsedTypeExprId);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedPatternId(u32);
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedUseId(u32);
+nz_u32_id!(ParsedUseId);
 
 #[derive(Debug, Clone)]
 pub struct ParsedUse {
@@ -1496,14 +1494,14 @@ pub struct ParsedExprMetadata {
 
 pub struct ParsedExpressionPool {
     // `expressions` and `type_hints` form a Struct-of-Arrays relationship
-    expressions: Pool<ParsedExpr, ParsedExprId>,
-    metadata: Pool<ParsedExprMetadata, ParsedExprId>,
+    expressions: VPool<ParsedExpr, ParsedExprId>,
+    metadata: VPool<ParsedExprMetadata, ParsedExprId>,
 }
 impl ParsedExpressionPool {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new() -> Self {
         ParsedExpressionPool {
-            expressions: Pool::with_capacity("parsed_expr", capacity),
-            metadata: Pool::with_capacity("parsed_expr_metadata", capacity),
+            expressions: VPool::make_max("parsed_expr", 10_000_000),
+            metadata: VPool::make_max("parsed_expr_metadata", 10_000_000),
         }
     }
 
@@ -1552,13 +1550,11 @@ impl ParsedExpressionPool {
 }
 
 pub struct ParsedTypeExpressionPool {
-    type_expressions: Pool<ParsedTypeExpr, ParsedTypeExprId>,
+    type_expressions: VPool<ParsedTypeExpr, ParsedTypeExprId>,
 }
 impl ParsedTypeExpressionPool {
-    fn new(capacity: usize) -> Self {
-        ParsedTypeExpressionPool {
-            type_expressions: Pool::with_capacity("parsed_type_expr", capacity),
-        }
+    fn new() -> Self {
+        ParsedTypeExpressionPool { type_expressions: VPool::make_mb("parsed_type_expr", 512) }
     }
 
     pub fn add(&mut self, expression: ParsedTypeExpr) -> ParsedTypeExprId {
@@ -1569,18 +1565,18 @@ impl ParsedTypeExpressionPool {
     }
 }
 
-#[derive(Debug, Default, Clone)]
 pub struct ParsedUsePool {
-    uses: Vec<ParsedUse>,
+    uses: VPool<ParsedUse, ParsedUseId>,
 }
 impl ParsedUsePool {
+    pub fn make() -> Self {
+        Self { uses: VPool::make_mb("parsed_uses", 128) }
+    }
     pub fn add_use(&mut self, r#use: ParsedUse) -> ParsedUseId {
-        let id = self.uses.len();
-        self.uses.push(r#use);
-        ParsedUseId(id as u32)
+        self.uses.add(r#use)
     }
     pub fn get_use(&self, id: ParsedUseId) -> &ParsedUse {
-        &self.uses[id.0 as usize]
+        self.uses.get(id)
     }
 }
 
@@ -1654,10 +1650,10 @@ pub struct ParsedProgram {
     pub name_id: Ident,
     pub config: CompilerConfig,
     pub spans: Spans,
-    pub functions: Vec<ParsedFunction>,
-    pub globals: Pool<ParsedGlobal, ParsedGlobalId>,
+    pub functions: VPool<ParsedFunction, ParsedFunctionId>,
+    pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
     pub type_defns: Vec<ParsedTypeDefn>,
-    pub namespaces: Pool<ParsedNamespace, ParsedNamespaceId>,
+    pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
     pub abilities: Vec<ParsedAbility>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
@@ -1666,14 +1662,14 @@ pub struct ParsedProgram {
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
     pub patterns: ParsedPatternPool,
-    pub stmts: Pool<ParsedStmt, ParsedStmtId>,
+    pub stmts: VPool<ParsedStmt, ParsedStmtId>,
     pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
     // p_ prefix means 'pool'; used to delineate secondary pools from primary language concepts
-    pub p_type_args: Pool<NamedTypeArg, NamedTypeArgId>,
-    pub p_call_args: Pool<ParsedCallArg, CallArgId>,
-    pub p_idents: Pool<Ident, IdentSliceId>,
-    pub p_ability_exprs: Pool<ParsedAbilityExpr, ParsedAbilityExprId>,
+    pub p_type_args: VPool<NamedTypeArg, NamedTypeArgId>,
+    pub p_call_args: VPool<ParsedCallArg, CallArgId>,
+    pub p_idents: VPool<Ident, IdentSliceId>,
+    pub p_ability_exprs: VPool<ParsedAbilityExpr, ParsedAbilityExprId>,
 }
 
 impl ParsedProgram {
@@ -1685,25 +1681,25 @@ impl ParsedProgram {
             name_id,
             config,
             spans: Spans::new(),
-            functions: Vec::new(),
-            globals: Pool::with_capacity("parsed_globals", 4096),
+            functions: VPool::make_mb("functions", 1024),
+            globals: VPool::make_mb("parsed_globals", 256),
             type_defns: Vec::new(),
-            namespaces: Pool::with_capacity("parsed_namespaces", 4096),
+            namespaces: VPool::make_mb("parsed_namespaces", 256),
             abilities: Vec::new(),
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
             strings: StringPool::make(),
-            exprs: ParsedExpressionPool::new(16384),
-            type_exprs: ParsedTypeExpressionPool::new(8192),
+            exprs: ParsedExpressionPool::new(),
+            type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
-            stmts: Pool::with_capacity("parsed_stmts", 8192),
-            uses: ParsedUsePool::default(),
+            stmts: VPool::make_mb("parsed_stmts", 256),
+            uses: ParsedUsePool::make(),
             errors: Vec::new(),
-            p_type_args: Pool::with_capacity("parsed_named_type_args", 8192),
-            p_call_args: Pool::with_capacity("parsed_call_args", 8192),
-            p_idents: Pool::with_capacity("ident_slices", 8192),
-            p_ability_exprs: Pool::with_capacity("ability_exprs", 8192),
+            p_type_args: VPool::make_mb("parsed_named_type_args", 256),
+            p_call_args: VPool::make_mb("parsed_call_args", 256),
+            p_idents: VPool::make_mb("ident_slices", 256),
+            p_ability_exprs: VPool::make_mb("ability_exprs", 256),
         }
     }
 
@@ -1718,14 +1714,14 @@ impl ParsedProgram {
     }
 
     pub fn get_function(&self, id: ParsedFunctionId) -> &ParsedFunction {
-        &self.functions[id.0 as usize]
+        self.functions.get(id)
     }
 
     pub fn add_function(&mut self, mut function: ParsedFunction) -> ParsedFunctionId {
-        let id = self.functions.len();
-        let id = ParsedFunctionId(id as u32);
+        let id = self.functions.next_id();
         function.id = id;
-        self.functions.push(function);
+        let id2 = self.functions.add(function);
+        debug_assert_eq!(id, id2);
         id
     }
 
@@ -3226,7 +3222,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_bracketed_type_args(&mut self) -> ParseResult<(SliceHandle<NamedTypeArgId>, SpanId)> {
         let Some(open_bracket) = self.maybe_consume_next(K::OpenBracket) else {
-            return Ok((SliceHandle::Empty, self.peek_back().span));
+            return Ok((SliceHandle::empty(), self.peek_back().span));
         };
 
         let mut type_args: SmallVec<[NamedTypeArg; 8]> = SmallVec::new();
@@ -3444,8 +3440,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             {
                 let first_type_args = match second.kind {
                     K::OpenBracket => self.parse_bracketed_type_args()?.0,
-                    K::At => SliceHandle::Empty,
-                    K::OpenParen => SliceHandle::Empty,
+                    K::At => SliceHandle::empty(),
+                    K::OpenParen => SliceHandle::empty(),
                     _ => unreachable!(),
                 };
                 let next_after_tparams = self.peek();
@@ -4177,7 +4173,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             compiler_debug: is_debug,
             additional_where_constraints: additional_type_constraints,
             condition,
-            id: ParsedFunctionId(u32::MAX),
+            id: ParsedFunctionId::PENDING,
         });
         Ok(Some(function_id))
     }

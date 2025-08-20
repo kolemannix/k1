@@ -51,9 +51,11 @@ fn moderate(): unit {
   struct_test/test();
   enum_fail/inner/test();
   match_fails/test();
+  println("require_test");
   require_test/test();
   array_test/test();
   matching_if/test();
+  println("lambdas");
   lambdas/test();
   condcomp/test();
   struct_composition/test();

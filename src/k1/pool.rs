@@ -4,69 +4,82 @@
 use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;
+mod virt_pool;
 
 pub trait PoolIndex:
-    Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self>
+    Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self> + Add<u32, Output = Self>
 {
 }
-impl<T: Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self>> PoolIndex
-    for T
+impl<
+    T: Copy
+        + Into<NonZeroU32>
+        + From<NonZeroU32>
+        + Eq
+        + Add<Self, Output = Self>
+        + Add<u32, Output = Self>,
+> PoolIndex for T
 {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SliceHandleInner<Index: PoolIndex> {
-    pub index: Index,
-    pub len: NonZeroU32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum SliceHandle<Index: PoolIndex> {
-    Empty,
-    NonEmpty(SliceHandleInner<Index>),
+pub struct SliceHandle<Index: PoolIndex> {
+    index: Option<Index>,
+    len: u32,
 }
 
 impl<Index: PoolIndex> SliceHandle<Index> {
+    pub const fn empty() -> Self {
+        Self { index: None, len: 0 }
+    }
+    pub fn make_nz(index: Index, len: NonZeroU32) -> Self {
+        Self { index: Some(index), len: len.get() }
+    }
+    pub fn make(index: Index, len: u32) -> Self {
+        if len == 0 { Self { index: None, len: 0 } } else { Self { index: Some(index), len } }
+    }
+
+    #[inline]
     pub fn index(&self) -> Option<Index> {
-        match self {
-            SliceHandle::Empty => None,
-            SliceHandle::NonEmpty(inner) => Some(inner.index),
+        self.index
+    }
+
+    #[inline]
+    pub fn end_index(&self) -> Option<Index> {
+        match self.index {
+            None => None,
+            Some(index) => {
+                let end_index = index + self.len as u32;
+                Some(end_index)
+            }
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
-        match self {
-            SliceHandle::Empty => 0,
-            SliceHandle::NonEmpty(slice) => slice.len.get() as usize,
-        }
+        self.len as usize
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        match self {
-            SliceHandle::Empty => true,
-            SliceHandle::NonEmpty(_) => false,
-        }
+        self.len == 0
     }
 
     /// Skip this entry, resulting in a handle with a length
     /// decreased by n, and pointing n elements ahead of where it was.
     /// Returns an empty handle on an already empty handle
     pub fn skip(&self, n: usize) -> Self {
-        let Some(skip_count_nzu32) = NonZeroU32::new(n as u32) else {
+        if n == 0 {
             return *self;
-        };
-        match self {
-            SliceHandle::Empty => SliceHandle::Empty,
-            SliceHandle::NonEmpty(inner) => {
-                let new_len = (inner.len.get() as usize).saturating_sub(n);
+        }
+        match self.index {
+            None => *self,
+            Some(index) => {
+                let new_len = (self.len).saturating_sub(n as u32);
                 if new_len == 0 {
-                    SliceHandle::Empty
+                    Self { index: Some(index), len: new_len }
                 } else {
-                    let new_index = inner.index + Index::from(skip_count_nzu32);
-                    SliceHandle::NonEmpty(SliceHandleInner {
-                        index: new_index,
-                        len: NonZeroU32::new(new_len as u32).unwrap(),
-                    })
+                    let new_index = index + (n as u32);
+                    Self { index: Some(new_index), len: new_len }
                 }
             }
         }
@@ -97,7 +110,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn next_id(&self) -> Index {
-        let index = crate::nzu32_increment(self.vec.len() as u32);
+        let index = crate::nzu32_from_incr(self.vec.len() as u32);
         Index::from(index)
     }
 
@@ -138,8 +151,6 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
             count += 1;
         }
 
-        let Some(count) = NonZeroU32::new(count) else { return SliceHandle::Empty };
-
         #[cfg(debug_assertions)]
         {
             let new_cap = self.vec.capacity();
@@ -148,7 +159,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
             }
         }
 
-        SliceHandle::NonEmpty(SliceHandleInner { index, len: count })
+        SliceHandle::make(index, count)
     }
 
     fn id_to_actual_index(index: Index) -> usize {
@@ -158,7 +169,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
 
     fn physical_index_to_id(index: usize) -> Index {
         // Safety: Incrementing by 1
-        let index_inc = crate::nzu32_increment(index as u32);
+        let index_inc = crate::nzu32_from_incr(index as u32);
         Index::from(index_inc)
     }
 
@@ -178,36 +189,42 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn get_slice(&self, handle: SliceHandle<Index>) -> &[T] {
-        match handle {
-            SliceHandle::Empty => &[],
-            SliceHandle::NonEmpty(handle) => self.get_n(handle.index, handle.len.get()),
+        match handle.index() {
+            None => &[],
+            Some(index) => self.get_n(index, handle.len),
         }
     }
 
     pub fn get_slice_mut(&mut self, handle: SliceHandle<Index>) -> &mut [T] {
-        match handle {
-            SliceHandle::Empty => &mut [],
-            SliceHandle::NonEmpty(handle) => self.get_n_mut(handle.index, handle.len.get()),
+        match handle.index() {
+            None => &mut [],
+            Some(index) => self.get_n_mut(index, handle.len),
         }
     }
 
     pub fn get_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
         debug_assert!(index < handle.len());
-        let SliceHandle::NonEmpty(handle) = handle else {
+        let Some(handle_index) = handle.index() else {
             panic!("get_nth called on empty handle");
         };
-        let slice_start_index = Self::id_to_actual_index(handle.index);
+        let slice_start_index = Self::id_to_actual_index(handle_index);
         let elem_index = slice_start_index + index;
         &self.vec[elem_index]
     }
 
     pub fn get_n(&self, index: Index, count: u32) -> &[T] {
+        if count == 0 {
+            return &[];
+        }
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &self.vec[index..end]
     }
 
     pub fn get_n_mut(&mut self, index: Index, count: u32) -> &mut [T] {
+        if count == 0 {
+            return &mut [];
+        }
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
         &mut self.vec[index..end]
@@ -226,8 +243,8 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
-        let SliceHandle::NonEmpty(handle) = handle else { return None };
-        let slice_start_index = Self::id_to_actual_index(handle.index);
+        let Some(index) = handle.index() else { return None };
+        let slice_start_index = Self::id_to_actual_index(index);
         self.vec.get(slice_start_index)
     }
 }
@@ -245,15 +262,11 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn add_slice_from_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
-        if let Some(len) = NonZeroU32::new(items.len() as u32) {
-            // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
-            // append the entire slice at once.
-            let index = self.next_id();
-            self.vec.extend_from_slice(items);
-            SliceHandle::NonEmpty(SliceHandleInner { index, len })
-        } else {
-            SliceHandle::Empty
-        }
+        // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
+        // append the entire slice at once.
+        let index = self.next_id();
+        self.vec.extend_from_slice(items);
+        SliceHandle::make(index, items.len() as u32)
     }
 }
 
@@ -281,15 +294,11 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn add_slice_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
-        if let Some(len) = NonZeroU32::new(items.len() as u32) {
-            // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
-            // append the entire slice at once.
-            let index = self.next_id();
-            self.vec.extend(items);
-            SliceHandle::NonEmpty(SliceHandleInner { index, len })
-        } else {
-            SliceHandle::Empty
-        }
+        let index = self.next_id();
+        // This implementation is specialized for slice iterators, where it uses [`copy_from_slice`] to
+        // append the entire slice at once.
+        self.vec.extend(items);
+        SliceHandle::make(index, items.len() as u32)
     }
 }
 
@@ -315,6 +324,8 @@ impl<T: PartialEq, Index: PoolIndex> Pool<T, Index> {
         self.get_slice(handle).contains(elem)
     }
 }
+
+pub use virt_pool::VPool;
 
 #[cfg(test)]
 mod test {

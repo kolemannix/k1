@@ -70,7 +70,7 @@ fn basic_fn() -> Result<(), ParseError> {
     let source =
         Source::make(0, "test_src".to_string(), "test_case.k1".to_string(), src.to_string());
     let mut module = test_parse_module(source)?;
-    let fndef = module.functions.first().unwrap();
+    let fndef = module.functions.get_opt(ParsedFunctionId::from_u32(1).unwrap()).unwrap();
     assert_eq!(fndef.name, module.idents.intern("basic"));
     Ok(())
 }

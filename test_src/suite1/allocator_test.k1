@@ -8,7 +8,7 @@ fn test(): unit {
   println("{p.x}");
   let s = a.push("Hello, memory");
   assert(s.len() == 13);
-  println(s);
+  assertEquals(s.*, "Hello, memory");
 
   a.freeAll();
 

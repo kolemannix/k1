@@ -361,6 +361,9 @@ pub fn compile_module(
         return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
 
+    p.named_types.print_size_info();
+    p.types.types.print_size_info();
+
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {
             let fname = format!("{}.svg", module_name);
