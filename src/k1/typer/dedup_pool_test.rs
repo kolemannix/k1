@@ -1,19 +1,18 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use crate::pool::Pool;
 use crate::typer::*;
 use fxhash::FxHashMap;
 
 struct TestDedupSystem {
-    static_values: Pool<StaticValue, StaticValueId>,
+    static_values: VPool<StaticValue, StaticValueId>,
     static_values_dedup: FxHashMap<u64, StaticValueId>,
 }
 
 impl TestDedupSystem {
     fn new() -> Self {
         Self {
-            static_values: Pool::new("test_static_values"),
+            static_values: VPool::make_mb("test_static_values", 1),
             static_values_dedup: FxHashMap::default(),
         }
     }
