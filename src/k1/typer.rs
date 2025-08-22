@@ -288,6 +288,20 @@ pub struct AggregateLayout {
 // nocommit(2): Switch to pool; make pattern matching code less allocatey period
 nz_u32_id!(PatternCtorId);
 
+impl PatternCtorId {
+    pub const UNIT: PatternCtorId = PatternCtorId::from_u32(1).unwrap();
+    pub const B_FALSE: PatternCtorId = PatternCtorId::from_u32(2).unwrap();
+    pub const B_TRUE: PatternCtorId = PatternCtorId::from_u32(3).unwrap();
+    pub const CHAR: PatternCtorId = PatternCtorId::from_u32(4).unwrap();
+    pub const STRING: PatternCtorId = PatternCtorId::from_u32(5).unwrap();
+    pub const INT: PatternCtorId = PatternCtorId::from_u32(6).unwrap();
+    pub const FLOAT: PatternCtorId = PatternCtorId::from_u32(7).unwrap();
+    pub const POINTER: PatternCtorId = PatternCtorId::from_u32(8).unwrap();
+
+    pub const TYPE_VARIABLE: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
+    pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
+}
+
 /// Used for analyzing pattern matching
 #[derive(Debug, Clone)]
 pub enum PatternCtor {
@@ -307,16 +321,30 @@ pub enum PatternCtor {
     /// the sake of being explicit; we could collapse all these into a 'Anything' constructor but the fact I can't
     /// think of a good name means we shouldn't, probably
     TypeVariable,
-    FunctionReference,
-    Reference(Box<PatternCtor>),
+    FunctionPointer,
+    Reference(PatternCtorId),
     Struct {
-        fields: Vec<(Ident, PatternCtor)>,
+        fields: Vec<(Ident, PatternCtorId)>,
     },
-    // Binding(Identifier),
     Enum {
         variant_name: Ident,
-        inner: Option<Box<PatternCtor>>,
+        inner: Option<PatternCtorId>,
     },
+}
+
+impl PatternCtor {
+    pub fn push_field(&mut self, field: (Ident, PatternCtorId)) {
+        match self {
+            PatternCtor::Struct { fields } => fields.push(field),
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PatternCtorTrialEntry {
+    ctor: PatternCtorId,
+    alive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2278,12 +2306,12 @@ impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
         const MAX_TYPES: usize = 131072;
         let types = TypePool {
-            types: VPool::make_max("types", MAX_TYPES),
+            types: VPool::make_with_hint("types", MAX_TYPES),
             hashes: FxHashMap::new(),
 
-            layouts: VPool::make_max("type_layouts", MAX_TYPES),
-            type_variable_counts: VPool::make_max("type_variable_counts", MAX_TYPES),
-            instance_info: VPool::make_max("instance_info", MAX_TYPES),
+            layouts: VPool::make_with_hint("type_layouts", MAX_TYPES),
+            type_variable_counts: VPool::make_with_hint("type_variable_counts", MAX_TYPES),
+            instance_info: VPool::make_with_hint("instance_info", MAX_TYPES),
 
             defn_info: FxHashMap::new(),
             ast_type_defn_mapping: FxHashMap::new(),
@@ -2302,7 +2330,7 @@ impl TypedProgram {
         let ast = ParsedProgram::make(program_name, config);
         let root_ident = ast.idents.builtins.root_module_name;
         let mut scopes = Scopes::make(root_ident);
-        let mut namespaces = Namespaces { namespaces: VPool::make_max("namespaces", 1024) };
+        let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
         let root_namespace = Namespace {
             name: root_ident,
             scope_id: Scopes::ROOT_SCOPE_ID,
@@ -2323,22 +2351,34 @@ impl TypedProgram {
         }
         let vm_stack_size = crate::MEGABYTE * 10;
         let vm_static_stack_size = crate::MEGABYTE;
+        let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
+        pattern_ctors.add(PatternCtor::Unit);
+        pattern_ctors.add(PatternCtor::BoolFalse);
+        pattern_ctors.add(PatternCtor::BoolTrue);
+        pattern_ctors.add(PatternCtor::Char);
+        pattern_ctors.add(PatternCtor::String);
+        pattern_ctors.add(PatternCtor::Int);
+        pattern_ctors.add(PatternCtor::Float);
+        pattern_ctors.add(PatternCtor::Pointer);
+        pattern_ctors.add(PatternCtor::TypeVariable);
+        pattern_ctors.add(PatternCtor::FunctionPointer);
+
         TypedProgram {
-            modules: VPool::make_max("modules", 32),
-            functions: VPool::make_max("typed_functions", 8192),
-            variables: VPool::make_max("typed_variables", 8192),
+            modules: VPool::make_with_hint("modules", 32),
+            functions: VPool::make_with_hint("typed_functions", 8192),
+            variables: VPool::make_with_hint("typed_variables", 8192),
             types,
-            globals: VPool::make_max("typed_globals", 4096),
-            exprs: VPool::make_max("typed_exprs", 65536),
-            stmts: VPool::make_max("typed_stmts", 8192 << 1),
+            globals: VPool::make_with_hint("typed_globals", 4096),
+            exprs: VPool::make_with_hint("typed_exprs", 65536),
+            stmts: VPool::make_with_hint("typed_stmts", 8192 << 1),
             static_values: StaticValuePool::with_capacity(8192),
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
             errors: Vec::new(),
             namespaces,
-            abilities: VPool::make_max("abilities", 2048),
-            ability_impls: VPool::make_max("ability_impls", 4096),
+            abilities: VPool::make_with_hint("abilities", 2048),
+            ability_impls: VPool::make_with_hint("ability_impls", 4096),
             ability_impl_table: FxHashMap::new(),
             blanket_impls: FxHashMap::new(),
             namespace_ast_mappings: FxHashMap::with_capacity(512),
@@ -2365,11 +2405,12 @@ impl TypedProgram {
                 emitted_code: String::with_capacity(8192),
                 emit_lexer_tokens: Vec::new(),
             },
-            named_types: VPool::make_mb("named_types", 256),
-            existential_type_params: VPool::make_mb("function_type_params", 256),
-            pattern_ctors: VPool::make_max("pattern_ctors", 8192),
+            named_types: VPool::make_with_hint("named_types", 32768),
+            existential_type_params: VPool::make_with_hint("function_type_params", 8192),
+            pattern_ctors,
             vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vms: vec![
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
@@ -7902,35 +7943,39 @@ impl TypedProgram {
 
         // Exhaustiveness Checking
         if !partial_match {
-            let trial_constructors: Vec<PatternCtor> =
-                self.generate_constructors_for_type(target_expr_type, target_expr_span);
-            let mut trial_alives: Vec<bool> = vec![true; trial_constructors.len()];
+            // nocommit reuse these
+            let mut trial_constructors = Vec::new();
+            let mut field_ctors_buf = Vec::new();
+            self.generate_constructors_for_type(
+                target_expr_type,
+                &mut trial_constructors,
+                &mut field_ctors_buf,
+                target_expr_span,
+            );
+            // nocommit last allocation
             let mut pattern_kill_counts: Vec<usize> = vec![0; all_unguarded_patterns.len()];
-            'trial: for (trial_index, trial_expr) in trial_constructors.iter().enumerate() {
+            'trial: for trial_entry in trial_constructors.iter_mut() {
                 '_pattern: for (index, pattern) in all_unguarded_patterns.iter().enumerate() {
-                    if TypedProgram::pattern_matches(pattern, trial_expr) {
+                    if TypedProgram::pattern_matches(&self.pattern_ctors, pattern, trial_entry.ctor)
+                    {
                         pattern_kill_counts[index] += 1;
-                        trial_alives[trial_index] = false;
+                        trial_entry.alive = false;
                         continue 'trial;
                     }
                 }
             }
 
-            let alive_indexes: SV4<usize> = trial_alives
-                .iter()
-                .enumerate()
-                .filter(|(_i, alive)| **alive)
-                .map(|(i, _alive)| i)
-                .collect();
-            if !alive_indexes.is_empty() {
-                let patterns: String = alive_indexes
+            let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
+            if alive_count != 0 {
+                let patterns = trial_constructors
                     .iter()
-                    .map(|i| self.pattern_ctor_to_string(&trial_constructors[*i]))
+                    .filter(|entry| entry.alive)
+                    .map(|entry| self.pattern_ctor_to_string(entry.ctor))
                     .join("\n- ");
                 return failf!(
                     target_expr_span,
                     "{} Unhandled patterns:\n- {}",
-                    alive_indexes.len(),
+                    alive_count,
                     patterns
                 );
             }
@@ -13842,119 +13887,203 @@ impl TypedProgram {
     }
 
     fn generate_constructors_for_type(
-        &self,
+        &mut self,
         type_id: TypeId,
-        _span_id: SpanId,
-    ) -> Vec<PatternCtor> {
+        dst: &mut Vec<PatternCtorTrialEntry>,
+        field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
+        span_id: SpanId,
+    ) {
+        #[inline]
+        fn alive(ctor: PatternCtorId) -> PatternCtorTrialEntry {
+            PatternCtorTrialEntry { ctor, alive: true }
+        }
         if type_id == STRING_TYPE_ID {
-            return vec![PatternCtor::String];
+            dst.push(alive(PatternCtorId::STRING));
+            return;
         }
         match self.types.get(type_id) {
-            Type::Unit => vec![PatternCtor::Unit],
-            Type::Char => vec![PatternCtor::Char],
-            Type::TypeParameter(_) => vec![PatternCtor::TypeVariable],
-            Type::Integer(_) => vec![PatternCtor::Int],
-            Type::Float(_) => vec![PatternCtor::Float],
+            Type::Unit => dst.push(alive(PatternCtorId::UNIT)),
+            Type::Char => dst.push(alive(PatternCtorId::CHAR)),
+            Type::TypeParameter(_) => dst.push(alive(PatternCtorId::TYPE_VARIABLE)),
+            Type::Integer(_) => dst.push(alive(PatternCtorId::INT)),
+            Type::Float(_) => dst.push(alive(PatternCtorId::FLOAT)),
             Type::Bool => {
-                vec![PatternCtor::BoolFalse, PatternCtor::BoolTrue]
+                dst.extend(&[alive(PatternCtorId::B_FALSE), alive(PatternCtorId::B_TRUE)])
             }
-            Type::Pointer => vec![PatternCtor::Pointer], // Just an opaque atom
+            Type::Pointer => dst.push(alive(PatternCtorId::POINTER)), // Just an opaque atom
+            Type::FunctionPointer(_) => {
+                dst.push(alive(PatternCtorId::FUNCTION_POINTER)) // FunctionPointer is an opaque atom pattern
+            }
             Type::Reference(refer) => {
                 // Follow the pointer
-                let inner = self.generate_constructors_for_type(refer.inner_type, _span_id);
-                inner
-                    .into_iter()
-                    .map(|pointee_pattern| PatternCtor::Reference(Box::new(pointee_pattern)))
-                    .collect()
-            }
-            Type::Enum(enum_type) => enum_type
-                .variants
-                .iter()
-                .flat_map(|v| match v.payload.as_ref() {
-                    None => {
-                        vec![PatternCtor::Enum { variant_name: v.name, inner: None }]
-                    }
-                    Some(payload) => self
-                        .generate_constructors_for_type(*payload, _span_id)
-                        .into_iter()
-                        .map(|inner| PatternCtor::Enum {
-                            variant_name: v.name,
-                            inner: Some(Box::new(inner)),
-                        })
-                        .collect(),
-                })
-                .collect(),
-            Type::Struct(struc) => {
-                debug_assert!(type_id != STRING_TYPE_ID);
-                let mut all_field_ctors: Vec<Vec<(Ident, PatternCtor)>> = vec![];
-                // TODO(perf): Tons of allocations here and probably worth a reusable buffer
-                //             Its all those expensive 'drop' calls that don't get us anything!
-                for field in struc.fields.iter() {
-                    let field_ctors_iter = self
-                        .generate_constructors_for_type(field.type_id, _span_id)
-                        .into_iter()
-                        .map(|pat| (field.name, pat))
-                        .collect::<Vec<_>>();
-                    all_field_ctors.push(field_ctors_iter)
+                let prev_len = dst.len();
+                self.generate_constructors_for_type(
+                    refer.inner_type,
+                    dst,
+                    field_ctors_buf,
+                    span_id,
+                );
+                for pointee_pattern_id in dst[prev_len..].iter_mut() {
+                    pointee_pattern_id.ctor =
+                        self.pattern_ctors.add(PatternCtor::Reference(pointee_pattern_id.ctor));
                 }
-                // Generate cross product of all field combinations
-                // Example:
-                // { x: bool, y: bool }
-                // all_field_ctors: [[(x, false), (x, true)], [(y, false), (y, true)]]
-                // result: [{}]
-                // field_ctors: x
-                // for ctor in result: {}
-                // field_ctor: (x, false)
-                // field_ctor: (x, true)
-                // { x: false }, { x: true }
-                // field_ctors: y
-                // for ctor in result: [{ x: false }, { x: true }]
-                //   field_ctor: (y, false)
-                //   field_ctor: (y, true)
-                // augment { x: false } -> { x: false, y: false}, { x: false, y: true }
-                // augment { x: true } -> { x: true, y: false}, { x: true, y: true }
-                //
-                // For each individual field's constructors, we iterate over all previously accumulated results
-                // Pushing this field's constructors onto each previous results' field vec
-
-                // FIXME: Re-write this to be more sensible; assigning to result from new_result
-                // every time just feels bad, its a triply nested 'for', idk, does not feel optimal
-                // TODO(perf): Also very allocatey
-                let mut result =
-                    vec![PatternCtor::Struct { fields: Vec::with_capacity(struc.fields.len()) }];
-                for field_ctors in all_field_ctors.into_iter() {
-                    let mut new_result = Vec::new();
-                    for full_struct_ctor in result.iter_mut() {
-                        for (field_name, field_ctor) in &field_ctors {
-                            if let PatternCtor::Struct { mut fields } = full_struct_ctor.clone() {
-                                fields.push((*field_name, field_ctor.clone()));
-                                new_result.push(PatternCtor::Struct { fields });
+            }
+            Type::Enum(enum_type) => {
+                for v in enum_type.variants.clone().iter() {
+                    match v.payload.as_ref() {
+                        None => dst.push(alive(
+                            self.pattern_ctors
+                                .add(PatternCtor::Enum { variant_name: v.name, inner: None }),
+                        )),
+                        Some(payload) => {
+                            let prev_len = dst.len();
+                            self.generate_constructors_for_type(
+                                *payload,
+                                dst,
+                                field_ctors_buf,
+                                span_id,
+                            );
+                            for payload_pattern_id in dst[prev_len..].iter_mut() {
+                                payload_pattern_id.ctor =
+                                    self.pattern_ctors.add(PatternCtor::Enum {
+                                        variant_name: v.name,
+                                        inner: Some(payload_pattern_id.ctor),
+                                    })
                             }
                         }
                     }
-                    result = new_result;
                 }
-                result
+            }
+            Type::Struct(struc) => {
+                debug_assert!(type_id != STRING_TYPE_ID);
+                let field_count = struc.fields.len();
+                for (index, field) in struc.fields.clone().iter().enumerate() {
+                    let prev_len = dst.len();
+                    self.generate_constructors_for_type(
+                        field.type_id,
+                        dst,
+                        field_ctors_buf,
+                        span_id,
+                    );
+                    match field_ctors_buf.get_mut(index) {
+                        None => {
+                            eprintln!(
+                                "Have to allocate fresh field constructor buf for index {index}..."
+                            );
+                            field_ctors_buf.push(Vec::with_capacity(128))
+                        }
+                        Some(buf) => buf.clear(),
+                    };
+                    for field_ctor in dst[prev_len..].iter() {
+                        eprintln!(
+                            "pushing constructor {} for field {}",
+                            self.pattern_ctor_to_string(field_ctor.ctor),
+                            self.ident_str(field.name)
+                        );
+                        field_ctors_buf[index].push((field.name, field_ctor.ctor));
+                    }
+                    eprintln!(
+                        "Pushed {} constructors for field {}; resetting dst to {prev_len}",
+                        field_ctors_buf[index].len(),
+                        self.ident_str(field.name)
+                    );
+                    dst.truncate(prev_len);
+                }
+                let final_count = field_ctors_buf[0..field_count]
+                    .iter()
+                    .map(|v| v.len())
+                    .reduce(|t, v| t * v)
+                    .unwrap_or(0);
+
+                eprintln!(
+                    "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
+                    field_ctors_buf.len(),
+                    self.type_id_to_string(type_id)
+                );
+                let dst_start = dst.len();
+                for _ in 0..final_count {
+                    let primed_struct_ctor_id = self
+                        .pattern_ctors
+                        .add(PatternCtor::Struct { fields: Vec::with_capacity(field_count) });
+                    dst.push(alive(primed_struct_ctor_id));
+                }
+                let result_struct_ids = &mut dst[dst_start..];
+
+                // This entire loop is just about taking the cross-product of all the fields'
+                // respective constructors in an efficient way; by populating slots in
+                // a pre-allocated table, and doing a bit of math to decide how many times
+                // a pattern should repeat or cycle. Example
+                // {  a: bool, b: bool, c: either A, B, C }
+                // 0  f        f        A
+                // 1  f        f        B
+                // 2  f        f        C
+                // 3  f        t        A
+                // 4  f        t        B
+                // 5  f        t        C
+                // 6  t        f        A
+                // 7  t        f        B
+                // 8  t        f        C
+                // 9  t        t        A
+                // 10 t        t        B
+                // 11 t        t        C
+                // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
+                // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
+                // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
+                let mut field_index_w_multi_ctor = 0;
+                for (field_index, ctors) in field_ctors_buf[0..field_count].iter().enumerate() {
+                    if ctors.len() == 1 {
+                        for result_struct in result_struct_ids.iter_mut() {
+                            self.pattern_ctors.get_mut(result_struct.ctor).push_field(ctors[0]);
+                        }
+                    } else {
+                        // multiplier = 2 ^ field_index but only for fields that have more than
+                        // 1 pattern
+                        let multiplier = if field_index_w_multi_ctor == 0 {
+                            1
+                        } else {
+                            field_index_w_multi_ctor * 2
+                        };
+                        eprintln!("repeat_count = {final_count} / {} * {multiplier}", ctors.len());
+                        let repeat_count = final_count / (ctors.len() * multiplier);
+                        for (row, result_struct) in result_struct_ids.iter_mut().enumerate() {
+                            let pattern_index = (row / repeat_count) % ctors.len();
+                            let pattern = ctors[pattern_index];
+                            eprintln!("field {field_index}: using pattern_index {pattern_index}");
+                            self.pattern_ctors.get_mut(result_struct.ctor).push_field(pattern);
+                        }
+                        field_index_w_multi_ctor += 1;
+                    }
+                }
+                for entry in result_struct_ids {
+                    eprintln!(
+                        "Struct Type {} pattern: {}",
+                        self.type_id_to_string(type_id),
+                        self.pattern_ctor_to_string(entry.ctor)
+                    );
+                }
             }
             Type::Function(_f) => {
                 debug!("function is probably unmatchable");
-                vec![]
             }
-            Type::FunctionPointer(_) => {
-                vec![PatternCtor::FunctionReference] // FunctionReference is an opaque atom pattern
-            }
-            _ => {
-                eprintln!(
-                    "unhandled type in generate_constructors_for_type {}",
-                    self.type_id_to_string(type_id)
-                );
-                vec![]
-            }
+            _ => self
+                .write_error(
+                    &mut stderr(),
+                    &errf!(
+                        span_id,
+                        "unhandled type in generate_constructors_for_type {}",
+                        self.type_id_to_string(type_id)
+                    ),
+                )
+                .unwrap(),
         }
     }
 
-    fn pattern_matches(pattern: &TypedPattern, ctor: &PatternCtor) -> bool {
-        match (pattern, ctor) {
+    fn pattern_matches(
+        ctors: &VPool<PatternCtor, PatternCtorId>,
+        pattern: &TypedPattern,
+        ctor: PatternCtorId,
+    ) -> bool {
+        match (pattern, ctors.get(ctor)) {
             (TypedPattern::Wildcard(_), _) => true,
             (TypedPattern::Variable(_), _) => true,
             (TypedPattern::LiteralUnit(_), PatternCtor::Unit) => true,
@@ -13964,7 +14093,7 @@ impl TypedProgram {
                 if *variant_name == enum_pat.variant_tag_name {
                     match (enum_pat.payload.as_ref(), inner) {
                         (Some(payload), Some(inner)) => {
-                            TypedProgram::pattern_matches(payload, inner)
+                            TypedProgram::pattern_matches(ctors, payload, *inner)
                         }
                         (None, None) => true,
                         _ => false,
@@ -13985,8 +14114,9 @@ impl TypedProgram {
                         .map(|(_, ctor_pattern)| ctor_pattern)
                         .expect("Field not in struct; pattern should have failed typecheck by now");
                     if !TypedProgram::pattern_matches(
+                        ctors,
                         &field_pattern.pattern,
-                        matching_field_pattern,
+                        *matching_field_pattern,
                     ) {
                         matches = false;
                         break;

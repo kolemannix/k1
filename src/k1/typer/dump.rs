@@ -884,10 +884,10 @@ impl TypedProgram {
 
     pub fn display_pattern_ctor(
         &self,
-        pattern_ctor: &PatternCtor,
+        pattern_ctor_id: PatternCtorId,
         writ: &mut impl Write,
     ) -> std::fmt::Result {
-        match pattern_ctor {
+        match self.pattern_ctors.get(pattern_ctor_id) {
             PatternCtor::Unit => writ.write_str("()"),
             PatternCtor::BoolTrue => writ.write_str("true"),
             PatternCtor::BoolFalse => writ.write_str("false"),
@@ -897,17 +897,17 @@ impl TypedProgram {
             PatternCtor::Float => writ.write_str("<float>"),
             PatternCtor::Pointer => writ.write_str("<ptr>"),
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
-            PatternCtor::FunctionReference => writ.write_str("fn*"),
+            PatternCtor::FunctionPointer => writ.write_str("fn*"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;
-                self.display_pattern_ctor(inner, writ)
+                self.display_pattern_ctor(*inner, writ)
             }
             PatternCtor::Struct { fields } => {
                 writ.write_str("{ ")?;
                 for (index, (field_name, field_pattern)) in fields.iter().enumerate() {
                     writ.write_str(self.ident_str(*field_name))?;
                     writ.write_str(": ")?;
-                    self.display_pattern_ctor(field_pattern, writ)?;
+                    self.display_pattern_ctor(*field_pattern, writ)?;
                     let last = index == fields.len() - 1;
                     if !last {
                         writ.write_str(", ")?;
@@ -922,7 +922,7 @@ impl TypedProgram {
                 writ.write_str(self.ident_str(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
                     writ.write_str("(")?;
-                    self.display_pattern_ctor(payload, writ)?;
+                    self.display_pattern_ctor(*payload, writ)?;
                     writ.write_str(")")?;
                 };
                 Ok(())
@@ -930,9 +930,9 @@ impl TypedProgram {
         }
     }
 
-    pub fn pattern_ctor_to_string(&self, pattern_ctor: &PatternCtor) -> String {
+    pub fn pattern_ctor_to_string(&self, pattern_ctor_id: PatternCtorId) -> String {
         let mut s = String::new();
-        self.display_pattern_ctor(pattern_ctor, &mut s).unwrap();
+        self.display_pattern_ctor(pattern_ctor_id, &mut s).unwrap();
         s
     }
 

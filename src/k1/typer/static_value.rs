@@ -209,7 +209,7 @@ pub struct StaticValuePool {
 impl StaticValuePool {
     pub fn with_capacity(capacity: usize) -> StaticValuePool {
         StaticValuePool {
-            pool: VPool::make_max("static_values", capacity),
+            pool: VPool::make_with_hint("static_values", capacity),
             hashes: FxHashMap::with_capacity(capacity),
         }
     }

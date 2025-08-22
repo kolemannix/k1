@@ -12,7 +12,7 @@ struct TestDedupSystem {
 impl TestDedupSystem {
     fn new() -> Self {
         Self {
-            static_values: VPool::make_mb("test_static_values", 1),
+            static_values: VPool::make("test_static_values"),
             static_values_dedup: FxHashMap::default(),
         }
     }
