@@ -898,14 +898,17 @@ pub struct TypePool {
 
 impl TypePool {
     pub fn empty() -> TypePool {
-        const MAX_TYPES: usize = 131072;
+        const EXPECTED_TYPE_COUNT: usize = 65536;
         TypePool {
-            types: VPool::make_max("types", MAX_TYPES),
+            types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
             hashes: FxHashMap::default(),
 
-            layouts: VPool::make_max("layouts", MAX_TYPES),
-            type_variable_counts: VPool::make_max("type_variable_counts", MAX_TYPES),
-            instance_info: VPool::make_max("instance_info", MAX_TYPES),
+            layouts: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
+            type_variable_counts: VPool::make_with_hint(
+                "type_variable_counts",
+                EXPECTED_TYPE_COUNT,
+            ),
+            instance_info: VPool::make_with_hint("instance_info", EXPECTED_TYPE_COUNT),
 
             defn_info: FxHashMap::default(),
 

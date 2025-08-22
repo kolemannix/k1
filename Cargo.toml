@@ -11,6 +11,7 @@ path = "src/k1/lib.rs"
 [features]
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
 gui = ["raylib"]
+profile = []
 
 [dependencies]
 # Core dependencies

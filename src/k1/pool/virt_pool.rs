@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use crate::pool::{PoolIndex, SliceHandle};
 
-pub struct VPool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
+pub struct VPool<T, Index: PoolIndex> {
     // It would be a lot more powerful if each entry could point to its 'next', or if each entry
     // were an enum allowing redirects. The issue there is we can't really provide a slice, we can
     // only provide iterators, it's just a lot more to do, and there's overhead per lookup
@@ -18,6 +18,7 @@ pub struct VPool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     mmap: memmap2::MmapMut,
     len: usize,
     max_len: usize,
+    expected_hint: Option<usize>,
     #[allow(unused)]
     name: &'static str,
     _index: std::marker::PhantomData<Index>,
@@ -25,21 +26,29 @@ pub struct VPool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
 }
 
 impl<T, Index: PoolIndex> VPool<T, Index> {
-    pub fn make_max(name: &'static str, max: usize) -> Self {
-        let alloc_bytes = std::mem::size_of::<T>() * max;
-        Self::make_bytes(name, alloc_bytes)
+    pub fn make_with_hint(name: &'static str, expected_usage: usize) -> Self {
+        Self::make_bytes(name, crate::GIGABYTE, Some(expected_usage))
     }
-    pub fn make_mb(name: &'static str, megs: usize) -> Self {
-        Self::make_bytes(name, crate::MEGABYTE * megs)
+    pub fn make(name: &'static str) -> Self {
+        Self::make_bytes(name, crate::GIGABYTE, None)
     }
-    pub fn make_bytes(name: &'static str, bytes: usize) -> Self {
+    pub fn make_bytes(name: &'static str, bytes: usize, expected_usage: Option<usize>) -> Self {
         let mmap = memmap2::MmapMut::map_anon(bytes).unwrap();
+        mmap.advise(memmap2::Advice::Sequential);
+        if let Some(expected_usage) = expected_usage {
+            mmap.advise_range(
+                memmap2::Advice::WillNeed,
+                0,
+                expected_usage * std::mem::size_of::<T>(),
+            );
+        }
         let len_in_ts = mmap.len() / std::mem::size_of::<T>();
         VPool {
             name,
             mmap,
             len: 0,
             max_len: len_in_ts,
+            expected_hint: expected_usage,
             _index: std::marker::PhantomData,
             _elem: std::marker::PhantomData,
         }
@@ -209,16 +218,28 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn print_size_info(&self) {
         let percent_used = (self.len as u128) * 100 / self.max_len as u128;
         let size_in_mb = self.mmap.len() / crate::MEGABYTE;
+        let hint = match self.expected_hint {
+            None => "".to_string(),
+            Some(hint) => format!("[{:2}% of hinted]", self.len as u128 * 100 / (hint as u128)),
+        };
         eprintln!(
-            "VPool {:16}: {:2}% of {:4}mb used by {} / {} elements ({} size {})",
+            "VPool {:16}: {:2}% of {:4}mb used by {} / {} elements {} ({} size {})",
             self.name,
             percent_used,
             size_in_mb,
             self.len,
             self.max_len,
+            hint,
             std::any::type_name::<T>(),
             std::mem::size_of::<T>()
         );
+    }
+}
+
+#[cfg(feature = "profile")]
+impl<T, Index: PoolIndex> Drop for VPool<T, Index> {
+    fn drop(&mut self) {
+        self.print_size_info()
     }
 }
 
@@ -305,7 +326,7 @@ mod test {
 
     #[test]
     fn single() {
-        let mut pool: VPool<Foo, MyIndex> = VPool::make_mb("single", 1);
+        let mut pool: VPool<Foo, MyIndex> = VPool::make("single");
         let handle = pool.add(Foo { data: 42 });
         assert_eq!(pool.get(handle).data, 42);
         *pool.get_mut(handle) = Foo { data: 43 };
@@ -314,7 +335,7 @@ mod test {
 
     #[test]
     fn slice() {
-        let mut pool: VPool<Foo, MyIndex> = VPool::make_mb("slice", 1);
+        let mut pool: VPool<Foo, MyIndex> = VPool::make("slice");
         let handle = pool
             .add_slice_from_iter([Foo { data: 1 }, Foo { data: 2 }, Foo { data: 3 }].into_iter());
         assert_eq!(pool.get_slice(handle).iter().map(|foo| foo.data).collect_vec(), vec![1, 2, 3]);
@@ -333,7 +354,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Pool Index out of bounds")]
     fn out_of_bounds_single() {
-        let pool: VPool<i32, MyIndex> = VPool::make_mb("bounds_test", 1);
+        let pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         let invalid_id = MyIndex::from(NonZeroU32::new(1).unwrap());
 
         pool.get(invalid_id);
@@ -342,13 +363,13 @@ mod test {
     #[test]
     #[should_panic(expected = "Pool Index out of bounds")]
     fn out_of_bounds_slice_start() {
-        let mut pool: VPool<i32, MyIndex> = VPool::make_mb("bounds_test", 1);
+        let mut pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         pool.add(1);
         pool.add(2);
         pool.add(3);
 
         // x x x _
-        //   [   ]
+        //       [   ]
         let slice_handle = SliceHandle::make(MyIndex::from(NonZeroU32::new(4).unwrap()), 1);
         pool.get_slice(slice_handle);
     }
@@ -356,7 +377,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Pool Index out of bounds")]
     fn out_of_bounds_slice_end() {
-        let mut pool: VPool<i32, MyIndex> = VPool::make_mb("bounds_test", 1);
+        let mut pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         pool.add(1);
         pool.add(2);
         pool.add(3);

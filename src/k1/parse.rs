@@ -1500,8 +1500,8 @@ pub struct ParsedExpressionPool {
 impl ParsedExpressionPool {
     pub fn new() -> Self {
         ParsedExpressionPool {
-            expressions: VPool::make_max("parsed_expr", 10_000_000),
-            metadata: VPool::make_max("parsed_expr_metadata", 10_000_000),
+            expressions: VPool::make_with_hint("parsed_expr", 65536 * 2),
+            metadata: VPool::make_with_hint("parsed_expr_metadata", 65536 * 2),
         }
     }
 
@@ -1554,7 +1554,9 @@ pub struct ParsedTypeExpressionPool {
 }
 impl ParsedTypeExpressionPool {
     fn new() -> Self {
-        ParsedTypeExpressionPool { type_expressions: VPool::make_mb("parsed_type_expr", 512) }
+        ParsedTypeExpressionPool {
+            type_expressions: VPool::make_with_hint("parsed_type_expr", 65536),
+        }
     }
 
     pub fn add(&mut self, expression: ParsedTypeExpr) -> ParsedTypeExprId {
@@ -1570,7 +1572,7 @@ pub struct ParsedUsePool {
 }
 impl ParsedUsePool {
     pub fn make() -> Self {
-        Self { uses: VPool::make_mb("parsed_uses", 128) }
+        Self { uses: VPool::make("parsed_uses") }
     }
     pub fn add_use(&mut self, r#use: ParsedUse) -> ParsedUseId {
         self.uses.add(r#use)
@@ -1681,10 +1683,10 @@ impl ParsedProgram {
             name_id,
             config,
             spans: Spans::new(),
-            functions: VPool::make_mb("functions", 1024),
-            globals: VPool::make_mb("parsed_globals", 256),
+            functions: VPool::make_with_hint("functions", 8192),
+            globals: VPool::make_with_hint("parsed_globals", 8192),
             type_defns: Vec::new(),
-            namespaces: VPool::make_mb("parsed_namespaces", 256),
+            namespaces: VPool::make_with_hint("parsed_namespaces", 8192),
             abilities: Vec::new(),
             ability_impls: Vec::new(),
             sources: Sources::default(),
@@ -1693,13 +1695,13 @@ impl ParsedProgram {
             exprs: ParsedExpressionPool::new(),
             type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
-            stmts: VPool::make_mb("parsed_stmts", 256),
+            stmts: VPool::make_with_hint("parsed_stmts", 65536),
             uses: ParsedUsePool::make(),
             errors: Vec::new(),
-            p_type_args: VPool::make_mb("parsed_named_type_args", 256),
-            p_call_args: VPool::make_mb("parsed_call_args", 256),
-            p_idents: VPool::make_mb("ident_slices", 256),
-            p_ability_exprs: VPool::make_mb("ability_exprs", 256),
+            p_type_args: VPool::make_with_hint("parsed_named_type_args", 8192),
+            p_call_args: VPool::make_with_hint("parsed_call_args", 8192),
+            p_idents: VPool::make_with_hint("ident_slices", 8192),
+            p_ability_exprs: VPool::make_with_hint("ability_exprs", 8192),
         }
     }
 

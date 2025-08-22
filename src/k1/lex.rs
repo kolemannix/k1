@@ -36,7 +36,7 @@ pub struct Spans {
 
 impl Spans {
     pub fn new() -> Spans {
-        let mut pool = VPool::make_mb("spans", 1024);
+        let mut pool = VPool::make_with_hint("spans", 131072);
         pool.add(Span::NONE);
         Spans { span_pool: pool }
     }
