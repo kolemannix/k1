@@ -16,6 +16,7 @@ fn low(): unit {
   ability_self_call/test();
   ability_constraint_fail/test();
   ability_01/test();
+  ability_overload_ish/test();
   bits_test/test();
   control_flow/test();
   enum_basic/test();

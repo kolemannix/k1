@@ -8,5 +8,9 @@ deftype Tool = either True, False, Iono
 fn test(): unit {
   let p: Tool = .True;
   let result = testCompile(p.num());
-  assertEquals(result, .Some("Call to `num`: \\(Self) -> i32 with type Self = Tool does not work, since it does not implement ability Num. No matching implementations found"));
+  assertEquals(result, .Some(
+`Call to Num/num with Self := Tool does not work
+No matching implementations found
+Function type: \(Self) -> i32`
+  ))
 }

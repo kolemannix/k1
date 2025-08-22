@@ -31,17 +31,17 @@ fn describeArray[T](): string {
 }
 
 fn test(): unit {
-  println("=== array_type_test ===");
+  println("array_type_test");
 
   // Test 1: Basic Array type names
-  print("1. Testing type names...");
+  print("> type names");
   assertEquals(typeName(typeId[Array[10 x i32]]()), "Array[10 x i32]");
   assertEquals(typeName(typeId[Array[5 x u64]]()), "Array[5 x u64]");
   assertEquals(typeName(typeId[Array[3 x bool]]()), "Array[3 x bool]");
   println("   PASS");
 
   // Test 2: Array type schemas
-  print("2. Testing type schemas...");
+  print("> type schemas");
   let i32ArraySchema = typeSchema(typeId[Array[10 x i32]]());
   require i32ArraySchema is .Array({ elementTypeId, size }) else {
     crash("Expected Array schema for Array[10 x i32]")
@@ -58,7 +58,7 @@ fn test(): unit {
   println("   PASS");
 
   // Test 3: Layout and size information
-  print("3. Testing layout information...");
+  print("> layout information");
   // u8 arrays: 1 byte per element, 1-byte aligned
   assertEquals(sizeOf[Array[4 x u8]](), 4);
   assertEquals(alignOf[Array[4 x u8]](), 1);
@@ -81,7 +81,7 @@ fn test(): unit {
   println("   PASS");
 
   // Test 4: Generic functions with Arrays (tests type substitution)
-  print("4. Testing generic Array operations...");
+  print("> array operations");
   let u8Info = getArrayInfo[u8]();
   assertEquals(u8Info.elementName, "u8");
   assertEquals(u8Info.fiveSize, 5);    // Array[5 x u8] = 5 bytes
@@ -98,15 +98,13 @@ fn test(): unit {
   assertEquals(pointInfo.tenSize, 80);  // Array[10 x Point] = 10 * 8 = 80 bytes
   println("   PASS");
 
-  // Test 5: More generic functions
-  print("5. Testing Array descriptions...");
+  print("> array descriptions");
   assertEquals(describeArray[i32](), "Array[3 x i32]");
   assertEquals(describeArray[string](), "Array[3 x string]");
   assertEquals(describeArray[Point](), "Array[3 x Point]");
   println("   PASS");
 
-  // Test 6: Type identity checks
-  print("6. Testing type identity...");
+  print("> type identity");
   let array1TypeId = typeId[Array[5 x i32]]();
   let array2TypeId = typeId[Array[5 x i32]]();
   let array3TypeId = typeId[Array[6 x i32]]();
@@ -117,8 +115,7 @@ fn test(): unit {
   assert(array1TypeId != array4TypeId);     // Different element type - keeping assert for != checks
   println("   PASS");
 
-  // Test 7: Zero-sized arrays
-  print("7. Testing edge cases...");
+  print("> edge cases");
   assertEquals(sizeOf[Array[0 x i32]](), 0);
   assertEquals(alignOf[Array[0 x i32]](), 1);  // Zero-length arrays should have alignment 1
 
@@ -126,11 +123,11 @@ fn test(): unit {
   assertEquals(alignOf[Array[1 x u8]](), 1);
   println("   PASS");
 
-  print("8. Testing type-level member access...");
+  print("> type-level member access");
   let t1 = typeId[Array[0 x string].element]();
   let t2 = typeId[string]();
   assertEquals(t1, t2);
   println("   PASS");
 
-  println("=== array_type_test PASS ===");
+  println("array_type_test end");
 }

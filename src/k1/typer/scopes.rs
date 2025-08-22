@@ -2,21 +2,17 @@
 // All rights reserved.
 
 use ahash::HashMapExt;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use std::{
-    collections::{HashSet, hash_map::Entry},
-    fmt::Display,
-    num::NonZeroU32,
-};
+use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
     errf,
     lex::SpanId,
     nz_u32_id,
     parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId},
-    pool::Pool,
+    pool::VPool,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
         TyperResult, VariableId, make_error,
@@ -97,7 +93,7 @@ pub struct ScopeLoopInfo {
 }
 
 pub struct Scopes {
-    scopes: Pool<Scope, ScopeId>,
+    scopes: VPool<Scope, ScopeId>,
     lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub core_scope_id: ScopeId,
@@ -111,7 +107,7 @@ impl Scopes {
     pub fn make(root_ident: Ident) -> Self {
         let root_scope = Scope::make(ScopeType::Namespace, None, Some(root_ident), 0);
         let mut scopes = Scopes {
-            scopes: Pool::with_capacity("scopes", 8192),
+            scopes: VPool::make_with_hint("scopes", 8192),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             core_scope_id: ScopeId::PENDING,
@@ -490,17 +486,14 @@ impl Scopes {
         }
     }
 
-    pub fn find_abilities_in_scope(&self, scope_id: ScopeId) -> HashSet<AbilityId> {
+    pub fn find_abilities_in_scope(&self, dst: &mut FxHashSet<AbilityId>, scope_id: ScopeId) {
         let scope = self.get_scope(scope_id);
-        let mut abilities = HashSet::new();
-        abilities.extend(scope.abilities.values());
+        dst.extend(scope.abilities.values());
         match scope.parent {
             Some(parent_scope_id) => {
-                let from_parent = self.find_abilities_in_scope(parent_scope_id);
-                abilities.extend(from_parent);
-                abilities
+                self.find_abilities_in_scope(dst, parent_scope_id);
             }
-            None => abilities,
+            None => {}
         }
     }
 

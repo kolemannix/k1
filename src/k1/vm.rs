@@ -2037,7 +2037,6 @@ pub struct Stack {
     allocation: MmapMut,
     base_ptr: *const u8,
     frames: Vec<StackFrame>,
-    // nocommit: Unnest VM's locals map
     locals: FxHashMap<(u32, VariableId), Value>,
     cursor: *const u8,
 }
@@ -2084,7 +2083,6 @@ impl Stack {
         if len_to_clear == 0 {
             return;
         }
-        eprintln!("stack resetting only {len_to_clear} bytes");
         self.cursor = self.base_ptr();
         unsafe {
             core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, len_to_clear);

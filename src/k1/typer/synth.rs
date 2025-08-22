@@ -29,7 +29,7 @@ impl TypedProgram {
         let implementation = self.ability_impls.get(implementation.full_impl_id);
         let ability = self.abilities.get(EQUALS_ABILITY_ID);
         let equals_index =
-            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().0;
+            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().index;
         let equals_implementation = implementation.function_at_index(equals_index);
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::from_ability_impl_fn(equals_implementation),
