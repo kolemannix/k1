@@ -21,7 +21,6 @@ use crate::{
     compiler::WordSize,
     failf, int_binop,
     lex::SpanId,
-    nz_u32_id,
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
@@ -157,8 +156,7 @@ impl Vm {
     }
 
     pub fn insert_local(&mut self, frame_index: u32, variable_id: VariableId, value: Value) {
-        let frame_locals = self.stack.locals.entry(frame_index).or_default();
-        frame_locals.insert(variable_id, value);
+        self.stack.locals.insert((frame_index, variable_id), value);
     }
 
     pub fn insert_current_local(&mut self, variable_id: VariableId, value: Value) {
@@ -170,8 +168,7 @@ impl Vm {
     }
 
     pub fn get_local(&mut self, frame_index: u32, variable_id: VariableId) -> Option<Value> {
-        let frame_locals = self.stack.locals.entry(frame_index).or_default();
-        frame_locals.get(&variable_id).copied()
+        self.stack.locals.get(&(frame_index, variable_id)).copied()
     }
 
     pub fn dump_current_frame(&mut self, k1: &TypedProgram) -> String {
@@ -189,10 +186,9 @@ impl Vm {
         let locals = self
             .stack
             .locals
-            .entry(frame_index as u32)
-            .or_default()
             .iter()
-            .map(|p| (*p.0, *p.1))
+            .filter(|(k, _v)| k.0 == frame_index as u32)
+            .map(|(k, v)| (k.1, *v))
             .collect_vec();
         let _debug_frame = self.stack.push_new_frame(None, None);
         for (k, v) in locals.into_iter() {
@@ -2037,19 +2033,18 @@ pub fn gep_enum_payload(
     payload_ptr
 }
 
-nz_u32_id!(FrameIndex);
-
 pub struct Stack {
     allocation: MmapMut,
     base_ptr: *const u8,
     frames: Vec<StackFrame>,
-    // nocommit: Unnest map
-    locals: FxHashMap<u32, FxHashMap<VariableId, Value>>,
+    // nocommit: Unnest VM's locals map
+    locals: FxHashMap<(u32, VariableId), Value>,
     cursor: *const u8,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct StackFrame {
+    #[allow(unused)]
     index: u32,
     base_ptr: *const u8,
     debug_name: Option<Ident>,
@@ -2111,7 +2106,6 @@ impl Stack {
 
     fn pop_frame(&mut self) -> StackFrame {
         let f = self.frames.pop().unwrap();
-        self.locals.entry(f.index).or_default().clear();
         self.cursor = f.base_ptr;
         f
     }

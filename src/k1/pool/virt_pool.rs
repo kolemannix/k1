@@ -34,13 +34,14 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
     pub fn make_bytes(name: &'static str, bytes: usize, expected_usage: Option<usize>) -> Self {
         let mmap = memmap2::MmapMut::map_anon(bytes).unwrap();
-        mmap.advise(memmap2::Advice::Sequential);
+        mmap.advise(memmap2::Advice::Sequential).unwrap();
         if let Some(expected_usage) = expected_usage {
             mmap.advise_range(
                 memmap2::Advice::WillNeed,
                 0,
                 expected_usage * std::mem::size_of::<T>(),
-            );
+            )
+            .unwrap();
         }
         let len_in_ts = mmap.len() / std::mem::size_of::<T>();
         VPool {
@@ -217,16 +218,18 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
 
     pub fn print_size_info(&self) {
         let percent_used = (self.len as u128) * 100 / self.max_len as u128;
+        let mb_used = self.len * std::mem::size_of::<T>() / crate::MEGABYTE;
         let size_in_mb = self.mmap.len() / crate::MEGABYTE;
         let hint = match self.expected_hint {
             None => "".to_string(),
             Some(hint) => format!("[{:2}% of hinted]", self.len as u128 * 100 / (hint as u128)),
         };
         eprintln!(
-            "VPool {:16}: {:2}% of {:4}mb used by {} / {} elements {} ({} size {})",
+            "VPool {:16}: {:04} / {:04}mb ({:02}%) used by {} / {} elements {} ({} size {})",
             self.name,
-            percent_used,
+            mb_used,
             size_in_mb,
+            percent_used,
             self.len,
             self.max_len,
             hint,

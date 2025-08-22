@@ -84,8 +84,11 @@ impl A {
     #[track_caller]
     #[inline]
     fn check_mine(&self, ptr: usize) {
-        if ptr <= self.base_ptr().addr() || ptr >= self.cursor.addr() {
-            panic!("Address out of bounds: {}", ptr,);
+        if ptr < self.base_ptr().addr() {
+            panic!("Address not mine (less than base): {} < {}", ptr, self.base_ptr().addr());
+        }
+        if ptr >= self.cursor.addr() {
+            panic!("Address is beyond cursor: {} >= {}", ptr, self.cursor.addr());
         }
     }
 
@@ -140,7 +143,6 @@ impl A {
         if cfg!(debug_assertions) {
             self.check_mine(ptr.addr())
         }
-        // nocommit: Should I check if ptr is between our base and cursor?
         unsafe { &*ptr }
     }
 

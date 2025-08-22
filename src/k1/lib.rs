@@ -21,8 +21,9 @@ pub const GIGABYTE: usize = MEGABYTE * 1024;
 
 pub const STACK_SIZE: usize = 10 * MEGABYTE;
 
-pub type SV8<T> = SmallVec<[T; 8]>;
+pub type SV2<T> = SmallVec<[T; 2]>;
 pub type SV4<T> = SmallVec<[T; 4]>;
+pub type SV8<T> = SmallVec<[T; 8]>;
 
 #[macro_export]
 macro_rules! nz_u32_id {

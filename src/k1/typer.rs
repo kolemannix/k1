@@ -57,8 +57,7 @@ use crate::parse::{
     Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
 };
 use crate::pool::{SliceHandle, VPool};
-use crate::{SV4, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
-use crate::{SV8, vm};
+use crate::{SV2, SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vm};
 
 #[cfg(test)]
 mod layout_test;
@@ -285,7 +284,6 @@ pub struct AggregateLayout {
     pub offsets: SmallVec<[u32; 8]>,
 }
 
-// nocommit(2): Switch to pool; make pattern matching code less allocatey period
 nz_u32_id!(PatternCtorId);
 
 impl PatternCtorId {
@@ -324,7 +322,7 @@ pub enum PatternCtor {
     FunctionPointer,
     Reference(PatternCtorId),
     Struct {
-        fields: Vec<(Ident, PatternCtorId)>,
+        fields: SV4<(Ident, PatternCtorId)>,
     },
     Enum {
         variant_name: Ident,
@@ -2204,6 +2202,9 @@ pub struct TypedModuleBuffers {
     name_builder: String,
     emitted_code: String,
     emit_lexer_tokens: Vec<lex::Token>,
+    /// For Pattern matching trials
+    trial_ctors: Vec<PatternCtorTrialEntry>,
+    field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -2404,6 +2405,8 @@ impl TypedProgram {
                 name_builder: String::with_capacity(4096),
                 emitted_code: String::with_capacity(8192),
                 emit_lexer_tokens: Vec::new(),
+                trial_ctors: Vec::with_capacity(1024),
+                field_ctors: (0..128).map(|_| Vec::with_capacity(128)).collect::<Vec<_>>(),
             },
             named_types: VPool::make_with_hint("named_types", 32768),
             existential_type_params: VPool::make_with_hint("function_type_params", 8192),
@@ -7808,7 +7811,9 @@ impl TypedProgram {
 
         let mut expected_arm_type_id = ctx.expected_type_id;
         let match_scope_id = ctx.scope_id;
-        let mut all_unguarded_patterns = Vec::with_capacity(cases.len());
+        // nocommit: Try to use scratch memory from new arena for `all_unguarded_patterns`
+        let mut all_unguarded_patterns: Vec<(TypedPattern, usize)> =
+            Vec::with_capacity(cases.len());
         let target_expr_type = self.exprs.get(target_expr).get_type();
         let target_expr_span = self.exprs.get(target_expr).get_span();
         for parsed_case in cases.iter() {
@@ -7862,10 +7867,10 @@ impl TypedProgram {
                     }
                 }
 
-                arm_patterns.push(pattern.clone());
                 if parsed_case.guard_condition_expr.is_none() {
-                    all_unguarded_patterns.push(pattern);
+                    all_unguarded_patterns.push((pattern.clone(), 0));
                 }
+                arm_patterns.push(pattern);
             }
 
             // Note: We compile the arm expression and the guard condition as many times as there are patterns, since each
@@ -7877,15 +7882,11 @@ impl TypedProgram {
             for pattern in arm_patterns.into_iter() {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
-                //let mut setup_statements = smallvec![];
-                //let mut binding_statements = smallvec![];
                 let mut instrs = eco_vec![];
                 self.compile_pattern_into_values(
                     &pattern,
                     target_expr,
                     &mut instrs,
-                    //&mut setup_statements,
-                    //&mut binding_statements,
                     false,
                     arm_scope_id,
                 )?;
@@ -7943,9 +7944,9 @@ impl TypedProgram {
 
         // Exhaustiveness Checking
         if !partial_match {
-            // nocommit reuse these
-            let mut trial_constructors = Vec::new();
-            let mut field_ctors_buf = Vec::new();
+            let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
+            let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
+            trial_constructors.clear();
             self.generate_constructors_for_type(
                 target_expr_type,
                 &mut trial_constructors,
@@ -7953,12 +7954,13 @@ impl TypedProgram {
                 target_expr_span,
             );
             // nocommit last allocation
-            let mut pattern_kill_counts: Vec<usize> = vec![0; all_unguarded_patterns.len()];
             'trial: for trial_entry in trial_constructors.iter_mut() {
-                '_pattern: for (index, pattern) in all_unguarded_patterns.iter().enumerate() {
+                '_pattern: for (index, (pattern, kill_count)) in
+                    all_unguarded_patterns.iter_mut().enumerate()
+                {
                     if TypedProgram::pattern_matches(&self.pattern_ctors, pattern, trial_entry.ctor)
                     {
-                        pattern_kill_counts[index] += 1;
+                        *kill_count += 1;
                         trial_entry.alive = false;
                         continue 'trial;
                     }
@@ -7966,8 +7968,12 @@ impl TypedProgram {
             }
 
             let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
+            self.buffers.trial_ctors = trial_constructors;
+            self.buffers.field_ctors = field_ctors_buf;
             if alive_count != 0 {
-                let patterns = trial_constructors
+                let patterns = self
+                    .buffers
+                    .trial_ctors
                     .iter()
                     .filter(|entry| entry.alive)
                     .map(|entry| self.pattern_ctor_to_string(entry.ctor))
@@ -7980,7 +7986,9 @@ impl TypedProgram {
                 );
             }
 
-            if let Some(useless_index) = pattern_kill_counts.iter().position(|p| *p == 0) {
+            if let Some(useless_index) =
+                all_unguarded_patterns.iter().position(|(p, kill_count)| *kill_count == 0)
+            {
                 // patterns[0]: For actual match expressions, which this is, we'll always have
                 // exactly 1 pattern per arm
                 let pattern = &typed_arms[useless_index].condition.patterns[0];
@@ -10396,14 +10404,6 @@ impl TypedProgram {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
         let args_slice = self.ast.p_call_args.get_slice(fn_call.args);
-        //eprintln!(
-        //    "params_slice! {:?}",
-        //    params.iter().map(|p| (self.name_of(p.name), p.is_context)).collect::<Vec<_>>()
-        //);
-        //eprintln!(
-        //    "args_slice! {:?}",
-        //    args_slice.iter().map(|a| self.ast.expr_id_to_string(a.value)).collect::<Vec<_>>()
-        //);
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
         let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: SmallVec<[MaybeTypedExpr; FUNC_PARAM_IDEAL_COUNT]> = SmallVec::new();
@@ -11307,7 +11307,6 @@ impl TypedProgram {
             .expect(
                 "specialize_function_body wants a normal specialization or a blanket impl defn",
             );
-        //eprintln!("specialize function {}", self.function_id_to_string(parent_function, true));
         let parent_function = self.get_function(parent_function);
         debug_assert!(parent_function.body_block.is_some());
         debug_assert!(specialized_function.body_block.is_none());
@@ -13966,23 +13965,13 @@ impl TypedProgram {
                         span_id,
                     );
                     match field_ctors_buf.get_mut(index) {
-                        None => {
-                            eprintln!(
-                                "Have to allocate fresh field constructor buf for index {index}..."
-                            );
-                            field_ctors_buf.push(Vec::with_capacity(128))
-                        }
+                        None => field_ctors_buf.push(Vec::with_capacity(128)),
                         Some(buf) => buf.clear(),
                     };
                     for field_ctor in dst[prev_len..].iter() {
-                        eprintln!(
-                            "pushing constructor {} for field {}",
-                            self.pattern_ctor_to_string(field_ctor.ctor),
-                            self.ident_str(field.name)
-                        );
                         field_ctors_buf[index].push((field.name, field_ctor.ctor));
                     }
-                    eprintln!(
+                    debug!(
                         "Pushed {} constructors for field {}; resetting dst to {prev_len}",
                         field_ctors_buf[index].len(),
                         self.ident_str(field.name)
@@ -13995,7 +13984,7 @@ impl TypedProgram {
                     .reduce(|t, v| t * v)
                     .unwrap_or(0);
 
-                eprintln!(
+                debug!(
                     "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
                     field_ctors_buf.len(),
                     self.type_id_to_string(type_id)
@@ -14004,7 +13993,7 @@ impl TypedProgram {
                 for _ in 0..final_count {
                     let primed_struct_ctor_id = self
                         .pattern_ctors
-                        .add(PatternCtor::Struct { fields: Vec::with_capacity(field_count) });
+                        .add(PatternCtor::Struct { fields: SmallVec::with_capacity(field_count) });
                     dst.push(alive(primed_struct_ctor_id));
                 }
                 let result_struct_ids = &mut dst[dst_start..];
@@ -14043,23 +14032,14 @@ impl TypedProgram {
                         } else {
                             field_index_w_multi_ctor * 2
                         };
-                        eprintln!("repeat_count = {final_count} / {} * {multiplier}", ctors.len());
                         let repeat_count = final_count / (ctors.len() * multiplier);
                         for (row, result_struct) in result_struct_ids.iter_mut().enumerate() {
                             let pattern_index = (row / repeat_count) % ctors.len();
                             let pattern = ctors[pattern_index];
-                            eprintln!("field {field_index}: using pattern_index {pattern_index}");
                             self.pattern_ctors.get_mut(result_struct.ctor).push_field(pattern);
                         }
                         field_index_w_multi_ctor += 1;
                     }
-                }
-                for entry in result_struct_ids {
-                    eprintln!(
-                        "Struct Type {} pattern: {}",
-                        self.type_id_to_string(type_id),
-                        self.pattern_ctor_to_string(entry.ctor)
-                    );
                 }
             }
             Type::Function(_f) => {
