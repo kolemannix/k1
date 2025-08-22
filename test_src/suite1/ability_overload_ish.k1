@@ -1,0 +1,28 @@
+ns ability_overload_ish;
+
+// We test 2 abilities in scope with the same name
+// and different signatures. The compiler should just
+// keep going and try to make each one work.
+ability Foo {
+  fn foo(self: Self): i32
+}
+
+ability Frob {
+  fn foo(self: Self, y: i32): i32
+}
+
+impl Foo for i32 { 
+  fn foo(self: i32): i32 { self }
+}
+
+impl Frob for i32 { 
+  fn foo(self: i32, y: i32): i32 { self + y }
+}
+
+fn test(): unit {
+  let x: i32 = 10;
+  assertEquals(x.foo(), 10);
+  assertEquals(x.foo(10), 20);
+
+  ()
+}

@@ -18,6 +18,7 @@ use static_value::StaticValuePool;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
@@ -29,11 +30,11 @@ use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
 use crate::{DepEq, DepHash};
-use ahash::HashMapExt;
+use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
 use colored::Colorize;
 use either::Either;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use log::{debug, error, trace};
 use smallvec::{SmallVec, smallvec};
 pub(crate) use static_value::{StaticEnum, StaticStruct, StaticValue, StaticValueId, StaticView};
@@ -57,7 +58,7 @@ use crate::parse::{
     Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
 };
 use crate::pool::{SliceHandle, VPool};
-use crate::{SV2, SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vm};
+use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vm};
 
 #[cfg(test)]
 mod layout_test;
@@ -94,10 +95,11 @@ impl Linkage {
 #[derive(Debug, Clone)]
 pub struct TypedAbilityFunctionRef {
     pub function_name: Ident,
+    pub index: u32,
     pub ability_id: AbilityId,
     pub function_id: FunctionId,
 }
-impl_copy_if_small!(12, TypedAbilityFunctionRef);
+impl_copy_if_small!(16, TypedAbilityFunctionRef);
 
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
 pub const WRITER_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
@@ -483,8 +485,8 @@ pub struct TypedAbility {
 }
 
 impl TypedAbility {
-    pub fn find_function_by_name(&self, name: Ident) -> Option<(usize, &TypedAbilityFunctionRef)> {
-        self.functions.iter().enumerate().find(|(_, f)| f.function_name == name)
+    pub fn find_function_by_name(&self, name: Ident) -> Option<TypedAbilityFunctionRef> {
+        self.functions.iter().find(|f| f.function_name == name).copied()
     }
 
     pub fn parent_ability_id(&self) -> Option<AbilityId> {
@@ -2077,8 +2079,8 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(&self, index: usize) -> AbilityImplFunction {
-        self.functions[index]
+    pub fn function_at_index(&self, index: u32) -> AbilityImplFunction {
+        self.functions[index as usize]
     }
 
     pub fn signature(&self) -> TypedAbilitySignature {
@@ -2268,6 +2270,7 @@ pub struct TypedProgram {
     pub ability_impl_table: FxHashMap<TypeId, Vec<AbilityImplHandle>>,
     /// Key is base ability id
     pub blanket_impls: FxHashMap<AbilityId, EcoVec<AbilityImplId>>,
+    pub function_name_to_ability: FxHashMap<Ident, EcoVec<AbilityId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
     pub function_ast_mappings: FxHashMap<ParsedFunctionId, FunctionId>,
     pub global_ast_mappings: FxHashMap<ParsedGlobalId, TypedGlobalId>,
@@ -2382,6 +2385,7 @@ impl TypedProgram {
             ability_impls: VPool::make_with_hint("ability_impls", 4096),
             ability_impl_table: FxHashMap::new(),
             blanket_impls: FxHashMap::new(),
+            function_name_to_ability: FxHashMap::with_capacity(1024),
             namespace_ast_mappings: FxHashMap::with_capacity(512),
             function_ast_mappings: FxHashMap::with_capacity(512),
             global_ast_mappings: FxHashMap::new(),
@@ -6635,7 +6639,7 @@ impl TypedProgram {
                 // Get the function id from it by name I guess
                 let call_ast_expr = self.ast.exprs.get(qcall.call_expr).expect_call().clone();
                 let call_name = call_ast_expr.name.name;
-                let Some((function_index, _)) = self
+                let Some(tafr) = self
                     .abilities
                     .get(signature.specialized_ability_id)
                     .find_function_by_name(call_name)
@@ -6648,7 +6652,7 @@ impl TypedProgram {
                     );
                 };
                 let impl_ = self.ability_impls.get(impl_handle.full_impl_id);
-                let impl_function = impl_.function_at_index(function_index);
+                let impl_function = impl_.function_at_index(tafr.index);
                 self.eval_function_call(
                     &call_ast_expr,
                     None,
@@ -7953,11 +7957,8 @@ impl TypedProgram {
                 &mut field_ctors_buf,
                 target_expr_span,
             );
-            // nocommit last allocation
             'trial: for trial_entry in trial_constructors.iter_mut() {
-                '_pattern: for (index, (pattern, kill_count)) in
-                    all_unguarded_patterns.iter_mut().enumerate()
-                {
+                '_pattern: for (pattern, kill_count) in all_unguarded_patterns.iter_mut() {
                     if TypedProgram::pattern_matches(&self.pattern_ctors, pattern, trial_entry.ctor)
                     {
                         *kill_count += 1;
@@ -7987,7 +7988,7 @@ impl TypedProgram {
             }
 
             if let Some(useless_index) =
-                all_unguarded_patterns.iter().position(|(p, kill_count)| *kill_count == 0)
+                all_unguarded_patterns.iter().position(|(_, kill_count)| *kill_count == 0)
             {
                 // patterns[0]: For actual match expressions, which this is, we'll always have
                 // exactly 1 pattern per arm
@@ -9299,13 +9300,9 @@ impl TypedProgram {
                             .abilities
                             .get(function_ability_id)
                             .find_function_by_name(fn_call.name.name)
-                            .unwrap()
-                            .0;
-                        let function_type_id = self.get_function(function_id).type_id;
-                        let ability_impl_function = self.resolve_ability_call(
-                            function_type_id,
+                            .unwrap();
+                        let ability_impl_function = self.solve_ability_call(
                             function_ability_index,
-                            function_ability_id,
                             fn_call,
                             known_args,
                             ctx,
@@ -9811,7 +9808,17 @@ impl TypedProgram {
             }
         };
 
-        let abilities_in_scope = self.scopes.find_abilities_in_scope(ctx.scope_id);
+        let Some(abilities_for_function) = self.function_name_to_ability.get(&fn_name) else {
+            return failf!(
+                call_span,
+                "Method '{}' does not exist on type: '{}'",
+                self.ident_str(call.name.name),
+                self.type_id_to_string(base_expr_type),
+            );
+        };
+
+        let mut abilities_in_scope = FxHashSet::new();
+        self.scopes.find_abilities_in_scope(&mut abilities_in_scope, ctx.scope_id);
         debug!(
             "abilities_in_scope: {:?}",
             abilities_in_scope
@@ -9820,31 +9827,33 @@ impl TypedProgram {
                 .collect::<Vec<_>>()
         );
 
-        // FIXME: ability call resolution is pretty expensive, it may be worth maintaining an index of function names -> ability,
-        //        then if we hit, just ensure its in scope.
-        //        Seeing this again in profile; should do it; nocommit(2)
-        let Some((ability_function_index, ability_function_ref)) = abilities_in_scope
-            .iter()
-            .find_map(|ability_id| self.abilities.get(*ability_id).find_function_by_name(fn_name))
-        else {
-            return failf!(
+        let mut errors: SV4<TyperError> = smallvec![];
+        for ability_id in abilities_for_function.clone().iter() {
+            let in_scope = abilities_in_scope.contains(ability_id);
+            if in_scope {
+                let ability_function_ref =
+                    self.abilities.get(*ability_id).find_function_by_name(fn_name).unwrap();
+                match self.solve_ability_call(ability_function_ref, call, known_args, ctx) {
+                    Ok(ability_impl_fn) => {
+                        return Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_fn)));
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            failf!(
                 call_span,
                 "Method '{}' does not exist on type: '{}'",
                 self.ident_str(call.name.name),
                 self.type_id_to_string(base_expr_type),
-            );
-        };
-        let ability_id = ability_function_ref.ability_id;
-        let ability_function_type = self.get_function(ability_function_ref.function_id).type_id;
-        let ability_impl_fn = self.resolve_ability_call(
-            ability_function_type,
-            ability_function_index,
-            ability_id,
-            call,
-            known_args,
-            ctx,
-        )?;
-        Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_fn)))
+            )
+        } else {
+            Err(errors.into_iter().next().unwrap())
+        }
     }
 
     pub fn function_to_reference(
@@ -9927,16 +9936,20 @@ impl TypedProgram {
         self.types.add(Type::Function(function_type), defn_info, None)
     }
 
-    fn resolve_ability_call(
+    /// After resolving to a particular root AbilityId + function index using just names,
+    /// we have to use the information in the call to 'solve' for Self using the rest
+    /// of the information available in the `ParsedCall`, and ultimately come back with either
+    /// an error, such as 'couldnt solve', 'not implemented' or: an exact physical function id of the correct AbilityImpl
+    fn solve_ability_call(
         &mut self,
-        function_type_id: TypeId,
-        function_ability_index: usize,
-        base_ability_id: AbilityId,
+        ability_function_ref: TypedAbilityFunctionRef,
         fn_call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
     ) -> TyperResult<AbilityImplFunction> {
         let call_span = fn_call.span;
+        let function_type_id = self.get_function(ability_function_ref.function_id).type_id;
+        let base_ability_id = ability_function_ref.ability_id;
         let ability_fn_type = self.types.get(function_type_id).as_function().unwrap();
         let ability_fn_return_type = ability_fn_type.return_type;
         let ability_fn_params: Vec<FnParamType> = ability_fn_type.logical_params().to_vec();
@@ -10054,28 +10067,30 @@ impl TypedProgram {
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
         let solved_self = self.named_types.get_nth(self_only, 0).type_id;
-        let impl_handle = self.find_ability_impl_for_type_or_generate_new(
-            solved_self,
-            base_ability_id,
-            &parameter_constraints,
-            ctx.scope_id,
-            call_span,
-        ).map_err(|msg| {
-           errf!(
-               call_span,
-               "Call to `{}`: {} with type Self = {} does not work, since it does not implement ability {}. {}",
-               self.namespaced_identifier_to_string(&fn_call.name),
-               self.type_id_to_string(function_type_id),
-               self.type_id_to_string(solved_self),
-               self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
-               msg
-           )
-        })?;
+        let impl_handle = self
+            .find_ability_impl_for_type_or_generate_new(
+                solved_self,
+                base_ability_id,
+                &parameter_constraints,
+                ctx.scope_id,
+                call_span,
+            )
+            .map_err(|msg| {
+                errf!(
+                    call_span,
+                    "Call to {}/{} with Self := {} does not work\n{}\nFunction type: {}",
+                    self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
+                    self.namespaced_identifier_to_string(&fn_call.name),
+                    self.type_id_to_string(solved_self),
+                    msg,
+                    self.type_id_to_string(function_type_id),
+                )
+            })?;
 
         let impl_function = self
             .ability_impls
             .get(impl_handle.full_impl_id)
-            .function_at_index(function_ability_index);
+            .function_at_index(ability_function_ref.index);
         Ok(impl_function)
     }
 
@@ -12156,7 +12171,7 @@ impl TypedProgram {
 
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = EcoVec::with_capacity(parsed_ability.functions.len());
-        for parsed_fn in parsed_ability.functions.clone().iter() {
+        for (index, parsed_fn) in parsed_ability.functions.clone().iter().enumerate() {
             let result = self.eval_function_declaration(
                 *parsed_fn,
                 specialized_ability_scope,
@@ -12172,6 +12187,7 @@ impl TypedProgram {
             let function_name = self.get_function(function_id).name;
             specialized_functions.push(TypedAbilityFunctionRef {
                 function_id,
+                index: index as u32,
                 ability_id: specialized_ability_id,
                 function_name,
             });
@@ -12875,7 +12891,7 @@ impl TypedProgram {
 
         let mut typed_functions: EcoVec<TypedAbilityFunctionRef> =
             EcoVec::with_capacity(parsed_ability.functions.len());
-        for parsed_function_id in parsed_ability.functions.iter() {
+        for (index, parsed_function_id) in parsed_ability.functions.iter().enumerate() {
             let Some(function_id) = self.eval_function_declaration(
                 *parsed_function_id,
                 ability_scope_id,
@@ -12883,12 +12899,25 @@ impl TypedProgram {
                 namespace_id,
             )?
             else {
-                // TODO: Possibly, disable conditional compilation of ability functions.
+                // Note: eval_function_declaration only returns None when conditional
+                // compilation disables it, but I don't think we should allow conditionally
+                // including or excluding ability functions? Or maybe its fine, an ability could
+                // have an extra function on Windows only for example? Still, maybe you'd rather push
+                // platform differences down into implementations, but who am I to say?
                 continue;
             };
             let function_name = self.get_function(function_id).name;
+            match self.function_name_to_ability.entry(function_name) {
+                Entry::Occupied(mut ability_ids) => {
+                    ability_ids.get_mut().push(ability_id);
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(eco_vec![ability_id]);
+                }
+            }
             typed_functions.push(TypedAbilityFunctionRef {
                 function_name,
+                index: index as u32,
                 ability_id,
                 function_id,
             });
