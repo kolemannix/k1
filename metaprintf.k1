@@ -1,8 +1,10 @@
 use core/meta
+use core/StringBuilder
 
 fn sprintf[Args](fmtString: static string, args: Args): string {
-  let* result: List[char]* = List/empty();
+  let* mut result: *mut List[char] = List/empty();
   #meta(fmtString) {
+    let context code = StringBuilder/new();
     let argsTypeId = types/typeId[Args]();
     let schema = types/typeSchema(argsTypeId);
     // Splitting doesn't work; we need to walk the format string
@@ -10,7 +12,9 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
     let parts = (fmtString as string).splitByChar('?');
-    meta/emitVariable("parts", parts);
+
+    // nocommit(2): Need inference from context impl
+    meta/emitVariable[StringBuilder, View[string]]("parts", parts.asView());
     switch schema {
       .Struct({fields}) -> {
 
@@ -20,20 +24,20 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
             crash("Got 1 format argument (a string) but format string has {parts.len}")
           };
           //meta/emitLine("its a string baby");
-          meta/emitLine("parts.get(0).printTo(result)");
-          meta/emitLine("result.writeString(args)");
+          meta/emitLine(context code)("parts.get(0).printTo(result)");
+          meta/emitLine(context code)("result.writeString(args)");
         } else {
-          if parts.len != fields.len {
+          if parts.len != fields.len() {
             crash("Mismatching format arg count")
           };
 
           for field in fields do {
-            meta/emitLine("let f{itIndex} = args.{field.name}")
+            meta/emitLine(context code)("let f{itIndex} = args.{field.name}")
           };
 
           for part in parts do {
-            meta/emitLine("parts.get({itIndex}).printTo(result)");
-            meta/emitLine("f{itIndex}.printTo(result)");
+            meta/emitLine(context code)("parts.get({itIndex}).printTo(result)");
+            meta/emitLine(context code)("f{itIndex}.printTo(result)");
           };
         }
 
@@ -51,7 +55,8 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
       //  meta/emitLine("parts.get(1).printTo(result)");
       //}
     };
-    meta/emitLine(#code string/wrapList(result));
+    code.putString(#code string/wrapList(result));
+    code.build()
   }
 }
 

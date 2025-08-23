@@ -24,11 +24,11 @@ use crate::{
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
-        self, BinaryOpKind, CastType, CodeEmission, FunctionId, IntrinsicOperation, Layout,
-        MatchingCondition, MatchingConditionInstr, NameAndTypeId, StaticEnum, StaticStruct,
-        StaticValue, StaticValueId, StaticView, TypedExpr, TypedExprId, TypedFloatValue,
-        TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult,
-        VariableExpr, VariableId, make_fail_span,
+        self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
+        MatchingConditionInstr, NameAndTypeId, StaticEnum, StaticStruct, StaticValue,
+        StaticValueId, StaticView, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
+        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr,
+        VariableId, make_fail_span,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
             I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
@@ -106,9 +106,6 @@ pub struct Vm {
     pub stack: Stack,
     eval_depth: AtomicU64,
     eval_span: SpanId,
-
-    pub emits: Vec<CodeEmission>,
-    pub allow_emits: bool,
 }
 
 impl Vm {
@@ -120,7 +117,6 @@ impl Vm {
 
         self.eval_depth.store(0, Ordering::Relaxed);
         self.eval_span = SpanId::NONE;
-        self.emits.clear();
     }
 
     pub fn make(stack_size_bytes: usize, static_size_bytes: usize) -> Self {
@@ -132,8 +128,6 @@ impl Vm {
             stack,
             eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
-            emits: Vec::with_capacity(128),
-            allow_emits: false,
         }
     }
 
@@ -1685,15 +1679,15 @@ fn execute_intrinsic(
         }
         IntrinsicOperation::EmitString => {
             // intern fn emit(code: string): unit
-            if !vm.allow_emits {
-                return failf!(
-                    vm.eval_span,
-                    "emit() called in a context that does not allow emits"
-                );
-            }
-            let string_value = execute_expr_return_exit!(vm, k1, args[0])?;
-            let string_id = value_to_string_id(k1, string_value);
-            vm.emits.push(CodeEmission::String(string_id));
+            // if !vm.allow_emits {
+            //     return failf!(
+            //         vm.eval_span,
+            //         "emit() called in a context that does not allow emits"
+            //     );
+            // }
+            // let string_value = execute_expr_return_exit!(vm, k1, args[0])?;
+            // let string_id = value_to_string_id(k1, string_value);
+            // vm.emits.push(CodeEmission::String(string_id));
             Ok(VmResult::UNIT)
         }
         IntrinsicOperation::BakeStaticValue => {
