@@ -29,7 +29,8 @@ use std::time::Instant;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::{DepEq, DepHash};
+use crate::kmem::{ASliceHandle, AVec};
+use crate::{DepEq, DepHash, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
 use colored::Colorize;
@@ -157,6 +158,11 @@ pub struct StaticExecContext {
     /// enclosing function, but for #static blocks it shouldn't
     /// So this type can be different than the usual ctx.expected_type
     expected_return_type: Option<TypeId>,
+}
+
+pub enum StaticExecutionResult {
+    TypedExpr(TypedExprId),
+    Definitions(ASliceHandle<ParsedId>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2203,21 +2209,15 @@ pub struct AbilityImplHandle {
 pub struct TypedModuleBuffers {
     name_builder: String,
     emitted_code: String,
-    emit_lexer_tokens: Vec<lex::Token>,
+    lexer_tokens: Vec<lex::Token>,
     /// For Pattern matching trials
     trial_ctors: Vec<PatternCtorTrialEntry>,
     field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
 }
 
-#[derive(Clone, Copy)]
-pub enum CodeEmission {
-    String(StringId),
-}
-
 pub struct VmExecuteResult {
     pub type_id: TypeId,
     pub static_value_id: StaticValueId,
-    pub emits: Vec<CodeEmission>,
 }
 
 nz_u32_id!(ModuleId);
@@ -2228,6 +2228,7 @@ pub const MODULE_ID_CORE: ModuleId = ModuleId::ONE;
 pub enum ModuleKind {
     Library,
     Executable,
+    Script,
 }
 
 pub enum ModuleRef {
@@ -2304,6 +2305,9 @@ pub struct TypedProgram {
     // It should be run in its own environment; as it should
     // not see any of the values from its environment.
     pub alt_vms: Vec<vm::Vm>,
+
+    pub a: kmem::A,
+    pub tmp: kmem::A,
 }
 
 impl TypedProgram {
@@ -2408,7 +2412,7 @@ impl TypedProgram {
             buffers: TypedModuleBuffers {
                 name_builder: String::with_capacity(4096),
                 emitted_code: String::with_capacity(8192),
-                emit_lexer_tokens: Vec::new(),
+                lexer_tokens: Vec::with_capacity(16384),
                 trial_ctors: Vec::with_capacity(1024),
                 field_ctors: (0..128).map(|_| Vec::with_capacity(128)).collect::<Vec<_>>(),
             },
@@ -2421,6 +2425,8 @@ impl TypedProgram {
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
+            a: kmem::A::make(),
+            tmp: kmem::A::make(),
         }
     }
 
@@ -2452,7 +2458,7 @@ impl TypedProgram {
         let start_parse = std::time::Instant::now();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
-        let mut token_buffer = Vec::with_capacity(16384);
+        let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
         for path in &files_to_compile {
             let content = std::fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
@@ -2466,7 +2472,6 @@ impl TypedProgram {
                 name.to_str().unwrap().to_string(),
                 content,
             );
-            token_buffer.clear();
             match parse::lex_text(&mut self.ast, source, &mut token_buffer) {
                 Err(e) => {
                     self.ast.push_error(e);
@@ -2483,7 +2488,9 @@ impl TypedProgram {
                 file_id,
             );
             parser.parse_file();
+            token_buffer.clear();
         }
+        self.buffers.lexer_tokens = token_buffer;
 
         let parsing_elapsed = start_parse.elapsed();
         log::info!("parsing took {}ms", parsing_elapsed.as_millis());
@@ -4031,7 +4038,8 @@ impl TypedProgram {
         let kind = match kind.variant_index {
             0 => ModuleKind::Library,
             1 => ModuleKind::Executable,
-            _ => panic!(),
+            2 => ModuleKind::Script,
+            i => panic!("Unecognized module kind index: {}", i),
         };
         let deps = vec![];
 
@@ -4767,33 +4775,18 @@ impl TypedProgram {
         }
         let static_ctx = ctx.static_ctx.unwrap();
 
-        let expr_original = self.eval_expr(parsed_expr, ctx)?;
-        let span = self.exprs.get(expr_original).get_span();
-        let expr = if static_ctx.is_metaprogram {
-            // We cast to Never because a value of this type will never be seen;
-            // for #meta blocks we do not use the result value, only the emitted code
-            // This avoids us failing typechecking;
-            // Philosophical note: Never here is not even a hack, since its 'true' purpose
-            // is to represent the types of expressions that never yield a value, and code
-            // whose value we never insert into the program fits that description perfectly,
-            // better than Unit
-            self.synth_cast(expr_original, NEVER_TYPE_ID, CastType::Transmute, None)
-        } else {
-            expr_original
-        };
-        let required_type_id = self.exprs.get(expr_original).get_type();
+        let expr = self.eval_expr(parsed_expr, ctx)?;
+        let span = self.exprs.get(expr).get_span();
+        let required_type_id = self.exprs.get(expr).get_type();
         let output_type_id =
-            if static_ctx.is_metaprogram { NEVER_TYPE_ID } else { required_type_id };
+            if static_ctx.is_metaprogram { STRING_TYPE_ID } else { required_type_id };
 
         if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, ctx.scope_id)? {
             return Ok(VmExecuteResult {
                 type_id: required_type_id,
                 static_value_id: shortcut_value_id,
-                emits: vec![],
             });
         }
-
-        vm.allow_emits = static_ctx.is_metaprogram;
 
         let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
             |mut e| {
@@ -4812,12 +4805,10 @@ impl TypedProgram {
 
         let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
 
-        let emits = vm.emits.clone();
-
         if !no_reset {
             vm.reset();
         }
-        Ok(VmExecuteResult { type_id: output_type_id, static_value_id, emits })
+        Ok(VmExecuteResult { type_id: output_type_id, static_value_id })
     }
 
     fn execute_static_expr(
@@ -6611,7 +6602,15 @@ impl TypedProgram {
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
-            ParsedExpr::Static(stat) => self.eval_static_expr(expr_id, *stat, ctx),
+            ParsedExpr::Static(stat) => {
+                let stat = *stat;
+                match self.eval_static_expr_and_exec(expr_id, stat, ctx)? {
+                    StaticExecutionResult::TypedExpr(typed_expr) => Ok(typed_expr),
+                    StaticExecutionResult::Definitions(_) => {
+                        self.ice_with_span("Got static definitions from an expression", stat.span)
+                    }
+                }
+            }
             ParsedExpr::Code(code) => {
                 let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
                 let span_content =
@@ -6832,12 +6831,12 @@ impl TypedProgram {
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
-    fn eval_static_expr(
+    fn eval_static_expr_and_exec(
         &mut self,
         _expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> TyperResult<StaticExecutionResult> {
         let span = stat.span;
         let base_expr = stat.base_expr;
 
@@ -6857,7 +6856,7 @@ impl TypedProgram {
                     })
                 }
             };
-            return Ok(self.exprs.add(typed_expr));
+            return Ok(StaticExecutionResult::TypedExpr(self.exprs.add(typed_expr)));
         }
 
         let kind = stat.kind;
@@ -6869,12 +6868,9 @@ impl TypedProgram {
                     _ => Some(expected_type_id),
                 },
             },
-            ParsedStaticBlockKind::Metaprogram => Some(UNIT_TYPE_ID),
+            ParsedStaticBlockKind::Metaprogram => Some(STRING_TYPE_ID),
         };
-        let is_metaprogram = match kind {
-            ParsedStaticBlockKind::Value => false,
-            ParsedStaticBlockKind::Metaprogram => true,
-        };
+        let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.p_idents.copy_slice_sv::<4>(stat.parameter_names) {
             let variable_expr = self.ast.exprs.add_expression(
@@ -6945,8 +6941,18 @@ impl TypedProgram {
 
         match kind {
             ParsedStaticBlockKind::Metaprogram => {
-                if vm_result.emits.is_empty() {
-                    Ok(self.exprs.add(TypedExpr::Unit(span)))
+                let StaticValue::String(string_id) =
+                    self.static_values.get(vm_result.static_value_id)
+                else {
+                    return failf!(span, "#meta block did not evaluate to a string");
+                };
+                let emitted_string = self.ast.strings.get_string(*string_id);
+                if emitted_string.is_empty() {
+                    if stat.is_definition {
+                        Ok(StaticExecutionResult::Definitions(ASliceHandle::empty()))
+                    } else {
+                        Ok(StaticExecutionResult::TypedExpr(self.exprs.add(TypedExpr::Unit(span))))
+                    }
                 } else {
                     // First, we write the emitted code to a text buffer
                     //
@@ -6969,23 +6975,16 @@ impl TypedProgram {
                     // FIXME: generated_filename is not unique if we specialized on multiple types
                     //        We need a specialization context, for both debugging and logging
                     //        and for this
+                    //        This could be rolled in with `is_generic_pass` ->
+                    //        If its not generic pass, provide specialization info payload
+                    // TODO: if specializing, say what the types are. I think this is actually
+                    // really important debugging context
                     let generated_filename =
                         format!("meta_{}_{}.k1", source.filename, line.line_number());
 
-                    // TODO: if specializing, say what the types are. I think this is actually
-                    // really important debugging context
-                    for emit in vm_result.emits.iter() {
-                        match emit {
-                            CodeEmission::String(string_id) => {
-                                content.push_str(self.ast.strings.get_string(*string_id));
-                            }
-                        }
-                    }
+                    content.push_str(emitted_string);
                     content.push('}');
-                    debug!(
-                        "Emitted raw content after {} emits:\n---\n{content}\n---",
-                        vm_result.emits.len()
-                    );
+                    debug!("Emitted raw content:\n---\n{content}\n---");
                     let generated_path = self.ast.config.out_dir.join(&generated_filename);
                     let origin_file = self.ast.spans.get(span).file_id;
                     let origin_source = self.ast.sources.get_source(origin_file);
@@ -7003,27 +7002,25 @@ impl TypedProgram {
                         )
                     }
 
-                    let parsed_metaprogram_result =
-                        self.parse_ad_hoc_expr(source_for_emission, &content);
-                    content.clear();
-                    self.buffers.emitted_code = content;
-                    let parsed_metaprogram = parsed_metaprogram_result?;
-                    let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
-                    debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
-
-                    Ok(typed_metaprogram)
+                    if stat.is_definition {
+                        eprintln!("nocommit IGNORING #meta DEFINITIONS");
+                        Ok(StaticExecutionResult::Definitions(ASliceHandle::empty()))
+                    } else {
+                        let parsed_metaprogram_result =
+                            self.parse_ad_hoc_expr(source_for_emission, &content);
+                        content.clear();
+                        self.buffers.emitted_code = content;
+                        let parsed_metaprogram = parsed_metaprogram_result?;
+                        let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
+                        debug!(
+                            "Emitted compiled expr:\n{}",
+                            self.expr_to_string(typed_metaprogram)
+                        );
+                        Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
+                    }
                 }
             }
             ParsedStaticBlockKind::Value => {
-                //match ctx.expected_type_id {
-                //    None => None,
-                //    Some(expected_type_id) => {
-                //        match self.types.get_no_follow_static(expected_type_id) {
-                //            Type::Static(s) => Some(s.inner_type_id),
-                //            _ => Some(expected_type_id),
-                //        }
-                //    }
-                //};
                 let static_type_id =
                     self.types.add_static_type(vm_result.type_id, Some(vm_result.static_value_id));
                 let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
@@ -7031,7 +7028,7 @@ impl TypedProgram {
                     static_type_id,
                     span,
                 ));
-                Ok(static_value_expr)
+                Ok(StaticExecutionResult::TypedExpr(static_value_expr))
             }
         }
     }
@@ -7041,7 +7038,7 @@ impl TypedProgram {
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
         let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
-        let mut tokens = std::mem::take(&mut self.buffers.emit_lexer_tokens);
+        let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
         if let Err(e) = lexer.run(&mut tokens) {
             let e = ParseError::Lex(e);
             parse::print_error(&self.ast, &e);
@@ -7067,7 +7064,7 @@ impl TypedProgram {
         };
 
         tokens.clear();
-        self.buffers.emit_lexer_tokens = tokens;
+        self.buffers.lexer_tokens = tokens;
 
         result
     }
@@ -7815,9 +7812,9 @@ impl TypedProgram {
 
         let mut expected_arm_type_id = ctx.expected_type_id;
         let match_scope_id = ctx.scope_id;
-        // nocommit: Try to use scratch memory from new arena for `all_unguarded_patterns`
-        let mut all_unguarded_patterns: Vec<(TypedPattern, usize)> =
-            Vec::with_capacity(cases.len());
+
+        let mut all_unguarded_patterns: AVec<(TypedPattern, usize)> =
+            self.tmp.new_vec(cases.iter().map(|pc| pc.patterns.len()).sum());
         let target_expr_type = self.exprs.get(target_expr).get_type();
         let target_expr_span = self.exprs.get(target_expr).get_span();
         for parsed_case in cases.iter() {
@@ -13297,6 +13294,33 @@ impl TypedProgram {
                     self.report_error(e);
                 };
             }
+            ParsedId::StaticDefn(static_expr_id) => {
+                let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
+                    unreachable!()
+                };
+                let is_metaprogram = s.kind.is_metaprogram();
+                if is_metaprogram {
+                    self.ice("TODO handle #meta for body phase", None)
+                }
+
+                // For value programs, we want to run them in the body phase
+                // so that they have access to as much code as possible
+
+                // So that we can exit with the value in 'run script' mode?
+                let static_ctx =
+                    StaticExecContext { is_metaprogram, expected_return_type: Some(I32_TYPE_ID) };
+                let eval_expr_ctx = EvalExprContext {
+                    scope_id,
+                    expected_type_id: None,
+                    is_inference: false,
+                    static_ctx: Some(static_ctx),
+                    global_defn_name: None,
+                    is_generic_pass: false,
+                };
+                if let Err(e) = self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx) {
+                    self.report_error(e);
+                };
+            }
             other_id => {
                 panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
             }
@@ -13562,6 +13586,27 @@ impl TypedProgram {
             ParsedId::AbilityImpl(ability_impl) => {
                 let _impl_id = self.eval_ability_impl_decl(ability_impl, scope_id)?;
                 Ok(())
+            }
+            ParsedId::StaticDefn(static_expr_id) => {
+                let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
+                    unreachable!()
+                };
+                let is_metaprogram = s.kind.is_metaprogram();
+                if is_metaprogram {
+                    // Declaration phase: eval the static, get the parsed definition ids
+                    // Recurse on them, being sure to do proper AST mappings and all that
+                    // Then the body phase should treat them like regular definitions
+                    // Except! The body phase iterates by AST. So we need to make sure
+                    // these definitions either end up in the appropriate AST namespaces's definitions
+                    // (preferable since less special)
+
+                    // Or put them in a separate 'meta definition body compile queue' and
+                    // Iterate them in that phase!
+                    self.ice("Cannot yet do #meta; have to think about phases", None)
+                } else {
+                    // We handle 'value' programs in the body phase
+                    Ok(())
+                }
             }
             other_id => {
                 panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
@@ -14048,7 +14093,7 @@ impl TypedProgram {
                 // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
                 // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
                 let mut field_index_w_multi_ctor = 0;
-                for (field_index, ctors) in field_ctors_buf[0..field_count].iter().enumerate() {
+                for ctors in field_ctors_buf[0..field_count].iter() {
                     if ctors.len() == 1 {
                         for result_struct in result_struct_ids.iter_mut() {
                             self.pattern_ctors.get_mut(result_struct.ctor).push_field(ctors[0]);

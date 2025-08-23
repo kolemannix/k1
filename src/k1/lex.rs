@@ -91,6 +91,7 @@ impl<'toks> TokenIter<'toks> {
         self.cursor
     }
 
+    #[inline]
     pub fn advance_n(&mut self, n: usize) {
         self.cursor += n
     }
@@ -587,7 +588,6 @@ pub struct Lexer<'a, 'spans> {
     pub spans: &'spans mut Spans,
     pub line_index: u32,
     pub pos: u32,
-    tok_buf: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -626,14 +626,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer {
-            file_id,
-            content: input.chars(),
-            spans,
-            line_index: 0,
-            pos: 0,
-            tok_buf: String::with_capacity(2048),
-        }
+        Lexer { file_id, content: input.chars(), spans, line_index: 0, pos: 0 }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -689,7 +682,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let (c, n) = self.peek_with_pos();
             debug!(
                 "LEX line={} char='{}' n={} buf={} state={:?}",
-                self.line_index, c, n, &self.tok_buf, state
+                self.line_index, c, n, tok_buf, state
             );
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {

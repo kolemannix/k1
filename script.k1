@@ -1,0 +1,25 @@
+let MODULE_INFO: core/k1/ModuleManifest = {
+    kind: .Library,
+    deps: "",
+};
+
+let n: uword = 255;
+let x: uword = 256;
+
+fn isPow2(x: uword): bool { (x - 1) | Bitwise/bitAnd(x) == 0 }
+
+#meta {
+  "deftype Frob = { b: bool }"
+}
+
+#static {
+
+  let x: Frob = { b: false };
+
+  println("Hello, script: {isPow2(n)}");
+  println("Hello, script: {isPow2(x)}");
+
+}
+// nocommit(1) defn conditions
+// #if true #static { println("Hello, true") } 
+// #if false #static { println("Hello, false") } 

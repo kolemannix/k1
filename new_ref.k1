@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let* x: *read i32 = 3;
-  let* w: *i32 = 3;
-
-  0
-}

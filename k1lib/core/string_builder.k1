@@ -35,3 +35,18 @@ ns StringBuilder {
     string/wrapList(self.charList)
   }
 }
+
+impl Writer for StringBuilder {
+  fn writeChar(self: Self, value: char): unit {
+    self.putChar(value)
+  }
+  fn writeByte(self: Self, value: u8): unit {
+    self.putByte(value)
+  }
+  fn writeString(self: Self, value: string): unit {
+    self.putString(value)
+  }
+  fn writeBytes(self: Self, bytes: View[byte]): unit {
+    self.putString(string/fromBytes(bytes))
+  }
+}

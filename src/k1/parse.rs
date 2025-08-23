@@ -86,6 +86,7 @@ pub enum ParsedId {
     Expression(ParsedExprId),
     TypeExpression(ParsedTypeExprId),
     Pattern(ParsedPatternId),
+    StaticDefn(ParsedExprId),
 }
 
 impl Display for ParsedId {
@@ -101,6 +102,7 @@ impl Display for ParsedId {
             ParsedId::Expression(id) => write!(f, "expr#{}", id.0),
             ParsedId::TypeExpression(id) => write!(f, "type_expr#{}", id.0),
             ParsedId::Pattern(id) => write!(f, "pattern#{}", id.0),
+            ParsedId::StaticDefn(id) => write!(f, "static#{}", id.0),
         }
     }
 }
@@ -160,7 +162,8 @@ impl From<ParsedFunctionId> for ParsedId {
 }
 
 impl ParsedId {
-    pub fn is_valid_definition(&self) -> bool {
+    /// 'definition' here means a top-level construct, what Rust calls an 'item'.
+    pub fn is_a_definition(&self) -> bool {
         match self {
             ParsedId::Function(_) => true,
             ParsedId::TypeDefn(_) => true,
@@ -172,6 +175,7 @@ impl ParsedId {
             ParsedId::TypeExpression(_) => false,
             ParsedId::Pattern(_) => false,
             ParsedId::Use(_) => true,
+            ParsedId::StaticDefn(_) => true,
         }
     }
 }
@@ -793,10 +797,17 @@ pub enum ParsedStaticBlockKind {
     Metaprogram,
 }
 
+impl ParsedStaticBlockKind {
+    pub fn is_metaprogram(&self) -> bool {
+        matches!(self, ParsedStaticBlockKind::Metaprogram)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
+    pub is_definition: bool,
     pub parameter_names: SliceHandle<IdentSliceId>,
     pub span: SpanId,
 }
@@ -1830,6 +1841,7 @@ impl ParsedProgram {
 
     pub fn get_span_for_id(&self, parsed_id: ParsedId) -> SpanId {
         match parsed_id {
+            ParsedId::Use(id) => self.uses.get_use(id).span,
             ParsedId::Function(id) => self.get_function(id).span,
             ParsedId::Namespace(_) => SpanId::NONE,
             ParsedId::Global(id) => self.get_global(id).span,
@@ -1839,7 +1851,7 @@ impl ParsedProgram {
             ParsedId::Expression(id) => self.exprs.get_span(id),
             ParsedId::TypeExpression(id) => self.get_type_expr_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
-            ParsedId::Use(id) => self.uses.get_use(id).span,
+            ParsedId::StaticDefn(id) => self.exprs.get_span(id),
         }
     }
 
@@ -2200,17 +2212,19 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
     }
 
     pub fn parse_definition(&mut self, terminator: TokenKind) -> ParseResult<Option<ParsedId>> {
-        let condition = if self.maybe_consume_next(K::Hash).is_some() {
-            if self.maybe_consume_next(K::KeywordIf).is_some() {
-                let condition_expr = self.expect_expression()?;
-                Some(condition_expr)
-            } else {
-                return Err(error_expected("#if", self.peek()));
-            }
+        let (first, second) = self.peek_two();
+        let condition = if first.kind == K::Hash && second.kind == K::KeywordIf {
+            self.advance_n(2);
+            let condition_expr = self.expect_expression()?;
+            Some(condition_expr)
         } else {
             None
         };
-        if let Some(use_id) = self.parse_use()? {
+        // nocommit(1): Ensure that `condition` is applied to all of these definitions
+        //              So that all can be conditionally compiled
+        if let Some(static_expr_id) = self.parse_static_defn()? {
+            Ok(Some(ParsedId::StaticDefn(static_expr_id)))
+        } else if let Some(use_id) = self.parse_use()? {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
@@ -2241,6 +2255,71 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 );
                 Err(err)
             }
+        }
+    }
+
+    fn parse_static_defn(&mut self) -> ParseResult<Option<ParsedExprId>> {
+        let Some(hash_token) = self.maybe_consume_next(K::Hash) else { return Ok(None) };
+        let maybe_directive = self.peek();
+        match self.parse_static_expr(hash_token, maybe_directive, true)? {
+            Some(static_expr_id) => Ok(Some(static_expr_id)),
+            None => {
+                Err(error_expected("static definition (e.g. #static or #meta)", maybe_directive))
+            }
+        }
+    }
+
+    /// Parses a 'static expression' which is our main metaprogramming construct,
+    /// Begins with a #static(<params>) or #meta(<params>), and followed by any expression
+    fn parse_static_expr(
+        &mut self,
+        hash_token: Token,
+        maybe_directive: Token,
+        is_definition: bool,
+    ) -> ParseResult<Option<ParsedExprId>> {
+        match maybe_directive.kind {
+            K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+                let chars = self.token_chars(maybe_directive);
+                match chars {
+                    "meta" | "meat" | "static" => {
+                        let kind = match chars {
+                            "meta" | "meat" => ParsedStaticBlockKind::Metaprogram,
+                            "static" => ParsedStaticBlockKind::Value,
+                            _ => unreachable!(),
+                        };
+                        self.advance();
+                        let mut parameter_names: SV4<Ident> = smallvec![];
+                        if let Some(_open_token) =
+                            self.maybe_consume_next_no_whitespace(K::OpenParen)
+                        {
+                            self.eat_delimited_ext(
+                                "params",
+                                &mut parameter_names,
+                                K::Comma,
+                                &[K::CloseParen],
+                                |p| {
+                                    Parser::expect_ident_ext(p, false, false)
+                                        .map(|(_token, ident)| ident)
+                                },
+                            )?;
+                        }
+                        let parameter_names_handle =
+                            self.ast.p_idents.add_slice_from_copy_slice(&parameter_names);
+                        let base_expr = self.expect_expression()?;
+                        let expr_span = self.get_expression_span(base_expr);
+                        let span = self.extend_span(hash_token.span, expr_span);
+                        Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+                            base_expr,
+                            kind,
+                            is_definition,
+                            parameter_names: parameter_names_handle,
+                            span,
+                        }))))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
         }
     }
 
@@ -3549,63 +3628,34 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
 
             let maybe_directive = self.peek();
-            match maybe_directive.kind {
-                K::Ident if !maybe_directive.is_whitespace_preceeded() => {
-                    let chars = self.token_chars(maybe_directive);
-                    match chars {
-                        "meta" | "meat" | "static" => {
-                            let kind = match chars {
-                                "meta" | "meat" => ParsedStaticBlockKind::Metaprogram,
-                                "static" => ParsedStaticBlockKind::Value,
-                                _ => unreachable!(),
-                            };
-                            self.advance();
-                            let mut parameter_names: SV4<Ident> = smallvec![];
-                            if let Some(_open_token) =
-                                self.maybe_consume_next_no_whitespace(K::OpenParen)
-                            {
-                                self.eat_delimited_ext(
-                                    "params",
-                                    &mut parameter_names,
-                                    K::Comma,
-                                    &[K::CloseParen],
-                                    |p| {
-                                        Parser::expect_ident_ext(p, false, false)
-                                            .map(|(_token, ident)| ident)
-                                    },
-                                )?;
+            if let Some(static_expr) = self.parse_static_expr(first, maybe_directive, false)? {
+                Ok(Some(static_expr))
+            } else {
+                match maybe_directive.kind {
+                    K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+                        let chars = self.token_chars(maybe_directive);
+                        match chars {
+                            "code" => {
+                                self.advance();
+                                let parsed_stmt = self.expect_statement()?;
+                                let stmt_span = self.ast.get_stmt_span(parsed_stmt);
+                                let span = self.extend_span(first.span, stmt_span);
+                                Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
+                                    parsed_stmt,
+                                    span,
+                                }))))
                             }
-                            let parameter_names_handle =
-                                self.ast.p_idents.add_slice_from_copy_slice(&parameter_names);
-                            let base_expr = self.expect_expression()?;
-                            let expr_span = self.get_expression_span(base_expr);
-                            let span = self.extend_span(first.span, expr_span);
-                            Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
-                                base_expr,
-                                kind,
-                                parameter_names: parameter_names_handle,
-                                span,
-                            }))))
+                            _ => Err(error("Unknown directive following #", self.peek())),
                         }
-                        "code" => {
-                            self.advance();
-                            let parsed_stmt = self.expect_statement()?;
-                            let stmt_span = self.ast.get_stmt_span(parsed_stmt);
-                            let span = self.extend_span(first.span, stmt_span);
-                            Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
-                                parsed_stmt,
-                                span,
-                            }))))
-                        }
-                        _ => Err(error("Unknown directive following #", self.peek())),
                     }
+                    K::KeywordIf => {
+                        let mut if_expr =
+                            Parser::expect("If Expression", first, self.parse_if_expr())?;
+                        if_expr.is_static = true;
+                        Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+                    }
+                    _ => Err(error("Unknown directive following #", self.peek())),
                 }
-                K::KeywordIf => {
-                    let mut if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-                    if_expr.is_static = true;
-                    Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
-                }
-                _ => Err(error("Unknown directive following #", self.peek())),
             }
         } else {
             // More expression types

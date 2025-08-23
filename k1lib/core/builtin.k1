@@ -332,7 +332,7 @@ ns k1 {
 
   // MUST MATCH k1_types::ModuleManifest
   deftype ModuleManifest = {
-    kind: (either(u8) Library, Executable),
+    kind: (either(u8) Library, Executable, Script),
     deps: string,
   }
 
@@ -390,7 +390,7 @@ impl Equals for bool {
   }
 }
 
-// nocommit(2): Metaprogramming for definitions.
+// nocommit(1): Metaprogramming for definitions.
 // #meta {
 //   for t in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] do {
 //     meta/emitString `impl Equals for {t} { fn equals(self: {t}, other: {t}): bool { self == other } } `

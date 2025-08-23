@@ -3,9 +3,9 @@
 
 ns meta {
 
-  fn emitLine(code: string): unit {
-    emit(code);
-    emit(";\n")
+  fn emitLine[W: Writer](context w: W)(code: string): unit {
+    w.writeString(code);
+    w.writeString(";\n");
   }
 
   fn bakedValueExpr[T](value: T): string {
@@ -19,13 +19,14 @@ ns meta {
     `let {name}: typeFromId({typeId}) = {bakedValueExpr};\n`
   }
 
-  fn emitVariable[T](name: string, value: T): unit {
-    emit(bakedVariable[T](name, value))
+  fn emitVariable[W: Writer, T](context w: W)(name: string, value: T): unit {
+    let bakedVar = bakedVariable[T](name, value);
+    w.writeString(bakedVar)
   }
 
-  fn emitLines[Iter: Iterator[Item = string]](lines: Iter): unit {
+  fn emitLines[W: Writer, Iter: Iterator[Item = string]](context w: W)(lines: Iter): unit {
     for l in lines do {
-      emitLine(l)
+      w.writeString(l)
     }
   }
 

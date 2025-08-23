@@ -2,13 +2,17 @@ ns test_meta;
 
 use core/meta/emitLine
 use core/meta/emit
+use core/StringBuilder
 
 fn simpleIncrement(): i32 {
   let mut x = 10;
   #meta {
+    // nocommit(2): Provide a meta/CodeBuilder
+    let code = core/StringBuilder/new();
     for core/IntRange/upTo(5) do {
-      emitLine(#code x = x + 1);
-    }
+      code.putString("x = x + 1;\n");
+    };
+    code.build()
   };
   assertEquals(x, 15);
 
@@ -19,15 +23,15 @@ use core/Writer
 use types/TypeSchema
 use types/typeSchema
 
-fn _writeJsonFromSchema(name: string, typeId: u64): unit {
+fn _writeJsonFromSchema(context code: StringBuilder)(name: string, typeId: u64): unit {
   switch typeSchema(typeId) {
     .Struct(s) -> {
-      emitLine(#code w.writeChar('{'));
+      emitLine(context code)(#code w.writeChar('{'));
       for f in s.fields do {
 
         let fieldLetName = `_{name}{f.name}`;
 
-        core/meta/emit(
+        code.putString(
          `let {fieldLetName} = {name}.{f.name};
           w.writeString("\"{f.name}\":");`
        ); //" fix quote
@@ -35,22 +39,22 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
         _writeJsonFromSchema(fieldLetName, f.typeId);
         let last = itIndex == s.fields.len() - 1;
         if not last {
-          emitLine(#code w.writeString(","));
+          emitLine(context code)(#code w.writeString(","));
         }
       };
-      emitLine(#code w.writeChar('}'));
+      emitLine(context code)(#code w.writeChar('}'));
     },
-    .Unit -> emitLine(#code w.writeString(`"unit"`)),
+    .Unit -> emitLine(context code)(#code w.writeString(`"unit"`)),
     .Bool -> {
-      emitLine(`w.writeString(if {name} "true" else "false")`)
+      emitLine(context code)(`w.writeString(if {name} "true" else "false")`)
     },
-    .Word(_) or .Int(_) -> emitLine(`{name}.printTo(w)`),
+    .Word(_) or .Int(_) -> emitLine(context code)(`{name}.printTo(w)`),
     .Either(_) -> {
       let tName = types/typeName(typeId);
       crash("Cannot yet create a JSON writer for either: {tName}")
     },
     _ -> {
-      emitLine(#code w.writeString(`"other"`))
+      emitLine(context code)(#code w.writeString(`"other"`))
     }
   };
 }
@@ -58,7 +62,9 @@ fn _writeJsonFromSchema(name: string, typeId: u64): unit {
 fn writeJson[T, W: Writer](context w: W)(t: T): unit {
   #meta {
     let typeId = types/typeId[T]();
+    let context code = core/StringBuilder/new();
     _writeJsonFromSchema("t", typeId);
+    code.build()
   }
 }
 
