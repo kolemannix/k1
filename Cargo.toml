@@ -12,6 +12,8 @@ path = "src/k1/lib.rs"
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
 gui = ["raylib"]
 profile = []
+# Our project-specific debug mode, not the same thing as the compiler's!
+dbg = []
 
 [dependencies]
 # Core dependencies

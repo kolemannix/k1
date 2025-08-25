@@ -39,6 +39,9 @@ pub struct ASliceHandle<T> {
     offset: u32,
     count: u32,
     _marker: std::marker::PhantomData<T>,
+    // TODO: Add fingerprints to handles in dbg mode
+    // #[cfg(feature = "dbg")]
+    // fingerprint: u64,
 }
 
 impl<T> ASliceHandle<T> {
@@ -165,7 +168,7 @@ impl A {
 
     pub fn get<T>(&self, handle: AHandle<T>) -> &T {
         let ptr = self.unpack_handle(handle);
-        if cfg!(debug_assertions) {
+        if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())
         }
         unsafe { &*ptr }
@@ -173,13 +176,13 @@ impl A {
 
     pub fn get_copy<T: Copy>(&self, handle: AHandle<T>) -> T {
         let ptr = self.unpack_handle(handle);
-        if cfg!(debug_assertions) {
+        if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())
         }
         unsafe { *ptr }
     }
 
-    pub fn get_slice<T>(&self, handle: ASliceHandle<T>) -> &[T] {
+    pub fn get_slice<T>(&self, handle: ASliceHandle<T>) -> &'static [T] {
         fuckit! {
             let ptr: *const T = self.offset_to_ptr(handle.offset);
             if cfg!(debug_assertions) {

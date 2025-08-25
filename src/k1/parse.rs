@@ -4440,11 +4440,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             t if t.kind == K::Semicolon => false, // namespace asdf;
             t => return Err(error_expected("{ or ;", t)),
         };
-        let mut definitions = EcoVec::new();
         let terminator = if is_braced { K::CloseBrace } else { K::Eof };
-        while let Some(def) = self.parse_definition(terminator)? {
-            definitions.push(def);
-        }
+        let definitions = self.parse_definitions(terminator)?;
 
         let name = self.intern_ident_token(ident);
         let span = self.extend_to_here(keyword.span);
@@ -4455,6 +4452,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span,
         });
         Ok(Some(namespace_id))
+    }
+
+    pub fn parse_definitions(&mut self, terminator: TokenKind) -> ParseResult<EcoVec<ParsedId>> {
+        let mut definitions = EcoVec::new();
+        while let Some(def) = self.parse_definition(terminator)? {
+            definitions.push(def);
+        }
+        Ok(definitions)
     }
 
     fn parse_use(&mut self) -> ParseResult<Option<ParsedUseId>> {

@@ -162,7 +162,17 @@ pub struct StaticExecContext {
 
 pub enum StaticExecutionResult {
     TypedExpr(TypedExprId),
-    Definitions(ASliceHandle<ParsedId>),
+    Definitions(EcoVec<ParsedId>),
+}
+
+pub enum ParseAdHocKind {
+    Expr,
+    Definitions,
+}
+
+pub enum ParseAdHocResult {
+    Expr(ParsedExprId),
+    Definitions(EcoVec<ParsedId>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -6949,7 +6959,7 @@ impl TypedProgram {
                 let emitted_string = self.ast.strings.get_string(*string_id);
                 if emitted_string.is_empty() {
                     if stat.is_definition {
-                        Ok(StaticExecutionResult::Definitions(ASliceHandle::empty()))
+                        Ok(StaticExecutionResult::Definitions(eco_vec![]))
                     } else {
                         Ok(StaticExecutionResult::TypedExpr(self.exprs.add(TypedExpr::Unit(span))))
                     }
@@ -6971,7 +6981,9 @@ impl TypedProgram {
                         line.line_number(),
                     )
                     .unwrap();
-                    content.push_str("{\n");
+                    if !stat.is_definition {
+                        content.push_str("{\n");
+                    }
                     // FIXME: generated_filename is not unique if we specialized on multiple types
                     //        We need a specialization context, for both debugging and logging
                     //        and for this
@@ -6983,7 +6995,9 @@ impl TypedProgram {
                         format!("meta_{}_{}.k1", source.filename, line.line_number());
 
                     content.push_str(emitted_string);
-                    content.push('}');
+                    if !stat.is_definition {
+                        content.push('}');
+                    }
                     debug!("Emitted raw content:\n---\n{content}\n---");
                     let generated_path = self.ast.config.out_dir.join(&generated_filename);
                     let origin_file = self.ast.spans.get(span).file_id;
@@ -7002,21 +7016,28 @@ impl TypedProgram {
                         )
                     }
 
-                    if stat.is_definition {
-                        eprintln!("nocommit IGNORING #meta DEFINITIONS");
-                        Ok(StaticExecutionResult::Definitions(ASliceHandle::empty()))
+                    let parse_kind = if stat.is_definition {
+                        ParseAdHocKind::Definitions
                     } else {
-                        let parsed_metaprogram_result =
-                            self.parse_ad_hoc_expr(source_for_emission, &content);
-                        content.clear();
-                        self.buffers.emitted_code = content;
-                        let parsed_metaprogram = parsed_metaprogram_result?;
-                        let typed_metaprogram = self.eval_expr(parsed_metaprogram, ctx)?;
-                        debug!(
-                            "Emitted compiled expr:\n{}",
-                            self.expr_to_string(typed_metaprogram)
-                        );
-                        Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
+                        ParseAdHocKind::Expr
+                    };
+                    let parsed_metaprogram_result =
+                        self.parse_ad_hoc(source_for_emission, &content, parse_kind);
+                    content.clear();
+                    self.buffers.emitted_code = content;
+                    let parsed_metaprogram = parsed_metaprogram_result?;
+                    match parsed_metaprogram {
+                        ParseAdHocResult::Expr(parsed_expr_id) => {
+                            let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
+                            debug!(
+                                "Emitted compiled expr:\n{}",
+                                self.expr_to_string(typed_metaprogram)
+                            );
+                            Ok(StaticExecutionResult::TypedExpr(typed_metaprogram))
+                        }
+                        ParseAdHocResult::Definitions(defns_slice) => {
+                            Ok(StaticExecutionResult::Definitions(defns_slice))
+                        }
                     }
                 }
             }
@@ -7033,7 +7054,12 @@ impl TypedProgram {
         }
     }
 
-    fn parse_ad_hoc_expr(&mut self, file_id: FileId, code_str: &str) -> TyperResult<ParsedExprId> {
+    fn parse_ad_hoc(
+        &mut self,
+        file_id: FileId,
+        code_str: &str,
+        kind: ParseAdHocKind,
+    ) -> TyperResult<ParseAdHocResult> {
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
@@ -7056,11 +7082,17 @@ impl TypedProgram {
             file_id,
         );
 
-        let result = match p.expect_expression() {
-            Err(e) => {
-                failf!(e.span(), "Failed to parse your emitted code: {}", e)
-            }
-            Ok(parsed_block) => Ok(parsed_block),
+        let result = match kind {
+            ParseAdHocKind::Expr => match p.expect_expression() {
+                Err(e) => {
+                    failf!(e.span(), "Failed to parse your emitted code: {}", e)
+                }
+                Ok(parsed_expr) => Ok(ParseAdHocResult::Expr(parsed_expr)),
+            },
+            ParseAdHocKind::Definitions => match p.parse_definitions(TokenKind::Eof) {
+                Err(e) => failf!(e.span(), "Failed to parse your emitted code: {}", e),
+                Ok(defns) => Ok(ParseAdHocResult::Definitions(defns)),
+            },
         };
 
         tokens.clear();
@@ -13299,27 +13331,26 @@ impl TypedProgram {
                     unreachable!()
                 };
                 let is_metaprogram = s.kind.is_metaprogram();
-                if is_metaprogram {
-                    self.ice("TODO handle #meta for body phase", None)
+                if !is_metaprogram {
+                    // For value programs, we want to run them in the body phase
+                    // so that they have access to as much code as possible
+
+                    let static_ctx =
+                        StaticExecContext { is_metaprogram, expected_return_type: None };
+                    let eval_expr_ctx = EvalExprContext {
+                        scope_id,
+                        expected_type_id: None,
+                        is_inference: false,
+                        static_ctx: Some(static_ctx),
+                        global_defn_name: None,
+                        is_generic_pass: false,
+                    };
+                    if let Err(e) =
+                        self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx)
+                    {
+                        self.report_error(e);
+                    };
                 }
-
-                // For value programs, we want to run them in the body phase
-                // so that they have access to as much code as possible
-
-                // So that we can exit with the value in 'run script' mode?
-                let static_ctx =
-                    StaticExecContext { is_metaprogram, expected_return_type: Some(I32_TYPE_ID) };
-                let eval_expr_ctx = EvalExprContext {
-                    scope_id,
-                    expected_type_id: None,
-                    is_inference: false,
-                    static_ctx: Some(static_ctx),
-                    global_defn_name: None,
-                    is_generic_pass: false,
-                };
-                if let Err(e) = self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx) {
-                    self.report_error(e);
-                };
             }
             other_id => {
                 panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
@@ -13418,6 +13449,7 @@ impl TypedProgram {
 
     // Evaluate a namespace during the Type Declaration phase:
     // This means finding all the type declarations in the namespace and registering their names,
+    // as well as ability defns, which are like types, and registering their names
     // then recursing down into child namespaces and doing the same
     fn eval_namespace_type_decl_phase(
         &mut self,
@@ -13587,26 +13619,10 @@ impl TypedProgram {
                 let _impl_id = self.eval_ability_impl_decl(ability_impl, scope_id)?;
                 Ok(())
             }
-            ParsedId::StaticDefn(static_expr_id) => {
-                let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
-                    unreachable!()
-                };
-                let is_metaprogram = s.kind.is_metaprogram();
-                if is_metaprogram {
-                    // Declaration phase: eval the static, get the parsed definition ids
-                    // Recurse on them, being sure to do proper AST mappings and all that
-                    // Then the body phase should treat them like regular definitions
-                    // Except! The body phase iterates by AST. So we need to make sure
-                    // these definitions either end up in the appropriate AST namespaces's definitions
-                    // (preferable since less special)
-
-                    // Or put them in a separate 'meta definition body compile queue' and
-                    // Iterate them in that phase!
-                    self.ice("Cannot yet do #meta; have to think about phases", None)
-                } else {
-                    // We handle 'value' programs in the body phase
-                    Ok(())
-                }
+            ParsedId::StaticDefn(_) => {
+                // StaticDefns are handled in either the namespace declaration phase (for
+                // metaprograms) or the body phase (for value programs)
+                Ok(())
             }
             other_id => {
                 panic!("Was asked to eval definition of a non-definition ast node {:?}", other_id)
@@ -13676,12 +13692,13 @@ impl TypedProgram {
         Ok(namespace_id)
     }
 
-    fn eval_namespace_namespace_phase(
+    fn declare_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
+        eprintln!("declaring namespace {}", self.ident_str(ast_namespace.name));
 
         let namespace_id = if let Some(existing) =
             self.scopes.find_namespace(parent_scope, ast_namespace.name)
@@ -13702,48 +13719,145 @@ impl TypedProgram {
         } else {
             self.create_namespace(parsed_namespace_id, parent_scope)?
         };
+        Ok(namespace_id)
+    }
 
+    fn declare_namespaces_in_namespace(&mut self, parsed_namespace_id: ParsedNamespaceId) {
+        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
+
+        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
-        for defn in &ast_namespace.definitions {
-            if let ParsedId::Namespace(namespace_id) = defn {
-                let _namespace_id =
-                    self.eval_namespace_namespace_phase(*namespace_id, namespace_scope_id)?;
+        let mut defns_to_add: SV4<(usize, EcoVec<ParsedId>)> = smallvec![];
+        for (index, defn) in ast_namespace.definitions.iter().enumerate() {
+            match *defn {
+                ParsedId::Namespace(namespace_id) => {
+                    if let Err(e) =
+                        self.declare_namespace_recursive(namespace_id, namespace_scope_id)
+                    {
+                        self.report_error(e)
+                    }
+                }
+                ParsedId::StaticDefn(static_expr_id) => {
+                    let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
+                        unreachable!()
+                    };
+                    let is_metaprogram = s.kind.is_metaprogram();
+                    if !is_metaprogram {
+                        continue;
+                    }
+                    // Declaration phase: eval the static, get the parsed definition ids
+                    // Recurse on them, being sure to do proper AST mappings and all that
+                    // Then the body phase should treat them like regular definitions
+                    // Except! The body phase iterates by AST. So we need to make sure
+                    // these definitions either end up in the appropriate AST namespaces's definitions
+                    // (preferable since less special)
+
+                    // Or put them in a separate 'meta definition body compile queue' and
+                    // Iterate them in that phase!
+                    let static_ctx = StaticExecContext {
+                        is_metaprogram,
+                        expected_return_type: Some(I32_TYPE_ID),
+                    };
+                    let eval_expr_ctx = EvalExprContext {
+                        scope_id: namespace_scope_id,
+                        expected_type_id: None,
+                        is_inference: false,
+                        static_ctx: Some(static_ctx),
+                        global_defn_name: None,
+                        is_generic_pass: false,
+                    };
+                    let newly_parsed_defns =
+                        match self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx) {
+                            Err(e) => {
+                                self.report_error(e);
+                                eco_vec![]
+                            }
+                            Ok(StaticExecutionResult::Definitions(defns)) => defns,
+                            Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
+                        };
+                    // If any of the meta definitions are themselves namespaces,
+                    // we need to run them now, in-loop, so that the program behaves
+                    // exactly as if they had been literally written in place
+                    //
+                    // We'll add them to the AST definitions later so that further
+                    // passes can find them
+                    for &d in newly_parsed_defns.iter() {
+                        match d {
+                            ParsedId::Namespace(ns) => {
+                                if let Err(e) =
+                                    self.declare_namespace_recursive(ns, namespace_scope_id)
+                                {
+                                    self.report_error(e)
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                    // We want to insert a given #meta's definitions right
+                    // after that meta, hence the +1
+                    defns_to_add.push((index + 1, newly_parsed_defns));
+                }
+                _ => {}
             }
         }
-        Ok(namespace_id)
+        // Reduce EcoVec refcount explicitly before we mutate
+        drop(ast_namespace);
+
+        let ast_namespace = self.ast.namespaces.get_mut(parsed_namespace_id);
+        eprintln!(
+            "Preparing to mutate ast namespace definitions with {} metaprogram outputs: {:?}",
+            defns_to_add.len(),
+            ast_namespace.definitions
+        );
+        for (insertion_index, defns) in defns_to_add.iter() {
+            for (i, defn) in defns.iter().enumerate() {
+                ast_namespace.definitions.insert(*insertion_index + i, *defn);
+            }
+        }
+        eprintln!(
+            "Mutated ast namespace definitions with {} metaprogram outputs: {:?}",
+            defns_to_add.len(),
+            ast_namespace.definitions
+        );
+    }
+
+    fn declare_namespace_recursive(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_scope: ScopeId,
+    ) -> TyperResult<NamespaceId> {
+        let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
+        self.declare_namespaces_in_namespace(parsed_namespace_id);
+        Ok(ns_id)
     }
 
     pub fn run(
         &mut self,
         module_name: Ident,
-        module_namespace_id: ParsedNamespaceId,
+        module_root_parsed_namespace: ParsedNamespaceId,
         kind: ModuleKind,
     ) -> anyhow::Result<ModuleId> {
         let module_id = self.modules.next_id();
         self.module_in_progress = Some(module_id);
-        //let module_namespace = self.ast.get_namespace(module_namespace_id);
 
         let mut err_writer = stderr();
 
         // Namespace phase
-        eprintln!(">> Phase 1 declare namespaces");
-        let ns_phase_res =
-            self.eval_namespace_namespace_phase(module_namespace_id, Scopes::ROOT_SCOPE_ID);
+        eprintln!(">> Phase 1 declare namespaces and run global #meta programs");
+        let root_namespace_declare_result =
+            self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
 
-        if let Err(e) = &ns_phase_res {
+        if let Err(e) = &root_namespace_declare_result {
             self.write_error(&mut err_writer, e)?;
             self.errors.push(e.clone());
-        }
-        if !self.errors.is_empty() {
             bail!(
                 "{} failed namespace declaration phase with {} errors",
                 self.program_name(),
                 self.errors.len()
             )
         }
-
-        let typed_namespace_id = ns_phase_res.unwrap();
+        let typed_namespace_id = root_namespace_declare_result.unwrap();
         let namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
         let real_module_id = self.modules.add(Module {
             id: module_id,
@@ -13754,14 +13868,24 @@ impl TypedProgram {
             namespace_scope_id,
         });
         debug_assert_eq!(module_id, real_module_id);
+
         let is_core = module_id == MODULE_ID_CORE;
         if !is_core {
             self.add_default_uses_to_scope(namespace_scope_id, SpanId::NONE)?;
         }
 
+        self.declare_namespaces_in_namespace(module_root_parsed_namespace);
+        if !self.errors.is_empty() {
+            bail!(
+                "{} failed namespace declaration phase with {} errors",
+                self.program_name(),
+                self.errors.len()
+            )
+        }
+
         // Pending Type declaration phase
         eprintln!(">> Phase 2 declare types");
-        let type_defn_result = self.eval_namespace_type_decl_phase(module_namespace_id);
+        let type_defn_result = self.eval_namespace_type_decl_phase(module_root_parsed_namespace);
         if let Err(e) = type_defn_result {
             self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
@@ -13775,7 +13899,7 @@ impl TypedProgram {
         }
         // Type evaluation phase
         eprintln!(">> Phase 3 evaluate types");
-        let type_eval_result = self.eval_namespace_type_eval_phase(module_namespace_id);
+        let type_eval_result = self.eval_namespace_type_eval_phase(module_root_parsed_namespace);
         if let Err(e) = type_eval_result {
             self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
@@ -13807,7 +13931,7 @@ impl TypedProgram {
         // Everything else declaration phase
         eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
         for &parsed_definition_id in
-            self.ast.namespaces.get(module_namespace_id).definitions.clone().iter()
+            self.ast.namespaces.get(module_root_parsed_namespace).definitions.clone().iter()
         {
             let result = self.eval_definition_declaration_phase(
                 parsed_definition_id,
@@ -13836,7 +13960,7 @@ impl TypedProgram {
         // Everything else evaluation phase
         eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
         for &parsed_definition_id in
-            self.ast.namespaces.get(module_namespace_id).definitions.clone().iter()
+            self.ast.namespaces.get(module_root_parsed_namespace).definitions.clone().iter()
         {
             self.eval_definition_body_phase(parsed_definition_id, namespace_scope_id);
         }

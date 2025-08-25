@@ -113,6 +113,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)?
+- [ ] First-class data-oriented design features for struct/enum setups
+      base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
+      'shared' chunks vs union chunk
+- [ ] META test: Can we build ArrayOfStructs using current metaprogramming?!
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
