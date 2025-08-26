@@ -13330,26 +13330,43 @@ impl TypedProgram {
                 let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
                     unreachable!()
                 };
+                let s = *s;
                 let is_metaprogram = s.kind.is_metaprogram();
+                debug_assert!(s.is_definition);
+                // For value programs, we want to run them in the body phase
+                // so that they have access to as much code as possible
                 if !is_metaprogram {
-                    // For value programs, we want to run them in the body phase
-                    // so that they have access to as much code as possible
+                    let should_compile = if let Some(condition_expr) = s.condition_if_definition {
+                        match self
+                            .execute_static_bool(condition_expr, EvalExprContext::make(scope_id))
+                        {
+                            Err(e) => {
+                                self.report_error(e);
+                                false
+                            }
+                            Ok(b) => b,
+                        }
+                    } else {
+                        true
+                    };
 
-                    let static_ctx =
-                        StaticExecContext { is_metaprogram, expected_return_type: None };
-                    let eval_expr_ctx = EvalExprContext {
-                        scope_id,
-                        expected_type_id: None,
-                        is_inference: false,
-                        static_ctx: Some(static_ctx),
-                        global_defn_name: None,
-                        is_generic_pass: false,
-                    };
-                    if let Err(e) =
-                        self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx)
-                    {
-                        self.report_error(e);
-                    };
+                    if should_compile {
+                        let static_ctx =
+                            StaticExecContext { is_metaprogram, expected_return_type: None };
+                        let eval_expr_ctx = EvalExprContext {
+                            scope_id,
+                            expected_type_id: None,
+                            is_inference: false,
+                            static_ctx: Some(static_ctx),
+                            global_defn_name: None,
+                            is_generic_pass: false,
+                        };
+                        if let Err(e) =
+                            self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx)
+                        {
+                            self.report_error(e);
+                        };
+                    }
                 }
             }
             other_id => {
@@ -13698,7 +13715,6 @@ impl TypedProgram {
         parent_scope: ScopeId,
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
-        eprintln!("declaring namespace {}", self.ident_str(ast_namespace.name));
 
         let namespace_id = if let Some(existing) =
             self.scopes.find_namespace(parent_scope, ast_namespace.name)
@@ -13742,19 +13758,40 @@ impl TypedProgram {
                     let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
                         unreachable!()
                     };
+                    let s = *s;
                     let is_metaprogram = s.kind.is_metaprogram();
                     if !is_metaprogram {
                         continue;
                     }
-                    // Declaration phase: eval the static, get the parsed definition ids
-                    // Recurse on them, being sure to do proper AST mappings and all that
-                    // Then the body phase should treat them like regular definitions
-                    // Except! The body phase iterates by AST. So we need to make sure
-                    // these definitions either end up in the appropriate AST namespaces's definitions
-                    // (preferable since less special)
+                    debug_assert!(s.is_definition);
 
-                    // Or put them in a separate 'meta definition body compile queue' and
-                    // Iterate them in that phase!
+                    let should_compile = if let Some(condition_expr) = s.condition_if_definition {
+                        match self.execute_static_bool(
+                            condition_expr,
+                            EvalExprContext::make(namespace_scope_id),
+                        ) {
+                            Err(e) => {
+                                self.report_error(e);
+                                false
+                            }
+                            Ok(b) => b,
+                        }
+                    } else {
+                        true
+                    };
+
+                    if !should_compile {
+                        continue;
+                    }
+
+                    // Metaprogram top-level evaluation
+                    // We simply run the program, getting a string,
+                    // parse it as definitions, then we load those definitions
+                    // injecting them into the AST, as if they appeared right here.
+                    // We ensure to handle namespaces right now, as this is the phase that
+                    // they should be handled. Everything else will get handled naturally
+                    // as we iterate over the namespace's definitions in the future phases
+
                     let static_ctx = StaticExecContext {
                         is_metaprogram,
                         expected_return_type: Some(I32_TYPE_ID),
@@ -13768,7 +13805,7 @@ impl TypedProgram {
                         is_generic_pass: false,
                     };
                     let newly_parsed_defns =
-                        match self.eval_static_expr_and_exec(static_expr_id, *s, eval_expr_ctx) {
+                        match self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx) {
                             Err(e) => {
                                 self.report_error(e);
                                 eco_vec![]
@@ -13805,21 +13842,11 @@ impl TypedProgram {
         drop(ast_namespace);
 
         let ast_namespace = self.ast.namespaces.get_mut(parsed_namespace_id);
-        eprintln!(
-            "Preparing to mutate ast namespace definitions with {} metaprogram outputs: {:?}",
-            defns_to_add.len(),
-            ast_namespace.definitions
-        );
         for (insertion_index, defns) in defns_to_add.iter() {
             for (i, defn) in defns.iter().enumerate() {
                 ast_namespace.definitions.insert(*insertion_index + i, *defn);
             }
         }
-        eprintln!(
-            "Mutated ast namespace definitions with {} metaprogram outputs: {:?}",
-            defns_to_add.len(),
-            ast_namespace.definitions
-        );
     }
 
     fn declare_namespace_recursive(
