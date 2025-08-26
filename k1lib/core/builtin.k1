@@ -390,12 +390,6 @@ impl Equals for bool {
   }
 }
 
-// nocommit(1): Metaprogramming for definitions.
-// #meta {
-//   for t in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] do {
-//     meta/emitString `impl Equals for {t} { fn equals(self: {t}, other: {t}): bool { self == other } } `
-//   }
-// }
 impl Equals for u8 { fn equals(self: u8, other: u8): bool { self == other } }
 impl Equals for u16 { fn equals(self: u16, other: u16): bool { self == other } }
 impl Equals for u32 { fn equals(self: u32, other: u32): bool { self == other } }

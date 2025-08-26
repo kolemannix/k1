@@ -30,4 +30,50 @@ ns meta {
     }
   }
 
+  // nocommit(2): support in-file 'meta' modules (although this probably does stay in core)
+  // Note: If we had an interface for "growable collection", we could implement it here.
+  //       len, get, empty, (push)
+  fn defineSoA[T](name: string): string {
+    let structTypeId = types/typeId[T]();
+    let tt = "typeFromId({structTypeId})";
+    require types/typeSchema(structTypeId) is .Struct({ fields }) else
+      crash("Its called a STRUCT of arrays for a reason");
+    if fields.isEmpty() { crash("Input struct must have at least one field") };
+    let code = core/StringBuilder/new();
+    code.putString("deftype {name} = {{\n");
+    for f in fields do {
+      code.putString("  ARR_{f.name}: List[typeFromId({f.typeId})],\n");
+    };
+    code.putString("}\n");
+
+    // begin ns
+    code.putString(`ns {name} {{\n`);
+
+    // begin fn get
+    code.putString(`  fn get(self: {name}, index: uword): {tt} {{\n`);
+    code.putString(`    let* mut ret: *mut {tt} = mem/zeroed();\n`);
+    for f in fields do {
+      code.putString(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);\n`)
+    };
+    code.putString(`    ret.*\n`);
+    code.putString(`  }\n`); // end fn get
+
+    // begin fn empty
+    code.putString(`  fn empty(): {name} {{ {{\n`);
+    for f in fields do {
+      code.putString(`    ARR_{f.name}: List/empty(), \n`);
+    };
+    code.putString(`} }\n`); // end fn empty
+
+    // begin fn push
+    code.putString(`  fn push(self: *mut {name}, value: {tt}): unit {{\n`);
+    for f in fields do {
+      code.putString(`    self.ARR_{f.name}*.push(value.{f.name});\n`)
+    };
+    code.putString(`}\n`); // end fn push
+
+    code.putString(`}\n`); // end ns
+    code.build()
+  }
+
 }
