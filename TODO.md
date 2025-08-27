@@ -3,12 +3,13 @@ New tagline? "C with typeclasses and tagged unions"
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
-- [ ] Bug: ability impls kinda have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
-           'skip and progress' style of pass for them
+- [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
+                             'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 - [ ] Related: Detect duplicate blanket impls?
-- [ ] Bug: Fix returning Result from main
+- [ ] Bug: Fix returning Result from main. I think main should just return an i32, honestly. If you want to use 'Try', make your own function.
+      So the only todo here is the remove the code that allows for anything but i32
 - [ ] Typecheck 'main' better
-- [ ] Dogfood idea: try to write a 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
+- [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 
 # General
