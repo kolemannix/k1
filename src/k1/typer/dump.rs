@@ -238,8 +238,12 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Reference(r) => {
+                w.write_char('*')?;
+                if r.mutable {
+                    w.write_str("mut ")?;
+                }
                 self.display_type_id(r.inner_type, expand, w)?;
-                w.write_char('*')
+                Ok(())
             }
             Type::Enum(e) => {
                 if let Some(defn_info) = defn_info {

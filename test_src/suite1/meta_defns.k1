@@ -1,0 +1,54 @@
+ns meta_defns;
+
+#meta "let n: uword = 255;"
+#meta "let x: uword = 256;"
+
+#meta "fn isPow2(x: uword): bool {{ (x - 1) | Bitwise/bitAnd(x) == 0 }"
+
+#meta {
+  let name1 = "1";
+  let name2 = "2";
+  let a = "ns Secret {{ fn secret{name1}(): int {{ 42 } }\n";
+  let b = "ns Secret {{ fn secret{name2}(): int {{ 43 } }\n";
+  "{a}{b}"
+}
+
+#meta {
+  "deftype Frob = {{ b: bool }"
+}
+
+#meta {
+  "ability Named {{ fn getName(self: Self): string }"
+}
+
+#meta {
+  `impl Named for Frob {{
+    fn getName(self: Self): string {{ if self.b "Bob" else "Joe" }
+  }`
+}
+
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
+
+fn test(): unit {
+  let frob: Frob = { b: false };
+
+  assertEquals(frob.getName(), "Joe");
+  assertEquals(isPow2(n), false);
+  assertEquals(isPow2(x), true);
+  assertEquals(Secret/secret1(), 42);
+  assertEquals(Secret/secret2(), 43);
+
+  let* mut ps = Point3List/empty();
+  ps.push({ x: 5, y: 10, z: 15 });
+  let p = ps.get(0);
+  assertEquals(p.x, 5);
+  assertEquals(p.y, 10);
+  assertEquals(p.z, 15);
+
+}
+
+// Only "static, true" and "meta, true" should appear
+#if true #static { println("static, true"); () } 
+#if false #static { println("static, false"); () } 
+#if true #meta { println("meta, true"); "let u1: unit = ();" } 
+#if false #meta { println("meta, false"); "let u2: unit = ();" } 
