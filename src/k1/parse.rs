@@ -808,6 +808,7 @@ pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
     pub is_definition: bool,
+    pub condition_if_definition: Option<ParsedExprId>,
     pub parameter_names: SliceHandle<IdentSliceId>,
     pub span: SpanId,
 }
@@ -1495,6 +1496,16 @@ pub struct ParsedNamespace {
     pub definitions: EcoVec<ParsedId>,
     pub id: ParsedNamespaceId,
     pub span: SpanId,
+    // Used by typer phase
+    pub enabled_definitions: EcoVec<ParsedId>,
+}
+
+pub enum ParsedDefinitionItem {
+    // Full solution is to build out this enum, then in typer, in the very first phase
+    // Evaluate all the conditions and form a new array of actual definitions for every
+    // namespace and all subsequent phases just look at that list
+    ConditionalBlock { condition: ParsedExprId, items: EcoVec<ParsedId> },
+    Definition(ParsedId),
 }
 
 #[derive(Clone, Copy)]
@@ -2211,6 +2222,15 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         self.ast.namespaces.get_mut(self.module_namespace_id).definitions.extend(new_definitions);
     }
 
+    fn error_here(&self, message: impl AsRef<str>) -> ParseError {
+        let p = self.peek();
+        ParseError::Parse {
+            message: message.as_ref().to_string(),
+            token: if p.kind == K::Eof { self.peek_back() } else { p },
+            cause: None,
+        }
+    }
+
     pub fn parse_definition(&mut self, terminator: TokenKind) -> ParseResult<Option<ParsedId>> {
         let (first, second) = self.peek_two();
         let condition = if first.kind == K::Hash && second.kind == K::KeywordIf {
@@ -2222,9 +2242,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         };
         // nocommit(1): Ensure that `condition` is applied to all of these definitions
         //              So that all can be conditionally compiled
-        if let Some(static_expr_id) = self.parse_static_defn()? {
+        if let Some(static_expr_id) = self.parse_static_defn(condition)? {
             Ok(Some(ParsedId::StaticDefn(static_expr_id)))
-        } else if let Some(use_id) = self.parse_use()? {
+        } else if let Some(use_id) = self.parse_use(condition)? {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
@@ -2249,19 +2269,23 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 self.advance();
                 Ok(None)
             } else {
+                let p = self.peek();
                 let err = error_expected(
                     format!("Definition (fn, deftype, or ns) or {terminator}"),
-                    self.peek(),
+                    if p.kind == K::Eof { self.peek_back() } else { self.peek() },
                 );
                 Err(err)
             }
         }
     }
 
-    fn parse_static_defn(&mut self) -> ParseResult<Option<ParsedExprId>> {
+    fn parse_static_defn(
+        &mut self,
+        condition: Option<ParsedExprId>,
+    ) -> ParseResult<Option<ParsedExprId>> {
         let Some(hash_token) = self.maybe_consume_next(K::Hash) else { return Ok(None) };
         let maybe_directive = self.peek();
-        match self.parse_static_expr(hash_token, maybe_directive, true)? {
+        match self.parse_static_expr(hash_token, maybe_directive, true, condition)? {
             Some(static_expr_id) => Ok(Some(static_expr_id)),
             None => {
                 Err(error_expected("static definition (e.g. #static or #meta)", maybe_directive))
@@ -2276,6 +2300,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         hash_token: Token,
         maybe_directive: Token,
         is_definition: bool,
+        condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
         match maybe_directive.kind {
             K::Ident if !maybe_directive.is_whitespace_preceeded() => {
@@ -2312,6 +2337,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                             base_expr,
                             kind,
                             is_definition,
+                            condition_if_definition: condition,
                             parameter_names: parameter_names_handle,
                             span,
                         }))))
@@ -2541,13 +2567,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_eat_token(&mut self, target_token: TokenKind) -> ParseResult<Token> {
-        let result = self.maybe_consume_next(target_token);
-        match result {
-            None => {
-                let actual = self.peek();
-                Err(error_expected(target_token, actual))
-            }
-            Some(t) => Ok(t),
+        let tok = self.peek();
+        if tok.kind == target_token {
+            self.advance();
+            Ok(tok)
+        } else {
+            Err(self.error_here(format!("Expected {}", target_token)))
         }
     }
 
@@ -2721,7 +2746,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             if next == '{' {
                                 buf.push('{');
                             } else {
-                                return Err(error("ICE: contains non-escaped '{'", first));
+                                return Err(error(
+                                    "Internal Compiler Error: contains non-escaped '{'",
+                                    first,
+                                ));
                             }
                         } else if c == '\\' {
                             let Some(next) = chars.next() else {
@@ -3582,9 +3610,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             },
                         ))))
                     }
-                    _ => Err(error(
+                    _ => Err(self.error_here(
                         "Expected '(' for function call; or '@' for qualified ability impl",
-                        self.peek(),
                     )),
                 }
             } else {
@@ -3628,7 +3655,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
 
             let maybe_directive = self.peek();
-            if let Some(static_expr) = self.parse_static_expr(first, maybe_directive, false)? {
+            if let Some(static_expr) =
+                self.parse_static_expr(first, maybe_directive, false, None)?
+            {
                 Ok(Some(static_expr))
             } else {
                 match maybe_directive.kind {
@@ -3645,7 +3674,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     span,
                                 }))))
                             }
-                            _ => Err(error("Unknown directive following #", self.peek())),
+                            _ => Err(self.error_here("Unknown directive following #")),
                         }
                     }
                     K::KeywordIf => {
@@ -3654,7 +3683,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         if_expr.is_static = true;
                         Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
                     }
-                    _ => Err(error("Unknown directive following #", self.peek())),
+                    _ => Err(self.error_here("Unknown directive following #")),
                 }
             }
         } else {
@@ -3921,7 +3950,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
         match self.eat_delimited_if_opener(name, destination, opener, delim, terminators, parse) {
-            Ok(None) => Err(error(opener, self.peek())),
+            Ok(None) => Err(self.error_here(opener)),
             Ok(Some(res)) => Ok(res),
             Err(err) => Err(err),
         }
@@ -3975,10 +4004,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             let found_delim = self.maybe_consume_next(delim);
             if found_delim.is_none() {
-                break Err(error(
-                    format!("Expected delimiter '{delim}' while parsing {name}"),
-                    self.peek(),
-                ));
+                break Err(
+                    self.error_here(format!("Expected delimiter '{delim}' while parsing {name}"))
+                );
             }
         }
     }

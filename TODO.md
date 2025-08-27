@@ -182,8 +182,12 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] #code directive
 - [x] static type universe: `static T`
 - [x] A syntax for talking about a certain impl of an ability: `Show::bool/show(b: bool)` or `(Allocator for T)/supportsFree()`
-- [ ] Upgrade Allocator api in std/mem to use static and metaprogramming
-      (this causes some issues because we need to use the context allocator to know the type, but if there is none because we're using the threadlocal current system, we have no place to get the type param from!')
+
+## Project: Metaprogramming round 2
+- [ ] Finish StructOfArrays builder
+- [ ] Provide in-file 'meta' module for convenience
+      (it gets pre-compiled as its own module so that you can write and use functions for metaprogramming)
+- [ ] Provide a specialized StringBuilder and suite of helpers, CodeBuilder?
 
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`

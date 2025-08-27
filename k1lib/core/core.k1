@@ -48,6 +48,7 @@ fn printIt[T: Print](value: T): unit {
 }
 
 fn print(s: string): unit {
+  // nocommit: Instead of this hack, make posix/write(ptr, ptr, len) the intrinsic.
   if k1/IS_STATIC {
     if s != "\n" {
       k1/emitCompilerMessage(compiler/location(), .Info, s)
@@ -58,7 +59,8 @@ fn print(s: string): unit {
   ()
 }
 fn println(s: string): unit {
-  // 2 calls for now to avoid dependency on allocator
+  // Whatever our implementation of print should be able to buffer
+  // such that its better to call twice than allocate a garbage string
   print(s);
   print("\n");
 }
@@ -72,7 +74,8 @@ fn eprint(s: string): unit {
   ()
 }
 fn eprintln(s: string): unit {
-  // 2 calls for now to avoid dependency on allocator
+  // Whatever our implementation of print should be able to buffer
+  // such that its better to call twice than allocate a garbage string
   eprint(s);
   eprint("\n");
 }
