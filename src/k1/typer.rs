@@ -25,7 +25,6 @@ use std::fmt::{Display, Formatter};
 use std::io::stderr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
@@ -2359,6 +2358,20 @@ pub struct Timing {
     pub total_vm_nanos: u64,
 }
 
+impl Timing {
+    pub fn time_raw(&self) -> u64 {
+        self.clock.raw()
+    }
+
+    pub fn elapsed_nanos(&self, since: u64) -> u64 {
+        self.clock.delta_as_nanos(since, self.clock.raw())
+    }
+
+    pub fn elapsed_ms(&self, since: u64) -> u64 {
+        self.elapsed_nanos(since) / 1_000_000
+    }
+}
+
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
         const MAX_TYPES: usize = 131072;
@@ -2480,6 +2493,7 @@ impl TypedProgram {
     }
 
     pub fn add_module(&mut self, src_path: &Path) -> anyhow::Result<ModuleId> {
+        let total_start = self.timing.time_raw();
         log::info!("Loading module {:?}...", src_path);
         let src_path = src_path.canonicalize().map_err(|e| {
             anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
@@ -2504,7 +2518,7 @@ impl TypedProgram {
             files_to_compile.swap(0, builtin_index);
         };
         let directory_string = parent_dir.to_str().unwrap().to_string();
-        let start_parse = std::time::Instant::now();
+        let parse_start = self.timing.time_raw();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
@@ -2543,9 +2557,14 @@ impl TypedProgram {
         }
         self.buffers.lexer_tokens = token_buffer;
 
-        let parsing_elapsed = start_parse.elapsed();
+        let parse_elapsed_us = self.timing.elapsed_nanos(parse_start) / 1_000;
+        let parse_elapsed_ms = parse_elapsed_us / 1_000;
         let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
-        log::info!("parsing took {}ms ({} lines, incl IO)", parsing_elapsed.as_millis(), lines);
+        log::info!(
+            "parsing took {}ms. {}us/line incl. io",
+            parse_elapsed_ms,
+            parse_elapsed_us / lines as u64
+        );
 
         if !self.ast.errors.is_empty() {
             bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
@@ -2592,10 +2611,12 @@ impl TypedProgram {
         // }
         // self.named_types.print_size_info();
         // self.types.types.print_size_info();
+        log::info!("typing took {}ms", typing_elapsed_ms,);
+        let total_elapsed_ms = self.timing.elapsed_ms(total_start);
         log::info!(
             "module {} took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
             src_path_name,
-            typing_elapsed_ms,
+            total_elapsed_ms,
             self.exprs.len(),
             self.function_iter().count(),
             self.types.type_count()
@@ -15093,12 +15114,11 @@ impl TypedProgram {
     // Timing
     //
     pub fn print_timing_info(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        writeln!(out, "Hello, timing")?;
         let infer_ms = self.timing.total_infer_nanos as f64 / 1_000_000.0;
         let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
         writeln!(
             out,
-            "infers: {}. {:.2}ms. {:.2}ms avg",
+            "infer: {:.2}ms. count: {} avg: {:.2}ms ",
             self.timing.total_infers,
             infer_ms,
             if self.timing.total_infers > 0 {

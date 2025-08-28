@@ -125,7 +125,9 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] Add entire modules from TypedProgram
   - [x] Module manifests somewhere
   - [x] Library vs Binary
-  - [ ] Dependencies: git url, 'local file', or 'package'
+  - [ ] Dependencies: local module
+  - [ ] Dependencies: git url
+  - [ ] Linker options
   - [ ] Prevent modules using definitions from modules they dont depend on
   - [ ] serialize typedprogram (for incremental compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
@@ -184,10 +186,10 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] A syntax for talking about a certain impl of an ability: `Show::bool/show(b: bool)` or `(Allocator for T)/supportsFree()`
 
 ## Project: Metaprogramming round 2
-- [ ] Finish StructOfArrays builder
-- [ ] Provide in-file 'meta' module for convenience
+- [x] Finish StructOfArrays builder
+- [x] Provide in-file 'meta' module for convenience
       (it gets pre-compiled as its own module so that you can write and use functions for metaprogramming)
-- [ ] Provide a specialized StringBuilder and suite of helpers, CodeBuilder?
+- [x] Provide a specialized StringBuilder and suite of helpers, CodeBuilder?
 
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
