@@ -371,6 +371,7 @@ pub struct BuiltinIdentifiers {
     pub toMut: Ident,
     pub unMut: Ident,
     pub data: Ident,
+    pub meta: Ident,
     pub param_0: Ident,
     pub param_1: Ident,
     pub param_2: Ident,
@@ -465,6 +466,7 @@ impl Default for Identifiers {
         let toMut = Ident(pool.get_or_intern_static("toMut"));
         let unMut = Ident(pool.get_or_intern_static("unMut"));
         let data = Ident(pool.get_or_intern_static("data"));
+        let meta = Ident(pool.get_or_intern_static("meta"));
 
         let param_0 = Ident(pool.get_or_intern_static("param_0"));
         let param_1 = Ident(pool.get_or_intern_static("param_1"));
@@ -538,6 +540,7 @@ impl Default for Identifiers {
                 toMut,
                 unMut,
                 data,
+                meta,
                 param_0,
                 param_1,
                 param_2,
@@ -569,14 +572,14 @@ impl ParsedCallArg {
 #[derive(Debug, Clone)]
 pub struct NamedTypeArg {
     pub name: Option<Ident>,
-    pub type_expr: ParsedTypeExprId,
+    pub type_expr: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 impl_copy_if_small!(12, NamedTypeArg);
 
 impl NamedTypeArg {
     pub fn unnamed(type_expr: ParsedTypeExprId, span: SpanId) -> NamedTypeArg {
-        NamedTypeArg { type_expr, name: None, span }
+        NamedTypeArg { type_expr: Some(type_expr), name: None, span }
     }
 }
 
@@ -1496,15 +1499,30 @@ pub struct ParsedNamespace {
     pub definitions: EcoVec<ParsedId>,
     pub id: ParsedNamespaceId,
     pub span: SpanId,
-    // Used by typer phase
-    pub enabled_definitions: EcoVec<ParsedId>,
+    // TODO: Used by typer phase once full conditional definitions is implemented
+    // pub enabled_definitions: EcoVec<ParsedId>,
 }
 
+// Tiny little expression language that turns out to be necesary if you want nice rich logical
+// recursive conditional compilation; i.e.,
+// #if <cond> {
+//   fn xyz();
+//   ns Foo {} }
+// else #if <cond2> {
+//   #if <cond3> { fn abc() } else { fn def() }
+// } else ns Bar {}
 pub enum ParsedDefinitionItem {
     // Full solution is to build out this enum, then in typer, in the very first phase
     // Evaluate all the conditions and form a new array of actual definitions for every
     // namespace and all subsequent phases just look at that list
-    ConditionalBlock { condition: ParsedExprId, items: EcoVec<ParsedId> },
+    Conditional {
+        condition: ParsedExprId,
+        cons_item: Box<ParsedDefinitionItem>,
+        else_item: Box<ParsedDefinitionItem>,
+    },
+    Block {
+        items: EcoVec<ParsedDefinitionItem>,
+    },
     Definition(ParsedId),
 }
 
@@ -2240,11 +2258,13 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else {
             None
         };
-        // nocommit(1): Ensure that `condition` is applied to all of these definitions
-        //              So that all can be conditionally compiled
+        // TODO: Ensure that `condition` is applied to all of these definitions
+        //       So that all can be conditionally compiled
+        //       For now, everything but ns and function ignore their conditions.
+        //
         if let Some(static_expr_id) = self.parse_static_defn(condition)? {
             Ok(Some(ParsedId::StaticDefn(static_expr_id)))
-        } else if let Some(use_id) = self.parse_use(condition)? {
+        } else if let Some(use_id) = self.parse_use()? {
             Ok(Some(ParsedId::Use(use_id)))
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
@@ -3349,8 +3369,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else {
                     None
                 };
-                let type_expr = p.expect_type_expression()?;
-                let span = p.extend_span(one.span, p.get_type_expression_span(type_expr));
+                let peeked = p.peek();
+                let type_expr = if peeked.kind == K::Ident && p.get_token_chars(peeked) == "_" {
+                    p.advance();
+                    None
+                } else {
+                    Some(p.expect_type_expression()?)
+                };
+                let span = p.extend_to_here(one.span);
                 Ok(NamedTypeArg { name, type_expr, span })
             },
         )?;
@@ -3723,11 +3749,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         loop {
             let next = self.peek();
             match next.kind {
+                K::Dot => {
+                    if maybe_open_paren.is_some() {
+                        // Incompatible
+                        return Err(error_expected("close paren or more stuff", next));
+                    }
+                    self.advance();
+                    break;
+                }
                 K::RThinArrow => {
                     self.advance();
                     return_type = Some(self.expect_type_expression()?);
                     if maybe_open_paren.is_some() {
                         self.expect_eat_token(K::CloseParen)?;
+                    } else {
+                        self.expect_eat_token(K::Dot)?;
                     }
                     break;
                 }
@@ -3746,7 +3782,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let next = self.peek();
 
                     // If we're not terminating now, expect a comma
-                    if next.kind != K::CloseParen && next.kind != K::RThinArrow {
+                    if next.kind != K::CloseParen
+                        && next.kind != K::RThinArrow
+                        && next.kind != K::Dot
+                    {
                         self.expect_eat_token(K::Comma)?;
                     }
                 }
@@ -4347,9 +4386,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name_token = self.expect_eat_token(K::Ident)?;
         let name = self.intern_ident_token(name_token);
         self.expect_eat_token(K::Equals)?;
-        let value = self.expect_type_expression()?;
-        let span = self.extend_span(name_token.span, self.get_type_expression_span(value));
-        Ok(NamedTypeArg { name: Some(name), type_expr: value, span })
+        let peeked = self.peek();
+        let type_expr = if peeked.kind == K::Ident && self.get_token_chars(peeked) == "_" {
+            self.advance();
+            None
+        } else {
+            Some(self.expect_type_expression()?)
+        };
+        let span = self.extend_to_here(name_token.span);
+        Ok(NamedTypeArg { name: Some(name), type_expr, span })
     }
 
     fn expect_ability_expr(&mut self) -> ParseResult<ParsedAbilityExpr> {
@@ -4694,7 +4739,7 @@ impl ParsedProgram {
         if !e.arguments.is_empty() {
             w.write_str("[")?;
             for (idx, arg) in self.p_type_args.get_slice(e.arguments).iter().enumerate() {
-                self.display_type_expr_id(arg.type_expr, w)?;
+                self.display_maybe_type_expr_id(arg.type_expr, w)?;
                 if idx < e.arguments.len() - 1 {
                     w.write_str(", ")?;
                 }
@@ -4718,6 +4763,17 @@ impl ParsedProgram {
         buffer
     }
 
+    pub fn display_maybe_type_expr_id(
+        &self,
+        ty_expr_id: Option<ParsedTypeExprId>,
+        w: &mut impl Write,
+    ) -> std::fmt::Result {
+        match ty_expr_id {
+            None => w.write_char('_'),
+            Some(t) => self.display_type_expr_id(t, w),
+        }
+    }
+
     pub fn display_type_expr_id(
         &self,
         ty_expr_id: ParsedTypeExprId,
@@ -4739,7 +4795,7 @@ impl ParsedProgram {
                 if !tapp.args.is_empty() {
                     w.write_str("[")?;
                     for tparam in self.p_type_args.get_slice(tapp.args) {
-                        self.display_type_expr_id(tparam.type_expr, w)?;
+                        self.display_maybe_type_expr_id(tparam.type_expr, w)?;
                         w.write_str(", ")?;
                     }
                     w.write_str("]")?;

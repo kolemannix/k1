@@ -506,6 +506,7 @@ impl Span {
         self.start + self.len
     }
 
+    #[track_caller]
     pub fn extended(&self, other: Span) -> Span {
         if cfg!(debug_assertions) {
             // Fuck off clippy: nothing wrong with this:

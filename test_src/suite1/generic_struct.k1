@@ -1,9 +1,9 @@
 ns generic_struct;
 
 deftype Box[T] = { value: T }
-deftype Pair[T, U] = { t: T?, u: U? }
-ns Pair {
-  fn t[T, U](self: Pair[T, U]): T? {
+deftype AuPair[T, U] = { t: T?, u: U? }
+ns AuPair {
+  fn t[T, U](self: AuPair[T, U]): T? {
     self.t
   }
 }
@@ -12,21 +12,22 @@ fn unboxIt[T](b: Box[Box[Box[T]]]): T {
   b.value.value.value
 }
 
-fn takesPolyPair[C, D](x: Pair[C, D]): unit { () }
+fn takesPolyAuPair[C, D](x: AuPair[C, D]): unit { () }
 
 fn test(): unit {
   let b: Box[int] = { value: 0 };
+  b.value;
   let c: Box[bool] = { value: true };
   let c2: Box[bool] = { value: false };
   let c3: Box[bool?] = { value: .Some(false) };
   let c4: Box[*bool] = { value: core/mem/new(false) };
-  assert(b.value == 0);
-  assert(c.value == true);
-  assert(c2.value == false);
-  assert(c3.value.! == false);
-  assert(c4.value.* == false);
+  assertEquals(b.value, 0);
+  assertEquals(c.value, true);
+  assertEquals(c2.value, false);
+  assertEquals(c3.value.!, false);
+  assertEquals(c4.value.*, false);
 
-  let p: Pair[int, bool] = { t: some(0), u: some(true) };
+  let p: AuPair[int, bool] = { t: some(0), u: some(true) };
   assert(p.t.! == 0);
   assert(p.u.! == true);
   assert(p.t[int, bool]().! == 0);
@@ -35,11 +36,22 @@ fn test(): unit {
   let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);
 
-  takesPolyPair({ t: some(42), u: Opt.Some(true) });
-  takesPolyPair({ t: some(42), u: .Some(true) });
-  takesPolyPair({ t: some(42), u: some(true) });
+  takesPolyAuPair({ t: some(42), u: Opt.Some(true) });
+  takesPolyAuPair({ t: some(42), u: .Some(true) });
+  takesPolyAuPair({ t: some(42), u: some(true) });
 
-  b.value;
+  takesPolyAuPair[int, _]({ t: some(42), u: some(true) });
+  takesPolyAuPair[_, bool]({ t: some(42), u: some(true) });
+  takesPolyAuPair[_, _]({ t: some(42), u: some(true) });
+
+  assert(
+    testCompile(takesPolyAuPair[Pointer, _]({ t: some(42), u: some(true) }))
+    is .Some(_)
+  );
+  assert(
+    testCompile(takesPolyAuPair[_, Pointer]({ t: some(42), u: some(true) }))
+    is .Some(_)
+  );
 
   ()
 }

@@ -5,6 +5,10 @@
 // over time, of wrapping the pointer in a struct
 // so that we can just pass around a StringBuilder
 // which is of course always mutable and always 'by reference'
+
+// We used to do a sort of 'linked list' of string or char segments
+// which I think is probably more performant, come to think of it,
+// than just a growing buffer
 deftype StringBuilder = { charList: *mut List[char] }
 ns StringBuilder {
   deftype alias Part = StringBuilder.charList.value.T

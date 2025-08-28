@@ -24,7 +24,7 @@ impl TypedProgram {
     /// We get a better error message if we wait to report the mismatch until the end
     pub(crate) fn infer_types(
         &mut self,
-        all_type_params: NamedTypeSlice,
+        all_type_params: &SV8<NameAndType>,
         // Sometimes, we don't need to solve everything. An example is when resolving
         // an ability call, we don't need to solve for the impl-side params, as they will come
         // once we look up the impl.
@@ -37,24 +37,37 @@ impl TypedProgram {
         span: SpanId,
         scope_id: ScopeId,
     ) -> TyperResult<(NamedTypeSlice, NamedTypeSlice)> {
-        self.inference_context.origin_stack.push(span);
-        let infer_depth = self.inference_context.origin_stack.len();
+        if self.inference_context_stack.is_empty() {
+            self.ictx_push();
+        }
+
+        let ictx = self.ictx_mut();
+        ictx.origin_stack.push(span);
+        let infer_depth = ictx.origin_stack.len();
+        if infer_depth == 1 {
+            let raw = self.timing.clock.raw();
+            self.ictx_mut().start_raw = raw;
+        }
 
         let mut self_ = scopeguard::guard(self, |self_| {
-            let id = self_.inference_context.origin_stack.pop().unwrap();
-            debug_assert!(id == span);
-            if self_.inference_context.origin_stack.is_empty() {
-                debug!("Resetting inference buffers since stack is empty");
-                self_.inference_context.constraints.clear();
-                self_.inference_context.params.clear();
-                self_.inference_context.solutions_so_far.clear();
-                self_.inference_context.inference_vars.clear();
-                self_.inference_context.substitutions.clear();
-                self_.inference_context.substitutions_vec.clear();
+            let clock = &self_.timing.clock;
+            let start = self_.ictx().start_raw;
+            let end = clock.raw();
+            let elapsed = clock.delta_as_nanos(start, end);
+
+            let ictx = self_.ictx_mut();
+            let id = ictx.origin_stack.pop().unwrap();
+            debug_assert_eq!(id, span);
+            if ictx.origin_stack.is_empty() {
+                self_.timing.total_infers += 1;
+                self_.timing.total_infer_nanos += elapsed;
+
+                debug!("Resetting inference context");
+                self_.ictx_pop();
             } else {
                 debug!(
                     "Not resetting inference buffers: inference depth is nonzero: {}",
-                    self_.inference_context.origin_stack.len()
+                    ictx.origin_stack.len()
                 );
             }
         });
@@ -64,16 +77,15 @@ impl TypedProgram {
         let mut instantiation_set: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
 
-        let inference_var_count = self_.inference_context.inference_vars.len();
-        let all_type_params_slice = self_.named_types.copy_slice_sv::<8>(all_type_params);
-        self_.inference_context.params.extend(all_type_params_slice.iter().map(|nt| nt.type_id));
-        for (idx, param) in all_type_params_slice.iter().enumerate() {
+        let inference_var_count = self_.ictx().inference_vars.len();
+        self_.ictx_mut().params.extend(all_type_params.iter().map(|nt| nt.type_id));
+        for (idx, param) in all_type_params.iter().enumerate() {
             let hole_index = idx + inference_var_count;
 
             let type_hole = self_
                 .types
                 .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
-            self_.inference_context.inference_vars.push(type_hole);
+            self_.ictx_mut().inference_vars.push(type_hole);
             instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
         }
 
@@ -100,7 +112,7 @@ impl TypedProgram {
                 inference_pairs.len()
             );
 
-            let s = std::mem::take(&mut self_.inference_context.substitutions_vec);
+            let s = std::mem::take(&mut self_.ictx_mut().substitutions_vec);
             // Calculating the 'expected_type_so_far' is an extra step that gives us better
             // results; we're able to get 'better' types from later arguments if we've already
             // learned some things from prior ones.
@@ -113,7 +125,7 @@ impl TypedProgram {
                 "[infer {infer_depth}] Expected type is: {}",
                 self_.type_id_to_string(expected_type_so_far)
             );
-            self_.inference_context.substitutions_vec = s;
+            self_.ictx_mut().substitutions_vec = s;
 
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
@@ -197,17 +209,17 @@ impl TypedProgram {
 
             debug!(
                 "[infer {infer_depth}] all constraints\n\t{}",
-                self_.pretty_print_type_substitutions(&self_.inference_context.constraints, "\n\t"),
+                self_.pretty_print_type_substitutions(&self_.ictx().constraints, "\n\t"),
             );
         }
 
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
-        let final_substitutions = &self_.inference_context.substitutions;
+        let final_substitutions = &self_.ictx().substitutions;
 
         let mut solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
         let mut all_solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
-        for param in self_.named_types.get_slice(all_type_params) {
+        for param in all_type_params.iter() {
             let param_to_hole =
                 instantiation_set.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
@@ -244,10 +256,7 @@ impl TypedProgram {
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
-                self_.pretty_print_type_substitutions(
-                    &self_.inference_context.solutions_so_far,
-                    ", "
-                )
+                self_.pretty_print_type_substitutions(&self_.ictx().solutions_so_far, ", ")
             );
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
@@ -275,7 +284,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> TyperResult<()> {
-        let infer_depth = self.inference_context.origin_stack.len();
+        let infer_depth = self.ictx().origin_stack.len();
         if let Some(static_type) = self.types.get_type_parameter(type_param_id).static_constraint {
             debug!(
                 "[infer {infer_depth}] > learning from STATIC param {} := {}. static type: {}",
@@ -397,31 +406,35 @@ impl TypedProgram {
         &mut self,
         fn_call: &ParsedCall,
         generic_function_sig: FunctionSignature,
-        known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
+        args_and_params: &ArgsAndParams,
     ) -> TyperResult<NamedTypeSlice> {
+        debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.is_generic());
         let passed_type_args = fn_call.type_args;
         let passed_type_args_count = passed_type_args.len();
-        let solved_type_params = if !passed_type_args.is_empty() {
-            if passed_type_args_count != generic_function_sig.type_params.len() {
-                return failf!(
-                    fn_call.span,
-                    "Expected {} type arguments but got {}",
-                    generic_function_sig.type_params.len(),
-                    passed_type_args_count
-                );
-            }
+        let type_params_handle = generic_function_sig.type_params;
+        let type_params = self.named_types.copy_slice_sv8(generic_function_sig.type_params);
+        // Fuse these two paths; where for a given type param,
+        // - X *if ALL PASSED, special case to skip inference altogether of course
+        let passed_type_args = self.ast.p_type_args.copy_slice_sv8(passed_type_args);
+        if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
+            return failf!(
+                fn_call.span,
+                "Expected {} type arguments but got {}",
+                type_params.len(),
+                passed_type_args_count
+            );
+        }
+        let all_passed = passed_type_args.len() == type_params.len()
+            && passed_type_args.iter().all(|nt| nt.type_expr.is_some());
+        debug!("all_passed={all_passed}");
+        let solved_type_params = if all_passed {
             let mut evaled_params: SV4<NameAndType> =
                 SmallVec::with_capacity(passed_type_args_count);
-            let type_args_owned = self.ast.p_type_args.copy_slice_sv::<4>(passed_type_args);
-            for (type_param, type_arg) in self
-                .named_types
-                .copy_slice_sv::<4>(generic_function_sig.type_params)
-                .iter()
-                .zip(type_args_owned.iter())
-            {
-                let passed_type = self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
+            for (type_param, type_arg) in type_params.iter().zip(passed_type_args.iter()) {
+                let passed_expr = type_arg.type_expr.unwrap(); // checked by all_passed
+                let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
                 evaled_params.push(NameAndType { name: type_param.name, type_id: passed_type });
             }
             self.named_types.add_slice_from_copy_slice(&evaled_params)
@@ -429,27 +442,52 @@ impl TypedProgram {
             let generic_function_type =
                 self.types.get(generic_function_sig.function_type).as_function().unwrap().clone();
             let generic_function_return_type = generic_function_type.return_type;
-            let generic_function_params = generic_function_type.logical_params();
-            let args_and_params = self.align_call_arguments_with_parameters(
-                fn_call,
-                generic_function_params,
-                known_args.map(|(_known_types, known_args)| known_args),
-                ctx.scope_id,
-                true,
-            )?;
-            let mut inference_pairs: SmallVec<[_; 8]> = match ctx.expected_type_id {
-                None => SmallVec::with_capacity(args_and_params.len()),
-                Some(expected) => {
-                    let mut v = SmallVec::with_capacity(args_and_params.len() + 1);
-                    // One Inference Pair for the return type
-                    v.push(InferenceInputPair {
-                        arg: TypeOrParsedExpr::Type(expected),
-                        param_type: generic_function_return_type,
-                        allow_mismatch: true,
-                    });
-                    v
+
+            let mut inference_pairs: SV8<_> = smallvec![];
+
+            // We add an inference pair for every type the user explicitly passed in
+            //
+            // We add these first so that they get applied first, and following conflicts are
+            // framed in terms of these being true; if users says T := Pointer, we later say
+            // "expected Pointer" when other params dont line up.
+            for (index, type_arg) in passed_type_args.iter().enumerate() {
+                if let Some(passed_type_expr) = type_arg.type_expr {
+                    let matching_param = if let Some(passed_name) = type_arg.name {
+                        let matching_param = type_params.iter().find(|nt| nt.name == passed_name);
+                        matching_param
+                    } else {
+                        // Use position
+                        type_params.get(index)
+                    };
+                    let passed_type = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
+                    if let Some(matching_param) = matching_param {
+                        debug!(
+                            "Adding a pair {} {}",
+                            self.ident_str(matching_param.name),
+                            self.type_id_to_string(passed_type)
+                        );
+                        inference_pairs.push(InferenceInputPair {
+                            param_type: matching_param.type_id,
+                            arg: TypeOrParsedExpr::Type(passed_type),
+                            allow_mismatch: false,
+                        })
+                    } else {
+                        return failf!(fn_call.span, "Unable to line up your type arguments");
+                    }
                 }
-            };
+            }
+
+            // We add an inference pair for the return type and expected type as the next most
+            // important
+            if let Some(expected) = ctx.expected_type_id {
+                // One Inference Pair for the return type
+                inference_pairs.push(InferenceInputPair {
+                    arg: TypeOrParsedExpr::Type(expected),
+                    param_type: generic_function_return_type,
+                    allow_mismatch: true,
+                });
+            }
+
             // An Inference Pair for each parameter/argument pair
             inference_pairs.extend(args_and_params.iter().map(|(expr, param)| {
                 let passed_type = match expr {
@@ -465,12 +503,10 @@ impl TypedProgram {
                 }
             }));
 
-            // Inference pairs for everything we learn from the constraints
-
             let (solutions, _all_solutions) = self
                 .infer_types(
-                    generic_function_sig.type_params,
-                    generic_function_sig.type_params,
+                    &type_params,
+                    type_params_handle,
                     &inference_pairs,
                     fn_call.span,
                     ctx.scope_id,
@@ -487,13 +523,10 @@ impl TypedProgram {
         };
 
         // Enforce ability constraints
-        let params_to_solutions_pairs: SV4<TypeSubstitutionPair> = self
-            .zip_named_types_to_subst_pairs(generic_function_sig.type_params, solved_type_params);
-        for (solution, type_param) in self
-            .named_types
-            .copy_slice_sv::<4>(solved_type_params)
-            .iter()
-            .zip(self.named_types.copy_slice_sv::<4>(generic_function_sig.type_params).iter())
+        let params_to_solutions_pairs: SV4<TypeSubstitutionPair> =
+            self.zip_named_types_to_subst_pairs(type_params_handle, solved_type_params);
+        for (solution, type_param) in
+            self.named_types.copy_slice_sv4(solved_type_params).iter().zip(type_params.iter())
         {
             self.check_type_constraints(
                 type_param.name,
@@ -565,13 +598,13 @@ impl TypedProgram {
                     MaybeTypedExpr::Typed(_) => {
                         unreachable!("Synthesizing calls with function type params is unsupported")
                     }
-                    MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(*p) {
+                    MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
                         ParsedExpr::Lambda(_lam) => {
                             debug!("substituting type for an ftp lambda so that it can infer");
                             let substituted_param_type =
                                 self.substitute_in_type(function_type_param.type_id, &subst_pairs);
                             let the_lambda = self.eval_expr(
-                                *p,
+                                p,
                                 ctx.with_expected_type(Some(substituted_param_type)),
                             )?;
                             let lambda_type = self.exprs.get(the_lambda).get_type();
@@ -582,7 +615,7 @@ impl TypedProgram {
                             PhysicalPassedFunction::Lambda(lambda_type)
                         }
                         _other => {
-                            let t = self.eval_expr(*p, ctx.with_no_expected_type())?;
+                            let t = self.eval_expr(p, ctx.with_no_expected_type())?;
                             let type_id = self.exprs.get(t).get_type();
                             match self.types.get(type_id) {
                                 Type::Lambda(_) => PhysicalPassedFunction::Lambda(type_id),
@@ -672,9 +705,9 @@ impl TypedProgram {
 
                 let expr_id = match corresponding_arg {
                     MaybeTypedExpr::Parsed(p) => {
-                        self.eval_expr(*p, ctx.with_expected_type(Some(static_type_param.type_id)))?
+                        self.eval_expr(p, ctx.with_expected_type(Some(static_type_param.type_id)))?
                     }
-                    MaybeTypedExpr::Typed(typed_expr_id) => *typed_expr_id,
+                    MaybeTypedExpr::Typed(typed_expr_id) => typed_expr_id,
                 };
                 let expr_type_id = self.exprs.get(expr_id).get_type();
                 let final_parameter_type = if let Type::Static(_passed_static_type) =
@@ -735,7 +768,8 @@ impl TypedProgram {
         &mut self,
         span: SpanId,
     ) -> TyperResult<SV4<TypeSubstitutionPair>> {
-        let mut ctx = std::mem::take(&mut self.inference_context);
+        let mut ctx = self.ictx_take();
+
         debug!(
             "calculate_inference_substitutions. constraints: [{}]",
             self.pretty_print_type_substitutions(&ctx.constraints, ", ")
@@ -786,7 +820,7 @@ impl TypedProgram {
                             self.type_id_to_string(subst.to),
                             self.type_id_to_string(*dest),
                         );
-                        self.inference_context = ctx;
+                        self.inference_context_stack.push(ctx);
                         return e;
                     }
                 }
@@ -837,7 +871,7 @@ impl TypedProgram {
             }
             ctx.solutions_so_far.push(spair! { original_param => *solved_to })
         }
-        self.inference_context = ctx;
+        self.inference_context_stack.push(ctx);
         Ok(newly_solved_params)
     }
 
@@ -848,12 +882,9 @@ impl TypedProgram {
     /// often that we want this mapping for each param
     fn make_inference_substitution_set(&self) -> SV8<TypeSubstitutionPair> {
         let mut subst_set: SV8<TypeSubstitutionPair> = smallvec![];
-        for (param, inference_hole) in
-            self.inference_context.params.iter().zip(self.inference_context.inference_vars.iter())
-        {
-            if let Some(solution) =
-                self.inference_context.solutions_so_far.iter().find(|p| p.from == *param)
-            {
+        let ictx = self.ictx();
+        for (param, inference_hole) in ictx.params.iter().zip(ictx.inference_vars.iter()) {
+            if let Some(solution) = ictx.solutions_so_far.iter().find(|p| p.from == *param) {
                 subst_set.push(*solution)
             } else {
                 subst_set.push(spair! { *param => *inference_hole })
@@ -868,14 +899,14 @@ impl TypedProgram {
         slot_type: TypeId,
     ) -> TypeUnificationResult {
         // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
-        let mut inference_substitutions = std::mem::take(&mut self.inference_context.constraints);
+        let mut inference_substitutions = std::mem::take(&mut self.ictx_mut().constraints);
         let result = self.unify_and_find_substitutions_rec(
             &mut inference_substitutions,
             passed_type,
             slot_type,
             false,
         );
-        self.inference_context.constraints = inference_substitutions;
+        self.ictx_mut().constraints = inference_substitutions;
         result
     }
 

@@ -13,8 +13,7 @@ fn sprintf[Args](fmtString: static string, args: Args): string {
     // code, which will need the baked string parts
     let parts = (fmtString as string).splitByChar('?');
 
-    // nocommit(2): Need inference from context impl
-    meta/emitVariable[StringBuilder, View[string]]("parts", parts.asView());
+    meta/emitVariable("parts", parts.asView());
     switch schema {
       .Struct({fields}) -> {
 
