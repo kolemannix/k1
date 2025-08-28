@@ -2508,12 +2508,14 @@ impl TypedProgram {
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
+        log::info!(
+            "Parsing {} discovered files for module {src_path_name}",
+            files_to_compile.len()
+        );
         for path in &files_to_compile {
             let content = std::fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
             let name = path.file_name().unwrap();
-            let name_str = name.to_string_lossy();
-            log::info!("  Parsing {}", name_str);
             let file_id = self.ast.sources.next_file_id();
             let source = parse::Source::make(
                 file_id,
@@ -2542,7 +2544,8 @@ impl TypedProgram {
         self.buffers.lexer_tokens = token_buffer;
 
         let parsing_elapsed = start_parse.elapsed();
-        log::info!("parsing took {}ms", parsing_elapsed.as_millis());
+        let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
+        log::info!("parsing took {}ms ({} lines, incl IO)", parsing_elapsed.as_millis(), lines);
 
         if !self.ast.errors.is_empty() {
             bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
