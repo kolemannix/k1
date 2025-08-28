@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Write, stderr};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
@@ -360,9 +360,6 @@ pub fn compile_module(
         eprintln!("{}", e);
         return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
-
-    p.named_types.print_size_info();
-    p.types.types.print_size_info();
 
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {

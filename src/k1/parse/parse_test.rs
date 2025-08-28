@@ -186,13 +186,14 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert_eq!(app.args.len(), 2);
     let args = module.p_type_args.get_slice(app.args);
-    let ParsedTypeExpr::TypeApplication(inner_app) = module.type_exprs.get(args[1].type_expr)
+    let ParsedTypeExpr::TypeApplication(inner_app) =
+        module.type_exprs.get(args[1].type_expr.unwrap())
     else {
         panic!("Expected second param to be a type application");
     };
     let inner_args = module.p_type_args.get_slice(inner_app.args);
     assert!(matches!(
-        module.type_exprs.get(inner_args[0].type_expr),
+        module.type_exprs.get(inner_args[0].type_expr.unwrap()),
         ParsedTypeExpr::TypeApplication(_)
     ));
     Ok(())
@@ -280,7 +281,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(fn_call.name.name, parser.idents.intern("getFn"));
     assert_eq!(call.name.name, parser.idents.intern("baz"));
     let type_args = parser.p_type_args.get_slice(call.type_args);
-    let type_arg = parser.type_exprs.get(type_args[0].type_expr);
+    let type_arg = parser.type_exprs.get(type_args[0].type_expr.unwrap());
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(parser.exprs.get(args[1].value), ParsedExpr::Literal(_)));
     Ok(())

@@ -3,11 +3,6 @@
 
 ns meta {
 
-  fn emitLine[W: Writer](context w: W)(code: string): unit {
-    w.writeString(code);
-    w.writeString(";\n");
-  }
-
   fn bakedValueExpr[T](value: T): string {
     let valueId = bakeStaticValue[T](value);
     `core/meta/getStaticValue({valueId})`
@@ -19,18 +14,27 @@ ns meta {
     `let {name}: typeFromId({typeId}) = {bakedValueExpr};\n`
   }
 
-  fn emitVariable[W: Writer, T](context w: W)(name: string, value: T): unit {
-    let bakedVar = bakedVariable[T](name, value);
-    w.writeString(bakedVar)
-  }
-
-  fn emitLines[W: Writer, Iter: Iterator[Item = string]](context w: W)(lines: Iter): unit {
-    for l in lines do {
-      w.writeString(l)
+  deftype CodeBuilder = { sb: StringBuilder }
+  ns CodeBuilder {
+    fn new(): CodeBuilder { { sb: StringBuilder/withCapacity(1024) } }
+    fn string(self: CodeBuilder, line: string): unit {
+      self.sb.writeString(line);
     }
+    fn line(self: CodeBuilder, line: string): unit {
+      self.sb.writeString(line);
+      self.sb.writeString("\n");
+    }
+    fn lines[Iter: Iterator[Item = string]](self: CodeBuilder, lines: Iter): unit {
+      for l in lines do { self.line(l) }
+    }
+    
+    fn var[T](self: CodeBuilder, name: string, value: T): unit {
+      let bakedVar = bakedVariable[T](name, value);
+      self.sb.writeString(bakedVar)
+    }
+    fn build(self: CodeBuilder): string { self.sb.build() }
   }
 
-  // nocommit(2): support in-file 'meta' modules (although this probably does stay in core)
   // Note: If we had an interface for "growable collection", we could implement it here.
   //       len, get, empty, (push)
   fn defineSoA[T](name: string): string {
@@ -39,40 +43,40 @@ ns meta {
     require types/typeSchema(structTypeId) is .Struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");
     if fields.isEmpty() { crash("Input struct must have at least one field") };
-    let code = core/StringBuilder/new();
-    code.putString("deftype {name} = {{\n");
+    let code = CodeBuilder/new();
+    code.line("deftype {name} = {{");
     for f in fields do {
-      code.putString("  ARR_{f.name}: List[typeFromId({f.typeId})],\n");
+      code.line("  ARR_{f.name}: List[typeFromId({f.typeId})],");
     };
-    code.putString("}\n");
+    code.line("}");
 
     // begin ns
-    code.putString(`ns {name} {{\n`);
+    code.line(`ns {name} {{`);
 
     // begin fn get
-    code.putString(`  fn get(self: {name}, index: uword): {tt} {{\n`);
-    code.putString(`    let* mut ret: *mut {tt} = mem/zeroed();\n`);
+    code.line(`  fn get(self: {name}, index: uword): {tt} {{`);
+    code.line(`    let* mut ret: *mut {tt} = mem/zeroed();`);
     for f in fields do {
-      code.putString(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);\n`)
+      code.line(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);`)
     };
-    code.putString(`    ret.*\n`);
-    code.putString(`  }\n`); // end fn get
+    code.line(`    ret.*`);
+    code.line(`  }`); // end fn get
 
     // begin fn empty
-    code.putString(`  fn empty(): {name} {{ {{\n`);
+    code.line(`  fn empty(): {name} {{ {{`);
     for f in fields do {
-      code.putString(`    ARR_{f.name}: List/empty(), \n`);
+      code.line(`    ARR_{f.name}: List/empty(),`);
     };
-    code.putString(`} }\n`); // end fn empty
+    code.line(`} }`); // end fn empty
 
     // begin fn push
-    code.putString(`  fn push(self: *mut {name}, value: {tt}): unit {{\n`);
+    code.line(`  fn push(self: *mut {name}, value: {tt}): unit {{`);
     for f in fields do {
-      code.putString(`    self.ARR_{f.name}*.push(value.{f.name});\n`)
+      code.line(`    self.ARR_{f.name}*.push(value.{f.name});`)
     };
-    code.putString(`}\n`); // end fn push
+    code.line(`}`); // end fn push
 
-    code.putString(`}\n`); // end ns
+    code.line(`}`); // end ns
     code.build()
   }
 

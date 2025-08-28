@@ -426,6 +426,7 @@ pub fn execute_single_expr_with_vm(
     vm: &mut Vm,
     input_parameters: &[(VariableId, StaticValueId)],
 ) -> TyperResult<Value> {
+    let start = m.timing.clock.raw();
     // Tell the code we're about to execute that this is static
     // Useful for conditional compilation to branch and do what makes sense
     // in an interpreted context
@@ -476,6 +477,8 @@ pub fn execute_single_expr_with_vm(
             );
         }
     }
+    let end = m.timing.clock.raw();
+    m.timing.total_vm_nanos += m.timing.clock.delta_as_nanos(start, end);
     res
 }
 

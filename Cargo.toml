@@ -52,6 +52,7 @@ tracing-appender = { version = "0.2", optional = true }
 raylib = { version = "5.0.1", optional = true}
 ecow = "0.2.3"
 memmap2 = "0.9.7"
+quanta = "0.12.6"
 
 [[bin]]
 name = "test_suite"
