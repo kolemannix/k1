@@ -303,8 +303,8 @@ fn namespaced_fncall() -> ParseResult<()> {
         dbg!(result);
         panic!("not fncall")
     };
-    assert_eq!(fn_call.name.namespaces[0], parser.idents.intern("foo"));
-    assert_eq!(fn_call.name.namespaces[1], parser.idents.intern("bar"));
+    assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(fn_call.name.path, 0)), "foo");
+    assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(fn_call.name.path, 1)), "bar");
     assert_eq!(fn_call.name.name, parser.idents.intern("baz"));
     assert!(fn_call.args.is_empty());
     Ok(())
@@ -317,8 +317,8 @@ fn namespaced_val() -> ParseResult<()> {
         dbg!(result);
         panic!("not variable")
     };
-    assert_eq!(variable.name.namespaces[0], parser.idents.intern("foo"));
-    assert_eq!(variable.name.namespaces[1], parser.idents.intern("bar"));
+    assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(variable.name.path, 0)), "foo");
+    assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(variable.name.path, 1)), "bar");
     assert_eq!(variable.name.name, parser.idents.intern("baz"));
     Ok(())
 }

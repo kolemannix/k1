@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::{Write, stderr};
+use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 

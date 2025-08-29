@@ -3,7 +3,6 @@
 
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::num::NonZeroU32;
 use std::str::Chars;
 
 use crate::nz_u32_id;

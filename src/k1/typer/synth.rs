@@ -1,10 +1,9 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-/// `synth`, synthesis, aka Spitting out typed code, used for features that desugar, as well
+/// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
 /// as some general lowering
 use super::*;
-use crate::{get_ident, qident};
 
 impl TypedProgram {
     pub(super) fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
@@ -28,8 +27,7 @@ impl TypedProgram {
             self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, scope_id, span)?;
         let implementation = self.ability_impls.get(implementation.full_impl_id);
         let ability = self.abilities.get(EQUALS_ABILITY_ID);
-        let equals_index =
-            ability.find_function_by_name(self.ast.idents.builtins.equals).unwrap().index;
+        let equals_index = ability.find_function_by_name(self.ast.idents.b.equals).unwrap().index;
         let equals_implementation = implementation.function_at_index(equals_index);
         let call_expr = self.exprs.add(TypedExpr::Call(Call {
             callee: Callee::from_ability_impl_fn(equals_implementation),
@@ -105,7 +103,7 @@ impl TypedProgram {
             .types
             .get(optional_type)
             .expect_enum()
-            .variant_by_name(get_ident!(self, "Some"))
+            .variant_by_name(self.ast.idents.b.Some)
             .unwrap();
 
         let some_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
@@ -125,7 +123,7 @@ impl TypedProgram {
             .types
             .get(optional_type)
             .expect_enum()
-            .variant_by_name(get_ident!(self, "None"))
+            .variant_by_name(self.ast.idents.b.None)
             .unwrap();
         let none_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
             variant_type_id: none_variant.my_type_id,
@@ -237,9 +235,7 @@ impl TypedProgram {
             span,
         }));
         let parsed_expr = self.ast.exprs.add_expression(
-            ParsedExpr::Variable(parse::ParsedVariable {
-                name: NamespacedIdentifier::naked(name, span),
-            }),
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
             None,
         );
@@ -249,7 +245,7 @@ impl TypedProgram {
 
     pub(super) fn synth_parsed_function_call(
         &mut self,
-        name: NamespacedIdentifier,
+        name: QIdent,
         type_args: &[ParsedTypeExprId],
         args: &[ParsedExprId],
         is_method: bool,
@@ -277,7 +273,7 @@ impl TypedProgram {
 
     pub(super) fn synth_typed_function_call(
         &mut self,
-        name: NamespacedIdentifier,
+        name: QIdent,
         type_args: &[TypeId],
         args: &[TypedExprId],
         ctx: EvalExprContext,
@@ -289,7 +285,7 @@ impl TypedProgram {
 
     pub(super) fn synth_typed_method_call(
         &mut self,
-        name: NamespacedIdentifier,
+        name: QIdent,
         type_args: &[TypeId],
         args: &[TypedExprId],
         ctx: EvalExprContext,
@@ -299,19 +295,10 @@ impl TypedProgram {
         self.eval_function_call(&call, Some((type_args, args)), ctx, None)
     }
 
-    // These are only used by the old coalescing accessor and should be removed when its rebuilt
-    pub(super) fn ident_opt_has_value(&self, span: SpanId) -> NamespacedIdentifier {
-        qident!(self, span, ["Opt"], "isSome")
-    }
-
-    pub(super) fn ident_opt_get(&self, span: SpanId) -> NamespacedIdentifier {
-        qident!(self, span, ["Opt"], "get")
-    }
-
     pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
         self.synth_parsed_function_call(
-            qident!(self, span, ["bool"], "negated"),
+            self.ast.idents.f.bool_negated.with_span(span),
             &[],
             &[base],
             false,
@@ -327,7 +314,7 @@ impl TypedProgram {
         let span = self.exprs.get(to_print).get_span();
         let writer_type_id = self.exprs.get(writer).get_type();
         self.synth_typed_function_call(
-            qident!(self, span, ["core", "Print"], "printTo"),
+            self.ast.idents.f.core_Print_printTo.with_span(span),
             &[writer_type_id],
             &[to_print, writer],
             ctx.with_no_expected_type(),
@@ -377,11 +364,11 @@ impl TypedProgram {
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: eco_vec![
                 StructField {
-                    name: self.ast.idents.builtins.filename,
+                    name: self.ast.idents.b.filename,
                     expr: self.exprs.add(TypedExpr::String(filename_string_id, span)),
                 },
                 StructField {
-                    name: self.ast.idents.builtins.line,
+                    name: self.ast.idents.b.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
                         value: TypedIntValue::U64(line_number as u64),
                         span,
@@ -402,7 +389,12 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let message_string_id = self.ast.strings.intern(message);
         let message_expr = self.exprs.add(TypedExpr::String(message_string_id, span));
-        self.synth_typed_function_call(qident!(self, span, "crash"), &[], &[message_expr], ctx)
+        self.synth_typed_function_call(
+            self.ast.idents.f.core_crash.with_span(span),
+            &[],
+            &[message_expr],
+            ctx,
+        )
     }
 
     pub(super) fn synth_discard_call(
@@ -411,7 +403,12 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.exprs.get(value).get_span();
-        self.synth_typed_function_call(qident!(self, span, ["core"], "discard"), &[], &[value], ctx)
+        self.synth_typed_function_call(
+            self.ast.idents.f.core_discard.with_span(span),
+            &[],
+            &[value],
+            ctx,
+        )
     }
 }
 

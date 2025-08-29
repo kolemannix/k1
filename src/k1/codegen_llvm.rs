@@ -1042,7 +1042,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 for field in &struc.fields {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_element_type.is_some()
-                        && field.name == self.k1.ast.idents.builtins.data
+                        && field.name == self.k1.ast.idents.b.data
                     {
                         let element_type =
                             self.codegen_type_inner(buffer_element_type.unwrap(), depth + 1)?;

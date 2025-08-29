@@ -45,17 +45,14 @@ use types::*;
 use crate::compiler::{CompilerConfig, WordSize};
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, FileId, ForExpr, ForExprType, Identifiers, NamedTypeArg, NamedTypeArgId,
-    NamespacedIdentifier, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId,
-    ParsedBlockKind, ParsedCallArg, ParsedCast, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
-    ParsedId, ParsedIfExpr, ParsedList, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern,
-    ParsedPatternId, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmtId,
-    ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
-    ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, Sources, StringId,
-    StructValueField,
-};
-use crate::parse::{
-    Ident, ParsedBlock, ParsedCall, ParsedExpr, ParsedLiteral, ParsedProgram, ParsedStmt,
+    self, FileId, ForExpr, ForExprType, Ident, IdentSlice, NamedTypeArg, NamedTypeArgId,
+    NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind,
+    ParsedCall, ParsedCallArg, ParsedCast, ParsedExpr, ParsedExprId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
+    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vm};
@@ -2028,16 +2025,6 @@ macro_rules! get_ident {
     };
 }
 
-/// Make a qualified, `NamespacedIdentifier` from components
-#[macro_export]
-macro_rules! qident {
-    ($self:ident, $span:expr, $namespaces:expr, $name:expr $(,)?) => {{
-        let idents: EcoVec<Ident> = ($namespaces).iter().map(|n| get_ident!($self, n)).collect();
-        NamespacedIdentifier { namespaces: idents, name: get_ident!($self, $name), span: $span }
-    }};
-    ($self:ident, $span:expr, $name:expr) => {{ NamespacedIdentifier { namespaces: eco_vec![], name: get_ident!($self, $name), span: $span } }};
-}
-
 fn make_fail_ast_id<A, T: AsRef<str>>(
     ast: &ParsedProgram,
     message: T,
@@ -2398,7 +2385,7 @@ impl TypedProgram {
         };
 
         let ast = ParsedProgram::make(program_name, config);
-        let root_ident = ast.idents.builtins.root_module_name;
+        let root_ident = ast.idents.b.root_module_name;
         let mut scopes = Scopes::make(root_ident);
         let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
         let root_namespace = Namespace {
@@ -2717,7 +2704,7 @@ impl TypedProgram {
         if let Some(exec_module) = self.modules.iter().find(|m| m.kind == ModuleKind::Executable) {
             self.scopes
                 .get_scope(exec_module.namespace_scope_id)
-                .find_function(self.ast.idents.builtins.main)
+                .find_function(self.ast.idents.b.main)
         } else {
             None
         }
@@ -3326,15 +3313,15 @@ impl TypedProgram {
                     let span = self.ast.get_type_expr_span(*param);
 
                     let name = match index {
-                        0 => self.ast.idents.builtins.param_0,
-                        1 => self.ast.idents.builtins.param_1,
-                        2 => self.ast.idents.builtins.param_2,
-                        3 => self.ast.idents.builtins.param_3,
-                        4 => self.ast.idents.builtins.param_4,
-                        5 => self.ast.idents.builtins.param_5,
-                        6 => self.ast.idents.builtins.param_6,
-                        7 => self.ast.idents.builtins.param_7,
-                        8 => self.ast.idents.builtins.param_8,
+                        0 => self.ast.idents.b.param_0,
+                        1 => self.ast.idents.b.param_1,
+                        2 => self.ast.idents.b.param_2,
+                        3 => self.ast.idents.b.param_3,
+                        4 => self.ast.idents.b.param_4,
+                        5 => self.ast.idents.b.param_5,
+                        6 => self.ast.idents.b.param_6,
+                        7 => self.ast.idents.b.param_7,
+                        8 => self.ast.idents.b.param_8,
                         i => format_ident!(self, "param_{}", i),
                     };
                     params.push(FnParamType {
@@ -3502,7 +3489,7 @@ impl TypedProgram {
         let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
-        if !ty_app.name.namespaces.is_empty() {
+        if !ty_app.name.path.is_empty() {
             return Ok(None);
         }
         let ty_app = ty_app.clone();
@@ -3669,7 +3656,7 @@ impl TypedProgram {
                             return failf!(
                                 ty_app.span,
                                 "Type {} expects {} type arguments, got {}",
-                                self.namespaced_identifier_to_string(&ty_app.name),
+                                self.qident_to_string(&ty_app.name),
                                 g.params.len(),
                                 ty_app.args.len()
                             );
@@ -3707,7 +3694,7 @@ impl TypedProgram {
                         failf!(
                             ty_app.span,
                             "Type '{}' not found",
-                            self.namespaced_identifier_to_string(ty_app_name),
+                            self.qident_to_string(ty_app_name),
                         )
                     }
                 }
@@ -4132,7 +4119,7 @@ impl TypedProgram {
             .definitions
             .iter()
             .filter_map(|defn| defn.as_global_id())
-            .find(|id| self.ast.get_global(*id).name == self.ast.idents.builtins.MODULE_INFO)
+            .find(|id| self.ast.get_global(*id).name == self.ast.idents.b.MODULE_INFO)
         else {
             return Ok(None);
         };
@@ -5173,7 +5160,7 @@ impl TypedProgram {
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         // Add Self
         subst_pairs.push(spair! {ability.self_type_id => type_variable_id});
-        let _ = self.scopes.add_type(scope_id, self.ast.idents.builtins.Self_, type_variable_id);
+        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.Self_, type_variable_id);
         // Add ability params
         for (parent_ability_param, ability_arg) in
             all_params.iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
@@ -5718,7 +5705,7 @@ impl TypedProgram {
             };
         }
 
-        let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.builtins.Self_, self_type_id);
+        let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
 
         let mut specialized_functions = EcoVec::with_capacity(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
@@ -5973,7 +5960,7 @@ impl TypedProgram {
                     );
                 }
                 if is_capture {
-                    if !variable.name.namespaces.is_empty() {
+                    if !variable.name.path.is_empty() {
                         return failf!(
                             variable_name_span,
                             "Should not capture namespaced things, I think?"
@@ -6033,12 +6020,12 @@ impl TypedProgram {
         }
 
         // Special case: .* dereference operation
-        if field_access.field_name == self.ast.idents.builtins.asterisk {
+        if field_access.field_name == self.ast.idents.b.asterisk {
             return self.eval_dereference(field_access.base, ctx, span);
         }
 
         // Special case: .! unwrap operation
-        if field_access.field_name == self.ast.idents.builtins.bang {
+        if field_access.field_name == self.ast.idents.b.bang {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with unwrap operator");
             }
@@ -6052,7 +6039,7 @@ impl TypedProgram {
         }
 
         // Special case: .try unwrap operation
-        if field_access.field_name == self.ast.idents.builtins.try_ {
+        if field_access.field_name == self.ast.idents.b.try_ {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "Cannot use ?. with try operator");
             }
@@ -6066,10 +6053,10 @@ impl TypedProgram {
         }
 
         // Special case: .toMut / .unMut reference unwrap operations
-        if field_access.field_name == self.ast.idents.builtins.toMut
-            || field_access.field_name == self.ast.idents.builtins.unMut
+        if field_access.field_name == self.ast.idents.b.toMut
+            || field_access.field_name == self.ast.idents.b.unMut
         {
-            let to_mut = field_access.field_name == self.ast.idents.builtins.toMut;
+            let to_mut = field_access.field_name == self.ast.idents.b.toMut;
             let name = if to_mut { "toMut" } else { "unMut" };
             let base_expr = self.eval_expr(field_access.base, ctx)?;
             let reference_type = match self.get_expr_type(base_expr) {
@@ -6120,7 +6107,7 @@ impl TypedProgram {
         let base_expr_type = self.exprs.get(base_expr).get_type();
 
         // Optional fork case: .tag enum special accessor
-        if field_access.field_name == self.ast.idents.builtins.tag {
+        if field_access.field_name == self.ast.idents.b.tag {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "TODO: support coalesce for .tag");
             }
@@ -6241,7 +6228,7 @@ impl TypedProgram {
                         block_scope,
                     );
                     let has_value = self.synth_typed_function_call(
-                        self.ident_opt_has_value(span),
+                        self.ast.idents.f.Opt_isSome.with_span(span),
                         &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
@@ -6266,7 +6253,7 @@ impl TypedProgram {
                     let field_type = target_field.type_id;
                     let field_name = target_field.name;
                     let opt_unwrap = self.synth_typed_function_call(
-                        self.ident_opt_get(span),
+                        self.ast.idents.f.Opt_get.with_span(span),
                         &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
@@ -6362,19 +6349,19 @@ impl TypedProgram {
             .unwrap();
         let mut result_block = self.synth_block(scope_id, span);
         let try_value_var = self.synth_variable_defn_simple(
-            self.ast.idents.builtins.try_value,
+            self.ast.idents.b.try_value,
             try_value_original_expr,
             result_block.scope_id,
         );
         let result_block_ctx = ctx.with_scope(result_block.scope_id).with_no_expected_type();
         let is_ok_call = self.synth_typed_function_call(
-            qident!(self, span, ["Try"], "isOk"),
+            self.ast.idents.f.Try_isOk.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
         )?;
         let get_ok_call = self.synth_typed_function_call(
-            qident!(self, span, ["Try"], "getOk"),
+            self.ast.idents.f.Try_getOk.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
@@ -6385,7 +6372,7 @@ impl TypedProgram {
             self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(0);
 
         let get_error_call = self.synth_typed_function_call(
-            qident!(self, span, ["Try"], "getError"),
+            self.ast.idents.f.Try_getError.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
@@ -6429,7 +6416,7 @@ impl TypedProgram {
             span,
         )?;
         self.synth_typed_function_call(
-            qident!(self, span, ["Unwrap"], "unwrap"),
+            self.ast.idents.f.Unwrap_unwrap.with_span(span),
             &[],
             &[operand_expr],
             ctx,
@@ -6884,20 +6871,20 @@ impl TypedProgram {
         let count_expr = self.synth_uword(element_count, span);
         let make_dest_coll = match list_kind {
             ContainerKind::List => self.synth_typed_function_call(
-                qident!(self, span, ["List"], "withCapacity"),
+                self.ast.idents.f.List_withCapacity.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
             )?,
             ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
-                qident!(self, span, ["Buffer"], "_allocate"),
+                self.ast.idents.f.Buffer__allocate.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
             )?,
             // Unlike the others, the array literal should go on the stack!
             ContainerKind::Array(array_type_id) => self.synth_typed_function_call(
-                qident!(self, span, ["core", "mem"], "zeroed"),
+                self.ast.idents.f.mem_zeroed.with_span(span),
                 &[array_type_id],
                 &[],
                 list_lit_ctx,
@@ -6909,7 +6896,7 @@ impl TypedProgram {
             ContainerKind::List => true,
         };
         let dest_coll_variable = self.synth_variable_defn(
-            get_ident!(self, "dest"),
+            self.ast.idents.b.dest,
             make_dest_coll,
             false,
             true, // is_mutable
@@ -6921,13 +6908,13 @@ impl TypedProgram {
             let index_expr = self.synth_uword(index, span);
             let push_call = match list_kind {
                 ContainerKind::List => self.synth_typed_function_call(
-                    qident!(self, span, ["List"], "push"),
+                    self.ast.idents.f.List_push.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, element_value_expr],
                     list_lit_ctx,
                 )?,
                 ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
-                    qident!(self, span, ["Buffer"], "set"),
+                    self.ast.idents.f.Buffer_set.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
                     list_lit_ctx,
@@ -6936,7 +6923,7 @@ impl TypedProgram {
                     // fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit
                     let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
                     self.synth_typed_function_call(
-                        qident!(self, span, ["Array"], "set"),
+                        self.ast.idents.f.Array_set.with_span(span),
                         &[size_type, element_type],
                         &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
                         list_lit_ctx,
@@ -6953,7 +6940,7 @@ impl TypedProgram {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
             ContainerKind::View => self.synth_typed_function_call(
-                qident!(self, span, ["View"], "wrapBuffer"),
+                self.ast.idents.f.View_wrapBuffer.with_span(span),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
@@ -7006,11 +6993,9 @@ impl TypedProgram {
         };
         let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
-        for param in self.ast.p_idents.copy_slice_sv::<4>(stat.parameter_names) {
+        for param in self.ast.idents.slices.copy_slice_sv4(stat.parameter_names) {
             let variable_expr = self.ast.exprs.add_expression(
-                ParsedExpr::Variable(ParsedVariable {
-                    name: NamespacedIdentifier::naked(param, span),
-                }),
+                ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(param, span) }),
                 false,
                 None,
             );
@@ -7240,7 +7225,7 @@ impl TypedProgram {
             let parsed_expr = match ast_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(
                     ParsedExpr::Variable(parse::ParsedVariable {
-                        name: NamespacedIdentifier::naked(ast_field.name, ast_field.span),
+                        name: QIdent::naked(ast_field.name, ast_field.span),
                     }),
                     false,
                     None,
@@ -7299,7 +7284,7 @@ impl TypedProgram {
             let parsed_expr = match passed_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(
                     ParsedExpr::Variable(parse::ParsedVariable {
-                        name: NamespacedIdentifier::naked(passed_field.name, passed_field.span),
+                        name: QIdent::naked(passed_field.name, passed_field.span),
                     }),
                     false,
                     None,
@@ -7516,7 +7501,7 @@ impl TypedProgram {
                 return failf!(span, "Interpolated strings are not supported in no_std mode");
             }
             let new_string_builder = self.synth_typed_function_call(
-                qident!(self, span, ["core", "List"], "withCapacity"),
+                self.ast.idents.f.List_withCapacity.with_span(span),
                 &[CHAR_TYPE_ID],
                 &[part_count_expr],
                 block_ctx,
@@ -7553,7 +7538,7 @@ impl TypedProgram {
             }
             let sb_deref = self.synth_dereference(string_builder_var.variable_expr);
             let build_call = self.synth_typed_function_call(
-                qident!(self, span, ["core", "string"], "wrapList"),
+                self.ast.idents.f.core_string_wrapList.with_span(span),
                 &[],
                 &[sb_deref],
                 block_ctx,
@@ -7797,7 +7782,7 @@ impl TypedProgram {
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type, false);
         let environment_param = FnParamType {
-            name: self.ast.idents.builtins.lambda_env_var_name,
+            name: self.ast.idents.b.lambda_env_var_name,
             type_id: POINTER_TYPE_ID,
             is_context: false,
             is_lambda_env: true,
@@ -7825,7 +7810,7 @@ impl TypedProgram {
             None,
         );
         let environment_casted_variable = self.synth_variable_defn(
-            self.ast.idents.builtins.env,
+            self.ast.idents.b.env,
             cast_env_param,
             false,
             false,
@@ -8542,7 +8527,7 @@ impl TypedProgram {
         for_expr: &ForExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.builtins.it);
+        let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.b.it);
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iterable_type = self.exprs.get(iterable_expr).get_type();
         let iterable_span = self.exprs.get(iterable_expr).get_span();
@@ -8593,7 +8578,7 @@ impl TypedProgram {
 
         let zero_expr = self.synth_uword(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
-            self.ast.idents.builtins.it_index,
+            self.ast.idents.b.itIndex,
             zero_expr,
             true,
             true,
@@ -8604,14 +8589,14 @@ impl TypedProgram {
             iterable_expr
         } else {
             self.synth_typed_function_call(
-                qident!(self, body_span, ["Iterable"], "iterator"),
+                self.ast.idents.f.Iterable_iterator.with_span(body_span),
                 &[],
                 &[iterable_expr],
                 ctx.with_scope(outer_for_expr_scope).with_no_expected_type(),
             )?
         };
         let iterator_variable = self.synth_variable_defn(
-            self.ast.idents.builtins.iter,
+            self.ast.idents.b.iter,
             iterator_initializer,
             false,
             true, //is_mutable
@@ -8629,7 +8614,7 @@ impl TypedProgram {
 
         let loop_scope_ctx = ctx.with_scope(loop_scope_id).with_no_expected_type();
         let iterator_next_call = self.synth_typed_function_call(
-            qident!(self, body_span, ["Iterator"], "next"),
+            self.ast.idents.f.Iterator_next.with_span(body_span),
             &[],
             &[iterator_variable.variable_expr],
             loop_scope_ctx,
@@ -8640,7 +8625,7 @@ impl TypedProgram {
             loop_scope_id,
         );
         let next_unwrap_call = self.synth_typed_function_call(
-            qident!(self, iterable_span, ["Unwrap"], "unwrap"),
+            self.ast.idents.f.Unwrap_unwrap.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
             ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
@@ -8665,7 +8650,7 @@ impl TypedProgram {
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
         let yielded_coll_variable = if !is_do_block {
             let size_hint_call = self.synth_typed_function_call(
-                qident!(self, body_span, ["Iterator"], "sizeHint"),
+                self.ast.idents.f.Iterator_sizeHint.with_span(body_span),
                 &[],
                 &[iterator_variable.variable_expr],
                 outer_for_expr_ctx,
@@ -8681,13 +8666,13 @@ impl TypedProgram {
                 span: iterable_span,
             }));
             let synth_function_call = self.synth_typed_function_call(
-                qident!(self, body_span, ["List"], "withCapacity"),
+                self.ast.idents.f.List_withCapacity.with_span(body_span),
                 &[body_block_result_type],
                 &[size_hint_lower_bound],
                 outer_for_expr_ctx,
             )?;
             Some(self.synth_variable_defn(
-                get_ident!(self, "yieldedColl"),
+                self.ast.idents.b.yieldDest,
                 synth_function_call,
                 false,
                 true, //is_mutable
@@ -8712,7 +8697,7 @@ impl TypedProgram {
         // Push element to yielded list
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             let list_push_call = self.synth_typed_function_call(
-                qident!(self, body_span, ["List"], "push"),
+                self.ast.idents.f.List_push.with_span(body_span),
                 &[body_block_result_type],
                 &[yielded_coll_variable.variable_expr, user_block_variable.variable_expr],
                 outer_for_expr_ctx,
@@ -8721,7 +8706,7 @@ impl TypedProgram {
         }
 
         let next_is_some_call = self.synth_typed_function_call(
-            qident!(self, body_span, ["Opt"], "isSome"),
+            self.ast.idents.f.Opt_isSome.with_span(body_span),
             &[item_type],
             &[next_variable.variable_expr],
             loop_scope_ctx,
@@ -9039,7 +9024,7 @@ impl TypedProgram {
                 let target = self.eval_expr(target_expr, ctx)?;
                 let target_type = self.exprs.get(target).get_type();
                 let target_var = self.synth_variable_defn_simple(
-                    self.ast.idents.builtins.if_target,
+                    self.ast.idents.b.if_target,
                     target,
                     ctx.scope_id,
                 );
@@ -9290,13 +9275,13 @@ impl TypedProgram {
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
         let lhs_has_value = self.synth_typed_function_call(
-            qident!(self, span, ["Unwrap"], "hasValue"),
+            self.ast.idents.f.Unwrap_hasValue.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
         )?;
         let lhs_get_expr = self.synth_typed_function_call(
-            qident!(self, span, ["Unwrap"], "unwrap"),
+            self.ast.idents.f.Unwrap_unwrap.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
@@ -9340,7 +9325,7 @@ impl TypedProgram {
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
             BinaryOpKind::NotEquals => self.synth_typed_function_call(
-                qident!(self, binary_op.span, ["bool"], "negated"),
+                self.ast.idents.f.bool_negated.with_span(binary_op.span),
                 &[],
                 &[equality_result],
                 ctx,
@@ -9364,7 +9349,7 @@ impl TypedProgram {
                     .p_call_args
                     .add_slice_from_iter([ParsedCallArg::unnamed(lhs)].into_iter());
                 ParsedCall {
-                    name: var.name.clone(),
+                    name: var.name,
                     type_args: SliceHandle::empty(),
                     args,
                     span,
@@ -9378,7 +9363,7 @@ impl TypedProgram {
                 args.extend_from_slice(self.ast.p_call_args.get_slice(fn_call.args));
                 let args_with_piped = self.ast.p_call_args.add_slice_copy(&args);
                 ParsedCall {
-                    name: fn_call.name.clone(),
+                    name: fn_call.name,
                     type_args: fn_call.type_args,
                     args: args_with_piped,
                     span,
@@ -9474,7 +9459,7 @@ impl TypedProgram {
                             self.ident_str(fn_call.name.name)
                         )
                     };
-                    if !fn_call.name.namespaces.is_empty() {
+                    if !fn_call.name.path.is_empty() {
                         return fn_not_found();
                     }
                     if let Some((variable_id, _scope_id)) =
@@ -9709,7 +9694,7 @@ impl TypedProgram {
         let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         match call.name.name {
-            n if n == self.ast.idents.builtins.len => {
+            n if n == self.ast.idents.b.len => {
                 let array_length = match array_type.concrete_count {
                     None => {
                         // We have some generic Array type like arr: Array[N, T] where N is a type
@@ -9725,7 +9710,7 @@ impl TypedProgram {
                 };
                 Ok(Either::Left(array_length))
             }
-            n if n == self.ast.idents.builtins.get || n == self.ast.idents.builtins.getRef => {
+            n if n == self.ast.idents.b.get || n == self.ast.idents.b.getRef => {
                 if call.args.len() != 2 {
                     return failf!(span, "Array get takes 1 argument, the index");
                 }
@@ -9736,7 +9721,7 @@ impl TypedProgram {
                     .check_and_coerce_expr(UWORD_TYPE_ID, index_expr, ctx.scope_id)
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
-                let is_referencing = n == self.ast.idents.builtins.getRef;
+                let is_referencing = n == self.ast.idents.b.getRef;
                 let array_reference_type = self.get_expr_type(base).as_reference();
                 if is_referencing && array_reference_type.is_none() {
                     return failf!(
@@ -9779,7 +9764,7 @@ impl TypedProgram {
                         span,
                     }));
                 let array_length_expr = self.synth_typed_method_call(
-                    qident!(self, span, "len"),
+                    QIdent::naked(self.ast.idents.b.len, span),
                     &[],
                     &[base],
                     ctx.with_no_expected_type(),
@@ -9793,7 +9778,7 @@ impl TypedProgram {
                 }));
                 let crash_message = self.synth_string_literal("Array index out of bounds", span);
                 let crash_oob = self.synth_typed_function_call(
-                    qident!(self, span, ["core"], "crashBounds"),
+                    self.ast.idents.f.core_crashBounds.with_span(span),
                     &[],
                     &[array_length_expr, index_expr, crash_message],
                     ctx.with_no_expected_type(),
@@ -9813,11 +9798,7 @@ impl TypedProgram {
                 if let Some(method_id) = array_scope.find_function(call.name.name) {
                     Ok(Either::Right(Callee::make_static(method_id)))
                 } else {
-                    failf!(
-                        span,
-                        "No such method on Array: {}",
-                        self.namespaced_identifier_to_string(&call.name)
-                    )
+                    failf!(span, "No such method on Array: {}", self.qident_to_string(&call.name))
                 }
             }
         }
@@ -9830,7 +9811,7 @@ impl TypedProgram {
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
     ) -> TyperResult<Either<TypedExprId, Callee>> {
-        debug_assert!(call.name.namespaces.is_empty());
+        debug_assert!(call.name.path.is_empty());
         let fn_name = call.name.name;
         let call_span = call.span;
 
@@ -9851,8 +9832,8 @@ impl TypedProgram {
                 return Ok(Either::Left(enum_constr));
             }
 
-            let is_fn_convert = fn_name == self.ast.idents.builtins.toRef
-                || fn_name == self.ast.idents.builtins.toDyn;
+            let is_fn_convert =
+                fn_name == self.ast.idents.b.toRef || fn_name == self.ast.idents.b.toDyn;
             if is_fn_convert {
                 // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
                 //       if you literally name the function on the lhs of the dot; you can't store
@@ -9883,16 +9864,16 @@ impl TypedProgram {
                                 "Cannot call toDyn or toRef with an intrinsic operation"
                             );
                         }
-                        return if fn_name == self.ast.idents.builtins.toDyn {
+                        return if fn_name == self.ast.idents.b.toDyn {
                             Ok(Either::Left(self.function_to_lambda_object(function_id, call_span)))
-                        } else if fn_name == self.ast.idents.builtins.toRef {
+                        } else if fn_name == self.ast.idents.b.toRef {
                             Ok(Either::Left(self.function_to_reference(function_id, call_span)))
                         } else {
                             unreachable!()
                         };
                     }
                 }
-            } else if fn_name == self.ast.idents.builtins.toStatic {
+            } else if fn_name == self.ast.idents.b.toStatic {
                 if call.args.len() != 1 {
                     return failf!(call_span, ".toStatic() takes no additional arguments");
                 }
@@ -9903,7 +9884,7 @@ impl TypedProgram {
                     }
                     Ok(static_expr_id) => Ok(Either::Left(static_expr_id)),
                 };
-            } else if fn_name == self.ast.idents.builtins.fromStatic {
+            } else if fn_name == self.ast.idents.b.fromStatic {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type_id = self.exprs.get(base_value).get_type();
                 let Some(static_type) = self.types.get_static_type_of_type(base_type_id) else {
@@ -10035,7 +10016,7 @@ impl TypedProgram {
             let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
             let mut new_function = function.clone();
             let empty_env_variable = self.variables.add(Variable {
-                name: self.ast.idents.builtins.lambda_env_var_name,
+                name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
@@ -10078,7 +10059,7 @@ impl TypedProgram {
         function_type.physical_params.insert(
             0,
             FnParamType {
-                name: self.ast.idents.builtins.lambda_env_var_name,
+                name: self.ast.idents.b.lambda_env_var_name,
                 type_id: empty_env_struct_ref,
                 is_context: false,
                 is_lambda_env: true,
@@ -10125,10 +10106,8 @@ impl TypedProgram {
 
         let all_type_params: SmallVec<[NameAndType; 8]> = {
             let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
-            type_params.push(NameAndType {
-                name: self.ast.idents.builtins.Self_,
-                type_id: ability_self_type_id,
-            });
+            type_params
+                .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
             type_params.extend(
                 ability_params
                     .iter()
@@ -10139,10 +10118,8 @@ impl TypedProgram {
         let all_type_params_handle = self.named_types.add_slice_copy(&all_type_params);
         let must_solve_type_params: SmallVec<[NameAndType; 8]> = {
             let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
-            type_params.push(NameAndType {
-                name: self.ast.idents.builtins.Self_,
-                type_id: ability_self_type_id,
-            });
+            type_params
+                .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
             type_params.extend(
                 ability_params
                     .iter()
@@ -10155,7 +10132,7 @@ impl TypedProgram {
             self.named_types.add_slice_copy(&must_solve_type_params);
 
         let self_only_type_params_handle = self.named_types.add_slice_copy(&[NameAndType {
-            name: self.ast.idents.builtins.Self_,
+            name: self.ast.idents.b.Self_,
             type_id: ability_self_type_id,
         }]);
 
@@ -10232,7 +10209,7 @@ impl TypedProgram {
                     call_span,
                     "Call to {}/{} with Self := {} does not work\n{}\nFunction type: {}",
                     self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
-                    self.namespaced_identifier_to_string(&fn_call.name),
+                    self.qident_to_string(&fn_call.name),
                     self.type_id_to_string(solved_self),
                     msg,
                     self.type_id_to_string(function_type_id),
@@ -10619,7 +10596,7 @@ impl TypedProgram {
 
         let args_slice = self.ast.p_call_args.get_slice(fn_call.args);
         let is_lambda =
-            params.first().is_some_and(|p| p.name == self.ast.idents.builtins.lambda_env_var_name);
+            params.first().is_some_and(|p| p.name == self.ast.idents.b.lambda_env_var_name);
         let params = if is_lambda { &params[1..] } else { params };
         let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
         let total_expected =
@@ -10818,7 +10795,7 @@ impl TypedProgram {
                             errf!(
                                 err.span,
                                 "Invalid call to {}\n    {}",
-                                self.namespaced_identifier_to_string(&fn_call.name),
+                                self.qident_to_string(&fn_call.name),
                                 err.message
                             )
                         })?;
@@ -10943,7 +10920,7 @@ impl TypedProgram {
                             errf!(
                                 err.span,
                                 "Invalid call to {}\n    {}",
-                                self.namespaced_identifier_to_string(&fn_call.name),
+                                self.qident_to_string(&fn_call.name),
                                 err.message
                             )
                         })?;
@@ -12306,7 +12283,7 @@ impl TypedProgram {
             specialized_child: specialized_ability_id,
             arguments,
         };
-        let self_ident = self.ast.idents.builtins.Self_;
+        let self_ident = self.ast.idents.b.Self_;
         let new_self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident,
@@ -12504,8 +12481,7 @@ impl TypedProgram {
         // Inject the 'Self' type parameter
         if is_ability_decl {
             let self_type_id = self_.abilities.get(ability_id.unwrap()).self_type_id;
-            type_params
-                .push(NameAndType { name: self_.ast.idents.builtins.Self_, type_id: self_type_id })
+            type_params.push(NameAndType { name: self_.ast.idents.b.Self_, type_id: self_type_id })
         }
         for type_parameter in parsed_type_params.iter() {
             let mut ability_constraints = SmallVec::new();
@@ -12715,8 +12691,8 @@ impl TypedProgram {
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an i32
-        let is_main_fn = namespace_id == ROOT_NAMESPACE_ID
-            && parsed_function_name == self_.ast.idents.builtins.main;
+        let is_main_fn =
+            namespace_id == ROOT_NAMESPACE_ID && parsed_function_name == self_.ast.idents.b.main;
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -12929,7 +12905,7 @@ impl TypedProgram {
             Some(parsed_ability.name),
         );
 
-        let self_ident_id = self.ast.idents.builtins.Self_;
+        let self_ident_id = self.ast.idents.b.Self_;
         let mut ability_params: EcoVec<TypedAbilityParam> =
             EcoVec::with_capacity(parsed_ability.params.len() + 1);
         let self_type_id = self.add_type_parameter(
@@ -13085,7 +13061,7 @@ impl TypedProgram {
 
     fn find_ability_or_declare(
         &mut self,
-        ability_name: &NamespacedIdentifier,
+        ability_name: &QIdent,
         scope_id: ScopeId,
     ) -> TyperResult<AbilityId> {
         let found_ability_id = self.scopes.find_ability_namespaced(
@@ -13224,7 +13200,7 @@ impl TypedProgram {
         let _ = self
             .scopes
             .get_scope_mut(impl_scope_id)
-            .add_type(self.ast.idents.builtins.Self_, impl_self_type);
+            .add_type(self.ast.idents.b.Self_, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
@@ -13520,10 +13496,7 @@ impl TypedProgram {
             _ => false,
         };
         if !is_fulfilled {
-            debug!(
-                "Handling unfulfilled use {}",
-                self.namespaced_identifier_to_string(&parsed_use.target)
-            );
+            debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
             if let Some(symbol) = self.find_useable_symbol(scope_id, &parsed_use.target)? {
                 self.scopes.add_use_binding(
                     scope_id,
@@ -13543,11 +13516,11 @@ impl TypedProgram {
     fn find_useable_symbol(
         &self,
         scope_id: ScopeId,
-        name: &NamespacedIdentifier,
+        name: &QIdent,
     ) -> TyperResult<Option<UseableSymbol>> {
         let scope_id_to_search = self.scopes.traverse_namespace_chain(
             scope_id,
-            &name.namespaces,
+            name.path,
             &self.namespaces,
             &self.ast.idents,
             name.span,
@@ -13651,11 +13624,11 @@ impl TypedProgram {
 
                     // Detect builtin types and store their IDs for fast lookups
                     if namespace_scope_id == self.scopes.types_scope_id {
-                        if name == self.ast.idents.builtins.TypeSchema {
+                        if name == self.ast.idents.b.TypeSchema {
                             self.types.builtins.types_type_schema = Some(type_id);
-                        } else if name == self.ast.idents.builtins.IntKind {
+                        } else if name == self.ast.idents.b.IntKind {
                             self.types.builtins.types_int_kind = Some(type_id);
-                        } else if name == self.ast.idents.builtins.IntValue {
+                        } else if name == self.ast.idents.b.IntValue {
                             self.types.builtins.types_int_value = Some(type_id)
                         }
                     }
@@ -13805,23 +13778,21 @@ impl TypedProgram {
             .and_then(|owner| owner.as_namespace())
             .expect("namespace must be defined directly inside another namespace");
 
-        let is_core =
-            parent_scope_id == Scopes::ROOT_SCOPE_ID && name == self.ast.idents.builtins.core;
+        let is_core = parent_scope_id == Scopes::ROOT_SCOPE_ID && name == self.ast.idents.b.core;
         if is_core {
             self.scopes.core_scope_id = ns_scope_id;
         }
-        let is_k1 =
-            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.k1;
+        let is_k1 = parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.k1;
         if is_k1 {
             self.scopes.k1_scope_id = ns_scope_id;
         }
         let is_types =
-            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.types;
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.types;
         if is_types {
             self.scopes.types_scope_id = ns_scope_id;
         }
         let is_array =
-            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.builtins.Array;
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.Array;
         if is_array {
             self.scopes.array_scope_id = ns_scope_id;
         }
@@ -14061,10 +14032,10 @@ impl TypedProgram {
                 .definitions
                 .iter()
                 .filter_map(|d| d.as_namespace_id())
-                .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.builtins.meta)
+                .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.meta)
             {
                 let ns = self.ast.namespaces.get(meta_ns_parsed_id);
-                if ns.name == self.ast.idents.builtins.meta {
+                if ns.name == self.ast.idents.b.meta {
                     // Phase 1
                     eprintln!(">> Phase 0.5 compile meta namespace");
                     self.declare_namespace(meta_ns_parsed_id, root_namespace_scope_id)?;
@@ -14512,20 +14483,20 @@ impl TypedProgram {
     }
 
     fn add_default_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
-        let core_ns = eco_vec![get_ident!(self, "core")];
+        let core_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core]);
         // Cloning the eco_vec is cheap, as long as we clone the same one not make fresh ones
         macro_rules! core_use {
             ($name: expr) => {
-                NamespacedIdentifier {
-                    namespaces: core_ns.clone(),
-                    name: get_ident!(self, $name),
-                    span,
-                }
+                QIdent { path: core_ns, name: get_ident!(self, $name), span }
             };
         }
 
         let default_uses = [
-            qident!(self, span, ["_root"], "core"),
+            QIdent {
+                path: self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]),
+                name: self.ast.idents.b.core,
+                span,
+            },
             core_use!("u8"),
             core_use!("u8"),
             core_use!("u16"),
@@ -15116,8 +15087,8 @@ impl TypedProgram {
         writeln!(
             out,
             "infer: {:.2}ms. count: {} avg: {:.2}ms ",
-            self.timing.total_infers,
             infer_ms,
+            self.timing.total_infers,
             if self.timing.total_infers > 0 {
                 infer_ms / self.timing.total_infers as f64
             } else {

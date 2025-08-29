@@ -1,8 +1,6 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use std::num::NonZeroU32;
-
 use smallvec::SmallVec;
 
 pub mod codegen_llvm;
@@ -51,11 +49,11 @@ macro_rules! nz_u32_id {
                 self.0.get()
             }
 
-            pub const fn from_nzu32(value: NonZeroU32) -> Self {
+            pub const fn from_nzu32(value: std::num::NonZeroU32) -> Self {
                 $name(value)
             }
             pub const fn from_u32(value: u32) -> Option<Self> {
-                match NonZeroU32::new(value) {
+                match std::num::NonZeroU32::new(value) {
                     None => None,
                     Some(nz_u32) => Some($name(nz_u32)),
                 }
@@ -64,12 +62,12 @@ macro_rules! nz_u32_id {
             pub const fn add_u32(self, value: u32) -> Self {
                 let add_result = self.0.get() + value;
                 // Safety: Cannot possibly get 0 when adding two nonzero values together
-                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
+                let new_result = unsafe { std::num::NonZeroU32::new_unchecked(add_result) };
                 $name(new_result)
             }
 
-            pub const ONE: Self = $name(NonZeroU32::new(1).unwrap());
-            pub const PENDING: Self = $name(NonZeroU32::MAX);
+            pub const ONE: Self = $name(std::num::NonZeroU32::new(1).unwrap());
+            pub const PENDING: Self = $name(std::num::NonZeroU32::MAX);
         }
 
         impl core::ops::Add<Self> for $name {
@@ -79,7 +77,7 @@ macro_rules! nz_u32_id {
             fn add(self, rhs: Self) -> Self::Output {
                 let add_result = self.0.get() + rhs.0.get();
                 // Safety: Cannot possibly get 0 when adding two nonzero values together
-                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
+                let new_result = unsafe { std::num::NonZeroU32::new_unchecked(add_result) };
                 $name(new_result)
             }
         }
@@ -92,7 +90,7 @@ macro_rules! nz_u32_id {
                 let add_result = self.0.get() + rhs;
                 // Safety: Cannot possibly get 0 when adding an unsigned value
                 // to a non-zero value
-                let new_result = unsafe { NonZeroU32::new_unchecked(add_result) };
+                let new_result = unsafe { std::num::NonZeroU32::new_unchecked(add_result) };
                 $name(new_result)
             }
         }
@@ -102,11 +100,6 @@ macro_rules! nz_u32_id {
 fn nzu32_from_incr(n: u32) -> std::num::NonZeroU32 {
     // Safety: If you add one to a u32 it'll never be zero
     unsafe { std::num::NonZeroU32::new_unchecked(n + 1) }
-}
-
-fn nzu32_add(n: NonZeroU32, add: u32) -> std::num::NonZeroU32 {
-    // Safety: If you add anything to a non-zero u32 it'll never be zero
-    unsafe { std::num::NonZeroU32::new_unchecked(n.get() + add) }
 }
 
 #[macro_export]

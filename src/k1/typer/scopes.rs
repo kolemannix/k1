@@ -11,7 +11,7 @@ use crate::{
     errf,
     lex::SpanId,
     nz_u32_id,
-    parse::{Identifiers, NamespacedIdentifier, ParsedAbilityId},
+    parse::{IdentPool, IdentSlice, ParsedAbilityId, QIdent},
     pool::VPool,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
@@ -193,16 +193,16 @@ impl Scopes {
     pub fn find_variable_namespaced(
         &self,
         scope: ScopeId,
-        name: &NamespacedIdentifier,
+        name: &QIdent,
         namespaces: &Namespaces,
-        identifiers: &Identifiers,
+        identifiers: &IdentPool,
     ) -> TyperResult<Option<(VariableId, ScopeId)>> {
-        if name.namespaces.is_empty() {
+        if name.path.is_empty() {
             Ok(self.find_variable(scope, name.name))
         } else {
             let scope_to_search = self.traverse_namespace_chain(
                 scope,
-                &name.namespaces,
+                name.path,
                 namespaces,
                 identifiers,
                 name.span,
@@ -266,16 +266,16 @@ impl Scopes {
     pub fn find_function_namespaced(
         &self,
         scope: ScopeId,
-        name: &NamespacedIdentifier,
+        name: &QIdent,
         namespaces: &Namespaces,
-        identifiers: &Identifiers,
+        identifiers: &IdentPool,
     ) -> TyperResult<Option<FunctionId>> {
-        if name.namespaces.is_empty() {
+        if name.path.is_empty() {
             Ok(self.find_function(scope, name.name))
         } else {
             let scope_to_search = self.traverse_namespace_chain(
                 scope,
-                &name.namespaces,
+                name.path,
                 namespaces,
                 identifiers,
                 name.span,
@@ -324,16 +324,16 @@ impl Scopes {
     pub fn find_type_namespaced(
         &self,
         scope_id: ScopeId,
-        type_name: &NamespacedIdentifier,
+        type_name: &QIdent,
         namespaces: &Namespaces,
-        identifiers: &Identifiers,
+        identifiers: &IdentPool,
     ) -> TyperResult<Option<(TypeId, ScopeId)>> {
-        if type_name.namespaces.is_empty() {
+        if type_name.path.is_empty() {
             Ok(self.find_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.traverse_namespace_chain(
                 scope_id,
-                &type_name.namespaces,
+                type_name.path,
                 namespaces,
                 identifiers,
                 type_name.span,
@@ -418,7 +418,7 @@ impl Scopes {
         }
     }
 
-    pub fn make_scope_name(&self, scope: &Scope, identifiers: &Identifiers) -> String {
+    pub fn make_scope_name(&self, scope: &Scope, identifiers: &IdentPool) -> String {
         let mut name = match scope.name {
             Some(_) if scope.parent.is_none() => "",
             Some(name) => identifiers.get_name(name),
@@ -438,12 +438,12 @@ impl Scopes {
     pub fn traverse_namespace_chain(
         &self,
         scope_id: ScopeId,
-        namespace_chain: &[Ident],
+        namespace_chain: IdentSlice,
         namespaces: &Namespaces,
-        identifiers: &Identifiers,
+        idents: &IdentPool,
         span: SpanId,
     ) -> TyperResult<ScopeId> {
-        let mut ns_iter = namespace_chain.iter();
+        let mut ns_iter = idents.slices.get_slice(namespace_chain).iter();
         let mut cur_scope_id = scope_id;
         let Some(first) = ns_iter.next() else {
             return Ok(cur_scope_id);
@@ -453,8 +453,8 @@ impl Scopes {
             return Err(errf!(
                 span,
                 "Namespace not found: {} from scope: {:?}",
-                identifiers.get_name(*first),
-                self.make_scope_name(self.get_scope(cur_scope_id), identifiers)
+                idents.get_name(*first),
+                self.make_scope_name(self.get_scope(cur_scope_id), idents)
             ));
         };
         cur_scope_id = namespaces.get(first_ns).scope_id;
@@ -465,8 +465,8 @@ impl Scopes {
                 errf!(
                     span,
                     "Namespace not found: {} in scope: {:?}",
-                    identifiers.get_name(*ns),
-                    self.get_scope(cur_scope_id).name.map(|n| identifiers.get_name(n))
+                    idents.get_name(*ns),
+                    self.get_scope(cur_scope_id).name.map(|n| idents.get_name(n))
                 )
             })?;
             let namespace = namespaces.get(namespace_id);
@@ -537,16 +537,16 @@ impl Scopes {
     pub fn find_ability_namespaced(
         &self,
         scope_id: ScopeId,
-        ability_name: &NamespacedIdentifier,
+        ability_name: &QIdent,
         namespaces: &Namespaces,
-        identifiers: &Identifiers,
+        identifiers: &IdentPool,
     ) -> TyperResult<Option<AbilityId>> {
-        if ability_name.namespaces.is_empty() {
+        if ability_name.path.is_empty() {
             Ok(self.find_ability(scope_id, ability_name.name))
         } else {
             let scope_to_search = self.traverse_namespace_chain(
                 scope_id,
-                &ability_name.namespaces,
+                ability_name.path,
                 namespaces,
                 identifiers,
                 ability_name.span,
