@@ -5,57 +5,8 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
-- [ ] Related: Detect duplicate blanket impls?
-- [ ] Bug: Fix returning Result from main. I think main should just return an i32, honestly. If you want to use 'Try', make your own function.
-      So the only todo here is the remove the code that allows for anything but i32
-- [ ] Typecheck 'main' better
-- [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
-      `impl Unwrap<Inner = u32> for i64`
 
-# General
-- [x] Matching push
-  - [x] boolean chains w/ binding ifs
-  - [x] Don't codegen conditions for arms that don't run
-  - [x] Remove 'statement conditions'
-  - [x] Prevent shadowing
-  - [x] Rewrite codegen for match to allow for better control flow
-  - [x] 'if' guards on regular match
-  - [x] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
-  - [x] Look into converting 'matching if' to also compile to a TypedMatch
-  - [x] Binding `while`
-  - [x] Matching on references
-    - [x] Match to get reference to each struct field, for example, use * for a dereferencing match
-    - [x] Match to get reference to enum payload
-  - [x] ASSERT FAILED: true != true at core.k1:23
-- [x] Real type inference
-  - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
-  - [x] Make 'crash' work in no-std
-  - [x] Make it pretty (de-coupled inference hole from type variable)
-  - [x] Move enum constructor onto new inference infra
-  - [x] Move ability resolution onto new inference infra
-  - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
-- [x] Fix closure types / get static dispatch for functions taking a closure directly
-- [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
-- [x] Run in Linux x86-64
-- [x] `require` statements with matching and binding
-- [x] Runtime-branching Allocator system (v2 is comptime branching)
-  - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
-  - [x] Global pointers, to enable
-  - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
-  - [x] Comptime structs!
-  - [x] alloca in loops fix
-  - [x] Parameterize stdlib over the current allocator ()
-- [x] Proper basic comptime
-  - [x] Rename to 'static'
-  - [x] Move to stack-based VM
-  - [x] literals
-  - [x] if/else
-  - [x] Arith
-  - [x] Struct construction
-  - [x] Struct field access
-  - [x] Enum construction
-
-## Cleanup/tidyness/punchlist
+## Working list
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [x] Adopt `ecow`'s EcoVec
 - [x] reproduce shadow bug: only when statically run?!
@@ -93,15 +44,14 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Compile switches with no patterns or guards to LLVM switch
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
-- [ ] Private functions?
 - [ ] Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
 - [ ] A clone ability. Clone and Copy are not good enough words for this; the distinct meanings are completely imposed rather than intrinsic
       What about: Value for Copy; Entity for "not copy"
 - [ ] Mark types as trivially copyable or not
+^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Support ability constraints on generics
 - [ ] Make statics ZSTs instead of sharing a repr with their inner type
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
@@ -117,7 +67,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] First-class data-oriented design features for struct/enum setups
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
       'shared' chunks vs union chunk
-- [ ] META test: Can we build ArrayOfStructs using current metaprogramming?!
+- [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
+- [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
+      `impl Unwrap<Inner = u32> for i64`
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
@@ -194,7 +146,9 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
 
-## Project
+## Project: Ability default implementations
+
+## Project: Defer
 - [ ] Defer
 
 ## Project: Operator overloading
@@ -210,6 +164,49 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
     - `if self.slots.get(probe_index) is None {`
 
+# General (late 2024)
+- [x] Matching push
+  - [x] boolean chains w/ binding ifs
+  - [x] Don't codegen conditions for arms that don't run
+  - [x] Remove 'statement conditions'
+  - [x] Prevent shadowing
+  - [x] Rewrite codegen for match to allow for better control flow
+  - [x] 'if' guards on regular match
+  - [x] Move pattern bindings for field access and enum payload back to variables to fully remove duplication (we can do this now that we have a place to put them that's per-arm)
+  - [x] Look into converting 'matching if' to also compile to a TypedMatch
+  - [x] Binding `while`
+  - [x] Matching on references
+    - [x] Match to get reference to each struct field, for example, use * for a dereferencing match
+    - [x] Match to get reference to enum payload
+  - [x] ASSERT FAILED: true != true at core.k1:23
+- [x] Real type inference
+  - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
+  - [x] Make 'crash' work in no-std
+  - [x] Make it pretty (de-coupled inference hole from type variable)
+  - [x] Move enum constructor onto new inference infra
+  - [x] Move ability resolution onto new inference infra
+  - [x] Make it fast (Added better 'pool' to prepare for avoiding lots of allocations)
+- [x] Fix closure types / get static dispatch for functions taking a closure directly
+- [x] *Specializing functions on their provided closures to allow inlining and static dispatch*
+- [x] Run in Linux x86-64
+- [x] `require` statements with matching and binding
+- [x] Runtime-branching Allocator system (v2 is comptime branching)
+  - [x] comptime enhancement to support this global initializer: `let* a: Arena* = { .. };`
+  - [x] Global pointers, to enable
+  - [x] The problem with passing an allocator around is all code becomes generic, or casts a pointer.
+  - [x] Comptime structs!
+  - [x] alloca in loops fix
+  - [x] Parameterize stdlib over the current allocator ()
+- [x] Proper basic comptime
+  - [x] Rename to 'static'
+  - [x] Move to stack-based VM
+  - [x] literals
+  - [x] if/else
+  - [x] Arith
+  - [x] Struct construction
+  - [x] Struct field access
+  - [x] Enum construction
+
 ## Non-goals at least for now
 - Memory safety / solving the 'aliasing' problem, not because its unimportant but because I have other interests
 - Tuples. I don't think you need them if you have anonymous structs. The lack of names always makes them
@@ -222,22 +219,22 @@ New tagline? "C with typeclasses and tagged unions"
       This simplification comes at the cost of making empty struct quite special, so I think it's a sidegrade. Won't do
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 
-## Maybe
+## Ideas
 - [ ] 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities, which we now have. Just need higher order type params `F[_]`
 - [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
 - [ ] as! for fallible casting and as? for optional casting
 - [ ] Test handling of NaN and Infinity, other float edge cases
-- [ ] German/Umbra strings
+- [ ] Try to encode prefix strings, aka German/Umbra strings
 
 ## Compiler
 - [x] LLVM: avoid loading aggregate values directly
 - [x] Convert NamedType to a trait
 - [x] Use smallvec
 - [x] UTF8
-- [ ] Test UTF8
-- [ ] Intern ParsedBlock and ParsedStatement
+- [ ] Test multi-byte characters (emoji, other)
+- [x] Intern ParsedBlock and ParsedStatement
 
 ## Error story
 - [x] As values, of course.
@@ -245,12 +242,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] A '?' operator for early return? We could do an ability for it!
 
 ## Memory Management story
-- [ ] Figure out the pointer/reference story
-  - I want to do a minimal runtime with a user-visible heap, semi-auto memory management. Write the heap and main fn in C, call main from the 'runtime' main, which sets up a basic heap based on settings or something user-visible.
-  This will let us intern strings, etc. Kinda like the JVM, except its not
-  a VM, just a native runtime.
-  - If we introduce simple implicits for context passing, we can use this to pass heaps around
-  - Generational References combined w/ arena-style memory mgmt
+- [ ] Semi-auto, mostly arenas, perhaps 2 global ones, 'perm' and 'tmp' via thread-locals, standard library built around them
 
 # Major fix
 - [x] Unmatched closing delim in namespace causes silent failure to parse rest of sources
@@ -261,8 +253,7 @@ New tagline? "C with typeclasses and tagged unions"
 
 # Minor Fix (possible good bite-sized videos)
 - [x] Lexer cleanup > Am I crazy or is this just always tok_buf.len()?!?!?!
-- [ ] type suffixes on int literals 123u32, 4u8, etc
-- [ ] Inference improvements
+- [ ] Binary op inference improvements
   - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
 - [x] Precedence of dereference (and i guess unary ops in general) should be higher
       Kinda fixed by removing all unary ops except 'not'

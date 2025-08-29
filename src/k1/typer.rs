@@ -2879,7 +2879,7 @@ impl TypedProgram {
                 );
             }
         }
-        let type_params_handle = self.named_types.add_slice_from_copy_slice(&type_params);
+        let type_params_handle = self.named_types.add_slice_copy(&type_params);
 
         let type_eval_context = EvalTypeExprContext {
             // For generics, we want the RHS to be its own type, then we make a Generic wrapper
@@ -5208,7 +5208,7 @@ impl TypedProgram {
                     let mut type_params_minus_self =
                         self.named_types.copy_slice_sv::<4>(generic_sig.type_params);
                     type_params_minus_self.retain(|tp| tp.type_id != ability_self_type);
-                    self.named_types.add_slice_from_copy_slice(&type_params_minus_self)
+                    self.named_types.add_slice_copy(&type_params_minus_self)
                 };
                 debug_assert_eq!(type_params_minus_self.len() + 1, generic_sig.type_params.len());
                 let specialized_signature = FunctionSignature {
@@ -5698,7 +5698,7 @@ impl TypedProgram {
             };
         }
         let substituted_ability_args_handle =
-            self.named_types.add_slice_from_copy_slice(&substituted_ability_args);
+            self.named_types.add_slice_copy(&substituted_ability_args);
         let concrete_ability_id = self.specialize_ability(
             generic_base_ability_id,
             substituted_ability_args_handle,
@@ -5758,7 +5758,7 @@ impl TypedProgram {
         }
 
         let substituted_impl_arguments_handle =
-            self.named_types.add_slice_from_copy_slice(&substituted_impl_arguments);
+            self.named_types.add_slice_copy(&substituted_impl_arguments);
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: SliceHandle::empty(),
@@ -9376,7 +9376,7 @@ impl TypedProgram {
                 let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
                 args.push(ParsedCallArg::unnamed(lhs));
                 args.extend_from_slice(self.ast.p_call_args.get_slice(fn_call.args));
-                let args_with_piped = self.ast.p_call_args.add_slice_from_copy_slice(&args);
+                let args_with_piped = self.ast.p_call_args.add_slice_copy(&args);
                 ParsedCall {
                     name: fn_call.name.clone(),
                     type_args: fn_call.type_args,
@@ -10136,7 +10136,7 @@ impl TypedProgram {
             );
             type_params
         };
-        let all_type_params_handle = self.named_types.add_slice_from_copy_slice(&all_type_params);
+        let all_type_params_handle = self.named_types.add_slice_copy(&all_type_params);
         let must_solve_type_params: SmallVec<[NameAndType; 8]> = {
             let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
             type_params.push(NameAndType {
@@ -10152,13 +10152,12 @@ impl TypedProgram {
             type_params
         };
         let must_solve_type_params_handle =
-            self.named_types.add_slice_from_copy_slice(&must_solve_type_params);
+            self.named_types.add_slice_copy(&must_solve_type_params);
 
-        let self_only_type_params_handle =
-            self.named_types.add_slice_from_copy_slice(&[NameAndType {
-                name: self.ast.idents.builtins.Self_,
-                type_id: ability_self_type_id,
-            }]);
+        let self_only_type_params_handle = self.named_types.add_slice_copy(&[NameAndType {
+            name: self.ast.idents.builtins.Self_,
+            type_id: ability_self_type_id,
+        }]);
 
         let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
             Some(ka) => &mut ka.1.iter().map(|t| MaybeTypedExpr::Typed(*t)),
@@ -10482,7 +10481,7 @@ impl TypedProgram {
                                             type_id: *expected_specialized_type,
                                         })
                                         .collect();
-                                    self.named_types.add_slice_from_copy_slice(&solved_params_iter)
+                                    self.named_types.add_slice_copy(&solved_params_iter)
                                 } else {
                                     return failf!(
                                         span,
@@ -10542,7 +10541,7 @@ impl TypedProgram {
                     let type_id = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
                     passed_params.push(NameAndType { name: generic_param.name, type_id });
                 }
-                self.named_types.add_slice_from_copy_slice(&passed_params)
+                self.named_types.add_slice_copy(&passed_params)
             };
 
             let passed_type_ids = self
@@ -10851,7 +10850,7 @@ impl TypedProgram {
                                 type_id: *type_arg,
                             })
                             .collect();
-                        self.named_types.add_slice_from_copy_slice(&args)
+                        self.named_types.add_slice_copy(&args)
                     }
                     _ => self.infer_and_constrain_call_type_args(
                         fn_call,
@@ -11209,8 +11208,8 @@ impl TypedProgram {
                 self.type_id_to_string_ext(substituted, true)
             );
         }
-        let ability_args_new_handle = self.named_types.add_slice_from_copy_slice(&ability_args_new);
-        let impl_args_new_handle = self.named_types.add_slice_from_copy_slice(&impl_args_new);
+        let ability_args_new_handle = self.named_types.add_slice_copy(&ability_args_new);
+        let impl_args_new_handle = self.named_types.add_slice_copy(&impl_args_new);
         let specialized_base =
             self.specialize_ability(base_ability_id, ability_args_new_handle, span, scope_id);
         TypedAbilitySignature {
@@ -12238,9 +12237,8 @@ impl TypedProgram {
             )?;
         }
 
-        let ability_arguments_handle =
-            self.named_types.add_slice_from_copy_slice(&ability_arguments);
-        let impl_arguments_handle = self.named_types.add_slice_from_copy_slice(&impl_arguments);
+        let ability_arguments_handle = self.named_types.add_slice_copy(&ability_arguments);
+        let impl_arguments_handle = self.named_types.add_slice_copy(&impl_arguments);
         Ok((ability_arguments_handle, impl_arguments_handle))
     }
 
@@ -12399,7 +12397,7 @@ impl TypedProgram {
             arguments.push(NameAndType { name, type_id: arg_type });
         }
 
-        let arguments_handle = self.named_types.add_slice_from_copy_slice(&arguments);
+        let arguments_handle = self.named_types.add_slice_copy(&arguments);
         let (ability_args, impl_args) = self.check_ability_arguments(
             ability_id,
             arguments_handle,
@@ -12783,11 +12781,11 @@ impl TypedProgram {
 
         let function_id = self_.functions.next_id();
 
-        let type_params_handle = self_.named_types.add_slice_from_copy_slice(&type_params);
+        let type_params_handle = self_.named_types.add_slice_copy(&type_params);
         let function_type_params_handle =
-            self_.existential_type_params.add_slice_from_copy_slice(&function_type_params);
+            self_.existential_type_params.add_slice_copy(&function_type_params);
         let static_type_params_handle =
-            self_.existential_type_params.add_slice_from_copy_slice(&static_type_params);
+            self_.existential_type_params.add_slice_copy(&static_type_params);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -13369,9 +13367,8 @@ impl TypedProgram {
             typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
-        let blanked_type_params_handle =
-            self.named_types.add_slice_from_copy_slice(&blanket_type_params);
-        let impl_arguments_handle = self.named_types.add_slice_from_copy_slice(&impl_arguments);
+        let blanked_type_params_handle = self.named_types.add_slice_copy(&blanket_type_params);
+        let impl_arguments_handle = self.named_types.add_slice_copy(&impl_arguments);
         let typed_impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: blanked_type_params_handle,

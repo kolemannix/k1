@@ -48,8 +48,7 @@ pub struct ParsedTypeDefnId(u32);
 nz_u32_id!(ParsedFunctionId);
 nz_u32_id!(ParsedGlobalId);
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedAbilityId(u32);
+nz_u32_id!(ParsedAbilityId);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
 pub struct ParsedAbilityImplId(u32);
 
@@ -298,15 +297,15 @@ impl Display for Ident {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NamespacedIdentifier {
-    pub namespaces: EcoVec<Ident>,
+    pub namespaces: IdentSlice,
     pub name: Ident,
     pub span: SpanId,
 }
 impl NamespacedIdentifier {
     pub fn naked(name: Ident, span: SpanId) -> NamespacedIdentifier {
-        NamespacedIdentifier { namespaces: EcoVec::new(), name, span }
+        NamespacedIdentifier { namespaces: IdentSlice::empty(), name, span }
     }
 }
 
@@ -1468,9 +1467,9 @@ pub struct ParsedAbilityParameter {
 #[derive(Debug, Clone)]
 pub struct ParsedAbility {
     pub name: Ident,
-    pub functions: Vec<ParsedFunctionId>,
+    pub functions: EcoVec<ParsedFunctionId>,
     pub span: SpanId,
-    pub params: Vec<ParsedAbilityParameter>,
+    pub params: EcoVec<ParsedAbilityParameter>,
     pub id: ParsedAbilityId,
 }
 
@@ -1686,6 +1685,7 @@ impl Sources {
 }
 
 nz_u32_id!(IdentSliceId);
+type IdentSlice = SliceHandle<IdentSliceId>;
 
 pub struct ParsedProgram {
     pub name: String,
@@ -1696,7 +1696,7 @@ pub struct ParsedProgram {
     pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
     pub type_defns: Vec<ParsedTypeDefn>,
     pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
-    pub abilities: Vec<ParsedAbility>,
+    pub abilities: VPool<ParsedAbility, ParsedAbilityId>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
     pub idents: Identifiers,
@@ -1723,11 +1723,11 @@ impl ParsedProgram {
             name_id,
             config,
             spans: Spans::new(),
-            functions: VPool::make_with_hint("functions", 8192),
+            functions: VPool::make_with_hint("functions", 16384),
             globals: VPool::make_with_hint("parsed_globals", 8192),
             type_defns: Vec::new(),
             namespaces: VPool::make_with_hint("parsed_namespaces", 8192),
-            abilities: Vec::new(),
+            abilities: VPool::make_with_hint("parsed_abilities", 2048),
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
@@ -1810,13 +1810,13 @@ impl ParsedProgram {
     }
 
     pub fn get_ability(&self, id: ParsedAbilityId) -> &ParsedAbility {
-        &self.abilities[id.0 as usize]
+        self.abilities.get(id)
     }
 
     pub fn add_ability(&mut self, mut ability: ParsedAbility) -> ParsedAbilityId {
-        let id = ParsedAbilityId(self.abilities.len() as u32);
+        let id = self.abilities.next_id();
         ability.id = id;
-        self.abilities.push(ability);
+        self.abilities.add(ability);
         id
     }
 
@@ -2349,7 +2349,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                             )?;
                         }
                         let parameter_names_handle =
-                            self.ast.p_idents.add_slice_from_copy_slice(&parameter_names);
+                            self.ast.p_idents.add_slice_copy(&parameter_names);
                         let base_expr = self.expect_expression()?;
                         let expr_span = self.get_expression_span(base_expr);
                         let span = self.extend_span(hash_token.span, expr_span);
@@ -3217,7 +3217,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         index_of_first_explicit_arg,
                         ParsedCallArg { name: None, value: self_arg, is_explicit_context: false },
                     );
-                    let args_handle = self.ast.p_call_args.add_slice_from_copy_slice(&args);
+                    let args_handle = self.ast.p_call_args.add_slice_copy(&args);
 
                     Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                         name: NamespacedIdentifier::naked(name, target.span),
@@ -3380,14 +3380,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(NamedTypeArg { name, type_expr, span })
             },
         )?;
-        let slice = self.ast.p_type_args.add_slice_from_copy_slice(&type_args);
+        let slice = self.ast.p_type_args.add_slice_copy(&type_args);
         let span = self.extend_span(open_bracket.span, args_span);
         Ok((slice, span))
     }
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {
         let (first, second) = self.tokens.peek_two();
-        let mut namespaces = EcoVec::new();
+        let mut namespaces: SV8<Ident> = smallvec![];
         if second.kind == K::Slash && !second.is_whitespace_preceeded() {
             // Namespaced expression; foo/
             // Loop until we don't see a /
@@ -3408,6 +3408,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name = self.expect_eat_token(K::Ident)?;
         let name_ident = self.intern_ident_token(name);
         let span = self.extend_span(first.span, name.span);
+        let namespaces_slice = self.ast.p_idents.add_slice_copy(namespaces);
         Ok(NamespacedIdentifier { namespaces, name: name_ident, span })
     }
 
@@ -4354,19 +4355,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let name_token = self.expect_eat_token(K::Ident)?;
         let name_identifier = self.intern_ident_token(name_token);
-        let ability_params = if let Some(_params_open) = self.maybe_consume_next(K::OpenBracket) {
-            let (params, _) = self.eat_delimited(
+        let mut ability_params = eco_vec![];
+        if let Some(_params_open) = self.maybe_consume_next(K::OpenBracket) {
+            self.eat_delimited_ext(
                 "Ability Parameter",
+                &mut ability_params,
                 K::Comma,
                 &[K::CloseBracket],
                 expect_ability_type_param,
             )?;
-            params
-        } else {
-            vec![]
         };
         self.expect_eat_token(K::OpenBrace)?;
-        let mut functions = Vec::new();
+        let mut functions = EcoVec::new();
         while let Some(parsed_function) = self.parse_function(None)? {
             functions.push(parsed_function);
         }
@@ -4377,7 +4377,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             functions,
             params: ability_params,
             span,
-            id: ParsedAbilityId(0),
+            id: ParsedAbilityId::ONE,
         });
         Ok(Some(ability_id))
     }
@@ -4411,7 +4411,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None => name.span,
             Some(args_span) => self.extend_span(name.span, args_span),
         };
-        let arguments_handle = self.ast.p_type_args.add_slice_from_copy_slice(&arguments);
+        let arguments_handle = self.ast.p_type_args.add_slice_copy(&arguments);
         Ok(ParsedAbilityExpr { name, arguments: arguments_handle, span })
     }
 
