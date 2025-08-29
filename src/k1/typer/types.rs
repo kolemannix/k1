@@ -9,7 +9,7 @@ use fxhash::FxHashMap;
 
 use crate::typer::scopes::*;
 
-use crate::parse::{Ident, ParsedId, ParsedTypeDefnId};
+use crate::parse::{Ident, IdentPool, ParsedId, ParsedTypeDefnId};
 
 use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
@@ -1291,14 +1291,14 @@ impl TypePool {
 
     pub fn add_lambda_object(
         &mut self,
-        identifiers: &Identifiers,
+        identifiers: &IdentPool,
         function_type_id: TypeId,
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = eco_vec![
-            StructTypeField { name: identifiers.builtins.fn_ptr, type_id: fn_ptr_type },
-            StructTypeField { name: identifiers.builtins.env_ptr, type_id: POINTER_TYPE_ID },
+            StructTypeField { name: identifiers.b.fn_ptr, type_id: fn_ptr_type },
+            StructTypeField { name: identifiers.b.env_ptr, type_id: POINTER_TYPE_ID },
         ];
         let struct_representation = self.add_anon(Type::Struct(StructType { fields }));
         self.add_anon(Type::LambdaObject(LambdaObjectType {

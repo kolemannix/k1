@@ -48,7 +48,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
         match self.index {
             None => None,
             Some(index) => {
-                let end_index = index + self.len as u32;
+                let end_index = index + self.len;
                 Some(end_index)
             }
         }

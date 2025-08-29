@@ -1156,21 +1156,17 @@ impl TypedProgram {
         w.write_str(self.ident_str(ident))
     }
 
-    pub fn display_namespaced_identifier(
-        &self,
-        w: &mut impl Write,
-        ident: &NamespacedIdentifier,
-    ) -> std::fmt::Result {
-        for ns in &ident.namespaces {
+    pub fn display_qident(&self, w: &mut impl Write, ident: &QIdent) -> std::fmt::Result {
+        for ns in self.ast.idents.slices.get_slice(ident.path) {
             self.write_ident(w, *ns)?;
             write!(w, "/")?;
         }
         self.write_ident(w, ident.name)
     }
 
-    pub fn namespaced_identifier_to_string(&self, ident: &NamespacedIdentifier) -> String {
-        let mut s = String::with_capacity(32);
-        self.display_namespaced_identifier(&mut s, ident).unwrap();
+    pub fn qident_to_string(&self, ident: &QIdent) -> String {
+        let mut s = String::with_capacity(128);
+        self.display_qident(&mut s, ident).unwrap();
         s
     }
 

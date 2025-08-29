@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use std::fmt::{Display, Formatter, Write};
-use std::num::NonZeroU32;
 
 use crate::compiler::CompilerConfig;
 use crate::pool::{SliceHandle, VPool};
@@ -10,10 +9,30 @@ use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
+pub use idents::{Ident, IdentPool, IdentSlice, IdentSliceId, QIdent};
 use log::trace;
 use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;
 use string_interner::backend::StringBackend;
+
+/// Make a qualified, `NamespacedIdentifier` from components
+#[macro_export]
+macro_rules! qident {
+    ($self:ident, $span:expr, $namespaces:expr, $name:expr $(,)?) => {{
+        let idents: IdentSlice = $self
+            .ast
+            .idents
+            .slices
+            .add_slice_from_iter(($namespaces).iter().map(|n| get_ident!($self, n)));
+        QIdent { path: idents, name: get_ident!($self, $name), span: $span }
+    }};
+    ($self:ident, $span:expr, $name:expr) => {{ QIdent { path: IdentSlice::empty(), name: get_ident!($self, $name), span: $span } }};
+}
+
+#[macro_export]
+macro_rules! qbident {
+    ($self:ident, $span:expr, $namespaces:expr, $name:expr $(,)?) => {{ NamespacedIdent { namespaces: $namespaces, name: get_ident!($self, $name), span: $span } }};
+}
 
 trait CanPush<T> {
     fn push_it(&mut self, value: T);
@@ -63,7 +82,7 @@ nz_u32_id!(ParsedUseId);
 
 #[derive(Debug, Clone)]
 pub struct ParsedUse {
-    pub target: NamespacedIdentifier,
+    pub target: QIdent,
     pub alias: Option<Ident>,
     pub span: SpanId,
 }
@@ -72,6 +91,8 @@ pub type FileId = u32;
 
 #[cfg(test)]
 mod parse_test;
+
+mod idents;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
 pub enum ParsedId {
@@ -263,297 +284,6 @@ impl StringPool {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct Ident(string_interner::symbol::SymbolU32);
-
-#[cfg(test)]
-impl Ident {
-    pub fn forged() -> Ident {
-        Ident(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())
-    }
-}
-
-impl Ord for Ident {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-impl PartialOrd for Ident {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl From<Ident> for usize {
-    fn from(value: Ident) -> Self {
-        value.0.to_usize()
-    }
-}
-
-impl Display for Ident {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_usize())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct NamespacedIdentifier {
-    pub namespaces: IdentSlice,
-    pub name: Ident,
-    pub span: SpanId,
-}
-impl NamespacedIdentifier {
-    pub fn naked(name: Ident, span: SpanId) -> NamespacedIdentifier {
-        NamespacedIdentifier { namespaces: IdentSlice::empty(), name, span }
-    }
-}
-
-#[allow(non_snake_case)]
-pub struct BuiltinIdentifiers {
-    pub main: Ident,
-    pub self_: Ident,
-    pub Self_: Ident,
-    pub it: Ident,
-    pub unit: Ident,
-    pub char: Ident,
-    pub string: Ident,
-    pub length: Ident,
-    pub len: Ident,
-    pub has_value: Ident,
-    pub get: Ident,
-    pub getRef: Ident,
-    pub not: Ident,
-    pub iter: Ident,
-    pub iteree: Ident,
-    pub it_index: Ident,
-    pub as_: Ident,
-    pub list_lit: Ident,
-    pub with_capacity: Ident,
-    pub yielded_coll: Ident,
-    pub iteree_length: Ident,
-    pub block_expr_val: Ident,
-    pub optelse_lhs: Ident,
-    pub list_literal: Ident,
-    pub source_location_typename: Ident,
-    pub lambda_env_var_name: Ident,
-    pub env: Ident,
-    pub fn_ptr: Ident,
-    pub env_ptr: Ident,
-    pub amp: Ident,
-    pub asterisk: Ident,
-    pub bang: Ident,
-    pub sb: Ident,
-    pub payload: Ident,
-    pub try_: Ident,
-    pub try_value: Ident,
-    pub if_target: Ident,
-    pub crash: Ident,
-    pub toRef: Ident,
-    pub toDyn: Ident,
-    pub toStatic: Ident,
-    pub fromStatic: Ident,
-    pub filename: Ident,
-    pub line: Ident,
-    pub equals: Ident,
-    pub tag: Ident,
-    pub MODULE_INFO: Ident,
-    pub root_module_name: Ident,
-    pub core: Ident,
-    pub k1: Ident,
-    pub types: Ident,
-    pub TypeSchema: Ident,
-    pub IntKind: Ident,
-    pub IntValue: Ident,
-    pub Layout: Ident,
-    pub Array: Ident,
-    pub toMut: Ident,
-    pub unMut: Ident,
-    pub data: Ident,
-    pub meta: Ident,
-    pub param_0: Ident,
-    pub param_1: Ident,
-    pub param_2: Ident,
-    pub param_3: Ident,
-    pub param_4: Ident,
-    pub param_5: Ident,
-    pub param_6: Ident,
-    pub param_7: Ident,
-    pub param_8: Ident,
-}
-
-// We use the default StringInterner, which uses a contiguous string as its backend
-// and u32 symbols
-pub struct Identifiers {
-    intern_pool: string_interner::StringInterner<StringBackend>,
-    pub builtins: BuiltinIdentifiers,
-}
-impl Identifiers {
-    pub fn intern(&mut self, s: impl AsRef<str>) -> Ident {
-        let s = self.intern_pool.get_or_intern(&s);
-        Ident(s)
-    }
-    pub fn get(&self, s: impl AsRef<str>) -> Option<Ident> {
-        self.intern_pool.get(&s).map(Ident)
-    }
-    pub fn get_name(&self, id: Ident) -> &str {
-        self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
-    }
-}
-
-impl Default for Identifiers {
-    #[allow(non_snake_case)]
-    fn default() -> Self {
-        let mut pool = string_interner::StringInterner::with_capacity(65536);
-
-        let main = Ident(pool.get_or_intern_static("main"));
-        let self_ = Ident(pool.get_or_intern_static("self"));
-        let self_cap = Ident(pool.get_or_intern_static("Self"));
-        let it = Ident(pool.get_or_intern_static("it"));
-        let unit = Ident(pool.get_or_intern_static("unit"));
-        let char = Ident(pool.get_or_intern_static("char"));
-        let string = Ident(pool.get_or_intern_static("string"));
-        let length = Ident(pool.get_or_intern_static("length"));
-        let len = Ident(pool.get_or_intern_static("len"));
-        let has_value = Ident(pool.get_or_intern_static("hasValue"));
-        let get = Ident(pool.get_or_intern_static("get"));
-        let getRef = Ident(pool.get_or_intern_static("getRef"));
-        let not = Ident(pool.get_or_intern_static("not"));
-        let iter = Ident(pool.get_or_intern_static("iter"));
-        let iteree = Ident(pool.get_or_intern_static("iteree"));
-        let it_index = Ident(pool.get_or_intern_static("itIndex"));
-        let as_ = Ident(pool.get_or_intern_static("as"));
-        let list_lit = Ident(pool.get_or_intern_static("list_lit"));
-        let with_capacity = Ident(pool.get_or_intern_static("withCapacity"));
-        let yielded_coll = Ident(pool.get_or_intern_static("yieldedColl"));
-        let iteree_length = Ident(pool.get_or_intern_static("iteree_length"));
-        let block_expr_val = Ident(pool.get_or_intern_static("block_expr_val"));
-        let optelse_lhs = Ident(pool.get_or_intern_static("optelse_lhs"));
-        let list_literal = Ident(pool.get_or_intern_static("list_literal"));
-        let source_location_typename = Ident(pool.get_or_intern_static("SourceLocation"));
-        let lambda_env_var_name = Ident(pool.get_or_intern_static("__lambda_env"));
-        let env = Ident(pool.get_or_intern_static("env"));
-        let fn_ptr = Ident(pool.get_or_intern_static("fn_ptr"));
-        let env_ptr = Ident(pool.get_or_intern_static("env_ptr"));
-        let amp = Ident(pool.get_or_intern_static("&"));
-        let ast = Ident(pool.get_or_intern_static("*"));
-        let bang = Ident(pool.get_or_intern_static("!"));
-        let sb = Ident(pool.get_or_intern_static("sb"));
-        let payload = Ident(pool.get_or_intern_static("payload"));
-        let try_ = Ident(pool.get_or_intern_static("try"));
-        let try_value = Ident(pool.get_or_intern_static("try_value"));
-        let if_target = Ident(pool.get_or_intern_static("if_target"));
-        let crash = Ident(pool.get_or_intern_static("crash"));
-        let toRef = Ident(pool.get_or_intern_static("toRef"));
-        let toDyn = Ident(pool.get_or_intern_static("toDyn"));
-        let toStatic = Ident(pool.get_or_intern_static("toStatic"));
-        let fromStatic = Ident(pool.get_or_intern_static("fromStatic"));
-        let filename = Ident(pool.get_or_intern_static("filename"));
-        let line = Ident(pool.get_or_intern_static("line"));
-        let equals = Ident(pool.get_or_intern_static("equals"));
-        let tag = Ident(pool.get_or_intern_static("tag"));
-        let MODULE_INFO = Ident(pool.get_or_intern_static("MODULE_INFO"));
-        let root_module_name = Ident(pool.get_or_intern_static("_root"));
-        let core = Ident(pool.get_or_intern_static("core"));
-        let k1 = Ident(pool.get_or_intern_static("k1"));
-        let types = Ident(pool.get_or_intern_static("types"));
-        let TypeSchema = Ident(pool.get_or_intern_static("TypeSchema"));
-        let IntKind = Ident(pool.get_or_intern_static("IntKind"));
-        let IntValue = Ident(pool.get_or_intern_static("IntValue"));
-        let Layout = Ident(pool.get_or_intern_static("Layout"));
-        let Array = Ident(pool.get_or_intern_static("Array"));
-        let toMut = Ident(pool.get_or_intern_static("toMut"));
-        let unMut = Ident(pool.get_or_intern_static("unMut"));
-        let data = Ident(pool.get_or_intern_static("data"));
-        let meta = Ident(pool.get_or_intern_static("meta"));
-
-        let param_0 = Ident(pool.get_or_intern_static("param_0"));
-        let param_1 = Ident(pool.get_or_intern_static("param_1"));
-        let param_2 = Ident(pool.get_or_intern_static("param_2"));
-        let param_3 = Ident(pool.get_or_intern_static("param_3"));
-        let param_4 = Ident(pool.get_or_intern_static("param_4"));
-        let param_5 = Ident(pool.get_or_intern_static("param_5"));
-        let param_6 = Ident(pool.get_or_intern_static("param_6"));
-        let param_7 = Ident(pool.get_or_intern_static("param_7"));
-        let param_8 = Ident(pool.get_or_intern_static("param_8"));
-
-        Self {
-            intern_pool: pool,
-            builtins: BuiltinIdentifiers {
-                main,
-                self_,
-                Self_: self_cap,
-                it,
-                unit,
-                char,
-                string,
-                length,
-                len,
-                has_value,
-                get,
-                getRef,
-                not,
-                iter,
-                iteree,
-                it_index,
-                as_,
-                list_lit,
-                with_capacity,
-                yielded_coll,
-                iteree_length,
-                block_expr_val,
-                optelse_lhs,
-                list_literal,
-                source_location_typename,
-                lambda_env_var_name,
-                env,
-                fn_ptr,
-                env_ptr,
-                amp,
-                asterisk: ast,
-                bang,
-                sb,
-                payload,
-                try_,
-                try_value,
-                if_target,
-                crash,
-                toRef,
-                toDyn,
-                toStatic,
-                fromStatic,
-                filename,
-                line,
-                equals,
-                tag,
-                MODULE_INFO,
-                root_module_name,
-                core,
-                k1,
-                types,
-                TypeSchema,
-                IntKind,
-                IntValue,
-                Layout,
-                Array,
-                toMut,
-                unMut,
-                data,
-                meta,
-                param_0,
-                param_1,
-                param_2,
-                param_3,
-                param_4,
-                param_5,
-                param_6,
-                param_7,
-                param_8,
-            },
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ParsedCallArg {
     pub name: Option<Ident>,
@@ -582,10 +312,10 @@ impl NamedTypeArg {
     }
 }
 
-static_assert_size!(ParsedCall, 56);
+static_assert_size!(ParsedCall, 44);
 #[derive(Debug, Clone)]
 pub struct ParsedCall {
-    pub name: NamespacedIdentifier,
+    pub name: QIdent,
     pub type_args: SliceHandle<NamedTypeArgId>,
     pub args: SliceHandle<CallArgId>,
     pub span: SpanId,
@@ -682,7 +412,7 @@ pub struct UnaryOp {
 
 #[derive(Debug, Clone)]
 pub struct ParsedVariable {
-    pub name: NamespacedIdentifier,
+    pub name: QIdent,
 }
 
 impl Display for ParsedVariable {
@@ -835,7 +565,7 @@ pub struct ParsedQAbilityCall {
     pub span: SpanId,
 }
 
-static_assert_size!(ParsedExpr, 56);
+static_assert_size!(ParsedExpr, 48);
 #[derive(Debug, Clone)]
 pub enum ParsedExpr {
     /// ```md
@@ -1152,7 +882,7 @@ pub struct StructType {
 
 #[derive(Debug, Clone)]
 pub struct TypeApplication {
-    pub name: NamespacedIdentifier,
+    pub name: QIdent,
     pub args: SliceHandle<NamedTypeArgId>,
     pub span: SpanId,
 }
@@ -1477,7 +1207,7 @@ nz_u32_id!(ParsedAbilityExprId);
 
 #[derive(Debug, Clone)]
 pub struct ParsedAbilityExpr {
-    pub name: NamespacedIdentifier,
+    pub name: QIdent,
     pub arguments: SliceHandle<NamedTypeArgId>,
     pub span: SpanId,
 }
@@ -1684,9 +1414,6 @@ impl Sources {
     }
 }
 
-nz_u32_id!(IdentSliceId);
-type IdentSlice = SliceHandle<IdentSliceId>;
-
 pub struct ParsedProgram {
     pub name: String,
     pub name_id: Ident,
@@ -1699,7 +1426,7 @@ pub struct ParsedProgram {
     pub abilities: VPool<ParsedAbility, ParsedAbilityId>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
     pub sources: Sources,
-    pub idents: Identifiers,
+    pub idents: IdentPool,
     pub strings: StringPool,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
@@ -1710,13 +1437,12 @@ pub struct ParsedProgram {
     // p_ prefix means 'pool'; used to delineate secondary pools from primary language concepts
     pub p_type_args: VPool<NamedTypeArg, NamedTypeArgId>,
     pub p_call_args: VPool<ParsedCallArg, CallArgId>,
-    pub p_idents: VPool<Ident, IdentSliceId>,
     pub p_ability_exprs: VPool<ParsedAbilityExpr, ParsedAbilityExprId>,
 }
 
 impl ParsedProgram {
     pub fn make(name: String, config: CompilerConfig) -> ParsedProgram {
-        let mut idents = Identifiers::default();
+        let mut idents = IdentPool::make();
         let name_id = idents.intern(&name);
         ParsedProgram {
             name,
@@ -1740,7 +1466,6 @@ impl ParsedProgram {
             errors: Vec::new(),
             p_type_args: VPool::make_with_hint("parsed_named_type_args", 8192),
             p_call_args: VPool::make_with_hint("parsed_call_args", 8192),
-            p_idents: VPool::make_with_hint("ident_slices", 8192),
             p_ability_exprs: VPool::make_with_hint("ability_exprs", 8192),
         }
     }
@@ -2349,7 +2074,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                             )?;
                         }
                         let parameter_names_handle =
-                            self.ast.p_idents.add_slice_copy(&parameter_names);
+                            self.ast.idents.slices.add_slice_copy(&parameter_names);
                         let base_expr = self.expect_expression()?;
                         let expr_span = self.get_expression_span(base_expr);
                         let span = self.extend_span(hash_token.span, expr_span);
@@ -2960,7 +2685,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let base_name = self.expect_namespaced_ident()?;
 
                 // Special case for Array[N x T] syntax
-                if base_name.namespaces.is_empty() {
+                if base_name.path.is_empty() {
                     if self.ast.idents.get_name(base_name.name) == "Array" {
                         // Array must always have bracket syntax
                         self.expect_eat_token(K::OpenBracket)?;
@@ -3220,7 +2945,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let args_handle = self.ast.p_call_args.add_slice_copy(&args);
 
                     Some(self.add_expression(ParsedExpr::Call(ParsedCall {
-                        name: NamespacedIdentifier::naked(name, target.span),
+                        name: QIdent::naked(name, target.span),
                         type_args,
                         args: args_handle,
                         span,
@@ -3385,7 +3110,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok((slice, span))
     }
 
-    fn expect_namespaced_ident(&mut self) -> ParseResult<NamespacedIdentifier> {
+    fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let (first, second) = self.tokens.peek_two();
         let mut namespaces: SV8<Ident> = smallvec![];
         if second.kind == K::Slash && !second.is_whitespace_preceeded() {
@@ -3408,8 +3133,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name = self.expect_eat_token(K::Ident)?;
         let name_ident = self.intern_ident_token(name);
         let span = self.extend_span(first.span, name.span);
-        let namespaces_slice = self.ast.p_idents.add_slice_copy(namespaces);
-        Ok(NamespacedIdentifier { namespaces, name: name_ident, span })
+        let namespaces_slice = self.ast.idents.slices.add_slice_copy(&namespaces);
+        Ok(QIdent { path: namespaces_slice, name: name_ident, span })
     }
 
     pub fn parse_compiler_debug(&mut self) -> bool {
@@ -3613,7 +3338,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         let span = self.extend_to_here(first.span);
 
                         let call_expr_id = self.add_expression(ParsedExpr::Call(ParsedCall {
-                            name: NamespacedIdentifier::naked(call_name, call_name_token.span),
+                            name: QIdent::naked(call_name, call_name_token.span),
                             type_args: call_type_args,
                             args: args_handle,
                             span,
@@ -4713,15 +4438,11 @@ impl ParsedProgram {
         }
     }
 
-    fn display_namespaced_identifier(
-        &self,
-        w: &mut impl Write,
-        ns_id: &NamespacedIdentifier,
-    ) -> std::fmt::Result {
-        if !ns_id.namespaces.is_empty() {
-            for (index, ns) in ns_id.namespaces.iter().enumerate() {
+    fn display_qident(&self, w: &mut impl Write, ns_id: &QIdent) -> std::fmt::Result {
+        if !ns_id.path.is_empty() {
+            for (index, ns) in self.idents.slices.get_slice(ns_id.path).iter().enumerate() {
                 w.write_str(self.idents.get_name(*ns))?;
-                if index < ns_id.namespaces.len() - 1 {
+                if index < ns_id.path.len() - 1 {
                     w.write_str("/")?;
                 }
             }
@@ -4735,7 +4456,7 @@ impl ParsedProgram {
         ability_expr_id: ParsedAbilityExprId,
     ) -> std::fmt::Result {
         let e = self.p_ability_exprs.get(ability_expr_id);
-        self.display_namespaced_identifier(w, &e.name)?;
+        self.display_qident(w, &e.name)?;
         if !e.arguments.is_empty() {
             w.write_str("[")?;
             for (idx, arg) in self.p_type_args.get_slice(e.arguments).iter().enumerate() {
@@ -4791,7 +4512,7 @@ impl ParsedProgram {
                 w.write_str(" }")
             }
             ParsedTypeExpr::TypeApplication(tapp) => {
-                display_namespaced_identifier(w, &self.idents, &tapp.name, "::")?;
+                self.display_qident(w, &tapp.name)?;
                 if !tapp.args.is_empty() {
                     w.write_str("[")?;
                     for tparam in self.p_type_args.get_slice(tapp.args) {
@@ -4915,20 +4636,6 @@ impl ParsedProgram {
         self.display_stmt_id(&mut buffer, stmt_id).unwrap();
         buffer
     }
-}
-
-pub fn display_namespaced_identifier(
-    writ: &mut impl Write,
-    idents: &Identifiers,
-    ns_ident: &NamespacedIdentifier,
-    delim: &'static str,
-) -> std::fmt::Result {
-    for ident in ns_ident.namespaces.iter() {
-        writ.write_str(idents.get_name(*ident))?;
-        writ.write_str(delim)?;
-    }
-    writ.write_str(idents.get_name(ns_ident.name))?;
-    Ok(())
 }
 
 pub fn lex_text(
