@@ -260,8 +260,8 @@ impl TypedProgram {
             );
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
-        let solutions_handle = self_.named_types.add_slice_from_copy_slice(&solutions);
-        let all_solutions_handle = self_.named_types.add_slice_from_copy_slice(&all_solutions);
+        let solutions_handle = self_.named_types.add_slice_copy(&solutions);
+        let all_solutions_handle = self_.named_types.add_slice_copy(&all_solutions);
         Ok((solutions_handle, all_solutions_handle))
     }
 
@@ -437,7 +437,7 @@ impl TypedProgram {
                 let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
                 evaled_params.push(NameAndType { name: type_param.name, type_id: passed_type });
             }
-            self.named_types.add_slice_from_copy_slice(&evaled_params)
+            self.named_types.add_slice_copy(&evaled_params)
         } else {
             let generic_function_type =
                 self.types.get(generic_function_sig.function_type).as_function().unwrap().clone();
@@ -675,8 +675,7 @@ impl TypedProgram {
                 self.pretty_print_named_types(&function_type_args, ", ")
             );
         }
-        let function_type_args_handle =
-            self.named_types.add_slice_from_copy_slice(&function_type_args);
+        let function_type_args_handle = self.named_types.add_slice_copy(&function_type_args);
         Ok(function_type_args_handle)
     }
 
@@ -736,7 +735,7 @@ impl TypedProgram {
                 self.pretty_print_named_types(&static_type_args, ", ")
             );
         }
-        let static_type_args_handle = self.named_types.add_slice_from_copy_slice(&static_type_args);
+        let static_type_args_handle = self.named_types.add_slice_copy(&static_type_args);
         Ok(static_type_args_handle)
     }
 

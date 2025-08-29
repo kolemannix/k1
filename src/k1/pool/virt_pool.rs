@@ -269,7 +269,7 @@ impl<T: Copy, Index: PoolIndex> VPool<T, Index> {
         SmallVec::from_slice(self.get_slice(handle))
     }
 
-    pub fn add_slice_from_copy_slice(&mut self, items: &[T]) -> SliceHandle<Index> {
+    pub fn add_slice_copy(&mut self, items: &[T]) -> SliceHandle<Index> {
         let items_len = items.len();
         let id = self.next_id();
         let index = Self::id_to_actual_index(id);

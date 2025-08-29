@@ -67,14 +67,14 @@ ns meta {
     for f in fields do {
       code.line(`    ARR_{f.name}: List/empty(),`);
     };
-    code.line(`} }`); // end fn empty
+    code.line(`  } }`); // end fn empty
 
     // begin fn push
     code.line(`  fn push(self: *mut {name}, value: {tt}): unit {{`);
     for f in fields do {
       code.line(`    self.ARR_{f.name}*.push(value.{f.name});`)
     };
-    code.line(`}`); // end fn push
+    code.line(`  }`); // end fn push
 
     code.line(`}`); // end ns
     code.build()
