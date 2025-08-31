@@ -896,7 +896,16 @@ pub struct ParsedOptional {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind {
     Read,
-    Write,
+    Mut,
+}
+
+impl ReferenceKind {
+    pub fn is_mutable(&self) -> bool {
+        match self {
+            Self::Read => false,
+            Self::Mut => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2584,13 +2593,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     });
                     let new_id = self.ast.type_exprs.add(new);
                     result = new_id;
-                } else if next.kind == K::QuestionMark {
-                    // Optional Type
-                    self.advance();
-                    result = self.ast.type_exprs.add(ParsedTypeExpr::Optional(ParsedOptional {
-                        base: result,
-                        span: next.span,
-                    }));
                 } else {
                     panic!("unhandled postfix type operator {:?}", next.kind);
                 }
@@ -2613,18 +2615,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Note: Here would be where we would support tuples (if we did paren tuples)
             self.expect_eat_token(K::CloseParen)?;
             Ok(Some(expr))
-        } else if first.kind == K::KeywordEither {
-            let enumm = self.expect_enum_type_expression()?;
-            let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Enum(enumm));
-            Ok(Some(type_expr_id))
-        } else if first.kind == K::BackSlash {
-            let fun = self.expect_function_type()?;
-            Ok(Some(fun))
         } else if first.kind == K::Asterisk {
             // Reference/Pointer notation: *(mut)<ty>
             self.advance();
             let reference_kind = if self.maybe_consume_next(K::KeywordMut).is_some() {
-                ReferenceKind::Write
+                ReferenceKind::Mut
             } else {
                 ReferenceKind::Read
             };
@@ -2635,6 +2630,36 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 span,
                 kind: reference_kind,
             }))))
+        } else if first.kind == K::OpenBrace {
+            let open_brace = self.expect_eat_token(K::OpenBrace)?;
+            let mut fields = eco_vec![];
+            let (fields_span, _) = self.eat_delimited_ext(
+                "Struct fields",
+                &mut fields,
+                K::Comma,
+                &[K::CloseBrace],
+                |p| {
+                    let field_res = Parser::parse_struct_type_field(p);
+                    Parser::expect("Struct field", open_brace, field_res)
+                },
+            )?;
+            let span = self.extend_span(first.span, fields_span);
+            let struc = StructType { fields, span };
+            Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
+        } else if first.kind == K::QuestionMark {
+            self.advance();
+            let base = self.expect_type_expression()?;
+            let span = self.extend_to_here(first.span);
+            let opt_id =
+                self.ast.type_exprs.add(ParsedTypeExpr::Optional(ParsedOptional { base, span }));
+            Ok(Some(opt_id))
+        } else if first.kind == K::KeywordEither {
+            let enumm = self.expect_enum_type_expression()?;
+            let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Enum(enumm));
+            Ok(Some(type_expr_id))
+        } else if first.kind == K::BackSlash {
+            let fun = self.expect_function_type()?;
+            Ok(Some(fun))
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
@@ -2723,22 +2748,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     TypeApplication { name: base_name, args: type_params, span },
                 ))))
             }
-        } else if first.kind == K::OpenBrace {
-            let open_brace = self.expect_eat_token(K::OpenBrace)?;
-            let mut fields = eco_vec![];
-            let (fields_span, _) = self.eat_delimited_ext(
-                "Struct fields",
-                &mut fields,
-                K::Comma,
-                &[K::CloseBrace],
-                |p| {
-                    let field_res = Parser::parse_struct_type_field(p);
-                    Parser::expect("Struct field", open_brace, field_res)
-                },
-            )?;
-            let span = self.extend_span(first.span, fields_span);
-            let struc = StructType { fields, span };
-            Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else {
             Ok(None)
         }
@@ -4524,12 +4533,17 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedTypeExpr::Optional(opt) => {
+                w.write_str("?")?;
                 self.display_type_expr_id(opt.base, w)?;
-                w.write_str("?")
+                Ok(())
             }
             ParsedTypeExpr::Reference(refer) => {
+                w.write_str("*")?;
+                if refer.kind.is_mutable() {
+                    w.write_str("mut ")?;
+                }
                 self.display_type_expr_id(refer.base, w)?;
-                w.write_str("*")
+                Ok(())
             }
             ParsedTypeExpr::Enum(e) => {
                 w.write_str("enum ")?;

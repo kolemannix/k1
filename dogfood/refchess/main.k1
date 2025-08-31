@@ -210,7 +210,7 @@ fn cmdNewGame(): unit {
 }
 
 
-fn handleCommand(context eng: Engine)(command: uci/Command): string? {
+fn handleCommand(context eng: Engine)(command: uci/Command): ?string {
   switch command {
     .Uci -> some(cmdInfo()),
     .Go(s) -> some(cmdGo(s)),

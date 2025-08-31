@@ -39,7 +39,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [ ] ThreadLocal globals
 - [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
-- [ ] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
+- [x] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
 - [ ] Use `perf` to look at branch info, cache info
 - [ ] Compile switches with no patterns or guards to LLVM switch
 - [ ] Implicit conversions: based on a special ability that integrates with 
@@ -57,7 +57,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Consider a rename of 'uword/iword'. What about `word` and `iword`.
+- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `word` and `iword`.
 - [ ] implement iterator for Array
 - [ ] Do safe integer coercions automatically
 - [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
@@ -79,7 +79,7 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Dependencies: local module
   - [ ] Dependencies: git url
   - [ ] Linker options
-  - [ ] Prevent modules using definitions from modules they dont depend on
+  - [ ] Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)
   - [ ] serialize typedprogram (for incremental compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
@@ -112,7 +112,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Change pointer syntax: `*<ty>`, `*<ty>`, `*mut <ty>`
 - [x] Rename 'Buffer' to ... View?
 - [x] Convert reference type syntax to prefix for better chaining
-- [ ] Convert option to prefix syntax
+- [x] Convert option to prefix syntax
 - [x] Add mutable/const bool to ReferenceType
 - [x] Update stdlib
 

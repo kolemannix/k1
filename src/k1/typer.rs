@@ -3045,7 +3045,7 @@ impl TypedProgram {
                 let span = r.span;
                 let mutable = match r.kind {
                     parse::ReferenceKind::Read => false,
-                    parse::ReferenceKind::Write => true,
+                    parse::ReferenceKind::Mut => true,
                 };
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
                 match self.types.get(inner_ty) {

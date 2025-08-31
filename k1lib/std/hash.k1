@@ -17,7 +17,7 @@ let MODULE_INFO: core/k1/ModuleManifest = {
     deps: "",
 };
 
-deftype Entry[V] = { key: string, value: V, deleted: bool }?
+deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
 deftype HashMap[V] = {
   size: uword,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
@@ -112,7 +112,7 @@ ns HashMap {
     };
   }
 
-  fn get[V](self: *HashMap[V], key: string): V? {
+  fn get[V](self: *HashMap[V], key: string): ?V {
     let index = self._computeIndex(key);
     let slot = self.entries.get(index);
     switch slot {

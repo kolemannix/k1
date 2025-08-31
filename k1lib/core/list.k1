@@ -93,7 +93,7 @@ ns List {
     self.buffer.get(index)
   }
 
-  fn getOpt[T](self: List[T], index: uword): T? {
+  fn getOpt[T](self: List[T], index: uword): ?T {
     if index >= self.len {
       .None
     } else .Some(self.buffer.get(index))
@@ -140,7 +140,7 @@ ns List {
     self.len > 0
   }
 
-  fn firstRef[T](self: *mut List[T]): (*mut T)? {
+  fn firstRef[T](self: *mut List[T]): ?(*mut T) {
     if self.nonEmpty() {
       .Some(self.getRef(0))
     } else {
@@ -148,17 +148,17 @@ ns List {
     }
   }
 
-  fn first[T](self: List[T]): T? {
+  fn first[T](self: List[T]): ?T {
     if self.nonEmpty() .Some(self.get(0)) 
     else .None
   }
 
-  fn lastRef[T](self: *mut List[T]): (*mut T)? {
+  fn lastRef[T](self: *mut List[T]): ?(*mut T) {
     if self.nonEmpty() .Some(self.getRef(self.len - 1))
     else .None
   }
 
-  fn last[T](self: List[T]): T? {
+  fn last[T](self: List[T]): ?T {
     if self.nonEmpty() .Some(self.get(self.len - 1))
     else .None
   }

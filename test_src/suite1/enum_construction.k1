@@ -1,7 +1,7 @@
 ns enum_construction;
 
 deftype State = either On(unit), Off(unit), Zilch
-deftype StateHard = either On(int?), Off(int?)
+deftype StateHard = either On(?int), Off(?int)
 deftype Contrived[A, B] = either Stuff({ a: A, b: B }), Empty
 
 fn test(): unit {

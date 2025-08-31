@@ -117,7 +117,7 @@ fn test(): unit {
     };
     inced.last()
   };
-  assertEquals[int?](listLast, some(6));
+  assertEquals[?int](listLast, some(6));
 
   assertEquals[int](#static loop {
     switch 42 {
@@ -133,7 +133,7 @@ fn test(): unit {
     sb.build()
   }, "Hello");
 
-  assertEquals[string?](
+  assertEquals[?string](
     testCompile( #static assert(false) ).map(\(s) s.take(38)),
     some("Static execution exited with code: 111")
   );

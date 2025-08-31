@@ -8,7 +8,7 @@ fn matchBool(b: bool): string {
 }
 
 deftype TriState = either Yes, No, Failure({ reason: string })
-fn matchTristateOpt(t: TriState?): string {
+fn matchTristateOpt(t: ?TriState): string {
   switch t {
     .Some(.Yes) -> "yes",
     .Some(.No) -> "no",
@@ -25,7 +25,7 @@ fn failedWithBaz(t: TriState): bool {
   }
 }
 
-fn matchOptBool(b: bool?): string {
+fn matchOptBool(b: ?bool): string {
   switch b {
     .None -> identity("None"),
     .Some(false) -> identity("false"),

@@ -81,7 +81,7 @@ ns types {
     Reference({ innerTypeId: u64, mutable: bool }),
     Array({
       elementTypeId: u64,
-      size: uword?
+      size: ?uword
     }),
     Struct({
       fields: View[{
@@ -95,7 +95,7 @@ ns types {
       variants: View[{
         name: string,
         tag: IntValue,
-        payload: { typeId: u64, offset: uword }?
+        payload: ?{ typeId: u64, offset: uword }
       }],
     }),
     Variant({
@@ -199,10 +199,10 @@ ability Try[impl T, impl E] {
 }
 
 ability Iterator[impl Item] {
-  fn next(self: *mut Self): Item?
-  fn sizeHint(self: *Self): { atLeast: uword, atMost: uword? }
+  fn next(self: *mut Self): ?Item
+  fn sizeHint(self: *Self): { atLeast: uword, atMost: ?uword }
   fn advanceBy(self: *mut Self, n: uword): unit
-  fn nth(self: *mut Self, n: uword): Item?
+  fn nth(self: *mut Self, n: uword): ?Item
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {

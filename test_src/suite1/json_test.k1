@@ -24,6 +24,6 @@ fn test(): unit {
   assert(obj2.asJsArray().!.value.get(1) is .JsNumber("123"));
 
   // TODO: Causes stack overflow due to no indirection
-  // type Node = { value: string, child: Node? }
+  // type Node = { value: string, child: ?Node }
   // let n: Node = { value: "hello", child: None };
 }

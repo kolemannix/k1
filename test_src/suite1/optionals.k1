@@ -1,19 +1,19 @@
 ns optionals;
 
-deftype PointMaybeY = { x: int, y: int? }
+deftype PointMaybeY = { x: int, y: ?int }
 
 fn testBasics(): int {
-  let p: PointMaybeY? = .Some({ x: 1, y: .Some(2) });
+  let p: ?PointMaybeY = .Some({ x: 1, y: .Some(2) });
   assert(p.!.x == 1);
   assert(p.!.y.! == 2);
 
-  let b = .Some(true): bool?;
+  let b = .Some(true): ?bool;
   if b is .Some(x) {
     assert(x);
   };
 
   assertMsg("a", Opt/isSome[bool](b));
-  let c: int? = .None;
+  let c: ?int = .None;
   assertMsg("b", not c.isSome());
 
   assertMsg("c", core/types/typeId[PointMaybeY.y.Some.value]() == core/types/typeId[int]());
@@ -27,7 +27,7 @@ fn testCoalesceAccessor(): unit {
   assert(maybeUser?.name.! == "Koleman");
 }
 
-deftype WeirdPoint = { x: int?, y: int }
+deftype WeirdPoint = { x: ?int, y: int }
 
 fn testComplex(): int {
   let my_point: WeirdPoint = { x: .Some(42), y: 0 };
@@ -37,7 +37,7 @@ fn testComplex(): int {
     assert(false);
   };
 
-  let mut my_arr: List[WeirdPoint?] = [.Some({ x: .Some(42), y: 3}), .None];
+  let mut my_arr: List[?WeirdPoint] = [.Some({ x: .Some(42), y: 3}), .None];
   if my_arr.get(0) is .Some(a) {
     assert(a.y == 3);
   };
@@ -45,8 +45,8 @@ fn testComplex(): int {
   0
 }
 
-fn noNum(): int? { .None }
-fn someNum(): int? { .Some(100) }
+fn noNum(): ?int { .None }
+fn someNum(): ?int { .Some(100) }
 
 fn optElseOperator(): unit {
   let result = noNum() ? 42;

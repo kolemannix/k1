@@ -17,7 +17,7 @@ I don't think its a struct, I think its more like Scala's implicits, and the
 other context, the one we use for allocations, is bound to a Thread, _not_ implicitly
 passed around on the stack.
 
-fn parse_expr(ctx: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): Ast? {
+fn parse_expr(ctx: Context, caller_loc: Loc)(tokens: Array<Token>, index: int): ?Ast {
   switch tokens.first() {
     None -> None,
     Some(t) -> {
