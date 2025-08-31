@@ -1,6 +1,7 @@
 use core/meta
 use core/StringBuilder
 
+// nocommit: need to get metaprintf committed into core or std
 fn sprintf[Args](fmtString: static string, args: Args): string {
   let* mut result: *mut List[char] = List/empty();
   #meta(fmtString) {

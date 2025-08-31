@@ -2123,9 +2123,10 @@ pub struct FunctionAbilityImplContextInfo {
     pub self_type_id: TypeId,
     pub impl_kind: AbilityImplKind,
     pub blanket_parent_function: Option<FunctionId>,
+    pub is_default: bool,
 }
 
-// Passed to eval_function_declaration to inform
+// Passed to compile_function_declaration to inform
 // behavior
 pub struct FunctionAbilityContextInfo {
     ability_id: AbilityId,
@@ -2142,6 +2143,7 @@ impl FunctionAbilityContextInfo {
         self_type_id: TypeId,
         impl_kind: AbilityImplKind,
         blanket_parent_function: Option<FunctionId>,
+        is_default: bool,
     ) -> Self {
         FunctionAbilityContextInfo {
             ability_id,
@@ -2149,6 +2151,7 @@ impl FunctionAbilityContextInfo {
                 self_type_id,
                 impl_kind,
                 blanket_parent_function,
+                is_default,
             }),
         }
     }
@@ -4992,7 +4995,7 @@ impl TypedProgram {
         Ok(*condition_bool)
     }
 
-    fn eval_global_declaration_phase(
+    fn declare_global(
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
@@ -5722,7 +5725,7 @@ impl TypedProgram {
                     let blanket_fn = self.get_function(blanket_impl_function_id);
                     let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
                     let specialized_function_id = self
-                        .eval_function_declaration(
+                        .compile_function_declaration(
                             parsed_fn,
                             new_impl_scope,
                             Some(FunctionAbilityContextInfo::ability_impl(
@@ -5730,6 +5733,7 @@ impl TypedProgram {
                                 self_type_id,
                                 kind,
                                 Some(blanket_impl_function_id),
+                                false,
                             )),
                             ROOT_NAMESPACE_ID,
                         )?
@@ -11407,7 +11411,7 @@ impl TypedProgram {
         let has_body = self
             .ast
             .get_function(generic_function.parsed_id.as_function_id().unwrap())
-            .block
+            .body
             .is_some();
         let specialized_function = TypedFunction {
             name: specialized_name_ident,
@@ -11475,7 +11479,7 @@ impl TypedProgram {
         let parsed_body = *self
             .ast
             .get_function(parent_function.parsed_id.as_function_id().unwrap())
-            .block
+            .body
             .as_ref()
             .unwrap();
         let typed_body = self.eval_expr(
@@ -12313,7 +12317,7 @@ impl TypedProgram {
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = EcoVec::with_capacity(parsed_ability.functions.len());
         for (index, parsed_fn) in parsed_ability.functions.clone().iter().enumerate() {
-            let result = self.eval_function_declaration(
+            let result = self.compile_function_declaration(
                 *parsed_fn,
                 specialized_ability_scope,
                 Some(FunctionAbilityContextInfo::ability_id_only(specialized_ability_id)),
@@ -12399,7 +12403,7 @@ impl TypedProgram {
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
-    fn eval_function_declaration(
+    fn compile_function_declaration(
         &mut self,
         parsed_function_id: ParsedFunctionId,
         parent_scope_id: ScopeId,
@@ -12439,10 +12443,14 @@ impl TypedProgram {
         let ability_kind = ability_id.map(|id| &self_.abilities.get(id).kind);
         let impl_self_type = impl_info.map(|impl_info| impl_info.self_type_id);
         let ability_kind_is_specialized = ability_kind.is_some_and(|kind| kind.is_specialized());
+
+        // In all of these scenarios, we've seen the function before, so we shouldn't do the AST
+        // mapping; there's a more appropriate 'original' that already has it
         let skip_ast_mapping = ability_kind_is_specialized
             || ability_info.as_ref().is_some_and(|info| {
                 info.impl_info.as_ref().is_some_and(|impl_info| {
-                    impl_info.impl_kind.is_derived_from_blanket()
+                    impl_info.is_default
+                        || impl_info.impl_kind.is_derived_from_blanket()
                         || impl_info.impl_kind.is_variable_constraint()
                 })
             });
@@ -12838,7 +12846,7 @@ impl TypedProgram {
         let is_abstract = is_intrinsic || is_extern || is_ability_defn;
         let is_generic = function.is_generic();
 
-        let body_block = match parsed_function.block.as_ref() {
+        let body_block = match parsed_function.body.as_ref() {
             None if is_abstract => None,
             None => return failf!(function_signature_span, "function is missing implementation"),
             Some(_) if is_abstract => {
@@ -12887,7 +12895,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn eval_ability(
+    fn compile_ability_definition(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
@@ -13025,14 +13033,14 @@ impl TypedProgram {
         let mut typed_functions: EcoVec<TypedAbilityFunctionRef> =
             EcoVec::with_capacity(parsed_ability.functions.len());
         for (index, parsed_function_id) in parsed_ability.functions.iter().enumerate() {
-            let Some(function_id) = self.eval_function_declaration(
+            let Some(function_id) = self.compile_function_declaration(
                 *parsed_function_id,
                 ability_scope_id,
                 Some(FunctionAbilityContextInfo::ability_id_only(ability_id)),
                 namespace_id,
             )?
             else {
-                // Note: eval_function_declaration only returns None when conditional
+                // Note: compile_function_declaration only returns None when conditional
                 // compilation disables it, but I don't think we should allow conditionally
                 // including or excluding ability functions? Or maybe its fine, an ability could
                 // have an extra function on Windows only for example? Still, maybe you'd rather push
@@ -13085,14 +13093,15 @@ impl TypedProgram {
                         self.ident_str(ability_name.name),
                         self.ast.get_span_content(ability_name.span)
                     );
-                    let ability_id = self.eval_ability(pending_ability, ability_scope)?;
+                    let ability_id =
+                        self.compile_ability_definition(pending_ability, ability_scope)?;
                     Ok(ability_id)
                 }
             }
         })
     }
 
-    fn eval_ability_impl_decl(
+    fn declare_ability_impl(
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
@@ -13100,7 +13109,7 @@ impl TypedProgram {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
         let ability_expr = self.ast.p_ability_exprs.get(parsed_ability_impl.ability_expr).clone();
-        let parsed_functions = &parsed_ability_impl.functions;
+        let parsed_impl_functions = &parsed_ability_impl.functions;
 
         let impl_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, None, None);
@@ -13266,41 +13275,55 @@ impl TypedProgram {
             AbilityImplKind::Blanket { base_ability: base_ability_id, parsed_id }
         };
 
-        let mut typed_functions = EcoVec::with_capacity(ability.functions.len());
-        for ability_function_ref in &ability.functions {
-            let Some((parsed_impl_function_id, impl_function_span)) =
-                parsed_functions.iter().find_map(|&fn_id| {
-                    let the_fn = self.ast.get_function(fn_id);
-                    if the_fn.name == ability_function_ref.function_name {
-                        Some((fn_id, the_fn.span))
-                    } else {
-                        None
-                    }
-                })
+        // Report extra functions first
+        for &parsed_fn in parsed_impl_functions {
+            let parsed_fn_name = self.ast.get_function(parsed_fn).name;
+            let Some(_ability_function_ref) =
+                ability.functions.iter().find(|f| f.function_name == parsed_fn_name)
             else {
                 return failf!(
                     span,
-                    "Missing implementation for function '{}' in ability '{}'",
-                    self.ident_str(ability_function_ref.function_name).blue(),
-                    self.ident_str(ability_name).blue()
+                    "Extra function in ability impl: {}",
+                    self.ident_str(parsed_fn_name)
                 );
             };
-            // Report extra functions too
-            for &parsed_fn in parsed_functions {
-                let parsed_fn_name = self.ast.get_function(parsed_fn).name;
-                let Some(_ability_function_ref) =
-                    ability.functions.iter().find(|f| f.function_name == parsed_fn_name)
-                else {
-                    return failf!(
-                        span,
-                        "Extra function in ability impl: {}",
-                        self.ident_str(parsed_fn_name)
-                    );
-                };
-            }
+        }
+
+        let mut typed_functions = EcoVec::with_capacity(ability.functions.len());
+        for ability_function_ref in &ability.functions {
+            let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
+                let the_fn = self.ast.get_function(fn_id);
+                if the_fn.name == ability_function_ref.function_name {
+                    Some((fn_id, false))
+                } else {
+                    None
+                }
+            });
+            let (parsed_impl_function_id, is_default) = match matching_impl_function {
+                Some(id) => id,
+                None => {
+                    let defn_fn = self.get_function(ability_function_ref.function_id);
+                    let parsed_function =
+                        self.ast.get_function(defn_fn.parsed_id.as_function_id().unwrap());
+
+                    // If the ability declaration itself has a default implementation
+                    // for this function, compile that
+                    match parsed_function.body {
+                        Some(_) => (defn_fn.parsed_id.as_function_id().unwrap(), true),
+                        None => {
+                            return failf!(
+                                span,
+                                "Missing implementation for function '{}' in ability '{}'",
+                                self.ident_str(ability_function_ref.function_name).blue(),
+                                self.ident_str(ability_name).blue()
+                            );
+                        }
+                    }
+                }
+            };
 
             let impl_function_id = self
-                .eval_function_declaration(
+                .compile_function_declaration(
                     parsed_impl_function_id,
                     impl_scope_id,
                     Some(FunctionAbilityContextInfo::ability_impl(
@@ -13308,6 +13331,7 @@ impl TypedProgram {
                         impl_self_type,
                         kind,
                         None,
+                        is_default,
                     )),
                     // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
                     // this isn't doing any harm for now
@@ -13332,7 +13356,7 @@ impl TypedProgram {
             if let Err(msg) =
                 self.check_types(substituted_root_type, specialized_fn_type, spec_fn_scope)
             {
-                eprintln!("{}", self.scope_id_to_string(spec_fn_scope));
+                let impl_function_span = self.ast.get_function(parsed_impl_function_id).span;
                 return failf!(
                     impl_function_span,
                     "Invalid implementation of {} in ability {}: {msg}",
@@ -13368,7 +13392,7 @@ impl TypedProgram {
 
     /// All we have to do is fill in the function bodies; the prior phase has already done all
     /// the work
-    fn eval_ability_impl(
+    fn compile_ability_impl_bodies(
         &mut self,
         parsed_ability_impl_id: ParsedAbilityImplId,
         _scope_id: ScopeId,
@@ -13395,7 +13419,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn eval_definition_body_phase(
+    fn compile_definition_body(
         &mut self,
         def: ParsedId,
         scope_id: ScopeId,
@@ -13408,7 +13432,7 @@ impl TypedProgram {
                 }
             }
             ParsedId::Namespace(namespace) => {
-                self.eval_namespace_body_phase(namespace, skip_defns);
+                self.compile_ns_body(namespace, skip_defns);
             }
             ParsedId::Global(global_id) => {
                 if let Err(e) = self.eval_global_body(global_id, None) {
@@ -13431,7 +13455,7 @@ impl TypedProgram {
                 // Nothing to do in this phase for an ability
             }
             ParsedId::AbilityImpl(ability_impl) => {
-                if let Err(e) = self.eval_ability_impl(ability_impl, scope_id) {
+                if let Err(e) = self.compile_ability_impl_bodies(ability_impl, scope_id) {
                     self.report_error(e);
                 };
             }
@@ -13574,7 +13598,7 @@ impl TypedProgram {
     // This means finding all the type declarations in the namespace and registering their names,
     // as well as ability defns, which are like types, and registering their names
     // then recursing down into child namespaces and doing the same
-    fn eval_namespace_type_decl_phase(
+    fn declare_types_in_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
@@ -13647,7 +13671,7 @@ impl TypedProgram {
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                if let Err(e) = self.eval_namespace_type_decl_phase(namespace_id, skip_defns) {
+                if let Err(e) = self.declare_types_in_namespace(namespace_id, skip_defns) {
                     self.report_error(e);
                 }
             }
@@ -13684,7 +13708,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn eval_namespace_declaration_phase(
+    fn declare_namespace_definitions(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
@@ -13700,17 +13724,15 @@ impl TypedProgram {
             match *defn {
                 ParsedId::Use(_use_id) => {}
                 ParsedId::Namespace(namespace_id) => {
-                    self.eval_namespace_declaration_phase(namespace_id, skip_defns)
+                    self.declare_namespace_definitions(namespace_id, skip_defns)
                 }
                 ParsedId::Global(constant_id) => {
-                    if let Err(e) =
-                        self.eval_global_declaration_phase(constant_id, namespace_scope_id)
-                    {
+                    if let Err(e) = self.declare_global(constant_id, namespace_scope_id) {
                         self.report_error(e);
                     }
                 }
                 ParsedId::Function(parsed_function_id) => {
-                    if let Err(e) = self.eval_function_declaration(
+                    if let Err(e) = self.compile_function_declaration(
                         parsed_function_id,
                         namespace_scope_id,
                         None,
@@ -13723,12 +13745,14 @@ impl TypedProgram {
                     // Handled by prior phase
                 }
                 ParsedId::Ability(parsed_ability_id) => {
-                    if let Err(e) = self.eval_ability(parsed_ability_id, namespace_scope_id) {
+                    if let Err(e) =
+                        self.compile_ability_definition(parsed_ability_id, namespace_scope_id)
+                    {
                         self.report_error(e)
                     };
                 }
                 ParsedId::AbilityImpl(ability_impl) => {
-                    if let Err(e) = self.eval_ability_impl_decl(ability_impl, namespace_scope_id) {
+                    if let Err(e) = self.declare_ability_impl(ability_impl, namespace_scope_id) {
                         self.report_error(e)
                     }
                 }
@@ -13746,11 +13770,7 @@ impl TypedProgram {
         }
     }
 
-    fn eval_namespace_body_phase(
-        &mut self,
-        ast_namespace_id: ParsedNamespaceId,
-        skip_defns: &[ParsedId],
-    ) {
+    fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
         let ast_namespace = self.ast.namespaces.get(ast_namespace_id).clone();
         let namespace_id = *self.namespace_ast_mappings.get(&ast_namespace.id).unwrap();
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
@@ -13758,7 +13778,7 @@ impl TypedProgram {
             if skip_defns.contains(defn) {
                 continue;
             }
-            self.eval_definition_body_phase(*defn, ns_scope_id, skip_defns);
+            self.compile_definition_body(*defn, ns_scope_id, skip_defns);
         }
     }
 
@@ -14074,7 +14094,7 @@ impl TypedProgram {
         // Pending Type declaration phase
         eprintln!(">> Phase 2 declare types");
         let type_defn_result =
-            self.eval_namespace_type_decl_phase(module_root_parsed_namespace, skip_defns);
+            self.declare_types_in_namespace(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_defn_result {
             self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
@@ -14120,7 +14140,7 @@ impl TypedProgram {
 
         // Everything else declaration phase
         eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
-        self.eval_namespace_declaration_phase(module_root_parsed_namespace, skip_defns);
+        self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             eprintln!(
                 "{} failed declaration phase with {} errors, but I will soldier on.",
@@ -14136,7 +14156,7 @@ impl TypedProgram {
         );
 
         eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
-        self.eval_namespace_body_phase(module_root_parsed_namespace, skip_defns);
+        self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
         let unresolved_uses: Vec<_> =
             self.use_statuses.iter().filter(|use_status| !use_status.1.is_resolved()).collect();

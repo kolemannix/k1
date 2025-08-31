@@ -1103,7 +1103,7 @@ pub struct ParsedFunction {
     pub params: EcoVec<FnArgDef>,
     pub context_params: EcoVec<FnArgDef>,
     pub ret_type: ParsedTypeExprId,
-    pub block: Option<ParsedExprId>,
+    pub body: Option<ParsedExprId>,
     pub signature_span: SpanId,
     pub span: SpanId,
     pub linkage: Linkage,
@@ -4011,7 +4011,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 .filter(|a| a.modifiers.is_context())
                 .collect(),
             ret_type,
-            block,
+            body: block,
             signature_span,
             span,
             linkage,

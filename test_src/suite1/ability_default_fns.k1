@@ -1,0 +1,57 @@
+ns ability_default_fns;
+
+let* mut I32_SPEC_COUNTER: *mut uword = 0;
+
+ability Increment {
+  fn inc(self: Self): Self
+  fn incTwice(self: Self): Self {
+    // Testing scope bindings
+    let me: Self = self;
+    let again: Self = me;
+    again.inc().inc()
+  }
+}
+impl Increment for i32 {
+  fn inc(self: Self): Self { self + 1 }
+  fn incTwice(self: Self): i32 {
+    I32_SPEC_COUNTER <- I32_SPEC_COUNTER.* + 1;
+    // Testing scope bindings
+    let me: Self = self;
+    let again: i32 = me;
+    again + 2
+  }
+}
+
+impl Increment for u32 {
+  fn inc(self: Self): Self { self + 1 }
+}
+
+ability IncrFour {
+  fn incFour(self: Self): Self
+  fn incEight(self: Self): Self {
+    self.incFour().incFour()
+  }
+}
+impl[T: Increment] IncrFour for T {
+  fn incFour(self: Self): Self {
+    self.incTwice().inc().inc()
+  }
+}
+
+
+fn test(): unit {
+  let i: i32 = 554;
+  assertEquals(i.inc(), 555);
+  assertEquals(i.incTwice(), 556);
+  assertEquals(i.incTwice().incTwice(), 558);
+  assertEquals(i.incFour(), 558);
+  assertEquals(i.incEight(), 562);
+
+  let u: u32 = 0;
+  assertEquals(u.incTwice(), 2);
+
+  // Ensures that our specialized implementation is used over the default
+  assertEquals(I32_SPEC_COUNTER.*, 6);
+  
+  ()
+}
