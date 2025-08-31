@@ -56,7 +56,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Make statics ZSTs instead of sharing a repr with their inner type
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [ ] More explicit companion ns via injecting `for` keyword `ns (for) type {`
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
 - [ ] Consider a rename of 'uword/iword'. What about `word` and `iword`.
 - [ ] implement iterator for Array
@@ -64,9 +63,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)?
-- [ ] First-class data-oriented design features for struct/enum setups
+  - [ ] First-class data-oriented design features for struct/enum setups?
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
-      'shared' chunks vs union chunk
+      'shared' chunks vs union chunk, AoS or AoSoA by default...
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
@@ -146,10 +145,10 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: Array types
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
 
-## Project: Ability default implementations
-
 ## Project: Defer
 - [ ] Defer
+
+## Project: 'Write' ability and intrinsic fix
 
 ## Project: Operator overloading
 - [ ] Operator 'overloading' story. I think the story is just abilities.
