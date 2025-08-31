@@ -185,7 +185,7 @@ ns Buffer {
     self.len > 0
   }
 
-  fn firstRef[T](self: Buffer[T]): (*mut T)? {
+  fn firstRef[T](self: Buffer[T]): ?(*mut T) {
     if not self.isEmpty() {
       .Some(self.getRef(0))
     } else {
@@ -193,14 +193,14 @@ ns Buffer {
     }
   }
 
-  fn first[T](self: Buffer[T]): T? {
+  fn first[T](self: Buffer[T]): ?T {
     switch self.firstRef() {
       .None -> .None,
       .Some(firstRef) -> .Some(firstRef.*)
     }
   }
 
-  fn lastRef[T](self: Buffer[T]): (*mut T)? {
+  fn lastRef[T](self: Buffer[T]): ?(*mut T) {
     if not self.isEmpty() {
       .Some(self.getRef(self.len - 1))
     } else {
@@ -208,7 +208,7 @@ ns Buffer {
     }
   }
 
-  fn last[T](self: Buffer[T]): T? {
+  fn last[T](self: Buffer[T]): ?T {
     switch self.lastRef() {
       .None -> .None,
       .Some(lastRef) -> .Some(lastRef.*)
@@ -266,21 +266,21 @@ ns BufferIterator {
 }
 
 impl[T] Iterator[Item = T] for BufferIterator[T] {
-  fn next(self: *mut BufferIterator[T]): Item? { 
+  fn next(self: *mut BufferIterator[T]): ?Item { 
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
       self.pos* <- self.pos + 1;
       some(item)
     } else .None
   }
-  fn sizeHint(self: *Self): { atLeast: uword, atMost: uword? } { 
+  fn sizeHint(self: *Self): { atLeast: uword, atMost: ?uword } { 
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
   fn advanceBy(self: *mut Self, n: uword): unit {
     self.pos* <- self.pos + n
   }
-  fn nth(self: *mut Self, n: uword): Item? {
+  fn nth(self: *mut Self, n: uword): ?Item {
     self.advanceBy(n);
     self.next()
   }

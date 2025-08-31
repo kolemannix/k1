@@ -41,7 +41,7 @@ fn test(): unit {
   assertEquals(point.y, 0);
   assertEquals(point.z, 0);
 
-  let o: typeOf(point)? = zeroed();
+  let o: ?typeOf(point) = zeroed();
   assertEquals(o.tag, 0);
 
 

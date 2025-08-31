@@ -57,11 +57,11 @@ ns string {
   fn isEmpty(self: string): bool { self.len() == 0 }
   fn nonEmpty(self: string): bool { self.len() != 0 }
 
-  fn first(self: string): char? {
+  fn first(self: string): ?char {
     if self.nonEmpty() .Some(self.get(0)) else .None
   }
 
-  fn last(self: string): char? {
+  fn last(self: string): ?char {
     if self.nonEmpty() .Some(self.get(self.len() - 1)) else .None
   }
 
@@ -113,7 +113,7 @@ ns string {
     }
   }
 
-  fn indexOfString(self: string, target: string): uword? {
+  fn indexOfString(self: string, target: string): ?uword {
     let mut i: uword = 0;
     while i < self.len() {
       if i + target.len() >= self.len() {
@@ -162,7 +162,7 @@ ns string {
     wrapList(chars)
   }
 
-  fn toInt(self: string): int? {
+  fn toInt(self: string): ?int {
     if self.isEmpty() { return(.None) };
 
     let neg = self.get(0) == '-';

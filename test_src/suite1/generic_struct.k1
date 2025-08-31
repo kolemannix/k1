@@ -1,9 +1,9 @@
 ns generic_struct;
 
 deftype Box[T] = { value: T }
-deftype AuPair[T, U] = { t: T?, u: U? }
+deftype AuPair[T, U] = { t: ?T, u: ?U }
 ns AuPair {
-  fn t[T, U](self: AuPair[T, U]): T? {
+  fn t[T, U](self: AuPair[T, U]): ?T {
     self.t
   }
 }
@@ -19,7 +19,7 @@ fn test(): unit {
   b.value;
   let c: Box[bool] = { value: true };
   let c2: Box[bool] = { value: false };
-  let c3: Box[bool?] = { value: .Some(false) };
+  let c3: Box[?bool] = { value: .Some(false) };
   let c4: Box[*bool] = { value: core/mem/new(false) };
   assertEquals(b.value, 0);
   assertEquals(c.value, true);

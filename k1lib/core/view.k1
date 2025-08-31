@@ -61,7 +61,7 @@ ns View {
     self.len() > 0
   }
 
-  fn firstRef[T](self: View[T]): (*T)? {
+  fn firstRef[T](self: View[T]): ?*T {
     if not self.isEmpty() {
       .Some(self.getRef(0))
     } else {
@@ -69,14 +69,14 @@ ns View {
     }
   }
 
-  fn first[T](self: View[T]): T? {
+  fn first[T](self: View[T]): ?T {
     switch self.firstRef() {
       .None -> .None,
       .Some(firstRef) -> .Some(firstRef.*)
     }
   }
 
-  fn lastRef[T](self: View[T]): (*T)? {
+  fn lastRef[T](self: View[T]): ?*T {
     if not self.isEmpty() {
       .Some(self.getRef(self.len() - 1))
     } else {
@@ -84,7 +84,7 @@ ns View {
     }
   }
 
-  fn last[T](self: View[T]): T? {
+  fn last[T](self: View[T]): ?T {
     switch self.lastRef() {
       .None -> .None,
       .Some(lastRef) -> .Some(lastRef.*)

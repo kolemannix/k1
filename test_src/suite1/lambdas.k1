@@ -47,7 +47,7 @@ fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
   f(i) + g(i)
 }
 
-fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> T?): T? {
+fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> ?T): ?T {
   t | f | g
 }
 

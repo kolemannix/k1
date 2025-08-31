@@ -54,7 +54,7 @@ fn complexReferences(): unit {
   // <any ptr> <- <expr>
 
   let* mut innerStructRef = { x: 42 };
-  let structOptRef: (*mut { x: int })? = .Some(innerStructRef);
+  let structOptRef: ?*mut { x: int } = .Some(innerStructRef);
 
   if structOptRef is .Some(x) {
     assert(x.x == 42);

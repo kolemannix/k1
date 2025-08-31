@@ -489,6 +489,7 @@ pub struct Codegen<'ctx, 'k1> {
     builder: Builder<'ctx>,
     pub llvm_functions: FxHashMap<FunctionId, CodegenedFunction<'ctx>>,
     pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
+    functions_pending_body_compilation: Vec<FunctionId>,
     llvm_types: RefCell<FxHashMap<TypeId, K1LlvmType<'ctx>>>,
     variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
@@ -727,6 +728,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             loops: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
             llvm_function_to_k1: FxHashMap::new(),
+            functions_pending_body_compilation: Vec::new(),
             llvm_types: RefCell::new(FxHashMap::new()),
             builtin_types,
             strings: FxHashMap::new(),
@@ -2465,7 +2467,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Lambda(lambda_expr) => {
                 debug!("codegen lambda {:?}", lambda_expr);
                 let lambda_type = self.k1.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
-                let llvm_fn = self.codegen_function_or_get(lambda_type.body_function_id)?;
+                let llvm_fn = self.codegen_function_signature(lambda_type.body_function_id)?;
                 let environment_struct_value = self
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
@@ -2476,14 +2478,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::FunctionPointer(function_pointer_expr) => {
                 let function_value =
-                    self.codegen_function_or_get(function_pointer_expr.function_id)?;
+                    self.codegen_function_signature(function_pointer_expr.function_id)?;
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
                 self.set_debug_location_from_span(function_pointer_expr.span);
                 Ok(function_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
-                let function_value = self.codegen_function_or_get(fn_to_lam_obj.function_id)?;
+                let function_value = self.codegen_function_signature(fn_to_lam_obj.function_id)?;
                 self.set_debug_location_from_span(fn_to_lam_obj.span);
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
@@ -3057,7 +3059,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.k1.ice_with_span("Cannot codegen a call to an abstract function", call.span)
             }
             Callee::StaticFunction(function_id) => {
-                let function_value = self.codegen_function_or_get(*function_id)?;
+                let function_value = self.codegen_function_signature(*function_id)?;
 
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
@@ -3069,7 +3071,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // before calling
                 args.insert(env_arg_index, lambda_env_struct.expect_basic_value().into());
 
-                let function_value = self.codegen_function_or_get(*function_id)?;
+                let function_value = self.codegen_function_signature(*function_id)?;
 
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, args.make_contiguous(), "").unwrap()
@@ -3713,53 +3715,41 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok((di_subprogram, *function_file))
     }
 
-    fn codegen_function_or_get(
+    fn codegen_function_signature(
         &mut self,
         function_id: FunctionId,
     ) -> CodegenResult<FunctionValue<'ctx>> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        debug!("codegen function\n{}", self.k1.function_id_to_string(function_id, false));
-        let previous_debug_location = self.get_debug_location();
+        debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
 
-        let function = self.k1.get_function(function_id);
-        let function_type_id = function.type_id;
-        let function_type = self.k1.types.get(function.type_id).as_function().unwrap();
-
-        let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
-        let function_line_number = self
-            .k1
-            .ast
-            .get_lines_for_span_id(function_span)
-            .expect("line for function span")
-            .0
-            .line_number();
-
-        let maybe_starting_block = self.builder.get_insert_block();
+        let typed_function = self.k1.get_function(function_id);
+        let function_type_id = typed_function.type_id;
+        let function_type = self.k1.types.get(typed_function.type_id).as_function().unwrap();
 
         let mut param_types: Vec<K1LlvmType<'ctx>> =
             Vec::with_capacity(function_type.physical_params.len());
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
             Vec::with_capacity(function_type.physical_params.len());
 
-        let llvm_linkage = match function.linkage {
+        let llvm_linkage = match typed_function.linkage {
             TyperLinkage::Standard => None,
             TyperLinkage::External { .. } => Some(LlvmLinkage::External),
             TyperLinkage::Intrinsic => None,
         };
-        let llvm_name = match function.linkage {
+        let llvm_name = match typed_function.linkage {
             TyperLinkage::External { link_name: Some(link_name), .. } => {
                 self.k1.ident_str(link_name)
             }
-            _ => &self.k1.make_qualified_name(function.scope, function.name, ".", true),
+            _ => &self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
         };
         if self.llvm_module.get_function(llvm_name).is_some() {
             if let Some(LlvmLinkage::External) = llvm_linkage {
                 eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
             } else {
                 return failf!(
-                    self.k1.ast.get_span_for_id(function.parsed_id),
+                    self.k1.ast.get_span_for_id(typed_function.parsed_id),
                     "Dupe function name: {}",
                     llvm_name
                 );
@@ -3791,43 +3781,67 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_function_type.llvm_function_type,
             llvm_linkage,
         );
+        let sret_pointer = if is_sret {
+            Some(function_value.get_first_param().unwrap().into_pointer_value())
+        } else {
+            None
+        };
         if let Some((sret_attribute, align_attribute)) = sret_attribute {
             function_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
             function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
         }
 
-        let function_span = self.k1.ast.get_span_for_id(function.parsed_id);
-        let (di_subprogram, di_file) = self.make_function_debug_info(
-            self.k1.ident_str(function.name),
-            function_span,
-            llvm_function_type.return_type.debug_type(),
-            &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
-        )?;
-
+        let compile_body = !typed_function.linkage.is_external();
+        if compile_body {
+            self.functions_pending_body_compilation.push(function_id);
+        }
         self.llvm_functions.insert(
             function_id,
             CodegenedFunction {
                 function_type: llvm_function_type,
                 function_value,
-                sret_pointer: None,
+                sret_pointer,
                 last_alloca_instr: None,
                 instruction_count: 0,
             },
         );
         self.llvm_function_to_k1.insert(function_value, function_id);
 
-        if function.linkage.is_external() {
-            return Ok(function_value);
-        }
+        Ok(function_value)
+    }
+
+    fn codegen_function_body(&mut self, function_id: FunctionId) -> CodegenResult<()> {
+        debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, true));
+        let maybe_starting_block = self.builder.get_insert_block();
+        let previous_debug_location = self.get_debug_location();
+        let typed_function = self.k1.get_function(function_id);
+        let function_type = self.k1.types.get(typed_function.type_id).as_function().unwrap();
+
+        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
+        let function_line_number = self
+            .k1
+            .ast
+            .get_lines_for_span_id(function_span)
+            .expect("line for function span")
+            .0
+            .line_number();
+
+        let codegened_function = self.llvm_functions.get(&function_id).unwrap();
+        let llvm_function_type = &codegened_function.function_type;
+        let is_sret = llvm_function_type.is_sret;
+        let function_value = codegened_function.function_value;
+
+        let (di_subprogram, di_file) = self.make_function_debug_info(
+            self.k1.ident_str(typed_function.name),
+            function_span,
+            llvm_function_type.return_type.debug_type(),
+            &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
+        )?;
 
         self.debug.push_scope(function_span, di_subprogram.as_debug_info_scope(), di_file);
 
         let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
-        if is_sret {
-            self.llvm_functions.get_mut(&function_id).unwrap().sret_pointer =
-                Some(function_value.get_first_param().unwrap().into_pointer_value())
-        }
         for (i, param) in function_value.get_param_iter().enumerate() {
             let sret_offset = if is_sret { 1 } else { 0 };
             let is_sret_param = i == 0 && is_sret;
@@ -3835,14 +3849,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
-            let variable_id = function.param_variables[i - sret_offset];
+            let variable_id = typed_function.param_variables[i - sret_offset];
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.k1.ast.idents.get("ret").unwrap(),
                     type_id: function_type.return_type,
                     is_context: false,
                     is_lambda_env: false,
-                    span: self.k1.ast.get_span_for_id(function.parsed_id),
+                    span: self.k1.ast.get_span_for_id(typed_function.parsed_id),
                 }
             } else {
                 &function_type.physical_params[i - sret_offset]
@@ -3877,22 +3891,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             );
             debug!(
                 "Inserting variable {i} for function {} id={} {} id={}",
-                self.k1.ident_str(function.name),
+                self.k1.ident_str(typed_function.name),
                 function_id,
                 param_name,
                 variable_id
             );
             self.variable_to_value.insert(variable_id, VariableValue::Direct { value: param });
         }
-        match function.intrinsic_type {
+        match typed_function.intrinsic_type {
             Some(intrinsic_type) => {
-                trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, function);
-                let _terminator_instr =
-                    self.codegen_intrinsic_function_body(intrinsic_type, function_id, function)?;
+                trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, typed_function);
+                let _terminator_instr = self.codegen_intrinsic_function_body(
+                    intrinsic_type,
+                    function_id,
+                    typed_function,
+                )?;
             }
             None => {
-                let function_block = function.body_block.unwrap_or_else(|| {
-                    panic!("Function has no block {}", self.get_ident_name(function.name))
+                let function_block = typed_function.body_block.unwrap_or_else(|| {
+                    panic!("Function has no block {}", self.get_ident_name(typed_function.name))
                 });
                 let TypedExpr::Block(function_block) = self.k1.exprs.get(function_block) else {
                     panic!("Expected block")
@@ -3900,15 +3917,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.codegen_block(function_block)?;
             }
         };
+        // nocommit: No longer needed now that we do bodies on delay?
         if let Some(start_block) = maybe_starting_block {
             self.builder.position_at_end(start_block);
         }
         self.debug.pop_scope();
         function_value.set_subprogram(di_subprogram);
 
+        // nocommit: No longer needed now that we do bodies on delay?
         self.set_debug_location(previous_debug_location);
 
-        Ok(function_value)
+        Ok(())
     }
 
     fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
@@ -4030,7 +4049,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // TODO: Codegen the exported functions as well as the called ones
         // for (id, function) in self.module.function_iter() {
         //     if function.linkage.is_exported() {
-        //         self.codegen_function_or_get(id)?;
+        //         self.codegen_function_signature(id)?;
         //     }
         // }
 
@@ -4039,7 +4058,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             if let TyperLinkage::External { link_name: Some(link_name) } = function.linkage {
                 match self.k1.ident_str(link_name) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
-                        self.codegen_function_or_get(id)?;
+                        self.codegen_function_signature(id)?;
                     }
                     _ => {}
                 };
@@ -4049,7 +4068,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let Some(main_function_id) = self.k1.get_main_function_id() else {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
-        let function_value = self.codegen_function_or_get(main_function_id)?;
+        let function_value = self.codegen_function_signature(main_function_id)?;
+        self.codegen_function_body(main_function_id)?;
+
+        let mut pending_buffer: Vec<FunctionId> =
+            Vec::with_capacity(self.functions_pending_body_compilation.len());
+        while !self.functions_pending_body_compilation.is_empty() {
+            pending_buffer.extend(&self.functions_pending_body_compilation);
+            self.functions_pending_body_compilation.clear();
+
+            for id in &pending_buffer {
+                self.codegen_function_body(*id)?;
+            }
+
+            pending_buffer.clear();
+        }
 
         let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
         self.builder.unset_current_debug_location();

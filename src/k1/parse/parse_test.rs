@@ -325,10 +325,10 @@ fn namespaced_val() -> ParseResult<()> {
 
 #[test]
 fn type_hint() -> ParseResult<()> {
-    let input = "None: u64?";
+    let input = "None: ?u64";
     let (module, _expr, expr_id) = test_single_expr_with_id(input)?;
     let type_hint = module.get_expression_type_hint(expr_id).unwrap();
-    assert_eq!(module.type_expr_to_string(type_hint), "u64?");
+    assert_eq!(module.type_expr_to_string(type_hint), "?u64");
     Ok(())
 }
 

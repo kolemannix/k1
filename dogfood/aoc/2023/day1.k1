@@ -4,7 +4,7 @@ fn day2(): int {
   let lineDigits = for line in lines yield {
     let* digits: List[i64]* = [];
     for c in line do {
-      let thisDigit: i64? = if c.toAsciiDigit() is .Some(d) {
+      let thisDigit: ?i64 = if c.toAsciiDigit() is .Some(d) {
         .Some(d as i64)
       } else {
         let rest = line.substring(itIndex, line.len);

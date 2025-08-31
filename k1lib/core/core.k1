@@ -9,14 +9,14 @@ fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T
 
 ns iter {
 
-  fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): T? {
+  fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): ?T {
     for i in iterable do {
       if pred(i) return(.Some(i))
     };
     .None
   }
 
-  fn position[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): uword? {
+  fn position[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): ?uword {
     for iterable do {
       if it == needle return(.Some(itIndex))
     };
@@ -208,7 +208,7 @@ ns char {
     string/wrapList([self])
   }
 
-  fn toDigitValue(self: char): u8? {
+  fn toDigitValue(self: char): ?u8 {
     let i_code = self as u8;
     if i_code >= 48 and i_code <= 57 {
       .Some(i_code - 48)
