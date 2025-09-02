@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::AVec;
+use crate::kmem::{AHandle, MSlice, MVec, Mem};
 use crate::{DepEq, DepHash, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -61,15 +61,12 @@ use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings
 mod layout_test;
 
 nz_u32_id!(FunctionId);
-
 nz_u32_id!(VariableId);
 
 nz_u32_id!(NamespaceId);
-
 pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
 
 nz_u32_id!(AbilityId);
-
 nz_u32_id!(AbilityImplId);
 
 nz_u32_id!(TypedGlobalId);
@@ -536,40 +533,40 @@ impl TypedAbility {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedEnumPattern {
     pub enum_type_id: TypeId,
     pub variant_tag_name: Ident,
     pub variant_index: u32,
-    pub payload: Option<Box<TypedPattern>>,
+    pub payload: Option<TypedPatternId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedStructPatternField {
     pub name: Ident,
-    pub pattern: TypedPattern,
+    pub pattern: TypedPatternId,
     pub field_index: u32,
     pub field_type_id: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedStructPattern {
     pub struct_type_id: TypeId,
-    pub fields: Vec<TypedStructPatternField>,
+    pub fields: MSlice<TypedStructPatternField>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct VariablePattern {
     pub name: Ident,
     pub type_id: TypeId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedReferencePattern {
-    pub inner_pattern: Box<TypedPattern>,
+    pub inner_pattern: TypedPatternId,
     pub span: SpanId,
 }
 
@@ -579,7 +576,100 @@ pub struct TypedReferencePattern {
 // <ident> ::= [a-z]*
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
-#[derive(Debug, Clone)]
+
+type TypedPatternId = AHandle<TypedPattern>;
+
+pub struct TypedPatternPool {
+    mem: Mem,
+}
+
+impl TypedPatternPool {
+    pub fn make() -> TypedPatternPool {
+        Self { mem: Mem::make() }
+    }
+
+    pub fn get(&self, pattern_id: TypedPatternId) -> &TypedPattern {
+        self.mem.get(pattern_id)
+    }
+
+    pub fn get_slice<T>(&self, slice: MSlice<T>) -> &'static [T] {
+        self.mem.get_slice(slice)
+    }
+
+    pub fn add(&mut self, pattern: TypedPattern) -> TypedPatternId {
+        self.mem.push_h(pattern)
+    }
+
+    pub fn add_pattern_slice(&mut self, data: &[TypedPatternId]) -> MSlice<TypedPatternId> {
+        self.mem.push_slice(data)
+    }
+
+    pub fn get_pattern_bindings(
+        &self,
+        pattern_id: TypedPatternId,
+    ) -> SmallVec<[VariablePattern; 8]> {
+        let mut v = smallvec![];
+        self.get_pattern_bindings_rec(pattern_id, &mut v);
+        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
+        v.sort_by_key(|vp| vp.name);
+        v
+    }
+    fn get_pattern_bindings_rec(
+        &self,
+        pattern_id: AHandle<TypedPattern>,
+        bindings: &mut SmallVec<[VariablePattern; 8]>,
+    ) {
+        match self.mem.get(pattern_id) {
+            TypedPattern::LiteralUnit(_) => (),
+            TypedPattern::LiteralChar(_, _) => (),
+            TypedPattern::LiteralInteger(_, _) => (),
+            TypedPattern::LiteralFloat(_, _) => (),
+            TypedPattern::LiteralBool(_, _) => (),
+            TypedPattern::LiteralString(_, _) => (),
+            TypedPattern::Variable(variable_pattern) => bindings.push(*variable_pattern),
+            TypedPattern::Enum(enum_pattern) => {
+                if let Some(payload_pattern_id) = enum_pattern.payload.as_ref() {
+                    self.get_pattern_bindings_rec(*payload_pattern_id, bindings)
+                }
+            }
+            TypedPattern::Struct(struct_pattern) => {
+                for field_pattern in self.mem.get_slice(struct_pattern.fields).iter() {
+                    self.get_pattern_bindings_rec(field_pattern.pattern, bindings)
+                }
+            }
+            TypedPattern::Wildcard(_) => (),
+            TypedPattern::Reference(refer) => {
+                self.get_pattern_bindings_rec(refer.inner_pattern, bindings)
+            }
+        }
+    }
+    pub fn pattern_has_innumerable_literal(&self, pattern_id: TypedPatternId) -> bool {
+        match self.mem.get(pattern_id) {
+            TypedPattern::LiteralChar(_, _span) => true,
+            TypedPattern::LiteralInteger(_, _span) => true,
+            TypedPattern::LiteralFloat(_, _span) => true,
+            TypedPattern::LiteralString(_, _span) => true,
+            TypedPattern::LiteralUnit(_span_id) => false,
+            TypedPattern::LiteralBool(_, _span_id) => false,
+            TypedPattern::Variable(_variable_pattern) => false,
+            TypedPattern::Enum(typed_enum_pattern) => typed_enum_pattern
+                .payload
+                .as_ref()
+                .is_some_and(|p| self.pattern_has_innumerable_literal(*p)),
+            TypedPattern::Struct(typed_struct_pattern) => {
+                self.mem.get_slice(typed_struct_pattern.fields).iter().any(|field_pattern| {
+                    self.pattern_has_innumerable_literal(field_pattern.pattern)
+                })
+            }
+            TypedPattern::Wildcard(_span_id) => false,
+            TypedPattern::Reference(refer) => {
+                self.pattern_has_innumerable_literal(refer.inner_pattern)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum TypedPattern {
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
@@ -595,56 +685,6 @@ pub enum TypedPattern {
 }
 
 impl TypedPattern {
-    pub fn all_bindings(&self) -> SmallVec<[VariablePattern; 8]> {
-        let mut v = smallvec![];
-        self.all_bindings_rec(&mut v);
-        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
-        v.sort_by_key(|vp| vp.name);
-        v
-    }
-    fn all_bindings_rec(&self, bindings: &mut SmallVec<[VariablePattern; 8]>) {
-        match self {
-            TypedPattern::LiteralUnit(_) => (),
-            TypedPattern::LiteralChar(_, _) => (),
-            TypedPattern::LiteralInteger(_, _) => (),
-            TypedPattern::LiteralFloat(_, _) => (),
-            TypedPattern::LiteralBool(_, _) => (),
-            TypedPattern::LiteralString(_, _) => (),
-            TypedPattern::Variable(variable_pattern) => bindings.push(variable_pattern.clone()),
-            TypedPattern::Enum(enum_pattern) => {
-                if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
-                    payload_pattern.all_bindings_rec(bindings)
-                }
-            }
-            TypedPattern::Struct(struct_pattern) => {
-                for field_pattern in struct_pattern.fields.iter() {
-                    field_pattern.pattern.all_bindings_rec(bindings)
-                }
-            }
-            TypedPattern::Wildcard(_) => (),
-            TypedPattern::Reference(refer) => refer.inner_pattern.all_bindings_rec(bindings),
-        }
-    }
-    pub fn has_innumerable_literal(&self) -> bool {
-        match self {
-            TypedPattern::LiteralChar(_, _span) => true,
-            TypedPattern::LiteralInteger(_, _span) => true,
-            TypedPattern::LiteralFloat(_, _span) => true,
-            TypedPattern::LiteralString(_, _span) => true,
-            TypedPattern::LiteralUnit(_span_id) => false,
-            TypedPattern::LiteralBool(_, _span_id) => false,
-            TypedPattern::Variable(_variable_pattern) => false,
-            TypedPattern::Enum(typed_enum_pattern) => {
-                typed_enum_pattern.payload.as_ref().is_some_and(|p| p.has_innumerable_literal())
-            }
-            TypedPattern::Struct(typed_struct_pattern) => typed_struct_pattern
-                .fields
-                .iter()
-                .any(|field_pattern| field_pattern.pattern.has_innumerable_literal()),
-            TypedPattern::Wildcard(_span_id) => false,
-            TypedPattern::Reference(refer) => refer.inner_pattern.has_innumerable_literal(),
-        }
-    }
     pub fn span_id(&self) -> SpanId {
         match self {
             TypedPattern::LiteralUnit(span) => *span,
@@ -1222,7 +1262,7 @@ pub struct TypedEnumIsVariantExpr {
 }
 impl_copy_if_small!(16, TypedEnumIsVariantExpr);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedMatchArm {
     pub condition: MatchingCondition,
     pub consequent_expr: TypedExprId,
@@ -1397,15 +1437,14 @@ pub struct PendingCaptureExpr {
     pub span: SpanId,
 }
 
-// TOOD(perf): Intern 'patterns'
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MatchingCondition {
     /// Multiple patterns does _not_ mean the user provided multiple patterns in a switch,
     /// that case currently gets compiled to N arms, where N is the number of alternate patterns
     /// Though that's something I could now consider changing, the trick would be to generate
     /// a single set of variables for all the bindings that each point to the unique variables from each
     /// pattern. We already check for exact number and name, so this is possible
-    pub patterns: SmallVec<[TypedPattern; 1]>,
+    pub patterns: MSlice<TypedPatternId>,
     pub instrs: EcoVec<MatchingConditionInstr>,
     #[allow(unused)]
     pub binding_eligible: bool,
@@ -1419,7 +1458,7 @@ pub enum MatchingConditionInstr {
 }
 impl_copy_if_small!(8, MatchingConditionInstr);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WhileLoop {
     pub condition_block: MatchingCondition,
     pub body: TypedExprId,
@@ -1435,7 +1474,7 @@ pub struct LoopExpr {
 }
 impl_copy_if_small!(12, LoopExpr);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
     pub initial_let_statements: EcoVec<TypedStmtId>,
@@ -1444,19 +1483,12 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ToEmit {
-    Parsed(ParsedStmtId),
-    /// Expression evaluating to a string, to be parsed, if executed at compile-time
-    String(TypedExprId),
-    Variable {
-        typed_let_stmt: TypedStmtId,
-    },
-}
+// nocommit switch to CallId too after patterns
+nz_u32_id!(CallId);
 
 // TODO(perf): TypedExpr is very big
 static_assert_size!(TypedExpr, 104);
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
     Char(u8, SpanId),
@@ -1665,7 +1697,7 @@ pub struct AssignmentStmt {
 }
 impl_copy_if_small!(16, AssignmentStmt);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedRequireStmt {
     pub condition: Box<MatchingCondition>,
     pub else_body: TypedExprId,
@@ -1673,7 +1705,7 @@ pub struct TypedRequireStmt {
 }
 
 static_assert_size!(TypedStmt, 24);
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TypedStmt {
     Expr(TypedExprId, TypeId),
     Let(LetStmt),
@@ -2283,6 +2315,7 @@ pub struct TypedProgram {
     pub types: TypePool,
     pub globals: VPool<TypedGlobal, TypedGlobalId>,
     pub exprs: VPool<TypedExpr, TypedExprId>,
+    pub calls: VPool<Call, CallId>,
     pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
@@ -2322,6 +2355,8 @@ pub struct TypedProgram {
 
     pub named_types: VPool<NameAndType, NameAndTypeId>,
     pub existential_type_params: VPool<ExistentialTypeParam, ExistentialTypeParamId>,
+
+    pub patterns: TypedPatternPool,
     pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
 
     // Can execute code statically; primary VM; gets 'rented out'
@@ -2334,9 +2369,9 @@ pub struct TypedProgram {
     pub alt_vms: Vec<vm::Vm>,
 
     /// Perm arena space
-    pub a: kmem::A,
+    pub a: kmem::Mem,
     /// tmp arena space
-    pub tmp: kmem::A,
+    pub tmp: kmem::Mem,
 
     pub timing: Timing,
 }
@@ -2434,6 +2469,7 @@ impl TypedProgram {
             types,
             globals: VPool::make_with_hint("typed_globals", 4096),
             exprs: VPool::make_with_hint("typed_exprs", 65536),
+            calls: VPool::make_with_hint("typed_calls", 32768),
             stmts: VPool::make_with_hint("typed_stmts", 8192 << 1),
             static_values: StaticValuePool::with_capacity(8192),
             type_schemas: FxHashMap::new(),
@@ -2467,6 +2503,7 @@ impl TypedProgram {
             },
             named_types: VPool::make_with_hint("named_types", 32768),
             existential_type_params: VPool::make_with_hint("function_type_params", 8192),
+            patterns: TypedPatternPool::make(),
             pattern_ctors,
             vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vms: vec![
@@ -2475,8 +2512,8 @@ impl TypedProgram {
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
 
-            a: kmem::A::make(),
-            tmp: kmem::A::make(),
+            a: kmem::Mem::make(),
+            tmp: kmem::Mem::make(),
 
             timing: Timing { clock, total_infers: 0, total_infer_nanos: 0, total_vm_nanos: 0 },
         }
@@ -4162,27 +4199,27 @@ impl TypedProgram {
     }
 
     fn eval_pattern(
-        &self,
+        &mut self,
         pat_expr: ParsedPatternId,
         target_type_id: TypeId,
         scope_id: ScopeId,
         allow_bindings: bool,
-    ) -> TyperResult<TypedPattern> {
+    ) -> TyperResult<TypedPatternId> {
         let parsed_pattern_expr = self.ast.patterns.get_pattern(pat_expr);
         match parsed_pattern_expr {
-            ParsedPattern::Wildcard(span) => Ok(TypedPattern::Wildcard(*span)),
+            ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    ParsedLiteral::Unit(span) => match self.types.get(target_type_id) {
-                        Type::Unit => Ok(TypedPattern::LiteralUnit(*span)),
+                    ParsedLiteral::Unit(span) => match target_type_id {
+                        UNIT_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralUnit(*span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type unit will never match {}",
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
-                        Type::Char => Ok(TypedPattern::LiteralChar(*c, *span)),
+                    ParsedLiteral::Char(c, span) => match target_type_id {
+                        CHAR_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type char will never match {}",
@@ -4197,9 +4234,9 @@ impl TypedProgram {
                                 .with_expected_type(Some(target_type_id)),
                         )? {
                             TypedExpr::Integer(value) => match self.types.get(target_type_id) {
-                                Type::Integer(_integer_type) => {
-                                    Ok(TypedPattern::LiteralInteger(value.value, num_lit.span))
-                                }
+                                Type::Integer(_integer_type) => Ok(self
+                                    .patterns
+                                    .add(TypedPattern::LiteralInteger(value.value, num_lit.span))),
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
                                     "integer literal pattern will never match {}",
@@ -4207,9 +4244,9 @@ impl TypedProgram {
                                 ),
                             },
                             TypedExpr::Float(value) => match self.types.get(target_type_id) {
-                                Type::Float(_integer_type) => {
-                                    Ok(TypedPattern::LiteralFloat(value.value, num_lit.span))
-                                }
+                                Type::Float(_integer_type) => Ok(self
+                                    .patterns
+                                    .add(TypedPattern::LiteralFloat(value.value, num_lit.span))),
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
                                     "float literal pattern will never match {}",
@@ -4223,8 +4260,8 @@ impl TypedProgram {
                             }
                         }
                     }
-                    ParsedLiteral::Bool(b, span) => match self.types.get(target_type_id) {
-                        Type::Bool => Ok(TypedPattern::LiteralBool(*b, *span)),
+                    ParsedLiteral::Bool(b, span) => match target_type_id {
+                        BOOL_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, *span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "bool literal pattern will never match {}",
@@ -4232,7 +4269,9 @@ impl TypedProgram {
                         ),
                     },
                     ParsedLiteral::String(string_id, span) => match target_type_id {
-                        STRING_TYPE_ID => Ok(TypedPattern::LiteralString(*string_id, *span)),
+                        STRING_TYPE_ID => {
+                            Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
+                        }
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "string literal pattern will never match {}",
@@ -4245,13 +4284,14 @@ impl TypedProgram {
                 if !allow_bindings {
                     return failf!(*span, "Bindings are not allowed here");
                 }
-                Ok(TypedPattern::Variable(VariablePattern {
+                Ok(self.patterns.add(TypedPattern::Variable(VariablePattern {
                     name: *ident_id,
                     type_id: target_type_id,
                     span: *span,
-                }))
+                })))
             }
             ParsedPattern::Enum(enum_pattern) => {
+                let enum_pattern_span = enum_pattern.span;
                 let Some((enum_type, _variant)) = self.types.get_as_enum(target_type_id) else {
                     return failf!(
                         enum_pattern.span,
@@ -4295,6 +4335,8 @@ impl TypedProgram {
                         self.ident_str(enum_pattern.variant_name).blue()
                     );
                 };
+                let matching_variant_index = matching_variant.index;
+                let matching_variant_name = matching_variant.name;
 
                 let payload_pattern = match &enum_pattern.payload_pattern {
                     None => None,
@@ -4312,18 +4354,18 @@ impl TypedProgram {
                             scope_id,
                             allow_bindings,
                         )?;
-                        Some(Box::new(payload_pattern))
+                        Some(payload_pattern)
                     }
                 };
 
                 let enum_pattern = TypedEnumPattern {
-                    enum_type_id: matching_variant.enum_type_id,
-                    variant_index: matching_variant.index,
-                    variant_tag_name: matching_variant.name,
+                    enum_type_id: target_type_id,
+                    variant_index: matching_variant_index,
+                    variant_tag_name: matching_variant_name,
                     payload: payload_pattern,
-                    span: enum_pattern.span,
+                    span: enum_pattern_span,
                 };
-                Ok(TypedPattern::Enum(enum_pattern))
+                Ok(self.patterns.add(TypedPattern::Enum(enum_pattern)))
             }
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
@@ -4333,14 +4375,18 @@ impl TypedProgram {
                         "Useless pattern: Struct pattern has no fields; use wildcard pattern '_' instead",
                     );
                 }
-                let expected_struct = target_type.as_struct().ok_or_else(|| {
-                    errf!(
-                        struct_pattern.span,
-                        "Impossible pattern: Match target '{}' is not a struct",
-                        self.type_id_to_string(target_type_id)
-                    )
-                })?;
-                let mut fields = Vec::with_capacity(struct_pattern.fields.len());
+                let struct_pattern = struct_pattern.clone();
+                let expected_struct = target_type
+                    .as_struct()
+                    .ok_or_else(|| {
+                        errf!(
+                            struct_pattern.span,
+                            "Impossible pattern: Match target '{}' is not a struct",
+                            self.type_id_to_string(target_type_id)
+                        )
+                    })?
+                    .clone();
+                let mut fields = self.patterns.mem.new_vec(struct_pattern.fields.len());
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
                     let (expected_field_index, expected_field) =
                         expected_struct.find_field(*field_name).ok_or_else(|| {
@@ -4366,10 +4412,10 @@ impl TypedProgram {
                 }
                 let struct_pattern = TypedStructPattern {
                     struct_type_id: target_type_id,
-                    fields,
+                    fields: self.patterns.mem.vec_to_mslice(&fields),
                     span: struct_pattern.span,
                 };
-                Ok(TypedPattern::Struct(struct_pattern))
+                Ok(self.patterns.add(TypedPattern::Struct(struct_pattern)))
             }
             ParsedPattern::Reference(reference_pattern) => {
                 let Type::Reference(r) = self.types.get(target_type_id) else {
@@ -4379,16 +4425,17 @@ impl TypedProgram {
                         self.type_id_to_string(target_type_id)
                     );
                 };
+                let reference_pattern_span = reference_pattern.span;
                 let inner_pattern = self.eval_pattern(
                     reference_pattern.inner,
                     r.inner_type,
                     scope_id,
                     allow_bindings,
                 )?;
-                Ok(TypedPattern::Reference(TypedReferencePattern {
-                    inner_pattern: Box::new(inner_pattern),
-                    span: reference_pattern.span,
-                }))
+                Ok(self.patterns.add(TypedPattern::Reference(TypedReferencePattern {
+                    inner_pattern,
+                    span: reference_pattern_span,
+                })))
             }
         }
     }
@@ -6274,7 +6321,7 @@ impl TypedProgram {
                         }));
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
-                        smallvec![],
+                        MSlice::empty(),
                         consequent_type_id,
                         has_value,
                         consequent,
@@ -6391,7 +6438,7 @@ impl TypedProgram {
         let return_error_expr =
             self.exprs.add(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
         let if_expr = self.synth_if_else(
-            smallvec![],
+            MSlice::empty(),
             value_success_type,
             is_ok_call,
             get_ok_call,
@@ -7911,7 +7958,7 @@ impl TypedProgram {
 
         let fallback_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: smallvec![],
+                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -7958,7 +8005,7 @@ impl TypedProgram {
         let mut expected_arm_type_id = ctx.expected_type_id;
         let match_scope_id = ctx.scope_id;
 
-        let mut all_unguarded_patterns: AVec<(TypedPattern, usize)> =
+        let mut all_unguarded_patterns: MVec<(TypedPatternId, usize)> =
             self.tmp.new_vec(cases.iter().map(|pc| pc.patterns.len()).sum());
         let target_expr_type = self.exprs.get(target_expr).get_type();
         let target_expr_span = self.exprs.get(target_expr).get_span();
@@ -7967,9 +8014,9 @@ impl TypedProgram {
             let mut arm_patterns = Vec::with_capacity(parsed_case.patterns.len());
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
-            for pattern_id in parsed_case.patterns.iter() {
+            for parsed_pattern_id in parsed_case.patterns.iter() {
                 let pattern = self.eval_pattern(
-                    *pattern_id,
+                    *parsed_pattern_id,
                     target_expr_type,
                     match_scope_id,
                     allow_bindings,
@@ -7980,13 +8027,13 @@ impl TypedProgram {
                 if multi_pattern {
                     match &expected_bindings {
                         None => {
-                            expected_bindings = Some(pattern.all_bindings());
+                            expected_bindings = Some(self.patterns.get_pattern_bindings(pattern));
                         }
                         Some(expected_bindings) => {
-                            let this_pattern_bindings = pattern.all_bindings();
+                            let this_pattern_bindings = self.patterns.get_pattern_bindings(pattern);
                             if this_pattern_bindings.is_empty() && !expected_bindings.is_empty() {
                                 return failf!(
-                                    pattern.span_id(),
+                                    self.patterns.get(pattern).span_id(),
                                     "Patterns in a multiple pattern arm must have the exact same bindings; but this one has none"
                                 );
                             }
@@ -8014,7 +8061,7 @@ impl TypedProgram {
                 }
 
                 if parsed_case.guard_condition_expr.is_none() {
-                    all_unguarded_patterns.push((pattern.clone(), 0));
+                    all_unguarded_patterns.push((pattern, 0));
                 }
                 arm_patterns.push(pattern);
             }
@@ -8030,7 +8077,7 @@ impl TypedProgram {
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
                 let mut instrs = eco_vec![];
                 self.compile_pattern_into_values(
-                    &pattern,
+                    pattern,
                     target_expr,
                     &mut instrs,
                     false,
@@ -8078,7 +8125,7 @@ impl TypedProgram {
 
                 typed_arms.push(TypedMatchArm {
                     condition: MatchingCondition {
-                        patterns: smallvec![pattern],
+                        patterns: self.patterns.add_pattern_slice(&[pattern]),
                         instrs,
                         binding_eligible: true,
                         diverges: condition_diverges,
@@ -8101,8 +8148,12 @@ impl TypedProgram {
             );
             'trial: for trial_entry in trial_constructors.iter_mut() {
                 '_pattern: for (pattern, kill_count) in all_unguarded_patterns.iter_mut() {
-                    if TypedProgram::pattern_matches(&self.pattern_ctors, pattern, trial_entry.ctor)
-                    {
+                    if TypedProgram::pattern_matches(
+                        &self.pattern_ctors,
+                        &self.patterns,
+                        *pattern,
+                        trial_entry.ctor,
+                    ) {
                         *kill_count += 1;
                         trial_entry.alive = false;
                         continue 'trial;
@@ -8132,12 +8183,13 @@ impl TypedProgram {
             if let Some(useless_index) =
                 all_unguarded_patterns.iter().position(|(_, kill_count)| *kill_count == 0)
             {
-                // patterns[0]: For actual match expressions, which this is, we'll always have
+                let pattern_slice = typed_arms[useless_index].condition.patterns;
+                // For actual match expressions, which this is, we'll always have
                 // exactly 1 pattern per arm
-                let pattern = &typed_arms[useless_index].condition.patterns[0];
-                if !pattern.has_innumerable_literal() {
+                let pattern = self.patterns.get_slice(pattern_slice)[0];
+                if !self.patterns.pattern_has_innumerable_literal(pattern) {
                     return failf!(
-                        pattern.span_id(),
+                        self.patterns.get(pattern).span_id(),
                         "Useless pattern: {}",
                         self.pattern_to_string(pattern)
                     );
@@ -8154,23 +8206,24 @@ impl TypedProgram {
     /// - A new variable binding
     fn compile_pattern_into_values(
         &mut self,
-        pattern: &TypedPattern,
+        pattern: TypedPatternId,
         target_expr: TypedExprId,
         instrs: &mut EcoVec<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
         arm_scope_id: ScopeId,
     ) -> TyperResult<()> {
         let target_expr_type = self.exprs.get(target_expr).get_type();
-        match pattern {
+        match self.patterns.get(pattern) {
             TypedPattern::Struct(struct_pattern) => {
                 let is_referencing = is_immediately_inside_reference_pattern;
-                for pattern_field in struct_pattern.fields.iter() {
+                let struct_type = struct_pattern.struct_type_id;
+                let struct_pattern_span = struct_pattern.span;
+                for pattern_field in self.patterns.get_slice(struct_pattern.fields).iter() {
                     let struct_reference_type = if is_referencing {
                         Some(self.types.get(target_expr_type).expect_reference())
                     } else {
                         None
                     };
-                    let struct_type = struct_pattern.struct_type_id;
                     let result_type = if is_referencing {
                         self.types.add_reference_type(
                             pattern_field.field_type_id,
@@ -8187,7 +8240,7 @@ impl TypedProgram {
                             result_type,
                             struct_type,
                             is_referencing,
-                            span: struct_pattern.span,
+                            span: struct_pattern_span,
                         }));
                     let var_name = self.build_ident_with(|k1, s| {
                         write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
@@ -8199,7 +8252,7 @@ impl TypedProgram {
                         variable_id: struct_field_variable.variable_id,
                     });
                     self.compile_pattern_into_values(
-                        &pattern_field.pattern,
+                        pattern_field.pattern,
                         struct_field_variable.variable_expr,
                         instrs,
                         is_referencing,
@@ -8209,6 +8262,7 @@ impl TypedProgram {
                 Ok(())
             }
             TypedPattern::Enum(enum_pattern) => {
+                let enum_pattern = enum_pattern.clone();
                 let is_referencing = is_immediately_inside_reference_pattern;
                 let is_variant_target =
                     if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
@@ -8220,7 +8274,7 @@ impl TypedProgram {
                     }));
                 instrs.push(MatchingConditionInstr::Cond { value: is_variant_condition });
 
-                if let Some(payload_pattern) = enum_pattern.payload.as_ref() {
+                if let Some(payload_pattern) = enum_pattern.payload {
                     let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
                     let variant = enum_type.variant_by_index(enum_pattern.variant_index);
                     let variant_type_id = variant.my_type_id;
@@ -8286,13 +8340,14 @@ impl TypedProgram {
             }
             TypedPattern::Wildcard(_span) => Ok(()),
             TypedPattern::Reference(reference_pattern) => {
+                let inner_pattern = reference_pattern.inner_pattern;
                 let target_expr = if is_immediately_inside_reference_pattern {
                     self.synth_dereference(target_expr)
                 } else {
                     target_expr
                 };
                 self.compile_pattern_into_values(
-                    &reference_pattern.inner_pattern,
+                    inner_pattern,
                     target_expr,
                     instrs,
                     true,
@@ -8300,14 +8355,14 @@ impl TypedProgram {
                 )?;
                 Ok(())
             }
-            pat => {
-                match pat {
-                    TypedPattern::LiteralUnit(_) => true,
-                    TypedPattern::LiteralChar(_, _) => true,
-                    TypedPattern::LiteralInteger(_, _) => true,
-                    TypedPattern::LiteralFloat(_, _) => true,
-                    TypedPattern::LiteralBool(_, _) => true,
-                    TypedPattern::LiteralString(_, _) => true,
+            literal_pat => {
+                match literal_pat {
+                    TypedPattern::LiteralUnit(_) => {}
+                    TypedPattern::LiteralChar(_, _) => {}
+                    TypedPattern::LiteralInteger(_, _) => {}
+                    TypedPattern::LiteralFloat(_, _) => {}
+                    TypedPattern::LiteralBool(_, _) => {}
+                    TypedPattern::LiteralString(_, _) => {}
                     _ => unreachable!("all non-literals should be handled by now"),
                 };
                 let target_expr = if is_immediately_inside_reference_pattern {
@@ -8319,7 +8374,9 @@ impl TypedProgram {
                 } else {
                     target_expr
                 };
-                match pat {
+                // A good ole reborrow; typed pattern is only 24 bytes but it does have some RCs so
+                // this should be faster
+                match self.patterns.get(pattern) {
                     TypedPattern::LiteralUnit(_span) => Ok(()),
                     TypedPattern::LiteralChar(byte, span) => {
                         let char_expr = self.exprs.add(TypedExpr::Char(*byte, *span));
@@ -8374,8 +8431,11 @@ impl TypedProgram {
                         instrs.push(MatchingConditionInstr::Cond { value: condition });
                         Ok(())
                     }
-                    other_pat => {
-                        unreachable!("should only be literal patterns from here: {other_pat:?}")
+                    _ => {
+                        unreachable!(
+                            "should only be literal patterns from here: {}",
+                            self.pattern_to_string(pattern)
+                        )
                     }
                 }
             }
@@ -8727,7 +8787,7 @@ impl TypedProgram {
         let consequent_block_id = self.exprs.add(TypedExpr::Block(consequent_block));
         let break_block_id = self.exprs.add(TypedExpr::Block(break_block));
         let if_next_loop_else_break_expr = self.synth_if_else(
-            smallvec![],
+            MSlice::empty(),
             UNIT_TYPE_ID,
             next_is_some_call,
             consequent_block_id,
@@ -8916,7 +8976,7 @@ impl TypedProgram {
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: smallvec![],
+                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -8936,7 +8996,7 @@ impl TypedProgram {
         condition: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<MatchingCondition> {
-        let mut all_patterns: SmallVec<[TypedPattern; 1]> = smallvec![];
+        let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
         let mut instrs: EcoVec<MatchingConditionInstr> = EcoVec::new();
         self.handle_matching_condition_rec(
@@ -8949,7 +9009,7 @@ impl TypedProgram {
 
         let mut all_bindings: SmallVec<[VariablePattern; 8]> = SmallVec::new();
         for pattern in all_patterns.iter() {
-            pattern.all_bindings_rec(&mut all_bindings);
+            self.patterns.get_pattern_bindings_rec(*pattern, &mut all_bindings);
         }
         if allow_bindings {
             // Bindings are allowed, fail if there are any duplicates
@@ -8977,7 +9037,7 @@ impl TypedProgram {
         let diverges = self.matching_condition_diverges(&instrs);
 
         Ok(MatchingCondition {
-            patterns: all_patterns,
+            patterns: self.patterns.add_pattern_slice(&all_patterns),
             instrs,
             binding_eligible: allow_bindings,
             diverges,
@@ -9016,7 +9076,7 @@ impl TypedProgram {
         &mut self,
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
-        all_patterns: &mut SmallVec<[TypedPattern; 1]>,
+        all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
         instrs: &mut EcoVec<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
@@ -9039,7 +9099,7 @@ impl TypedProgram {
                     variable_id: target_var.variable_id,
                 });
                 self.compile_pattern_into_values(
-                    &pattern,
+                    pattern,
                     target_var.variable_expr,
                     instrs,
                     false,
@@ -9291,8 +9351,14 @@ impl TypedProgram {
             coalesce_ctx,
         )?;
 
-        let if_else =
-            self.synth_if_else(smallvec![], output_type, lhs_has_value, lhs_get_expr, rhs, span);
+        let if_else = self.synth_if_else(
+            MSlice::empty(),
+            output_type,
+            lhs_has_value,
+            lhs_get_expr,
+            rhs,
+            span,
+        );
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.add_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add(TypedExpr::Block(coalesce_block)))
@@ -9788,7 +9854,7 @@ impl TypedProgram {
                     ctx.with_no_expected_type(),
                 )?;
                 let if_else_expr = self.synth_if_else(
-                    smallvec![],
+                    MSlice::empty(),
                     result_type,
                     is_in_bounds,
                     get_element_expr,
@@ -10326,7 +10392,7 @@ impl TypedProgram {
             let alternate = self.synth_optional_none(resulting_type_id, span);
 
             Ok(Some(self.synth_if_else(
-                smallvec![],
+                MSlice::empty(),
                 consequent_type_id,
                 condition,
                 consequent,
@@ -14451,10 +14517,11 @@ impl TypedProgram {
 
     fn pattern_matches(
         ctors: &VPool<PatternCtor, PatternCtorId>,
-        pattern: &TypedPattern,
+        patterns: &TypedPatternPool,
+        pattern: TypedPatternId,
         ctor: PatternCtorId,
     ) -> bool {
-        match (pattern, ctors.get(ctor)) {
+        match (patterns.get(pattern), ctors.get(ctor)) {
             (TypedPattern::Wildcard(_), _) => true,
             (TypedPattern::Variable(_), _) => true,
             (TypedPattern::LiteralUnit(_), PatternCtor::Unit) => true,
@@ -14462,9 +14529,9 @@ impl TypedProgram {
             (TypedPattern::LiteralBool(false, _), PatternCtor::BoolFalse) => true,
             (TypedPattern::Enum(enum_pat), PatternCtor::Enum { variant_name, inner }) => {
                 if *variant_name == enum_pat.variant_tag_name {
-                    match (enum_pat.payload.as_ref(), inner) {
+                    match (enum_pat.payload, inner) {
                         (Some(payload), Some(inner)) => {
-                            TypedProgram::pattern_matches(ctors, payload, *inner)
+                            TypedProgram::pattern_matches(ctors, patterns, payload, *inner)
                         }
                         (None, None) => true,
                         _ => false,
@@ -14478,7 +14545,7 @@ impl TypedProgram {
                 // an empty pattern already matches. So we iterate over the fields this pattern does
                 // care about, and if any do not match, we'll consider the whole pattern not to match
                 let mut matches = true;
-                for field_pattern in struc.fields.iter() {
+                for field_pattern in patterns.get_slice(struc.fields).iter() {
                     let matching_field_pattern = fields
                         .iter()
                         .find(|(name, _ctor_pattern)| *name == field_pattern.name)
@@ -14486,7 +14553,8 @@ impl TypedProgram {
                         .expect("Field not in struct; pattern should have failed typecheck by now");
                     if !TypedProgram::pattern_matches(
                         ctors,
-                        &field_pattern.pattern,
+                        patterns,
+                        field_pattern.pattern,
                         *matching_field_pattern,
                     ) {
                         matches = false;

@@ -25,41 +25,64 @@ macro_rules! fuckit {
 }
 
 use core::mem::{align_of, size_of};
-pub struct A {
+use std::num::NonZeroU32;
+pub struct Mem {
     mmap: memmap2::MmapMut,
     cursor: *const u8,
 }
 
+// We use NonZeroU32 so that the handles are niched, allowing for use
+// for no size cost in types like Option and Result
+pub struct AHandle<T>(NonZeroU32, std::marker::PhantomData<T>);
 static_assert_size!(AHandle<u128>, 4);
-pub struct AHandle<T>(u32, std::marker::PhantomData<T>);
 
-static_assert_size!(ASliceHandle<u128>, 8);
-#[derive(Clone, Copy)]
-pub struct ASliceHandle<T> {
-    offset: u32,
+impl<T> Copy for AHandle<T> {}
+impl<T> Clone for AHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+pub struct MSlice<T> {
+    offset: NonZeroU32,
     count: u32,
     _marker: std::marker::PhantomData<T>,
     // TODO: Add fingerprints to handles in dbg mode
     // #[cfg(feature = "dbg")]
     // fingerprint: u64,
 }
+static_assert_size!(MSlice<u128>, 8);
+impl<T> Copy for MSlice<T> {}
+impl<T> Clone for MSlice<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
-impl<T> ASliceHandle<T> {
+impl<T> MSlice<T> {
     pub fn empty() -> Self {
-        Self { offset: 0, count: 0, _marker: std::marker::PhantomData }
+        const BOGUS_OFFSET: NonZeroU32 = NonZeroU32::new(8).unwrap();
+        // `offset` should never be touched when count is 0
+        Self { offset: BOGUS_OFFSET, count: 0, _marker: std::marker::PhantomData }
     }
     pub fn len(&self) -> u32 {
         self.count
     }
 }
 
-impl A {
+impl Mem {
     pub fn make() -> Self {
         // Note(knix) If we never allow larger than a 4gb allocation, then we are safe to hand out 32-bit
         //            offsets instead of pointers, which could be big for some codebases
         let mmap = memmap2::MmapMut::map_anon(1 * crate::GIGABYTE).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
-        Self { cursor: mmap.as_ptr(), mmap }
+
+        // We waste the first 8 bytes every time, so that our handles can be niched
+        // We could instead store offsets as (true offset) + 1, but I'd rather waste 8 bytes per
+        // arena than convert on every single access
+        let cursor = unsafe { mmap.as_ptr().byte_add(8) };
+
+        Self { cursor, mmap }
     }
     fn cursor_mut(&self) -> *mut u8 {
         self.cursor.cast_mut()
@@ -69,12 +92,16 @@ impl A {
         self.mmap.as_ptr()
     }
 
-    fn ptr_to_offset<T>(&self, ptr: *const T) -> u32 {
-        (ptr.addr() - self.base_ptr().addr()) as u32
+    fn ptr_to_offset<T: ?Sized>(&self, ptr: *const T) -> NonZeroU32 {
+        let Some(result) = NonZeroU32::new(ptr.addr() as u32 - self.base_ptr().addr() as u32)
+        else {
+            panic!("Attempted to create a null handle");
+        };
+        result
     }
 
-    fn offset_to_ptr<T>(&self, offset: u32) -> *const T {
-        unsafe { self.base_ptr().add(offset as usize) as *const T }
+    fn offset_to_ptr<T>(&self, offset: NonZeroU32) -> *const T {
+        unsafe { self.base_ptr().add(offset.get() as usize) as *const T }
     }
 
     fn pack_handle<T>(&self, ptr: *const T) -> AHandle<T> {
@@ -84,6 +111,11 @@ impl A {
 
     fn unpack_handle<T>(&self, handle: AHandle<T>) -> *const T {
         self.offset_to_ptr::<T>(handle.0)
+    }
+
+    pub fn vec_to_mslice<T>(&self, m_vec: &MVec<T>) -> MSlice<T> {
+        let offset = self.ptr_to_offset(m_vec.buf.cast_const());
+        MSlice { offset, count: m_vec.len() as u32, _marker: std::marker::PhantomData }
     }
 
     #[track_caller]
@@ -133,7 +165,7 @@ impl A {
         self.pack_handle(t_ptr)
     }
 
-    pub fn new_vec<T>(&mut self, len: usize) -> AVec<T> {
+    pub fn new_vec<T>(&mut self, len: usize) -> MVec<T> {
         unsafe {
             let start_cursor = self.cursor_mut();
             let dst_aligned = start_cursor.byte_add(start_cursor.align_offset(align_of::<T>()));
@@ -144,11 +176,11 @@ impl A {
 
             let raw_slice: *mut [T] =
                 core::ptr::slice_from_raw_parts_mut(dst_aligned as *mut T, len);
-            AVec { buf: raw_slice, len: 0 }
+            MVec { buf: raw_slice, len: 0 }
         }
     }
 
-    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> ASliceHandle<T> {
+    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T> {
         unsafe {
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
@@ -158,7 +190,7 @@ impl A {
 
             let dst: &mut [T] = std::slice::from_raw_parts_mut(dst as *mut T, ts.len());
             dst.copy_from_slice(ts);
-            ASliceHandle {
+            MSlice {
                 offset: self.ptr_to_offset(dst.as_ptr()),
                 count: ts.len() as u32,
                 _marker: std::marker::PhantomData,
@@ -182,7 +214,7 @@ impl A {
         unsafe { *ptr }
     }
 
-    pub fn get_slice<T>(&self, handle: ASliceHandle<T>) -> &'static [T] {
+    pub fn get_slice<T>(&self, handle: MSlice<T>) -> &'static [T] {
         fuckit! {
             let ptr: *const T = self.offset_to_ptr(handle.offset);
             if cfg!(debug_assertions) {
@@ -192,14 +224,18 @@ impl A {
             src
         }
     }
+
+    pub fn bytes_used(&self) -> usize {
+        self.cursor.addr() - self.base_ptr().addr()
+    }
 }
 
-pub struct AVec<T> {
+pub struct MVec<T> {
     buf: *mut [T],
     len: usize,
 }
 
-impl<T> AVec<T> {
+impl<T> MVec<T> {
     pub fn len(&self) -> usize {
         self.len
     }
@@ -248,7 +284,7 @@ mod test {
 
     #[test]
     fn test() {
-        let mut arena = A::make();
+        let mut arena = Mem::make();
         let handle = arena.push_h(42u32);
         let value = arena.get(handle);
         assert_eq!(*value, 42);
@@ -264,7 +300,7 @@ mod test {
 
     #[test]
     fn vec() {
-        let mut arena = A::make();
+        let mut arena = Mem::make();
         let mut v = arena.new_vec(16);
         for i in 0..16 {
             v.push(i * 10);
@@ -280,7 +316,7 @@ mod test {
     #[test]
     #[should_panic(expected = "AVec is full")]
     fn vec_oob() {
-        let mut arena = A::make();
+        let mut arena = Mem::make();
         let mut v = arena.new_vec(4);
         for i in 0..5 {
             v.push(i * 10);

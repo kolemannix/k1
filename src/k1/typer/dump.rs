@@ -855,9 +855,9 @@ impl TypedProgram {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        for (idx, pattern) in cond.patterns.iter().enumerate() {
+        for (idx, &pattern) in self.patterns.get_slice(cond.patterns).iter().enumerate() {
             self.display_pattern(pattern, w)?;
-            if idx != cond.patterns.len() - 1 {
+            if idx != cond.patterns.len() as usize - 1 {
                 w.write_str(" and ")?;
             }
         }
@@ -942,10 +942,10 @@ impl TypedProgram {
 
     pub fn display_pattern(
         &self,
-        pattern: &TypedPattern,
+        pattern: TypedPatternId,
         writ: &mut impl Write,
     ) -> std::fmt::Result {
-        match pattern {
+        match self.patterns.get(pattern) {
             TypedPattern::LiteralUnit(_) => writ.write_str("()"),
             TypedPattern::LiteralChar(value, _) => write!(writ, "{value}"),
             TypedPattern::LiteralInteger(value, _) => write!(writ, "{value}"),
@@ -956,7 +956,7 @@ impl TypedProgram {
             TypedPattern::Wildcard(_) => writ.write_str("_"),
             TypedPattern::Enum(enum_pat) => {
                 writ.write_str(self.ident_str(enum_pat.variant_tag_name))?;
-                if let Some(payload) = enum_pat.payload.as_ref() {
+                if let Some(payload) = enum_pat.payload {
                     writ.write_str("(")?;
                     self.display_pattern(payload, writ)?;
                     writ.write_str(")")?;
@@ -965,11 +965,13 @@ impl TypedProgram {
             }
             TypedPattern::Struct(struct_pat) => {
                 writ.write_str("{ ")?;
-                for (index, field_pat) in struct_pat.fields.iter().enumerate() {
+                for (index, field_pat) in
+                    self.patterns.get_slice(struct_pat.fields).iter().enumerate()
+                {
                     writ.write_str(self.ident_str(field_pat.name))?;
                     writ.write_str(": ")?;
-                    self.display_pattern(&field_pat.pattern, writ)?;
-                    let last = index == struct_pat.fields.len() - 1;
+                    self.display_pattern(field_pat.pattern, writ)?;
+                    let last = index == struct_pat.fields.len() as usize - 1;
                     if !last {
                         writ.write_str(", ")?;
                     } else {
@@ -980,7 +982,7 @@ impl TypedProgram {
                 Ok(())
             }
             TypedPattern::Reference(reference_pattern) => {
-                self.display_pattern(&reference_pattern.inner_pattern, writ)?;
+                self.display_pattern(reference_pattern.inner_pattern, writ)?;
                 writ.write_str("*")?;
                 Ok(())
             }
@@ -1088,9 +1090,9 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn pattern_to_string(&self, pattern: &TypedPattern) -> String {
+    pub fn pattern_to_string(&self, pattern_id: TypedPatternId) -> String {
         let mut s = String::new();
-        self.display_pattern(pattern, &mut s).unwrap();
+        self.display_pattern(pattern_id, &mut s).unwrap();
         s
     }
 
