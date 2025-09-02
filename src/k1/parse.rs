@@ -741,11 +741,11 @@ impl ExprStackMember {
 
 #[derive(Debug, Clone)]
 pub struct ParsedStructPattern {
-    pub fields: Vec<(Ident, ParsedPatternId)>,
+    pub fields: EcoVec<(Ident, ParsedPatternId)>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedEnumPattern {
     pub enum_name: Option<Ident>,
     pub variant_name: Ident,
@@ -2166,7 +2166,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else if first.kind == K::OpenBrace {
             // Struct
             let open_brace = self.tokens.next();
-            let mut fields = Vec::new();
+            let mut fields = EcoVec::new();
             while self.peek().kind != K::CloseBrace {
                 let ident_token = self.expect_eat_token(K::Ident)?;
                 let ident = self.intern_ident_token(ident_token);

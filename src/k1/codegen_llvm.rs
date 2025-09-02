@@ -2516,8 +2516,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let static_value = self.codegen_static_value_as_code(*value_id)?;
                 Ok(static_value.into())
             }
-            e @ TypedExpr::PendingCapture(_) => {
-                panic!("Unsupported expression: {e:?}")
+            TypedExpr::PendingCapture(_) => {
+                panic!("Unsupported expression: {}", self.k1.expr_to_string(expr_id))
             }
         }
     }
@@ -3832,7 +3832,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_value = codegened_function.function_value;
 
         let (di_subprogram, di_file) = self.make_function_debug_info(
-            self.k1.ident_str(typed_function.name),
+            function_value.get_name().to_str().unwrap(),
             function_span,
             llvm_function_type.return_type.debug_type(),
             &llvm_function_type.param_types.iter().map(|t| t.debug_type()).collect::<Vec<_>>(),
@@ -3917,15 +3917,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.codegen_block(function_block)?;
             }
         };
-        // nocommit: No longer needed now that we do bodies on delay?
-        if let Some(start_block) = maybe_starting_block {
-            self.builder.position_at_end(start_block);
-        }
         self.debug.pop_scope();
         function_value.set_subprogram(di_subprogram);
-
-        // nocommit: No longer needed now that we do bodies on delay?
-        self.set_debug_location(previous_debug_location);
 
         Ok(())
     }
@@ -4069,7 +4062,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
         let function_value = self.codegen_function_signature(main_function_id)?;
-        self.codegen_function_body(main_function_id)?;
 
         let mut pending_buffer: Vec<FunctionId> =
             Vec::with_capacity(self.functions_pending_body_compilation.len());
@@ -4084,8 +4076,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             pending_buffer.clear();
         }
 
-        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
         self.builder.unset_current_debug_location();
+        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
         let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
         self.builder.position_at_end(entry_block);
         let params: Vec<BasicMetadataValueEnum<'ctx>> =
@@ -4096,15 +4088,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .unwrap()
             .try_as_basic_value()
             .unwrap_left();
-        //let (sub_prog, _) = self
-        //    .make_function_debug_info(
-        //        "main",
-        //        SpanId::NONE,
-        //        self.codegen_type(I32_TYPE_ID)?.debug_type(),
-        //        &[],
-        //    )
-        //    .unwrap();
-        //function_value.set_subprogram(sub_prog);
         self.builder.build_return(Some(&res)).unwrap();
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());

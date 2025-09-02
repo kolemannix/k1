@@ -41,7 +41,7 @@ impl TypedProgram {
 
     pub(super) fn synth_if_else(
         &mut self,
-        patterns: SmallVec<[TypedPattern; 1]>,
+        patterns: MSlice<TypedPatternId>,
         result_type: TypeId,
         condition: TypedExprId,
         consequent: TypedExprId,
@@ -60,7 +60,7 @@ impl TypedProgram {
         };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: smallvec![],
+                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
