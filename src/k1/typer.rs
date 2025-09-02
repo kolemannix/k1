@@ -765,7 +765,6 @@ pub struct FunctionSignature {
     pub function_type: TypeId,
     pub type_params: NamedTypeSlice,
     pub function_type_params: SliceHandle<ExistentialTypeParamId>,
-    pub static_type_params: SliceHandle<ExistentialTypeParamId>,
 }
 impl_copy_if_small!(32, FunctionSignature);
 
@@ -776,14 +775,11 @@ impl FunctionSignature {
             function_type,
             type_params: SliceHandle::empty(),
             function_type_params: SliceHandle::empty(),
-            static_type_params: SliceHandle::empty(),
         }
     }
 
     pub fn is_generic(&self) -> bool {
-        !self.type_params.is_empty()
-            || !self.function_type_params.is_empty()
-            || !self.static_type_params.is_empty()
+        !self.type_params.is_empty() || !self.function_type_params.is_empty()
     }
 }
 
@@ -816,7 +812,6 @@ impl TypedFunction {
             function_type: self.type_id,
             type_params: self.type_params,
             function_type_params: self.function_type_params,
-            static_type_params: self.static_type_params,
         }
     }
 
@@ -1158,7 +1153,7 @@ pub struct Call {
     pub callee: Callee,
     pub args: SmallVec<[TypedExprId; FUNC_PARAM_IDEAL_COUNT]>,
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
-    /// Specifically sizeOf[T], there's no actual value to specialize on, kinda of a hack would be
+    /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
     /// better to specialize anyway and inline? idk
     pub type_args: NamedTypeSlice,
     pub return_type: TypeId,
@@ -1487,7 +1482,7 @@ pub struct TypedMatchExpr {
 nz_u32_id!(CallId);
 
 // TODO(perf): TypedExpr is very big
-static_assert_size!(TypedExpr, 104);
+static_assert_size!(TypedExpr, 56);
 #[derive(Clone)]
 pub enum TypedExpr {
     Unit(SpanId),
@@ -1503,7 +1498,11 @@ pub enum TypedExpr {
     UnaryOp(UnaryOp),
     BinaryOp(BinaryOp),
     Block(TypedBlock),
-    Call(Call),
+    Call {
+        call_id: CallId,
+        return_type: TypeId,
+        span: SpanId,
+    },
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     Match(TypedMatchExpr),
@@ -1566,7 +1565,7 @@ impl TypedExpr {
             TypedExpr::UnaryOp(_) => "unary_op",
             TypedExpr::BinaryOp(_) => "binary_op",
             TypedExpr::Block(_) => "block",
-            TypedExpr::Call(_) => "call",
+            TypedExpr::Call { .. } => "call",
             TypedExpr::Match(_) => "match",
             TypedExpr::WhileLoop(_) => "while_loop",
             TypedExpr::LoopExpr(_) => "loop",
@@ -1600,7 +1599,7 @@ impl TypedExpr {
             TypedExpr::BinaryOp(binary_op) => binary_op.ty,
             TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
             TypedExpr::Block(b) => b.expr_type,
-            TypedExpr::Call(call) => call.return_type,
+            TypedExpr::Call { return_type, .. } => *return_type,
             TypedExpr::Match(match_) => match_.result_type,
             TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
@@ -1634,7 +1633,7 @@ impl TypedExpr {
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
-            TypedExpr::Call(call) => call.span,
+            TypedExpr::Call { span, .. } => span,
             TypedExpr::Match(match_) => match_.span,
             TypedExpr::WhileLoop(while_loop) => while_loop.span,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
@@ -1657,8 +1656,12 @@ impl TypedExpr {
         if let Self::Variable(v) = self { v } else { panic!("Expected variable expression") }
     }
 
-    pub fn expect_call(&self) -> &Call {
-        if let Self::Call(c) = self { c } else { panic!("Expected call expression") }
+    pub fn expect_call_id(&self) -> CallId {
+        if let Self::Call { call_id, .. } = self {
+            *call_id
+        } else {
+            panic!("Expected call expression")
+        }
     }
 
     pub fn is_unit(&self) -> bool {
@@ -6428,13 +6431,15 @@ impl TypedProgram {
             &[try_value_var.variable_expr],
             result_block_ctx,
         )?;
-        let make_error_call = self.exprs.add(TypedExpr::Call(Call {
+        let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: smallvec![get_error_call],
             type_args: SliceHandle::empty(),
             return_type: block_return_type,
             span,
-        }));
+        });
+        let make_error_call =
+            self.exprs.add(TypedExpr::Call { call_id, return_type: block_return_type, span });
         let return_error_expr =
             self.exprs.add(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
         let if_expr = self.synth_if_else(
