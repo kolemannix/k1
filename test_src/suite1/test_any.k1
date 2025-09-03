@@ -1,16 +1,13 @@
+ns any_test;
+
 use types/Any
 use types/TypeSchema
 use types/typeId
-
-fn makeAny[T](t: *T): Any {
-  { typeId: typeId[T](), value: t as Pointer }
-}
+use types/makeAny
 
 fn kindOfAny(any: Any): string {
   typeVariantName(any.typeId) ? "fail"
 }
-
-deftype alias EnumVariant = TypeSchema.Either.value.variants.T
 
 fn typeVariantName(typeId: u64): ?string {
   let schema = types/typeSchema(typeId);
@@ -22,13 +19,11 @@ fn typeVariantName(typeId: u64): ?string {
   variant?.name
 }
 
-fn main(): i32 {
+fn test(): unit {
   let* i: *int = 10;
-  //let x: Any = { typeId: typeId[typeOf(i)](), value: i };
-  let x2: Any = makeAny(i);
-  let str: Any = makeAny(core/mem/new({ x: 1, y: 100 }));
-  println("{x2.typeId}");
-  println("Variant name: {kindOfAny(x2)}");
-  println("Variant name: {kindOfAny(str)}");
-  0
+  let intPtr: Any = makeAny(i);
+  let* s = { x: 1, y: 100 };
+  let structPtr: Any = makeAny(s);
+  assertEquals(kindOfAny(intPtr), "Int");
+  assertEquals(kindOfAny(structPtr), "Struct");
 }

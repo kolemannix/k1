@@ -29,13 +29,15 @@ impl TypedProgram {
         let ability = self.abilities.get(EQUALS_ABILITY_ID);
         let equals_index = ability.find_function_by_name(self.ast.idents.b.equals).unwrap().index;
         let equals_implementation = implementation.function_at_index(equals_index);
-        let call_expr = self.exprs.add(TypedExpr::Call(Call {
+        let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(equals_implementation),
             args: smallvec![lhs, rhs],
             type_args: SliceHandle::empty(),
             return_type: BOOL_TYPE_ID,
             span,
-        }));
+        });
+        let call_expr =
+            self.exprs.add(TypedExpr::Call { call_id, return_type: BOOL_TYPE_ID, span });
         Ok(call_expr)
     }
 

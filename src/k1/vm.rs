@@ -672,7 +672,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             }
         }
         TypedExpr::Block(_) => execute_block(vm, m, expr),
-        TypedExpr::Call(_) => execute_call(vm, m, expr),
+        TypedExpr::Call { .. } => execute_call(vm, m, expr),
         TypedExpr::Match(match_expr) => {
             let match_expr = match_expr.clone();
             //eprintln!("execute_match: {}", m.expr_to_string(expr));
@@ -1263,9 +1263,14 @@ pub fn execute_stmt(
     }
 }
 
-fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> TyperResult<VmResult> {
-    debug!("Executing call: {}", m.expr_to_string(call_id));
-    let call = m.exprs.get(call_id).expect_call();
+fn execute_call(
+    vm: &mut Vm,
+    m: &mut TypedProgram,
+    call_expr_id: TypedExprId,
+) -> TyperResult<VmResult> {
+    debug!("Executing call: {}", m.expr_to_string(call_expr_id));
+    let call_id = m.exprs.get(call_expr_id).expect_call_id();
+    let call = m.calls.get(call_id);
     let call_args = call.args.clone();
     let span = call.span;
     let (function_id, maybe_lambda_env_ptr) = match call.callee {
@@ -1324,7 +1329,7 @@ fn execute_call(vm: &mut Vm, m: &mut TypedProgram, call_id: TypedExprId) -> Type
     let function = m.get_function(function_id);
 
     if let Some(intrinsic_type) = function.intrinsic_type {
-        let call = m.exprs.get(call_id).expect_call();
+        let call = m.calls.get(call_id);
         return execute_intrinsic(
             vm,
             m,
@@ -2322,6 +2327,7 @@ fn execute_matching_condition(
 pub fn value_to_rust_str(value: Value) -> &'static str {
     let ptr = value.expect_agg();
     let k1_string = unsafe { (ptr as *const k1_types::K1ViewLike).read() };
+    eprintln!("value_to_rust_str {:?} {}", ptr, k1_string.len);
     unsafe { k1_string.to_str() }
 }
 
@@ -2405,7 +2411,7 @@ pub fn vm_value_to_static_value(
                 let (view, element_type) = value_as_view(m, vm_value);
                 let mut elements = EcoVec::with_capacity(view.len);
                 for index in 0..view.len {
-                    let elem_vm = get_view_element(vm, m, view, element_type, index)
+                    let elem_vm = get_view_element(vm, m, view.data, element_type, index)
                         .unwrap_or_else(|e| {
                             m.ice_with_span(
                                 format!("Failed to load view element {index}: {}", e),
@@ -2473,7 +2479,30 @@ pub fn vm_value_to_static_value(
                     Type::EnumVariant(_enum_variant) => {
                         todo!("enum variant vm -> static")
                     }
-                    _ => unreachable!("aggregate should be struct or enum"),
+                    Type::Array(array_type) => {
+                        let element_type = array_type.element_type;
+                        let Some(count) = array_type.concrete_count else {
+                            return failf!(
+                                span,
+                                "Cannot convert array of unknown size to static value"
+                            );
+                        };
+                        let count = count as usize;
+                        let mut elements = EcoVec::with_capacity(count);
+                        for index in 0..count {
+                            let elem_result = get_view_element(vm, m, ptr, element_type, index);
+                            let elem_vm = elem_result.unwrap_or_else(|e| {
+                                m.ice_with_span(
+                                    format!("Failed to load view element {index}: {}", e),
+                                    span,
+                                )
+                            });
+                            let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
+                            elements.push(elem_static);
+                        }
+                        StaticValue::View(StaticView { elements, type_id })
+                    }
+                    _ => vm_crash(m, vm, "aggregate should be struct or enum"),
                 }
             }
         }
@@ -2490,15 +2519,14 @@ pub fn value_as_view(k1: &TypedProgram, view_value: Value) -> (k1_types::K1ViewL
     (buffer, element_type)
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn get_view_element(
     vm: &mut Vm,
     k1: &TypedProgram,
-    view: K1ViewLike,
+    data_ptr: *const u8,
     elem_type: TypeId,
     index: usize,
 ) -> TyperResult<Value> {
-    let data_ptr = view.data;
-
     let elem_offset = offset_at_index(&k1.types, elem_type, index);
     let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
     load_value(vm, k1, elem_type, elem_ptr, true)
@@ -2706,9 +2734,9 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
 }
 
 #[track_caller]
-fn vm_crash(k1: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
-    eprintln!("{}", make_stack_trace(k1, &vm.stack));
-    k1.ice_with_span(msg, vm.eval_span)
+fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
+    eprintln!("{}", make_stack_trace(m, &vm.stack));
+    m.ice_with_span(msg, vm.eval_span)
 }
 
 //mod c_mem {

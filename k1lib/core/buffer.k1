@@ -253,6 +253,10 @@ ns Buffer {
     );
   }
 
+  fn refIter[T](self: Buffer[T]): BufferRefIterator[T] {
+    BufferRefIterator/fromBuffer(self)
+  }
+
 }
 
 deftype BufferIterator[T] = {
@@ -303,5 +307,36 @@ impl[T: Print] Print for Buffer[T] {
       };
     };
     w.writeChar(']');
+  }
+}
+
+deftype BufferRefIterator[T] = {
+  buf: Buffer[T],
+  pos: uword
+}
+ns BufferRefIterator {
+  fn fromBuffer[T](buf: Buffer[T]): BufferRefIterator[T] { 
+    { buf, pos: 0 }
+  }
+}
+
+impl[T] Iterator[Item = *mut T] for BufferRefIterator[T] {
+  fn next(self: *mut BufferRefIterator[T]): ?Item { 
+    if self.pos < self.buf.len {
+      let item = self.buf.getRef(self.pos);
+      self.pos* <- self.pos + 1;
+      some(item)
+    } else .None
+  }
+  fn sizeHint(self: *Self): { atLeast: uword, atMost: ?uword } { 
+    let rem = self.buf.len - self.pos;
+    { atLeast: rem, atMost: some(rem) }
+  }
+  fn advanceBy(self: *mut Self, n: uword): unit {
+    self.pos* <- self.pos + n
+  }
+  fn nth(self: *mut Self, n: uword): ?Item {
+    self.advanceBy(n);
+    self.next()
   }
 }

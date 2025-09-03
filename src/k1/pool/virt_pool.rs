@@ -212,6 +212,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 
     pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
+        #[allow(clippy::question_mark)]
         let Some(index) = handle.index() else { return None };
         self.get_opt(index)
     }

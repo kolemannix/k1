@@ -1,11 +1,5 @@
 New tagline? "C with typeclasses and tagged unions"
 
-# Bugs
-- [ ] Defect: Generic (co)recursive types do not work
-- [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
-- [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
-                             'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
-
 ## Working list
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [x] Adopt `ecow`'s EcoVec
@@ -46,10 +40,6 @@ New tagline? "C with typeclasses and tagged unions"
       type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
 - [ ] c"" strings that are of type Pointer (what about interpolation?)
-- [ ] A clone ability. Clone and Copy are not good enough words for this; the distinct meanings are completely imposed rather than intrinsic
-      What about: Value for Copy; Entity for "not copy"
-- [ ] Mark types as trivially copyable or not
-^ 'Buffer' would be NOT copyable since it contains a Reference
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Support ability constraints on generics
@@ -69,6 +59,12 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
+
+# Bugs
+- [ ] Defect: Generic (co)recursive types do not work
+- [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
+- [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
+                             'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules

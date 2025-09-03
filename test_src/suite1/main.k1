@@ -65,6 +65,7 @@ fn moderate(): unit {
   type_schema/test();
   array_type_test/test();
   ability_complex/test();
+  any_test/test();
 }
 
 fn coreLib(): unit {
