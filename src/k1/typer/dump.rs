@@ -594,8 +594,9 @@ impl TypedProgram {
                 let variable = self.variables.get(v.variable_id);
                 w.write_str(self.ident_str(variable.name))
             }
-            TypedExpr::Call(fn_call) => {
-                match &fn_call.callee {
+            TypedExpr::Call { call_id, .. } => {
+                let call = self.calls.get(*call_id);
+                match &call.callee {
                     Callee::StaticLambda { function_id, .. } => {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(w, name)?;
@@ -619,7 +620,7 @@ impl TypedProgram {
                     }
                 };
                 w.write_str("(")?;
-                for (idx, arg) in fn_call.args.iter().enumerate() {
+                for (idx, arg) in call.args.iter().enumerate() {
                     if idx > 0 {
                         w.write_str(", ")?;
                     }
@@ -1199,12 +1200,6 @@ impl TypedProgram {
                 self.write_ident(w, ftp.name)?;
                 w.write_str(": ")?;
                 self.display_type_id(ftp.type_id, false, w)?;
-                w.write_str(", ")?;
-            }
-            for stp in self.existential_type_params.get_slice(signature.static_type_params).iter() {
-                self.write_ident(w, stp.name)?;
-                w.write_str(": ")?;
-                self.display_type_id(stp.type_id, false, w)?;
                 w.write_str(", ")?;
             }
             w.write_char(']')?;

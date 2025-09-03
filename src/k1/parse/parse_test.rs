@@ -390,3 +390,23 @@ fn empty_struct() -> ParseResult<()> {
     assert!(matches!(expr, ParsedExpr::Struct(_)));
     Ok(())
 }
+
+#[test]
+fn integer_suffix() -> ParseResult<()> {
+    let input_u8 = r#"42u8"#;
+    let input_i64 = r#"-42i64"#;
+    let (module, expr, _expr_id) = test_single_expr_with_id(input_u8)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+        panic!("`{input_u8}` did not parse as expected")
+    };
+    let text = module.get_span_content(expr.get_span());
+    assert_eq!(text, "42u8");
+
+    let (module, expr, _expr_id) = test_single_expr_with_id(input_i64)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+        panic!("`{input_i64}` did not parse as expected")
+    };
+    let text = module.get_span_content(expr.get_span());
+    assert_eq!(text, "-42i64");
+    Ok(())
+}

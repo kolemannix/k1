@@ -1,6 +1,5 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
-
 use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;
@@ -86,6 +85,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
     }
 }
 
+#[allow(unused)]
 pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     // It would be a lot more powerful if each entry could point to its 'next', or if each entry
     // were an enum allowing redirects. The issue there is we can't really provide a slice, we can
@@ -100,6 +100,7 @@ pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     _index: std::marker::PhantomData<Index>,
 }
 
+#[allow(unused)]
 impl<T, Index: PoolIndex> Pool<T, Index> {
     pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T, Index> {
         Pool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
@@ -243,6 +244,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
     }
 
     pub fn get_first(&self, handle: SliceHandle<Index>) -> Option<&T> {
+        #[allow(clippy::question_mark)]
         let Some(index) = handle.index() else { return None };
         let slice_start_index = Self::id_to_actual_index(index);
         self.vec.get(slice_start_index)
@@ -250,6 +252,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
 }
 
 /// WHEN T IS CLONE IMPL
+#[allow(unused)]
 impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
     pub fn get_slice_to_smallvec<const N: usize>(
         &self,
@@ -271,6 +274,7 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
 }
 
 /// WHEN T IS COPY IMPL
+#[allow(unused)]
 impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
     pub fn copy_slice_sv<const N: usize>(&self, handle: SliceHandle<Index>) -> SmallVec<[T; N]>
     where
@@ -303,6 +307,7 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
 }
 
 /// WHEN T IS COPY AND EQ
+#[allow(unused)]
 impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
     pub fn slices_equal_copy(
         &self,
@@ -319,6 +324,7 @@ impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
 }
 
 // WHEN T IS EQ
+#[allow(unused)]
 impl<T: PartialEq, Index: PoolIndex> Pool<T, Index> {
     pub fn slice_contains(&self, handle: SliceHandle<Index>, elem: &T) -> bool {
         self.get_slice(handle).contains(elem)
@@ -329,8 +335,6 @@ pub use virt_pool::VPool;
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU32;
-
     use crate::nz_u32_id;
 
     nz_u32_id!(MyIndex);

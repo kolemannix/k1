@@ -74,7 +74,7 @@ impl Mem {
     pub fn make() -> Self {
         // Note(knix) If we never allow larger than a 4gb allocation, then we are safe to hand out 32-bit
         //            offsets instead of pointers, which could be big for some codebases
-        let mmap = memmap2::MmapMut::map_anon(1 * crate::GIGABYTE).unwrap();
+        let mmap = memmap2::MmapMut::map_anon(crate::GIGABYTE).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
 
         // We waste the first 8 bytes every time, so that our handles can be niched

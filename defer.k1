@@ -1,0 +1,177 @@
+// Port of basic block profiler from Casey Muratori's Computer Enhance
+
+#if k1/OS_MACOS ns macos_time {
+  deftype mach_timebase_info_data_t = { denom: u32, numer: u32 }
+
+  extern("mach_absolute_time") fn mach_absolute_time(): u64
+  extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
+
+  let* mut timebase: *mut mach_timebase_info_data_t = { denom: 0, numer: 0 };
+
+  fn perf_to_nanos(counter: u64): u64 {
+    if (timebase.denom == 0) {
+      mach_timebase_info(timebase);
+    };
+    counter * (timebase.numer as u64) / (timebase.denom as u64);
+  }
+
+}
+
+// Core profiling data structures
+deftype ProfileAnchor = {
+    tsc_elapsed_exclusive: u64,   // Does NOT include children
+    tsc_elapsed_inclusive: u64,  // DOES include children  
+    hit_count: u64,
+    label: string,
+}
+
+deftype ProfileBlock = {
+    label: string,
+    old_tsc_elapsed_inclusive: u64,
+    start_tsc: u64,
+    parent_index: u32,
+    anchor_index: u32,
+}
+
+// Global profiler state
+let* mut global_profiler_anchors: *mut Array[4096 x ProfileAnchor] = zeroed();
+let* mut global_profiler_parent: *mut u32 = 0;
+let* mut global_profile_start_tsc: *mut u64 = 0;
+let* mut global_profile_end_tsc: *mut u64 = 0;
+
+fn read_cpu_timer(): u64 {
+  macos_time/mach_absolute_time()
+}
+
+fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
+    let parent_index = global_profiler_parent;
+    let anchor = global_profiler_anchors.get(anchor_index as uword);
+    let old_tsc_elapsed_inclusive = anchor.tsc_elapsed_inclusive;
+    
+    global_profiler_parent <- anchor_index;
+    let start_tsc = read_cpu_timer();
+    
+    {
+      label: label,
+      old_tsc_elapsed_inclusive: old_tsc_elapsed_inclusive,
+      start_tsc: start_tsc,
+      parent_index: parent_index,
+      anchor_index: anchor_index
+    }
+}
+
+fn end_profile_block(block: ProfileBlock): unit {
+    let elapsed = read_cpu_timer() - block.start_tsc;
+    global_profiler_parent <- block.parent_index;
+    
+    let parent = global_profiler_anchors.get(block.parent_index as uword);
+    let anchor = global_profiler_anchors.get(block.anchor_index as uword);
+    
+    parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive.* - elapsed;
+    anchor <- {
+      tsc_elapsed_exclusive: anchor.tsc_elapsed_exclusive.* + elapsed,
+      tsc_elapsed_inclusive: block.old_tsc_elapsed_inclusive + elapsed,
+      hit_count: anchor.hit_count.* + 1,
+      label: block.label,
+    }
+}
+
+// Print timing results for a single anchor
+fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
+    let percent = 100.0 * (anchor.tsc_elapsed_exclusive as f64) / (total_tsc_elapsed as f64);
+    print("  {anchor.label}[{anchor.hit_count}]: {anchor.tsc_elapsed_exclusive} ({percent}%");
+    // std.io.printf("  %s[%llu]: %llu (%.2f%%", anchor.label, anchor.hit_count, anchor.tsc_elapsed_exclusive, percent);
+    
+    if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
+        let percent_with_children = 100.0 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
+        print(", {percent_with_children}% w/children");
+    };
+    print(")\n")
+}
+
+// Print all anchor profiling data
+fn print_anchor_data(total_cpu_elapsed: u64): unit {
+    for anchor in global_profiler_anchors.asBuffer().refIter() do {
+        if anchor.tsc_elapsed_inclusive != 0 {
+            print_time_elapsed(total_cpu_elapsed, anchor)
+        }
+    }
+}
+
+// Begin overall profiling session
+fn begin_profile(): unit {
+    global_profile_start_tsc <- read_cpu_timer()
+}
+
+// End profiling session and print results
+fn end_and_print_profile(): unit {
+    global_profile_end_tsc <- read_cpu_timer();
+    let total_tsc_elapsed = global_profile_end_tsc.* - global_profile_start_tsc.*;
+    
+    let nanos_elapsed = macos_time/perf_to_nanos(total_tsc_elapsed);
+    let total_time_ms = nanos_elapsed / 1_000_000;
+    println("\nTotal time: {total_time_ms}ms");
+    
+    print_anchor_data(total_tsc_elapsed)
+}
+
+// Profiling macros using defer pattern
+let* mut profile_counter: *mut u32 = 1;
+
+fn time_block(label: string): ProfileBlock {
+    let anchor_index = profile_counter.*;
+    profile_counter <- profile_counter.* + 1;
+    begin_profile_block(label, anchor_index)
+}
+
+// Example function to profile
+fn expensive_computation(n: iword): iword {
+    let block = time_block("expensive_computation");
+    // defer end_profile_block(block)
+    
+    let* mut result = 0;
+    for IntRange/upTo(n) do {
+        result <- it * it
+    };
+
+    end_profile_block(block);
+
+    result
+}
+
+// Another example function with nested profiling
+fn process_data(): iword {
+  let block = time_block("process_data");
+  // end_profile_block(block)
+   
+  let result1 = expensive_computation(1000);
+    
+  // Nested profiling block
+  {
+    let nested_block = time_block("data_validation");
+    // defer end_profile_block(nested_block);
+    
+    for IntRange/upTo(500) do {
+        it * 2
+    };
+    end_profile_block(nested_block);
+  };
+  
+  let result2 = expensive_computation(2000);
+  result1 + result2
+}
+
+fn main(): i32 {
+  begin_profile();
+  
+  let main_block = time_block("main");
+  // defer end_profile_block(main_block);
+  
+  let result = process_data();
+  println("Result: {result}");
+
+  end_profile_block(main_block);
+   
+  end_and_print_profile();
+  0
+}

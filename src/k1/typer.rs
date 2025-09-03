@@ -724,7 +724,6 @@ pub struct SpecializationInfo {
     pub parent_function: FunctionId,
     pub type_arguments: NamedTypeSlice,
     pub function_type_arguments: NamedTypeSlice,
-    pub static_type_arguments: NamedTypeSlice,
     pub specialized_function_id: FunctionId,
     pub specialized_function_type: TypeId,
 }
@@ -1478,10 +1477,8 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
-// nocommit switch to CallId too after patterns
 nz_u32_id!(CallId);
 
-// TODO(perf): TypedExpr is very big
 static_assert_size!(TypedExpr, 56);
 #[derive(Clone)]
 pub enum TypedExpr {
@@ -1633,7 +1630,7 @@ impl TypedExpr {
             TypedExpr::BinaryOp(binary_op) => binary_op.span,
             TypedExpr::UnaryOp(unary_op) => unary_op.span,
             TypedExpr::Block(b) => b.span,
-            TypedExpr::Call { span, .. } => span,
+            TypedExpr::Call { span, .. } => *span,
             TypedExpr::Match(match_) => match_.span,
             TypedExpr::WhileLoop(while_loop) => while_loop.span,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
@@ -2273,6 +2270,7 @@ pub struct TypedModuleBuffers {
     /// For Pattern matching trials
     trial_ctors: Vec<PatternCtorTrialEntry>,
     field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
+    int_parse: String,
 }
 
 pub struct VmExecuteResult {
@@ -2503,6 +2501,7 @@ impl TypedProgram {
                 lexer_tokens: Vec::with_capacity(16384),
                 trial_ctors: Vec::with_capacity(1024),
                 field_ctors: (0..128).map(|_| Vec::with_capacity(128)).collect::<Vec<_>>(),
+                int_parse: String::with_capacity(128),
             },
             named_types: VPool::make_with_hint("named_types", 32768),
             existential_type_params: VPool::make_with_hint("function_type_params", 8192),
@@ -3487,8 +3486,7 @@ impl TypedProgram {
                 // Use the expected type hint if provided (e.g., uword for array sizes)
                 let eval_context =
                     EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
-                let parsed_value =
-                    self.eval_numeric_value(&numeric.text, numeric.span, eval_context)?;
+                let parsed_value = self.eval_numeric_value(numeric.span, eval_context)?;
                 match parsed_value {
                     TypedExpr::Integer(int_expr) => {
                         Ok((StaticValue::Int(int_expr.value), int_expr.get_type()))
@@ -4230,8 +4228,8 @@ impl TypedProgram {
                         ),
                     },
                     ParsedLiteral::Numeric(num_lit) => {
+                        let num_lit = *num_lit;
                         match self.eval_numeric_value(
-                            &num_lit.text,
                             num_lit.span,
                             EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
@@ -5092,7 +5090,10 @@ impl TypedProgram {
     ) -> TyperResult<()> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
-            self.ice_with_span("ast mapping for global is missing", parsed_global.span)
+            // This means we failed to compile the definition; or we have a bug!
+            // TODO: Store failures so we can be certain which is true!
+            debug!("skipping rest of global body");
+            return Ok(());
         };
         let typed_global = self.globals.get(global_id);
         let scope_id = typed_global.parent_scope;
@@ -5819,31 +5820,21 @@ impl TypedProgram {
         })
     }
 
-    fn eval_numeric_value(
-        &self,
-        parsed_text: &str,
-        span: SpanId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExpr> {
-        if parsed_text.contains('.') {
-            Ok(TypedExpr::Float(TypedFloatExpr {
-                value: self.eval_float_value(parsed_text, span, ctx)?,
-                span,
-            }))
+    fn eval_numeric_value(&mut self, span: SpanId, ctx: EvalExprContext) -> TyperResult<TypedExpr> {
+        let parsed_text = self.ast.get_span_content(span);
+        let is_float = parsed_text.contains('.');
+        if is_float {
+            Ok(TypedExpr::Float(TypedFloatExpr { value: self.eval_float_value(span, ctx)?, span }))
         } else {
             Ok(TypedExpr::Integer(TypedIntegerExpr {
-                value: self.eval_integer_value(parsed_text, span, ctx)?,
+                value: self.eval_integer_value(span, ctx)?,
                 span,
             }))
         }
     }
 
-    fn eval_float_value(
-        &self,
-        parsed_text: &str,
-        span: SpanId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedFloatValue> {
+    fn eval_float_value(&self, span: SpanId, ctx: EvalExprContext) -> TyperResult<TypedFloatValue> {
+        let parsed_text = self.ast.get_span_content(span);
         let expected_width = match ctx.expected_type_id {
             None => NumericWidth::B32,
             Some(F64_TYPE_ID) => NumericWidth::B64,
@@ -5863,12 +5854,51 @@ impl TypedProgram {
     }
 
     fn eval_integer_value(
-        &self,
-        parsed_text: &str,
+        &mut self,
         span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedIntValue> {
-        let default = IntegerType::IWord(self.target_word_size());
+        let parsed_text = self.ast.get_span_content(span);
+
+        let maybe_suffix_char = parsed_text.chars().find_position(|&c| c == 'u' || c == 'i');
+        let suffix_result = match maybe_suffix_char {
+            None => None,
+            Some((offset, _)) => {
+                let (num, suffix) = parsed_text.split_at(offset);
+                let int_type = match suffix {
+                    "u8" => IntegerType::U8,
+                    "u16" => IntegerType::U16,
+                    "u32" => IntegerType::U32,
+                    "u64" => IntegerType::U64,
+                    "uword" => IntegerType::UWord(self.target_word_size()),
+                    "i8" => IntegerType::I8,
+                    "i16" => IntegerType::I16,
+                    "i32" => IntegerType::I32,
+                    "i64" => IntegerType::I64,
+                    "iword" => IntegerType::IWord(self.target_word_size()),
+                    _ => {
+                        return Err(errf!(
+                            span,
+                            "Invalid integer suffix '{}'; expected u8, u16, u32, u64, uword, i8, i16, i32, i64, iword",
+                            suffix
+                        ));
+                    }
+                };
+                Some((int_type, num))
+            }
+        };
+
+        let (suffix_int_type, num_to_parse) = match suffix_result {
+            None => (None, parsed_text),
+            Some((int_type, num_text)) => (Some(int_type), num_text),
+        };
+
+        self.buffers.int_parse.push_str(parsed_text);
+        if num_to_parse.contains('_') {
+            self.buffers.int_parse.retain(|c| c != '_');
+        };
+        let num_to_parse = &self.buffers.int_parse;
+
         let expected_type_id = match ctx.expected_type_id {
             None => None,
             Some(t) => Some(match self.types.get_no_follow_static(t) {
@@ -5876,8 +5906,9 @@ impl TypedProgram {
                 _ => t,
             }),
         };
-        let expected_int_type = match expected_type_id {
-            None => default,
+        let default_int_type = IntegerType::IWord(self.target_word_size());
+        let expected_int_type = suffix_int_type.unwrap_or_else(|| match expected_type_id {
+            None => default_int_type,
             Some(U8_TYPE_ID) => IntegerType::U8,
             Some(U16_TYPE_ID) => IntegerType::U16,
             Some(U32_TYPE_ID) => IntegerType::U32,
@@ -5890,16 +5921,16 @@ impl TypedProgram {
             Some(IWORD_TYPE_ID) => IntegerType::IWord(self.target_word_size()),
             Some(_other) => {
                 // Parse as default and let typechecking fail
-                default
+                default_int_type
             }
-        };
+        });
         macro_rules! parse_int {
             ($int_type:ident, $rust_int_type:ty, $base: expr, $offset: expr) => {{
-                let result = <$rust_int_type>::from_str_radix(&parsed_text[$offset..], $base);
+                let result = <$rust_int_type>::from_str_radix(&num_to_parse[$offset..], $base);
                 result.map(|int| TypedIntValue::$int_type(int))
             }};
         }
-        if parsed_text.starts_with("0x") {
+        let ret = if num_to_parse.starts_with("0x") {
             let hex_base = 16;
             let offset = 2;
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
@@ -5919,7 +5950,7 @@ impl TypedProgram {
             let value = value
                 .map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))?;
             Ok(value)
-        } else if parsed_text.starts_with("0b") {
+        } else if num_to_parse.starts_with("0b") {
             let bin_base = 2;
             let offset = 2;
             let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
@@ -5965,7 +5996,9 @@ impl TypedProgram {
                 )
             })?;
             Ok(value)
-        }
+        };
+        self.buffers.int_parse.clear();
+        ret
     }
 
     fn eval_variable(
@@ -6629,7 +6662,7 @@ impl TypedProgram {
                 Ok(self.exprs.add(TypedExpr::Char(*byte, *span)))
             }
             ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
-                let numeric_expr = self.eval_numeric_value(&int.text, int.span, ctx)?;
+                let numeric_expr = self.eval_numeric_value(int.span, ctx)?;
                 Ok(self.exprs.add(numeric_expr))
             }
             ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => {
@@ -8267,7 +8300,7 @@ impl TypedProgram {
                 Ok(())
             }
             TypedPattern::Enum(enum_pattern) => {
-                let enum_pattern = enum_pattern.clone();
+                let enum_pattern = *enum_pattern;
                 let is_referencing = is_immediately_inside_reference_pattern;
                 let is_variant_target =
                     if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
@@ -10919,21 +10952,8 @@ impl TypedProgram {
                     ctx,
                 )?;
 
-                // TODO: Kill static type args as their own thing since I made statics more of
-                //       a first-class type kind; we should just use static constraints on type
-                //       parameters instead
-                let static_type_args = self.determine_static_type_args_for_call(
-                    signature,
-                    &original_args_and_params,
-                    ctx,
-                )?;
-
-                let specialized_function_type = self.substitute_in_function_signature(
-                    type_args,
-                    function_type_args,
-                    static_type_args,
-                    signature,
-                );
+                let specialized_function_type =
+                    self.substitute_in_function_signature(type_args, function_type_args, signature);
                 let is_abstract = self
                     .types
                     .get_contained_type_variable_counts(specialized_function_type)
@@ -10952,7 +10972,6 @@ impl TypedProgram {
                             let function_id = self.specialize_function_signature(
                                 type_args,
                                 function_type_args,
-                                static_type_args,
                                 function_id,
                             )?;
                             Callee::StaticFunction(function_id)
@@ -11037,7 +11056,8 @@ impl TypedProgram {
         {
             self.handle_intrinsic(call, intrinsic_type, ctx)
         } else {
-            Ok(self.exprs.add(TypedExpr::Call(call)))
+            let call_id = self.calls.add(call);
+            Ok(self.exprs.add(TypedExpr::Call { call_id, return_type: call_return_type, span }))
         }
     }
 
@@ -11306,8 +11326,6 @@ impl TypedProgram {
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
         function_type_arguments: NamedTypeSlice,
-        // Must 'zip' up with each static type param
-        static_type_arguments: NamedTypeSlice,
         generic_function_sig: FunctionSignature,
     ) -> TypeId {
         //let generic_function = self.get_function(generic_function_id);
@@ -11328,21 +11346,6 @@ impl TypedProgram {
             subst_pairs.push(TypeSubstitutionPair {
                 from: function_type_param.type_id,
                 to: function_type_arg.type_id,
-            })
-        }
-        // Here, we add substitution pairs for each static type param.
-        // Examples:
-        // static string -> static[string, "Hello, World"];
-        // static int -> static[int, 42]
-        for (static_type_param, static_type_arg) in self
-            .existential_type_params
-            .get_slice(generic_function_sig.static_type_params)
-            .iter()
-            .zip(self.named_types.get_slice(static_type_arguments))
-        {
-            subst_pairs.push(TypeSubstitutionPair {
-                from: static_type_param.type_id,
-                to: static_type_arg.type_id,
             })
         }
 
@@ -11373,8 +11376,6 @@ impl TypedProgram {
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
         function_type_arguments: NamedTypeSlice,
-        // Must 'zip' up with each static type param
-        static_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
@@ -11388,10 +11389,6 @@ impl TypedProgram {
                 && self.named_types.slices_equal_copy(
                     existing_specialization.function_type_arguments,
                     function_type_arguments,
-                )
-                && self.named_types.slices_equal_copy(
-                    existing_specialization.static_type_arguments,
-                    static_type_arguments,
                 )
             {
                 debug!(
@@ -11412,7 +11409,6 @@ impl TypedProgram {
         let specialized_function_type_id = self.substitute_in_function_signature(
             type_arguments,
             function_type_arguments,
-            static_type_arguments,
             generic_function.signature(),
         );
         debug!(
@@ -11474,7 +11470,6 @@ impl TypedProgram {
             parent_function: generic_function_id,
             type_arguments,
             function_type_arguments,
-            static_type_arguments,
             specialized_function_id: FunctionId::PENDING,
             specialized_function_type: specialized_function_type_id,
         };
@@ -12554,8 +12549,8 @@ impl TypedProgram {
         // Instantiate type arguments.
         let mut type_params: SmallVec<[NameAndType; 8]> =
             SmallVec::with_capacity(parsed_type_params.len());
-        let mut function_type_params: SmallVec<[ExistentialTypeParam; 4]> = SmallVec::new();
-        let mut static_type_params: SmallVec<[ExistentialTypeParam; 4]> = SmallVec::new();
+        let mut function_type_params: SV4<ExistentialTypeParam> = SmallVec::new();
+        let mut static_type_params: SV4<ExistentialTypeParam> = SmallVec::new();
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
@@ -14577,6 +14572,8 @@ impl TypedProgram {
 
     fn add_default_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
         let core_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core]);
+        let core_mem: IdentSlice =
+            self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core, self.ast.idents.b.mem]);
         // Cloning the eco_vec is cheap, as long as we clone the same one not make fresh ones
         macro_rules! core_use {
             ($name: expr) => {
@@ -14642,8 +14639,11 @@ impl TypedProgram {
             core_use!("assertMsg"),
             core_use!("crash"),
             core_use!("mem"),
+            core_use!("mem"),
             core_use!("types"),
             core_use!("k1"),
+            core_use!("IntRange"),
+            QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
         ];
         for du in default_uses.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse { target: du, alias: None, span });

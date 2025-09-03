@@ -121,7 +121,8 @@ impl TypedProgram {
                     recurse_stmt!(*stmt);
                 }
             }
-            TypedExpr::Call(call) => {
+            TypedExpr::Call { call_id, .. } => {
+                let call = self.calls.get(*call_id);
                 match call.callee {
                     Callee::DynamicLambda(callee_expr) => recurse!(callee_expr),
                     Callee::DynamicFunction { function_pointer_expr } => {

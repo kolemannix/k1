@@ -50,7 +50,7 @@ use crate::typer::types::{
     TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
-    AssignmentKind, BinaryOp, BinaryOpKind, Call, Callee, CastType, FunctionId,
+    AssignmentKind, BinaryOp, BinaryOpKind, Call, CallId, Callee, CastType, FunctionId,
     IntegerCastDirection, IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, LetStmt,
     Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr, StaticValue,
     StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue, TypedFunction,
@@ -767,6 +767,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         locn
     }
 
+    #[allow(unused)]
     fn set_debug_location(&self, locn: DILocation<'ctx>) {
         self.builder.set_current_debug_location(locn)
     }
@@ -2343,7 +2344,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let block_value = self.codegen_block(block)?;
                 Ok(block_value)
             }
-            TypedExpr::Call(call) => self.codegen_function_call(call),
+            TypedExpr::Call { call_id, .. } => self.codegen_function_call(*call_id),
             TypedExpr::EnumConstructor(enum_constr) => {
                 let llvm_type = self.codegen_type(enum_constr.variant_type_id)?;
                 let enum_ptr = self.build_k1_alloca(&llvm_type, "enum_constr");
@@ -3028,7 +3029,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         alloca
     }
 
-    fn codegen_function_call(&mut self, call: &Call) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_function_call(&mut self, call_id: CallId) -> CodegenResult<LlvmValue<'ctx>> {
+        let call = self.k1.calls.get(call_id);
         let typed_function = call.callee.maybe_function_id().map(|f| self.k1.get_function(f));
         if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
             if intrinsic_type.is_inlined() {
@@ -3812,8 +3814,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_function_body(&mut self, function_id: FunctionId) -> CodegenResult<()> {
         debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, true));
-        let maybe_starting_block = self.builder.get_insert_block();
-        let previous_debug_location = self.get_debug_location();
         let typed_function = self.k1.get_function(function_id);
         let function_type = self.k1.types.get(typed_function.type_id).as_function().unwrap();
 

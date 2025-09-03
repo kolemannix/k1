@@ -206,40 +206,18 @@ pub struct ParsedList {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedNumericLiteral {
-    pub text: String,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ParsedLiteral {
     Unit(SpanId),
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
     String(StringId, SpanId),
-}
-
-impl Display for ParsedLiteral {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParsedLiteral::Unit(_) => f.write_str("()"),
-            ParsedLiteral::Char(byte, _) => {
-                f.write_char('\'')?;
-                f.write_char(*byte as char)?;
-                f.write_char('\'')
-            }
-            ParsedLiteral::Numeric(i) => f.write_str(&i.text),
-            ParsedLiteral::Bool(true, _) => f.write_str("true"),
-            ParsedLiteral::Bool(false, _) => f.write_str("false"),
-            ParsedLiteral::String(s, _) => {
-                f.write_char('"')?;
-                write!(f, "{}", s).unwrap();
-                f.write_char('"')
-            }
-        }
-    }
 }
 
 impl ParsedLiteral {
@@ -1276,10 +1254,10 @@ pub struct ParsedExpressionPool {
     metadata: VPool<ParsedExprMetadata, ParsedExprId>,
 }
 impl ParsedExpressionPool {
-    pub fn new() -> Self {
+    pub fn make_with_hint(expected_elements: usize) -> Self {
         ParsedExpressionPool {
-            expressions: VPool::make_with_hint("parsed_expr", 65536 * 2),
-            metadata: VPool::make_with_hint("parsed_expr_metadata", 65536 * 2),
+            expressions: VPool::make_with_hint("parsed_expr", expected_elements),
+            metadata: VPool::make_with_hint("parsed_expr_metadata", expected_elements),
         }
     }
 
@@ -1467,7 +1445,7 @@ impl ParsedProgram {
             sources: Sources::default(),
             idents,
             strings: StringPool::make(),
-            exprs: ParsedExpressionPool::new(),
+            exprs: ParsedExpressionPool::make_with_hint(131072),
             type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
             stmts: VPool::make_with_hint("parsed_stmts", 65536),
@@ -2411,12 +2389,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
                 let text = self.token_chars(second);
                 if text.chars().next().unwrap().is_numeric() {
-                    let mut s = "-".to_string();
-                    s.push_str(text);
                     self.advance();
                     self.advance();
                     let span = self.extend_token_span(first, second);
-                    let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { text: s, span });
+                    let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { span });
                     Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
                 } else {
                     Err(error_expected("number following '-'", second))
@@ -2437,13 +2413,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else {
                     match text.chars().next() {
                         Some(c) if c.is_numeric() => {
-                            let s = text.to_string();
                             self.advance();
                             Ok(Some(self.add_expression(ParsedExpr::Literal(
-                                ParsedLiteral::Numeric(ParsedNumericLiteral {
-                                    text: s,
-                                    span: first.span,
-                                }),
+                                ParsedLiteral::Numeric(ParsedNumericLiteral { span: first.span }),
                             ))))
                         }
                         _ => Ok(None),
@@ -4315,7 +4287,7 @@ impl ParsedProgram {
                 write!(w, "{}", op.op_kind)?;
                 self.display_expr_id(w, op.expr)
             }
-            ParsedExpr::Literal(lit) => w.write_fmt(format_args!("{}", lit)),
+            ParsedExpr::Literal(lit) => self.display_literal(w, lit),
             ParsedExpr::InterpolatedString(is) => {
                 w.write_char('"')?;
                 for part in &is.parts {
@@ -4443,6 +4415,29 @@ impl ParsedProgram {
                 w.write_char('/')?;
                 self.display_expr_id(w, qcall.call_expr)?;
                 Ok(())
+            }
+        }
+    }
+
+    fn display_literal(&self, w: &mut impl Write, lit: &ParsedLiteral) -> std::fmt::Result {
+        match lit {
+            ParsedLiteral::Unit(_) => w.write_str("()"),
+            ParsedLiteral::Char(byte, _) => {
+                w.write_char('\'')?;
+                w.write_char(*byte as char)?;
+                w.write_char('\'')
+            }
+            ParsedLiteral::Numeric(i) => {
+                let s = self.get_span_content(i.span);
+                w.write_str(s)?;
+                Ok(())
+            }
+            ParsedLiteral::Bool(true, _) => w.write_str("true"),
+            ParsedLiteral::Bool(false, _) => w.write_str("false"),
+            ParsedLiteral::String(s, _) => {
+                w.write_char('"')?;
+                write!(w, "{}", s).unwrap();
+                w.write_char('"')
             }
         }
     }
@@ -4606,7 +4601,7 @@ impl ParsedProgram {
                 w.write_str("]")
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                write!(w, "{}", parsed_literal)?;
+                self.display_literal(w, parsed_literal)?;
                 Ok(())
             }
         }

@@ -679,66 +679,6 @@ impl TypedProgram {
         Ok(function_type_args_handle)
     }
 
-    pub(crate) fn determine_static_type_args_for_call(
-        &mut self,
-        original_function_sig: FunctionSignature,
-        args_and_params: &ArgsAndParams,
-        ctx: EvalExprContext,
-    ) -> TyperResult<NamedTypeSlice> {
-        let mut static_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
-        if !original_function_sig.static_type_params.is_empty() {
-            for static_type_param in self
-                .existential_type_params
-                .copy_slice_sv::<4>(original_function_sig.static_type_params)
-                .iter()
-            {
-                let (corresponding_arg, corresponding_value_param) =
-                    args_and_params.get(static_type_param.value_param_index as usize);
-                debug!(
-                    "The param for static_type_param {} {} is {} and passed: {:?}",
-                    static_type_param.type_id,
-                    self.ident_str(static_type_param.name),
-                    self.ident_str(corresponding_value_param.name),
-                    corresponding_arg
-                );
-
-                let expr_id = match corresponding_arg {
-                    MaybeTypedExpr::Parsed(p) => {
-                        self.eval_expr(p, ctx.with_expected_type(Some(static_type_param.type_id)))?
-                    }
-                    MaybeTypedExpr::Typed(typed_expr_id) => typed_expr_id,
-                };
-                let expr_type_id = self.exprs.get(expr_id).get_type();
-                let final_parameter_type = if let Type::Static(_passed_static_type) =
-                    self.types.get_no_follow_static(expr_type_id)
-                {
-                    expr_type_id
-                } else if let Ok(lifted) = self.attempt_static_lift(expr_id) {
-                    self.exprs.get(lifted).get_type()
-                } else {
-                    return failf!(
-                        self.exprs.get(expr_id).get_span(),
-                        "Expected a static value for static type parameter {}, but got {}",
-                        self.ident_str(static_type_param.name),
-                        self.type_id_to_string(expr_type_id)
-                    );
-                };
-                static_type_args.push(NameAndType {
-                    name: static_type_param.name,
-                    type_id: final_parameter_type,
-                });
-            }
-        }
-        if !static_type_args.is_empty() {
-            debug!(
-                "We're passing function_type_args! {}",
-                self.pretty_print_named_types(&static_type_args, ", ")
-            );
-        }
-        let static_type_args_handle = self.named_types.add_slice_copy(&static_type_args);
-        Ok(static_type_args_handle)
-    }
-
     fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
         debug!(
             "Applying substitution {} -> {} to set {}",

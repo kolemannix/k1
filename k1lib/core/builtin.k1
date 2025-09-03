@@ -119,6 +119,11 @@ ns types {
     value: Pointer
   }
 
+
+  fn makeAny[T](t: *T): Any {
+    { typeId: typeId[T](), value: t as Pointer }
+  }
+
 }
 
 ns meta {
