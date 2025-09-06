@@ -55,7 +55,7 @@ ns meta {
 
     // begin fn get
     code.line(`  fn get(self: {name}, index: uword): {tt} {{`);
-    code.line(`    let* mut ret: *mut {tt} = mem/zeroed();`);
+    code.line(`    let* ret: *mut {tt} = mem/zeroed();`);
     for f in fields do {
       code.line(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);`)
     };
@@ -74,7 +74,7 @@ ns meta {
     for f in fields do {
       code.line(`    self.ARR_{f.name}*.push(value.{f.name});`)
     };
-    code.line(`  }`); // end fn push
+    code.line(`}`); // end fn push
 
     code.line(`}`); // end ns
     code.build()

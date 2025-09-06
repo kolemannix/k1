@@ -26,12 +26,12 @@ fn day2(): int {
     };
     *digits
   };
-  let mut sum = 0;
+  let sum = 0;
   for lineDigits do {
     if it.first() is .Some(fst) {
       if it.last() is .Some(lst) {
         let two_digit = fst * 10 + lst;
-        sum = sum + two_digit;
+        sum := sum + two_digit;
       };
     };
   };
@@ -45,28 +45,28 @@ fn main(): i32 {
   printUInt(input.len);
   println(" characters long");
   let* digits: List[List[int]]* = [];
-  let mut line: u64 = 0;
-  let mut first = true;
+  let line: u64 = 0;
+  let first = true;
   for c in input do {
     if c == '\n' {
-      line = line + 1;
-      first = true;
+      line := line + 1;
+      first := true;
     };
     if c.toAsciiDigit() is .Some(i) {
       if first {
         digits.push([i as int]);
-        first = false;
+        first := false;
       } else {
         digits.getRef(line).push(i as int);
       };
     };
   };
-  let mut sum = 0;
+  let sum = 0;
   for *digits do {
     if it.first() is .Some(fst) {
       if it.last() is .Some(lst) {
         let two_digit = fst * 10 + lst;
-        sum = sum + two_digit;
+        sum := sum + two_digit;
       };
     };
   };

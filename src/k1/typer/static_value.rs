@@ -22,19 +22,30 @@ pub struct StaticEnum {
     pub payload: Option<StaticValueId>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum StaticContainerKind {
+    View,
+    Array,
+}
+
 #[derive(Debug, Clone)]
-pub struct StaticView {
+pub struct StaticContainer {
     pub elements: EcoVec<StaticValueId>,
+    pub kind: StaticContainerKind,
     pub type_id: TypeId,
 }
 
-impl StaticView {
+impl StaticContainer {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     pub fn len(&self) -> usize {
         self.elements.len()
+    }
+
+    pub fn is_array(&self) -> bool {
+        matches!(self.kind, StaticContainerKind::Array)
     }
 }
 
@@ -52,7 +63,7 @@ pub enum StaticValue {
     NullPointer,
     Struct(StaticStruct),
     Enum(StaticEnum),
-    View(StaticView),
+    LinearContainer(StaticContainer),
 }
 
 impl StaticValue {
@@ -67,7 +78,10 @@ impl StaticValue {
             StaticValue::NullPointer => "nullptr",
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
-            StaticValue::View(_) => "view",
+            StaticValue::LinearContainer(c) => match c.kind {
+                StaticContainerKind::View => "view",
+                StaticContainerKind::Array => "array",
+            },
         }
     }
 
@@ -82,7 +96,7 @@ impl StaticValue {
             StaticValue::NullPointer => POINTER_TYPE_ID,
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Enum(e) => e.variant_type_id,
-            StaticValue::View(v) => v.type_id,
+            StaticValue::LinearContainer(v) => v.type_id,
         }
     }
 
@@ -107,9 +121,9 @@ impl StaticValue {
         }
     }
 
-    pub fn as_view(&self) -> Option<&StaticView> {
+    pub fn as_view(&self) -> Option<&StaticContainer> {
         match self {
-            StaticValue::View(view) => Some(view),
+            StaticValue::LinearContainer(view) => Some(view),
             _ => None,
         }
     }
@@ -137,7 +151,8 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
                 s.type_id.hash(state);
                 s.fields.len().hash(state);
                 for &field_id in &s.fields {
-                    d.get(field_id).dep_hash(d, state);
+                    field_id.hash(state);
+                    // d.get(field_id).dep_hash(d, state);
                 }
             }
             StaticValue::Enum(e) => {
@@ -148,11 +163,11 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
                     d.get(payload_id).dep_hash(d, state);
                 }
             }
-            StaticValue::View(v) => {
+            StaticValue::LinearContainer(v) => {
                 v.type_id.hash(state);
                 v.elements.len().hash(state);
                 for &element_id in &v.elements {
-                    d.get(element_id).dep_hash(d, state);
+                    element_id.hash(state);
                 }
             }
         }
@@ -170,11 +185,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
             (StaticValue::String(a), StaticValue::String(b)) => a == b,
             (StaticValue::NullPointer, StaticValue::NullPointer) => true,
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
-                a.type_id == b.type_id
-                    && a.fields.len() == b.fields.len()
-                    && a.fields.iter().zip(b.fields.iter()).all(|(&a_field, &b_field)| {
-                        pool.get(a_field).dep_eq(pool.get(b_field), pool)
-                    })
+                a.type_id == b.type_id && a.fields.len() == b.fields.len() && a.fields == b.fields
             }
             (StaticValue::Enum(a), StaticValue::Enum(b)) => {
                 a.variant_type_id == b.variant_type_id
@@ -188,7 +199,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
                         _ => false,
                     }
             }
-            (StaticValue::View(a), StaticValue::View(b)) => {
+            (StaticValue::LinearContainer(a), StaticValue::LinearContainer(b)) => {
                 a.type_id == b.type_id
                     && a.elements.len() == b.elements.len()
                     && a.elements
@@ -250,6 +261,18 @@ impl StaticValuePool {
 
     pub fn add_int(&mut self, value: TypedIntValue) -> StaticValueId {
         self.add(StaticValue::Int(value))
+    }
+
+    pub fn add_view(
+        &mut self,
+        view_type_id: TypeId,
+        elements: EcoVec<StaticValueId>,
+    ) -> StaticValueId {
+        self.add(StaticValue::LinearContainer(StaticContainer {
+            type_id: view_type_id,
+            kind: StaticContainerKind::View,
+            elements,
+        }))
     }
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {

@@ -60,12 +60,20 @@ ns Buffer {
 
   fn filledIn[T](context mode: mem/AllocMode)(size: uword, value: T): Buffer[T] {
     let buf: Buffer[T] = _allocateIn[T](size);
-    let mut i = 0: uword;
-    // TODO(stdlib slow): Do a static specialization on T to get a memcpy when appropriate
-    while i < size {
-      buf.set(i, value);
-      i = i + 1;
-    };
+
+    // TODO: Make this specialization possible
+    //#if types/getTypeSchema[T]() is .Int(.U8) or .Int(.I8) {
+    //  let valueU8 = meta/typeAssert[T, u8](value);
+    //  println("specialized memset in Buffer/filledIn");
+    //  mem/set(dst = buf.dataPointer(), value = value, count = size)
+    //} else {
+    //println("unspecialized Buffer/filledIn");
+      let* i = 0: uword;
+      while i.* < size {
+        buf.getRefUnchecked(i.*) <- value;
+        i <- i.* + 1;
+      };
+    //};
     buf
   }
 
@@ -141,6 +149,10 @@ ns Buffer {
 
   fn getRefRead[T](self: Buffer[T], index: uword): *T {
     self.getRef[T](index) as *T
+  }
+
+  fn getRefUnchecked[T](self: Buffer[T], index: uword): *mut T {
+    self.dataPointer().refAtIndex[T](index)
   }
 
   fn getRef[T](self: Buffer[T], index: uword): *mut T {
@@ -234,7 +246,7 @@ ns Buffer {
   }
 
   fn sorted[T](self: Buffer[T]): Buffer[T] where T: Comparable {
-    let* mut list = List/wrapBuffer(self);
+    let* list = List/wrapBuffer(self);
     list.sort();
     list.asBuffer()
   }

@@ -1,9 +1,9 @@
 ns enum_basic;
 
 fn enumNoPayload(): unit {
-  let mut v: either Yes, No = .No;
+  let v: either Yes, No = .No;
   if v is .No { () } else { crash("") };
-  v = .Yes;
+  v := .Yes;
   if v is .Yes { () } else { crash("") };
 }
 

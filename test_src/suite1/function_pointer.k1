@@ -5,10 +5,10 @@ fn staticAddTwo(x: int): int { x + 2 }
 
 fn test(): unit {
   assert(staticAddOne.toRef() as Pointer != staticAddTwo.toRef() as Pointer);
-  let mut someAddFn = staticAddOne.toRef();
+  let someAddFn = staticAddOne.toRef();
   let x = someAddFn(10);
   assertEquals(x, 11);
-  someAddFn = staticAddTwo.toRef();
+  someAddFn := staticAddTwo.toRef();
   let y = someAddFn(20);
   assertEquals(y, 22);
 

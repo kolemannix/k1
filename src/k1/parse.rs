@@ -311,15 +311,11 @@ pub struct ParsedLet {
 }
 
 impl ParsedLet {
-    pub const FLAG_MUTABLE: u8 = 1;
-    pub const FLAG_CONTEXT: u8 = 2;
-    pub const FLAG_REFERENCING: u8 = 4;
+    pub const FLAG_CONTEXT: u8 = 1;
+    pub const FLAG_REFERENCING: u8 = 2;
 
-    pub fn make_flags(mutable: bool, context: bool, referencing: bool) -> u8 {
+    pub fn make_flags(context: bool, referencing: bool) -> u8 {
         let mut flags = 0;
-        if mutable {
-            flags |= Self::FLAG_MUTABLE;
-        }
         if context {
             flags |= Self::FLAG_CONTEXT;
         }
@@ -327,13 +323,6 @@ impl ParsedLet {
             flags |= Self::FLAG_REFERENCING;
         }
         flags
-    }
-
-    pub fn set_mutable(&mut self) {
-        self.flags |= Self::FLAG_MUTABLE;
-    }
-    pub fn is_mutable(&self) -> bool {
-        self.flags & Self::FLAG_MUTABLE != 0
     }
 
     pub fn set_context(&mut self) {
@@ -755,17 +744,15 @@ pub enum ParsedPattern {
     Reference(ParsedReferencePattern),
 }
 
-impl ParsedPattern {}
-
 #[derive(Debug, Clone)]
-pub struct Assignment {
+pub struct AssignStmt {
     pub lhs: ParsedExprId,
     pub rhs: ParsedExprId,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct SetStmt {
+pub struct StoreStmt {
     pub lhs: ParsedExprId,
     pub rhs: ParsedExprId,
     pub span: SpanId,
@@ -826,8 +813,8 @@ pub enum ParsedStmt {
     Use(UseStmt),                 // use core/list/new as foo
     Let(ParsedLet),               // let x = 42
     Require(ParsedRequire),       // require x is .Some(foo) else crash()
-    Assignment(Assignment),       // x = 42
-    SetRef(SetStmt),              // x <- 42
+    Assign(AssignStmt),           // x := 42
+    Store(StoreStmt),             // x <- 42
     LoneExpression(ParsedExprId), // println("asdfasdf")
 }
 static_assert_size!(ParsedStmt, 24);
@@ -1139,7 +1126,6 @@ pub struct ParsedGlobal {
     pub value_expr: ParsedExprId,
     pub span: SpanId,
     pub id: ParsedGlobalId,
-    pub is_mutable: bool,
     pub is_referencing: bool,
 }
 
@@ -1503,8 +1489,8 @@ impl ParsedProgram {
             ParsedStmt::Use(u) => u.span,
             ParsedStmt::Let(v) => v.span,
             ParsedStmt::Require(g) => g.span,
-            ParsedStmt::Assignment(a) => a.span,
-            ParsedStmt::SetRef(s) => s.span,
+            ParsedStmt::Assign(a) => a.span,
+            ParsedStmt::Store(s) => s.span,
             ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
         }
     }
@@ -2639,8 +2625,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if let Some(literal_expr_id) = self.parse_literal_atom()? {
             match self.ast.exprs.get(literal_expr_id) {
                 ParsedExpr::Literal(l) => {
-                    let type_expr_id =
-                        self.ast.type_exprs.add(ParsedTypeExpr::StaticLiteral(l.clone()));
+                    let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::StaticLiteral(*l));
                     Ok(Some(type_expr_id))
                 }
                 _ => unreachable!("parse_literal returned non-literal"),
@@ -3548,7 +3533,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let is_context = self.maybe_consume_next(K::KeywordContext).is_some();
-        let is_mutable = self.maybe_consume_next(K::KeywordMut).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let typ = match self.maybe_consume_next(K::Colon) {
             None => Ok(None),
@@ -3563,7 +3547,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
             value: initializer_expression,
-            flags: ParsedLet::make_flags(is_mutable, is_context, is_reference),
+            flags: ParsedLet::make_flags(is_context, is_reference),
             span,
         }))
     }
@@ -3588,7 +3572,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let is_mutable = self.maybe_consume_next(K::KeywordMut).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
@@ -3602,24 +3585,23 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
-            is_mutable,
             is_referencing,
         });
         Ok(Some(constant_id))
     }
 
-    fn expect_assignment(&mut self, lhs: ParsedExprId) -> ParseResult<Assignment> {
-        self.expect_eat_token(K::Equals)?;
+    fn expect_assignment(&mut self, lhs: ParsedExprId) -> ParseResult<AssignStmt> {
+        self.expect_eat_token(K::ColonEquals)?;
         let rhs = self.expect_expression()?;
         let span = self.extend_expr_span(lhs, rhs);
-        Ok(Assignment { lhs, rhs, span })
+        Ok(AssignStmt { lhs, rhs, span })
     }
 
-    fn expect_set_stmt(&mut self, lhs: ParsedExprId) -> ParseResult<SetStmt> {
+    fn expect_set_stmt(&mut self, lhs: ParsedExprId) -> ParseResult<StoreStmt> {
         self.expect_eat_token(K::LThinArrow)?;
         let rhs = self.expect_expression()?;
         let span = self.extend_expr_span(lhs, rhs);
-        Ok(SetStmt { lhs, rhs, span })
+        Ok(StoreStmt { lhs, rhs, span })
     }
 
     fn eat_fn_param(&mut self, is_context: bool) -> ParseResult<FnArgDef> {
@@ -3819,12 +3801,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             // Assignment:
             // - Validate expr type, since only some exprs can be LHS of an assignment
             // - Build assignment
-            if peeked.kind == K::Equals {
+            if peeked.kind == K::ColonEquals {
                 let assgn = self.expect_assignment(expr)?;
-                Ok(Some(self.ast.stmts.add(ParsedStmt::Assignment(assgn))))
+                Ok(Some(self.ast.stmts.add(ParsedStmt::Assign(assgn))))
             } else if peeked.kind == K::LThinArrow {
                 let set = self.expect_set_stmt(expr)?;
-                Ok(Some(self.ast.stmts.add(ParsedStmt::SetRef(set))))
+                Ok(Some(self.ast.stmts.add(ParsedStmt::Store(set))))
             } else {
                 Ok(Some(self.ast.stmts.add(ParsedStmt::LoneExpression(expr))))
             }
@@ -4616,8 +4598,7 @@ impl ParsedProgram {
             ParsedStmt::Let(let_stmt) => {
                 write!(
                     w,
-                    "let{}{}{} {} = ",
-                    if let_stmt.is_mutable() { "mut " } else { " " },
+                    "let{}{} {} = ",
                     if let_stmt.is_referencing() { "* " } else { " " },
                     if let_stmt.is_context() { "context " } else { " " },
                     self.idents.get_name(let_stmt.name)
@@ -4632,8 +4613,20 @@ impl ParsedProgram {
                 self.display_expr_id(w, require_stmt.else_body)?;
                 Ok(())
             }
-            ParsedStmt::Assignment(_assignment) => todo!(),
-            ParsedStmt::SetRef(_set_stmt) => todo!(),
+            ParsedStmt::Assign(assgn) => {
+                // <a> := <b>
+                self.display_expr_id(w, assgn.lhs)?;
+                write!(w, " := ")?;
+                self.display_expr_id(w, assgn.rhs)?;
+                Ok(())
+            }
+            ParsedStmt::Store(store) => {
+                // <a> <- <b>
+                self.display_expr_id(w, store.lhs)?;
+                write!(w, " <- ")?;
+                self.display_expr_id(w, store.rhs)?;
+                Ok(())
+            }
             ParsedStmt::LoneExpression(parsed_expression_id) => {
                 self.display_expr_id(w, *parsed_expression_id)
             }

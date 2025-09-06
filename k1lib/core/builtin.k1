@@ -221,7 +221,8 @@ ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
 
 ns Buffer {
   fn equalsBits[T](self: Buffer[T], other: Buffer[T]): bool {
-    if self.len != other.len false else {
+    if self.len == 0 and other.len == 0 true
+    else if self.len != other.len       false else {
       mem/equals(self.dataPointer(), other.dataPointer(), self.sizeBytes())
     }
   }
@@ -428,10 +429,10 @@ ns Array {
 
   fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[N x T] {
     let arrayUninit = allocate[N, T]();
-    let mut i: uword = 0;
-    while i < n.fromStatic() {
-      arrayUninit.getRef(i) <- t;
-      i = i + 1;
+    let* i = 0uword;
+    while i.* < n.fromStatic() {
+      arrayUninit.getRef(i.*) <- t;
+      i <- i.* + 1;
     };
     arrayUninit
   }

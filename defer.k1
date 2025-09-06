@@ -1,18 +1,19 @@
 // Port of basic block profiler from Casey Muratori's Computer Enhance
 
 #if k1/OS_MACOS ns macos_time {
-  deftype mach_timebase_info_data_t = { denom: u32, numer: u32 }
+  deftype mach_timebase_info_data_t = { numer: u32, denom: u32 }
 
   extern("mach_absolute_time") fn mach_absolute_time(): u64
   extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
 
-  let* mut timebase: *mut mach_timebase_info_data_t = { denom: 0, numer: 0 };
+  let* timebase: *mut mach_timebase_info_data_t = { numer: 0, denom: 0 };
 
   fn perf_to_nanos(counter: u64): u64 {
     if (timebase.denom == 0) {
       mach_timebase_info(timebase);
     };
-    counter * (timebase.numer as u64) / (timebase.denom as u64);
+    eprintln("timebase is {timebase.numer} / {timebase.denom}");
+    (counter * (timebase.numer as u64)) / (timebase.denom as u64);
   }
 
 }
@@ -34,10 +35,10 @@ deftype ProfileBlock = {
 }
 
 // Global profiler state
-let* mut global_profiler_anchors: *mut Array[4096 x ProfileAnchor] = zeroed();
-let* mut global_profiler_parent: *mut u32 = 0;
-let* mut global_profile_start_tsc: *mut u64 = 0;
-let* mut global_profile_end_tsc: *mut u64 = 0;
+let* global_profiler_anchors: *mut Array[4096 x ProfileAnchor] = zeroed();
+let* global_profiler_parent: *mut u32 = 0;
+let* global_profile_start_tsc: *mut u64 = 0;
+let* global_profile_end_tsc: *mut u64 = 0;
 
 fn read_cpu_timer(): u64 {
   macos_time/mach_absolute_time()
@@ -45,7 +46,19 @@ fn read_cpu_timer(): u64 {
 
 fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let parent_index = global_profiler_parent;
-    let anchor = global_profiler_anchors.get(anchor_index as uword);
+    eprintln("begin {label} with index {anchor_index}");
+    let anchor = global_profiler_anchors.getRef(anchor_index as uword);
+    
+    // Initialize anchor on first use
+    if anchor.label == "" {
+        anchor <- {
+            tsc_elapsed_exclusive: 0,
+            tsc_elapsed_inclusive: 0,
+            hit_count: 0,
+            label: label,
+        }
+    };
+    
     let old_tsc_elapsed_inclusive = anchor.tsc_elapsed_inclusive;
     
     global_profiler_parent <- anchor_index;
@@ -64,26 +77,26 @@ fn end_profile_block(block: ProfileBlock): unit {
     let elapsed = read_cpu_timer() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
-    let parent = global_profiler_anchors.get(block.parent_index as uword);
-    let anchor = global_profiler_anchors.get(block.anchor_index as uword);
+    let parent = global_profiler_anchors.getRef(block.parent_index as uword);
+    let anchor = global_profiler_anchors.getRef(block.anchor_index as uword);
     
-    parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive.* - elapsed;
+    parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive - elapsed;
     anchor <- {
-      tsc_elapsed_exclusive: anchor.tsc_elapsed_exclusive.* + elapsed,
+      tsc_elapsed_exclusive: anchor.tsc_elapsed_exclusive + elapsed,
       tsc_elapsed_inclusive: block.old_tsc_elapsed_inclusive + elapsed,
-      hit_count: anchor.hit_count.* + 1,
+      hit_count: anchor.hit_count + 1,
       label: block.label,
     }
 }
 
 // Print timing results for a single anchor
 fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
-    let percent = 100.0 * (anchor.tsc_elapsed_exclusive as f64) / (total_tsc_elapsed as f64);
+    let percent = 100.0: f64 * (anchor.tsc_elapsed_exclusive as f64) / (total_tsc_elapsed as f64);
     print("  {anchor.label}[{anchor.hit_count}]: {anchor.tsc_elapsed_exclusive} ({percent}%");
     // std.io.printf("  %s[%llu]: %llu (%.2f%%", anchor.label, anchor.hit_count, anchor.tsc_elapsed_exclusive, percent);
     
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
-        let percent_with_children = 100.0 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
+        let percent_with_children = 100.0: f64 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
         print(", {percent_with_children}% w/children");
     };
     print(")\n")
@@ -92,7 +105,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64): unit {
     for anchor in global_profiler_anchors.asBuffer().refIter() do {
-        if anchor.tsc_elapsed_inclusive != 0 {
+        if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }
     }
@@ -115,60 +128,35 @@ fn end_and_print_profile(): unit {
     print_anchor_data(total_tsc_elapsed)
 }
 
-// Profiling macros using defer pattern
-let* mut profile_counter: *mut u32 = 1;
-
-fn time_block(label: string): ProfileBlock {
-    let anchor_index = profile_counter.*;
-    profile_counter <- profile_counter.* + 1;
+fn time_block[Label: static string](label: Label, anchor_index: u32): ProfileBlock {
+    // nocommit
+    // let anchor_index: u32 = meta/specCount();
+    let anchor_index = anchor_index;
     begin_profile_block(label, anchor_index)
 }
 
-// Example function to profile
-fn expensive_computation(n: iword): iword {
-    let block = time_block("expensive_computation");
+fn expensive_computation(n: iword): unit {
+    let block = time_block("expensive_computation".toStatic(), 0);
     // defer end_profile_block(block)
     
-    let* mut result = 0;
+    let* result = 0;
     for IntRange/upTo(n) do {
-        result <- it * it
+        println("{it * it}");
     };
 
     end_profile_block(block);
 
-    result
-}
-
-// Another example function with nested profiling
-fn process_data(): iword {
-  let block = time_block("process_data");
-  // end_profile_block(block)
-   
-  let result1 = expensive_computation(1000);
-    
-  // Nested profiling block
-  {
-    let nested_block = time_block("data_validation");
-    // defer end_profile_block(nested_block);
-    
-    for IntRange/upTo(500) do {
-        it * 2
-    };
-    end_profile_block(nested_block);
-  };
-  
-  let result2 = expensive_computation(2000);
-  result1 + result2
 }
 
 fn main(): i32 {
   begin_profile();
   
-  let main_block = time_block("main");
+  let main_block = time_block("main".toStatic(), 3);
   // defer end_profile_block(main_block);
   
-  let result = process_data();
-  println("Result: {result}");
+  expensive_computation(1_000_0);
+  expensive_computation(1000);
+  expensive_computation(1000);
 
   end_profile_block(main_block);
    

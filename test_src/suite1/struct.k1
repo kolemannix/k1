@@ -20,7 +20,7 @@ ns Foo {
 }
 
 fn structArgMut(): unit {
-  let* mut x = Foo/new(42);
+  let* x = Foo/new(42);
   assert(x.x == 42);
   assert(x.getValue() == 42);
   x.setValue(41);

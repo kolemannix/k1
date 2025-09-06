@@ -1,7 +1,7 @@
 ns match_references;
 
 fn test(): unit {
-  let* mut x = some(42);
+  let* x = some(42);
   while x.* is .Some(xx) {
     if xx == 0 break()
     else { 
@@ -31,6 +31,11 @@ fn test(): unit {
   b.*.* <- false;
   if b is true*** { crash("b was true!") };
   assert(b.*.*.* == false);
+
+  switch b {
+     true*** -> crash("b  was true!"),
+     false*** -> ()
+  };
 
   ()
 }

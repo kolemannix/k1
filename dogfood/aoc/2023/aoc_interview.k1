@@ -1,10 +1,10 @@
 fn unique(arr: Buffer[char]): bool {
   let* seen: List[char]* = [];
-  let mut ret = true;
+  let ret = true;
   for c in arr do {
     for s in seen.* do {
       if c == s {
-          ret = false;
+          ret := false;
       }
     };
     seen.push(c);

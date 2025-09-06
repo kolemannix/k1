@@ -116,12 +116,12 @@ impl TypedProgram {
     }
 
     fn display_variable(&self, var: &Variable, writ: &mut impl Write) -> std::fmt::Result {
-        if var.mutable() {
-            writ.write_str("mut ")?;
-        }
+        writ.write_str("(")?;
         writ.write_str(self.ident_str(var.name))?;
         writ.write_str(": ")?;
-        self.display_type_id(var.type_id, false, writ)
+        self.display_type_id(var.type_id, false, writ)?;
+        writ.write_str(")")?;
+        Ok(())
     }
 
     pub fn display_type_id(
@@ -348,11 +348,9 @@ impl TypedProgram {
             Type::Static(stat) => {
                 w.write_str("static[")?;
                 self.display_type_id(stat.inner_type_id, expand, w)?;
-                w.write_str(", ")?;
                 if let Some(value_id) = stat.value_id {
+                    w.write_str(", ")?;
                     self.display_static_value(w, value_id)?;
-                } else {
-                    w.write_str("<no value>")?;
                 }
                 w.write_str("]")?;
                 Ok(())
@@ -500,8 +498,8 @@ impl TypedProgram {
             TypedStmt::Assignment(assignment) => {
                 self.display_expr_id(assignment.destination, writ, indentation)?;
                 match assignment.kind {
-                    AssignmentKind::Value => writ.write_str(" = ")?,
-                    AssignmentKind::Reference => writ.write_str(" <- ")?,
+                    AssignmentKind::Store => writ.write_str(" <- ")?,
+                    AssignmentKind::Set => writ.write_str(" := ")?,
                 }
                 self.display_expr_id(assignment.value, writ, indentation)
             }
@@ -835,19 +833,32 @@ impl TypedProgram {
                 };
                 Ok(())
             }
-            StaticValue::View(view) => {
-                write!(w, "[")?;
-                for (index, elem) in view.elements.iter().enumerate() {
-                    self.display_static_value(w, *elem)?;
-                    let last = index == view.elements.len() - 1;
-                    if !last {
-                        write!(w, ", ")?;
-                    }
+            StaticValue::LinearContainer(cont) => {
+                match cont.kind {
+                    StaticContainerKind::View => write!(w, "View")?,
+                    StaticContainerKind::Array => write!(w, "Array")?,
                 }
-                write!(w, "]")?;
+                self.display_static_items(w, &cont.elements)?;
                 Ok(())
             }
         }
+    }
+
+    fn display_static_items(
+        &self,
+        w: &mut impl Write,
+        elements: &[StaticValueId],
+    ) -> std::fmt::Result {
+        write!(w, "[")?;
+        for (index, elem) in elements.iter().enumerate() {
+            self.display_static_value(w, *elem)?;
+            let last = index == elements.len() - 1;
+            if !last {
+                write!(w, ", ")?;
+            }
+        }
+        write!(w, "]")?;
+        Ok(())
     }
 
     fn display_matching_condition(
@@ -1062,7 +1073,7 @@ impl TypedProgram {
             AbilityImplKind::Concrete => "concrete",
             AbilityImplKind::Blanket { .. } => "blanket",
             AbilityImplKind::DerivedFromBlanket { .. } => "derived",
-            AbilityImplKind::VariableConstraint => "constraint",
+            AbilityImplKind::TypeParamConstraint => "constraint",
         };
         write!(w, "{kind_str:10} ")?;
         self.display_ability_signature(
@@ -1187,7 +1198,7 @@ impl TypedProgram {
         if let Some(name) = signature.name {
             self.write_ident(w, name)?;
         }
-        if signature.is_generic() {
+        if signature.has_type_params() {
             w.write_char('[')?;
             for (idx, tp) in self.named_types.get_slice(signature.type_params).iter().enumerate() {
                 if idx > 0 {

@@ -1,0 +1,7 @@
+// stdlib tests
+fn main(): i32 {
+
+  hash_test/test();
+
+  0
+}

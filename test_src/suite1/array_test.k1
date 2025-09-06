@@ -6,7 +6,7 @@ deftype Thing = {
 }
 
 fn testLiterals(): unit {
-  let* mut array: *mut Array[3 x bool] = [false, true, true];
+  let* array: *mut Array[3 x bool] = [false, true, true];
   let buffer: Buffer[bool] = [false, true, true];
   let list: List[bool] = [false, true, true];
   assertEquals(array.asBuffer(), buffer);
@@ -56,7 +56,7 @@ fn test(): unit {
   testLiterals();
   testFilled();
 
-  let* mut array: *Array[10 x f32] = mem/zeroed();
+  let* array: *mut Array[10 x f32] = mem/zeroed();
   assert(testCompile(array.get(11)) is .Some(_));
   array.set(0, 3.14);
   let buf = Buffer/wrapArray(array);

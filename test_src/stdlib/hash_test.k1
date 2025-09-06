@@ -1,0 +1,64 @@
+ns hash_test;
+
+use std/HashMap
+
+fn testBasic(): unit {
+  let* myMap = HashMap/new[int]();
+  myMap.insert("a", 10);
+  myMap.insert("b", 11);
+  myMap.insert("c", 12);
+  assertEquals(myMap.get("a"), .Some(10));
+  assertEquals(myMap.get("b"), .Some(11));
+  assertEquals(myMap.get("c"), .Some(12));
+  myMap.remove("a");
+  assertEquals(myMap.get("a"), .None);
+  assertEquals(myMap.get("b"), .Some(11));
+  myMap.insert("a", 20);
+  assertEquals(myMap.get("a"), .Some(20));
+  myMap.insert("b", 21);
+  assertEquals(myMap.get("b"), .Some(21));
+}
+
+fn testResize(size: int): unit {
+  let* myMap = HashMap/new[int]();
+  let i = 0;
+  while i < size {
+    myMap.insert(i.show(), i);
+    if i % 5 == 0 {
+      myMap.remove(i.show())
+    };
+    i := i + 1
+  };
+  i := 0;
+  myMap.dump();
+  while i < size {
+    let result = myMap.get(i.show());
+    if i % 5 == 0 {
+      assertMsg("{i} should be empty", result is .None);
+    } else {
+      if result is .Some(v) { assert(v == i) } else { crash("Missing value {i}") }
+    };
+    i := i + 1
+  };
+  myMap.dump();
+}
+
+fn test(): unit {
+  testBasic();
+  // nocommit(3): Debug the hash map at some point
+  // testResize(100)
+}
+
+fn randByte(): u8 {
+  (core/sys/arc4random_uniform(26) + 65) as u8
+}
+
+fn randString(len: uint): string {
+  let* chars = List/withCapacity[char](len);
+  let i = 0uword;
+  while i < len {
+    chars.push(randByte() as char);
+    i := i + 1
+  };
+  string/wrapList(chars.*)
+}

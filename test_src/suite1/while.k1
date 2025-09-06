@@ -1,13 +1,13 @@
 ns while_test;
 
 fn whileSimple(): unit {
-  let mut i: int = 10;
-  let mut iters = 0;
+  let i: int = 10;
+  let iters = 0;
   while i > -10 {
-    i = i - 1;
-    iters = iters + 1;
+    i := i - 1;
+    iters := iters + 1;
   };
-  assert(iters == 20);
+  assertEquals(iters, 20);
 }
 
 fn whileReturn(): int {

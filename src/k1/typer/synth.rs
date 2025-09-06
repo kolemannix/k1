@@ -223,8 +223,9 @@ impl TypedProgram {
             })
         };
         let mut flags = VariableFlags::empty();
-        flags.set(VariableFlags::Mutable, is_mutable);
         flags.set(VariableFlags::UserHidden, !no_mangle);
+        let reassignable = !is_referencing && is_mutable;
+        flags.set(VariableFlags::Reassigned, reassignable);
         let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
         let variable_id = self.variables.add(variable);
         let variable_expr =

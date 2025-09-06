@@ -15,15 +15,15 @@ fn captures(): unit {
 }
 
 fn captureMut(): unit {
-  let* mut counter = 3;
+  let* counter = 3;
 
-  let inc = \(x: int) {
+  let myInc = \(x: int) {
     counter <- counter.* + 1;
   };
 
-  inc(0);
-  inc(0);
-  inc(0);
+  myInc(0);
+  myInc(0);
+  myInc(0);
 
   assert(counter.* == 6);
 }
@@ -56,7 +56,7 @@ fn runThings(thunks: List[dyn[\()-> unit]]): unit {
 }
 
 fn thunksTest(): unit {
-  let* mut counter = 0;
+  let* counter = 0;
   let thunks: List[dyn[\() -> unit]] = [
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
