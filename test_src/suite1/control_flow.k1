@@ -9,9 +9,9 @@ fn ifBasic(): int {
 
 fn ifNoElse(): int {
   // Gets unit type
-  let mut x = 0;
+  let x = 0;
   let expr: unit = if true {
-    x = 42;
+    x := 42;
   };
   assert(x == 42);
   assert(expr == ());

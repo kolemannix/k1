@@ -206,7 +206,7 @@ pub enum TokenKind {
     LeftAngle,
     RightAngle,
     Colon,
-    ColonColon,
+    ColonEquals,
     Semicolon,
     Equals,
     EqualsEquals,
@@ -302,7 +302,7 @@ impl TokenKind {
             K::LeftAngle => Some("<"),
             K::RightAngle => Some(">"),
             K::Colon => Some(":"),
-            K::ColonColon => Some("::"),
+            K::ColonEquals => Some(":="),
             K::Semicolon => Some(";"),
             K::Equals => Some("="),
             K::EqualsEquals => Some("=="),
@@ -378,7 +378,7 @@ impl TokenKind {
             (TokenKind::Bang, '=') => Some(K::BangEquals),
             (TokenKind::LeftAngle, '=') => Some(K::LessThanEqual),
             (TokenKind::RightAngle, '=') => Some(K::GreaterThanEqual),
-            (TokenKind::Colon, ':') => Some(K::ColonColon),
+            (TokenKind::Colon, '=') => Some(K::ColonEquals),
             (TokenKind::Slash, '/') => Some(TokenKind::LineComment),
 
             // Thin Arrows
@@ -423,7 +423,7 @@ impl TokenKind {
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
             ">=" => Some(K::GreaterThanEqual),
-            "::" => Some(K::ColonColon),
+            ":=" => Some(K::ColonEquals),
             _ => None,
         }
     }

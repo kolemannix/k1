@@ -14,7 +14,7 @@ pub(crate) mod visit;
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
-use static_value::StaticValuePool;
+use static_value::{StaticContainerKind, StaticValuePool};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -37,7 +37,9 @@ use either::Either;
 use fxhash::{FxHashMap, FxHashSet};
 use log::{debug, error, trace};
 use smallvec::{SmallVec, smallvec};
-pub(crate) use static_value::{StaticEnum, StaticStruct, StaticValue, StaticValueId, StaticView};
+pub(crate) use static_value::{
+    StaticContainer, StaticEnum, StaticStruct, StaticValue, StaticValueId,
+};
 
 use scopes::*;
 use types::*;
@@ -777,7 +779,7 @@ impl FunctionSignature {
         }
     }
 
-    pub fn is_generic(&self) -> bool {
+    pub fn has_type_params(&self) -> bool {
         !self.type_params.is_empty() || !self.function_type_params.is_empty()
     }
 }
@@ -815,7 +817,7 @@ impl TypedFunction {
     }
 
     fn is_generic(&self) -> bool {
-        matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().is_generic()
+        matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().has_type_params()
     }
 }
 
@@ -1684,8 +1686,8 @@ impl_copy_if_small!(20, LetStmt);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentKind {
-    Value,
-    Reference,
+    Set,
+    Store,
 }
 
 #[derive(Debug, Clone)]
@@ -1778,7 +1780,7 @@ bitflags! {
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct VariableFlags: u16 {
-        const Mutable = 1;
+        const Reassigned = 1;
         const Context = 1 << 1;
         const UserHidden = 1 << 2;
     }
@@ -1794,8 +1796,8 @@ pub struct Variable {
 }
 
 impl Variable {
-    pub fn mutable(&self) -> bool {
-        self.flags.contains(VariableFlags::Mutable)
+    pub fn reassigned(&self) -> bool {
+        self.flags.contains(VariableFlags::Reassigned)
     }
     pub fn context(&self) -> bool {
         self.flags.contains(VariableFlags::Context)
@@ -2017,7 +2019,7 @@ macro_rules! errf {
     ($span:expr, $($format_args:expr),* $(,)?) => {
         {
             let s: String = format!($($format_args),*);
-            make_error(&s, $span)
+            $crate::typer::make_error(&s, $span)
         }
     };
 }
@@ -2027,7 +2029,7 @@ macro_rules! failf {
     ($span:expr, $($format_args:expr),* $(,)?) => {
         {
             let s: String = format!($($format_args),*);
-            make_fail_span(&s, $span)
+            $crate::typer::make_fail_span(&s, $span)
         }
     };
 }
@@ -2083,7 +2085,7 @@ pub enum AbilityImplKind {
     Concrete,
     Blanket { base_ability: AbilityId, parsed_id: ParsedAbilityImplId },
     DerivedFromBlanket { blanket_impl_id: AbilityImplId },
-    VariableConstraint,
+    TypeParamConstraint,
 }
 
 impl AbilityImplKind {
@@ -2102,8 +2104,8 @@ impl AbilityImplKind {
         matches!(self, AbilityImplKind::Concrete)
     }
 
-    pub fn is_variable_constraint(&self) -> bool {
-        matches!(self, AbilityImplKind::VariableConstraint)
+    pub fn is_type_param_constraint(&self) -> bool {
+        matches!(self, AbilityImplKind::TypeParamConstraint)
     }
 
     pub fn is_derived_from_blanket(&self) -> bool {
@@ -3458,7 +3460,7 @@ impl TypedProgram {
                 Ok(static_type_id)
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                let parsed_literal = parsed_literal.clone();
+                let parsed_literal = *parsed_literal;
                 let (static_value, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
                 let static_value_id = self.static_values.add(static_value);
@@ -4660,12 +4662,9 @@ impl TypedProgram {
         }
     }
 
-    // nocommit(2): We're now generating errors as a matter of course in successful compilation
+    // nocommit(3): We're now generating errors as a matter of course in successful compilation
     //              due to how 'coerce' works. We need to make sure generating these error strings
     //              is performant, currently it is very much not
-    //
-    //              We could simply pass a 'no_error' flag if coercing, then call _again_ to get the error
-    //              if coerce fails
     pub fn check_types(
         &self,
         expected: TypeId,
@@ -4874,6 +4873,22 @@ impl TypedProgram {
                     ))
                 }
             }
+            (Type::Array(expected_array), Type::Array(actual_array)) => {
+                let elem_check = self.check_types(
+                    expected_array.element_type,
+                    actual_array.element_type,
+                    scope_id,
+                );
+                let size_check =
+                    self.check_types(expected_array.size_type, actual_array.size_type, scope_id);
+                if let Err(msg) = elem_check {
+                    Err(format!("Arrays have different element types: {msg}"))
+                } else if let Err(msg) = size_check {
+                    Err(format!("Arrays have different size types: {msg}"))
+                } else {
+                    Ok(())
+                }
+            }
             (_expected, Type::Never) => Ok(()),
             (_exp, _act) => Err(format!(
                 "Expected {} but got {}",
@@ -5055,7 +5070,14 @@ impl TypedProgram {
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
-        let is_mutable = parsed_global.is_mutable;
+        let is_mutable = if is_referencing {
+            let Some(reference_type) = self.types.get(type_id).as_reference() else {
+                return failf!(global_span, "Global references must have a reference type");
+            };
+            reference_type.mutable
+        } else {
+            false
+        };
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
@@ -5232,7 +5254,7 @@ impl TypedProgram {
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
         let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
-        let impl_kind = AbilityImplKind::VariableConstraint;
+        let impl_kind = AbilityImplKind::TypeParamConstraint;
         let functions = functions
             .iter()
             .map(|f| {
@@ -5319,7 +5341,7 @@ impl TypedProgram {
             Some(v) => v
                 .iter()
                 .filter(|handle| {
-                    self.ability_impls.get(handle.full_impl_id).kind.is_variable_constraint()
+                    self.ability_impls.get(handle.full_impl_id).kind.is_type_param_constraint()
                 })
                 .copied()
                 .collect(),
@@ -5884,6 +5906,7 @@ impl TypedProgram {
                         ));
                     }
                 };
+                //eprintln!("num_text is {num}, itype is {}", int_type);
                 Some((int_type, num))
             }
         };
@@ -5893,7 +5916,7 @@ impl TypedProgram {
             Some((int_type, num_text)) => (Some(int_type), num_text),
         };
 
-        self.buffers.int_parse.push_str(parsed_text);
+        self.buffers.int_parse.push_str(num_to_parse);
         if num_to_parse.contains('_') {
             self.buffers.int_parse.retain(|c| c != '_');
         };
@@ -5947,9 +5970,7 @@ impl TypedProgram {
                 IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, hex_base, offset),
                 IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, hex_base, offset),
             };
-            let value = value
-                .map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))?;
-            Ok(value)
+            value.map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))
         } else if num_to_parse.starts_with("0b") {
             let bin_base = 2;
             let offset = 2;
@@ -5967,10 +5988,7 @@ impl TypedProgram {
                 IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, bin_base, offset),
                 IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, bin_base, offset),
             };
-            let value = value.map_err(|e| {
-                make_error(format!("Invalid binary {expected_int_type}: {e}"), span)
-            })?;
-            Ok(value)
+            value.map_err(|e| make_error(format!("Invalid binary {expected_int_type}: {e}"), span))
         } else {
             let dec_base = 10;
             let offset = 0;
@@ -5988,14 +6006,13 @@ impl TypedProgram {
                 IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, dec_base, offset),
                 IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, dec_base, offset),
             };
-            let value = value.map_err(|e| {
+            value.map_err(|e| {
                 errf!(
                     span,
-                    "Invalid {} integer {expected_int_type}: {e}",
+                    "Invalid {} integer {expected_int_type}: `{num_to_parse}` {e}",
                     if expected_int_type.is_signed() { "signed" } else { "unsigned" }
                 )
-            })?;
-            Ok(value)
+            })
         };
         self.buffers.int_parse.clear();
         ret
@@ -6005,7 +6022,6 @@ impl TypedProgram {
         &mut self,
         variable_expr_id: ParsedExprId,
         scope_id: ScopeId,
-        is_assignment_lhs: bool,
     ) -> TyperResult<(VariableId, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
@@ -6039,13 +6055,6 @@ impl TypedProgram {
                 };
 
                 let v = self.variables.get(variable_id);
-                if is_assignment_lhs && !v.mutable() {
-                    return failf!(
-                        variable_name_span,
-                        "Cannot assign to immutable variable {}",
-                        self.ast.idents.get_name(v.name)
-                    );
-                }
                 if is_capture {
                     if !variable.name.path.is_empty() {
                         return failf!(
@@ -6673,15 +6682,12 @@ impl TypedProgram {
                 let expr = TypedExpr::String(*s, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpr::Variable(_variable) => {
-                Ok(self.eval_variable(expr_id, ctx.scope_id, false)?.1)
-            }
+            ParsedExpr::Variable(_variable) => Ok(self.eval_variable(expr_id, ctx.scope_id)?.1),
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
                 self.eval_field_access(&field_access, ctx, false)
             }
             ParsedExpr::Block(block) => {
-                // TODO(clone big) This clone is actually sad because Block is still big. We need to intern blocks
                 let block = block.clone();
                 let block_scope =
                     self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
@@ -7088,8 +7094,7 @@ impl TypedProgram {
                 false,
                 None,
             );
-            let (variable_id, variable_expr) =
-                self.eval_variable(variable_expr, ctx.scope_id, false)?;
+            let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx.scope_id)?;
             let variable_type = self.exprs.get(variable_expr).get_type();
             match self.types.get_no_follow_static(variable_type) {
                 Type::Static(stat) => {
@@ -7437,8 +7442,10 @@ impl TypedProgram {
                     // So we start with: { a: int, b: true } and definition Pair[A, B] = { a: A, b: B }
                     // And we need to solve for A and B as int and bool.
                     let generic_type = self.types.get(gi.generic_parent).expect_generic();
+                    let generic_params = generic_type.params;
                     let generic_struct_id = generic_type.inner;
-                    let generic_fields = &self.types.get(generic_struct_id).expect_struct().fields;
+                    let generic_fields =
+                        self.types.get(generic_struct_id).expect_struct().fields.clone();
                     const TYPE_PARAM_MODE: bool = true;
                     for (value, generic_field) in field_types.iter().zip(generic_fields.iter()) {
                         let res = self.unify_and_find_substitutions_rec(
@@ -7450,8 +7457,8 @@ impl TypedProgram {
                         debug_assert!(!matches!(res, TypeUnificationResult::NonMatching(_)))
                     }
                     let mut type_args_to_use: SV4<TypeId> =
-                        SmallVec::with_capacity(generic_type.params.len());
-                    for gp in self.named_types.get_slice(generic_type.params) {
+                        SmallVec::with_capacity(generic_params.len());
+                    for gp in self.named_types.get_slice(generic_params) {
                         let Some(matching) = substs.iter().find_map(|pair| {
                             if pair.from == gp.type_id { Some(pair.to) } else { None }
                         }) else {
@@ -8683,7 +8690,7 @@ impl TypedProgram {
             self.ast.idents.b.itIndex,
             zero_expr,
             true,
-            true,
+            true, // mutable = true
             false,
             outer_for_expr_scope,
         );
@@ -8847,7 +8854,7 @@ impl TypedProgram {
             destination: index_variable.variable_expr,
             value: add_operation,
             span: iterable_span,
-            kind: AssignmentKind::Value,
+            kind: AssignmentKind::Set,
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
@@ -10801,11 +10808,11 @@ impl TypedProgram {
         match callee {
             Callee::StaticFunction(function_id) => self.get_function(*function_id).is_generic(),
             Callee::StaticLambda { .. } => false,
-            Callee::Abstract { function_sig, .. } => function_sig.is_generic(),
+            Callee::Abstract { function_sig, .. } => function_sig.has_type_params(),
             Callee::DynamicFunction { .. } => false,
             Callee::DynamicLambda(_) => false,
             // Should always be false...
-            Callee::DynamicAbstract { function_sig, .. } => function_sig.is_generic(),
+            Callee::DynamicAbstract { function_sig, .. } => function_sig.has_type_params(),
         }
     }
 
@@ -10875,7 +10882,7 @@ impl TypedProgram {
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
         let signature = self.get_callee_function_signature(&callee);
-        let is_generic = signature.is_generic();
+        let is_generic = signature.has_type_params();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
         // TODO: eliminate this to_vec()
@@ -11047,7 +11054,6 @@ impl TypedProgram {
         };
 
         // Intrinsics that are handled by the typechecking phase are implemented here.
-        // Currently only CompilerSourceLocation.
         if let Some(intrinsic_type) = call
             .callee
             .maybe_function_id()
@@ -11179,16 +11185,19 @@ impl TypedProgram {
                         self.type_id_to_string(return_static_type)
                     );
                 };
-                let Some(static_value_id) = static_type.value_id else {
-                    return failf!(
-                        span,
-                        "Expected type {} is not a static type with a value",
-                        self.type_id_to_string(return_static_type)
-                    );
-                };
-                let static_value_expr =
-                    TypedExpr::StaticValue(static_value_id, return_static_type, span);
-                Ok(self.exprs.add(static_value_expr))
+                if let Some(static_value_id) = static_type.value_id {
+                    let static_value_expr =
+                        TypedExpr::StaticValue(static_value_id, return_static_type, span);
+                    Ok(self.exprs.add(static_value_expr))
+                } else {
+                    let unit_expr = self.exprs.add(TypedExpr::Unit(span));
+                    Ok(self.synth_cast(
+                        unit_expr,
+                        static_type_arg.type_id,
+                        CastType::Transmute,
+                        None,
+                    ))
+                }
             }
             IntrinsicOperation::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
@@ -11511,6 +11520,7 @@ impl TypedProgram {
             "Specializing sig (has_body={has_body}, is_concrete={is_concrete}) of {}",
             self.function_id_to_string(generic_function_id, false)
         );
+
         if has_body && is_concrete {
             self.functions_pending_body_specialization.push(specialized_function_id);
         }
@@ -11520,6 +11530,14 @@ impl TypedProgram {
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
         let specialized_function = self.get_function(function_id);
+        // eprintln!("specialize_function_body\n  {}", self.function_id_to_string(function_id, false));
+        // eprintln!(
+        //     "specialize_function_body with: {}",
+        //     self.pretty_print_named_type_slice(
+        //         specialized_function.specialization_info.unwrap().type_arguments,
+        //         ", "
+        //     )
+        // );
         if specialized_function.body_block.is_some() {
             return Ok(());
         }
@@ -11602,9 +11620,24 @@ impl TypedProgram {
         if function.is_generic() {
             return false;
         }
+        // If we specialized on something generic, but we don't accept or return it in our
+        // signature, we won't catch it by checking the signature!
+        // Example: fn typeOnly[T: static uword](): unit
+        // If specialized on static[uword, <none>], wouldn't have any generics in its signature
+        if let Some(spec_info) = function.specialization_info {
+            for t in self.named_types.get_slice(spec_info.type_arguments) {
+                if self.types.type_variable_counts.get(t.type_id).is_abstract() {
+                    return false;
+                }
+            }
+            for t in self.named_types.get_slice(spec_info.function_type_arguments) {
+                if self.types.type_variable_counts.get(t.type_id).is_abstract() {
+                    return false;
+                }
+            }
+        }
         let info = self.types.get_contained_type_variable_counts(function.type_id);
-        let has_no_abstract_types_in_signature =
-            info.type_parameter_count == 0 && info.inference_variable_count == 0;
+        let has_no_abstract_types_in_signature = !info.is_abstract();
         has_no_abstract_types_in_signature
     }
 
@@ -11646,7 +11679,7 @@ impl TypedProgram {
                         EvalTypeExprContext::VARIABLE_BINDING,
                     )?),
                 };
-                let expected_rhs_type = match provided_type {
+                let (expected_rhs_type, provided_reference_mutability) = match provided_type {
                     Some(provided_type) => {
                         if parsed_let.is_referencing() {
                             let Type::Reference(expected_reference_type) =
@@ -11659,12 +11692,15 @@ impl TypedProgram {
                                     "Expected type must be a reference type when using let*"
                                 );
                             };
-                            Some(expected_reference_type.inner_type)
+                            (
+                                Some(expected_reference_type.inner_type),
+                                Some(expected_reference_type.mutable),
+                            )
                         } else {
-                            Some(provided_type)
+                            (Some(provided_type), None)
                         }
                     }
-                    None => None,
+                    None => (None, None),
                 };
                 let value_expr =
                     self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_rhs_type))?;
@@ -11679,18 +11715,13 @@ impl TypedProgram {
                 let actual_type = self.exprs.get(value_expr).get_type();
 
                 let variable_type = if parsed_let.is_referencing() {
-                    let mutable = parsed_let.is_mutable();
+                    let mutable = provided_reference_mutability.unwrap_or(true);
                     self.types.add_reference_type(actual_type, mutable)
                 } else {
                     actual_type
                 };
 
                 let mut flags = VariableFlags::empty();
-
-                // Setting Mutable is weird because, for mutable referencing lets,
-                // the 'mut' controls both the mutability of the pointer
-                // and the re-assignability of the variable
-                flags.set(VariableFlags::Mutable, parsed_let.is_mutable());
 
                 flags.set(VariableFlags::Context, parsed_let.is_context());
                 let variable_id = self.variables.add(Variable {
@@ -11757,32 +11788,36 @@ impl TypedProgram {
                 }));
                 Ok(Some(id))
             }
-            ParsedStmt::Assignment(assignment) => {
-                static_assert_size!(parse::Assignment, 12);
-                let assignment = assignment.clone();
+            ParsedStmt::Assign(assign) => {
+                static_assert_size!(parse::AssignStmt, 12);
+                let assignment = assign.clone();
                 let ParsedExpr::Variable(_) = self.ast.exprs.get(assignment.lhs) else {
                     return failf!(
                         self.ast.exprs.get_span(assignment.lhs),
-                        "Value assignment destination must be a variable"
+                        "Value assignment destination must be a plain variable expression"
                     );
                 };
-                let (_, lhs) = self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                let (typed_variable_id, lhs) = self.eval_variable(assignment.lhs, ctx.scope_id)?;
                 let lhs_type = self.exprs.get(lhs).get_type();
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get(rhs).get_type();
                 if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
+                self.variables
+                    .get_mut(typed_variable_id)
+                    .flags
+                    .set(VariableFlags::Reassigned, true);
                 let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
                     destination: lhs,
                     value: rhs,
                     span: assignment.span,
-                    kind: AssignmentKind::Value,
+                    kind: AssignmentKind::Set,
                 }));
                 Ok(Some(stmt_id))
             }
-            ParsedStmt::SetRef(set_stmt) => {
-                static_assert_size!(parse::SetStmt, 12);
+            ParsedStmt::Store(set_stmt) => {
+                static_assert_size!(parse::StoreStmt, 12);
                 let set_stmt = set_stmt.clone();
                 let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
                 let lhs_type = self.exprs.get(lhs).get_type();
@@ -11810,7 +11845,7 @@ impl TypedProgram {
                     destination: lhs,
                     value: rhs,
                     span: set_stmt.span,
-                    kind: AssignmentKind::Reference,
+                    kind: AssignmentKind::Store,
                 }));
                 Ok(Some(stmt_id))
             }
@@ -12517,7 +12552,7 @@ impl TypedProgram {
                 info.impl_info.as_ref().is_some_and(|impl_info| {
                     impl_info.is_default
                         || impl_info.impl_kind.is_derived_from_blanket()
-                        || impl_info.impl_kind.is_variable_constraint()
+                        || impl_info.impl_kind.is_type_param_constraint()
                 })
             });
         let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
@@ -12810,7 +12845,7 @@ impl TypedProgram {
                 Some(impl_info) => match impl_info.impl_kind {
                     AbilityImplKind::Concrete
                     | AbilityImplKind::Blanket { .. }
-                    | AbilityImplKind::VariableConstraint => TypedFunctionKind::AbilityImpl(
+                    | AbilityImplKind::TypeParamConstraint => TypedFunctionKind::AbilityImpl(
                         ability_info.ability_id,
                         impl_info.self_type_id,
                     ),
@@ -14107,7 +14142,7 @@ impl TypedProgram {
 
         let is_core = module_id == MODULE_ID_CORE;
         if !is_core {
-            self.add_default_uses_to_scope(root_namespace_scope_id, SpanId::NONE)?;
+            self.add_core_uses_to_scope(root_namespace_scope_id, SpanId::NONE)?;
         }
 
         // Meta phase: Find meta namespace, if exists, and fully compile it
@@ -14563,94 +14598,110 @@ impl TypedProgram {
                 }
                 matches
             }
+            (TypedPattern::Reference(ref_pattern), PatternCtor::Reference(ref_ctor)) => {
+                TypedProgram::pattern_matches(ctors, patterns, ref_pattern.inner_pattern, *ref_ctor)
+            }
             _ => {
-                // eprintln!("Unhandled pattern_matches case: {:?} {:?}", pattern, ctor);
+                // eprintln!(
+                //     "Unhandled pattern_matches case: {:?} {:?}",
+                //     self.pattern_to_string(pattern),
+                //     ctor
+                // );
                 false
             }
         }
     }
 
-    fn add_default_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
+    fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
+        let root_ns: IdentSlice =
+            self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]);
         let core_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core]);
+
         let core_mem: IdentSlice =
             self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core, self.ast.idents.b.mem]);
-        // Cloning the eco_vec is cheap, as long as we clone the same one not make fresh ones
-        macro_rules! core_use {
+
+        macro_rules! core {
             ($name: expr) => {
                 QIdent { path: core_ns, name: get_ident!(self, $name), span }
             };
         }
 
-        let default_uses = [
-            QIdent {
-                path: self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]),
-                name: self.ast.idents.b.core,
-                span,
-            },
-            core_use!("u8"),
-            core_use!("u8"),
-            core_use!("u16"),
-            core_use!("u32"),
-            core_use!("u64"),
-            core_use!("i8"),
-            core_use!("i16"),
-            core_use!("i32"),
-            core_use!("i64"),
-            core_use!("uword"),
-            core_use!("iword"),
-            core_use!("unit"),
-            core_use!("char"),
-            core_use!("bool"),
-            core_use!("never"),
-            core_use!("Pointer"),
-            core_use!("f32"),
-            core_use!("f64"),
-            core_use!("Buffer"),
-            core_use!("View"),
-            core_use!("Array"),
-            core_use!("List"),
-            core_use!("string"),
-            core_use!("Opt"),
-            core_use!("some"),
-            core_use!("none"),
-            core_use!("Ordering"),
-            core_use!("Result"),
-            core_use!("int"),
-            core_use!("uint"),
-            core_use!("byte"),
-            core_use!("Equals"),
-            core_use!("Writer"),
-            core_use!("Print"),
-            core_use!("Show"),
-            core_use!("Bitwise"),
-            core_use!("Comparable"),
-            core_use!("Unwrap"),
-            core_use!("Try"),
-            core_use!("Iterator"),
-            core_use!("Iterable"),
-            core_use!("println"),
-            core_use!("print"),
-            core_use!("eprint"),
-            core_use!("eprintln"),
-            core_use!("printIt"),
-            core_use!("identity"),
-            core_use!("assert"),
-            core_use!("assertEquals"),
-            core_use!("assertMsg"),
-            core_use!("crash"),
-            core_use!("mem"),
-            core_use!("mem"),
-            core_use!("types"),
-            core_use!("k1"),
-            core_use!("IntRange"),
+        let idents_to_use = [
+            QIdent { path: root_ns, name: self.ast.idents.b.core, span }, // use _root/core;
+            QIdent { path: root_ns, name: self.ast.idents.b.std, span },  // use _root/std;
+            core!("u8"),
+            core!("u8"),
+            core!("u16"),
+            core!("u32"),
+            core!("u64"),
+            core!("i8"),
+            core!("i16"),
+            core!("i32"),
+            core!("i64"),
+            core!("uword"),
+            core!("iword"),
+            core!("unit"),
+            core!("char"),
+            core!("bool"),
+            core!("never"),
+            core!("Pointer"),
+            core!("f32"),
+            core!("f64"),
+            core!("Buffer"),
+            core!("View"),
+            core!("Array"),
+            core!("List"),
+            core!("string"),
+            core!("Opt"),
+            core!("some"),
+            core!("none"),
+            core!("Ordering"),
+            core!("Result"),
+            core!("int"),
+            core!("uint"),
+            core!("byte"),
+            core!("Equals"),
+            core!("Writer"),
+            core!("Print"),
+            core!("Show"),
+            core!("Bitwise"),
+            core!("Comparable"),
+            core!("Unwrap"),
+            core!("Try"),
+            core!("Iterator"),
+            core!("Iterable"),
+            core!("println"),
+            core!("print"),
+            core!("eprint"),
+            core!("eprintln"),
+            core!("printIt"),
+            core!("identity"),
+            core!("assert"),
+            core!("assertEquals"),
+            core!("assertMsg"),
+            core!("crash"),
+            core!("mem"),
+            core!("types"),
+            core!("k1"),
+            core!("IntRange"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
         ];
-        for du in default_uses.into_iter() {
-            let use_id = self.ast.uses.add_use(parse::ParsedUse { target: du, alias: None, span });
+        for qid in idents_to_use.into_iter() {
+            let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
             self.eval_use_definition(scope, use_id)?;
         }
         Ok(())
     }
+
+    // fn add_std_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
+    //     let std_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.std]);
+    //     let idents_to_use = [QIdent { path: std_ns, name: get_ident!(self, "HashMap"), span }];
+    //     for qid in idents_to_use.into_iter() {
+    //         let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
+    //         self.eval_use_definition(scope, use_id)?;
+    //     }
+    //     Ok(())
+    // }
 
     fn get_type_schema(&mut self, type_id: TypeId, span: SpanId) -> StaticValueId {
         if let Some(static_value_id) = self.type_schemas.get(&type_id) {
@@ -14736,10 +14787,8 @@ impl TypedProgram {
                         ),
                     );
                 }
-                let view = self.static_values.add(StaticValue::View(StaticView {
-                    elements: field_values,
-                    type_id: struct_schema_fields_view_type_id,
-                }));
+                let view =
+                    self.static_values.add_view(struct_schema_fields_view_type_id, field_values);
                 let payload =
                     self.static_values.add_struct(struct_schema_payload_type_id, eco_vec![view]);
                 make_variant(get_ident!(self, "Struct"), Some(payload))
@@ -14864,10 +14913,7 @@ impl TypedProgram {
                     ))
                 }
                 let variants_view_value_id =
-                    self.static_values.add(StaticValue::View(StaticView {
-                        elements: variant_values,
-                        type_id: variants_view_type_id,
-                    }));
+                    self.static_values.add_view(variants_view_type_id, variant_values);
                 let payload_value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id: either_payload_type_id,
                     fields: eco_vec![tag_type_value_id, variants_view_value_id],
@@ -14940,10 +14986,8 @@ impl TypedProgram {
                     params_value_ids.push(param_struct_value_id)
                 }
 
-                let params_view_value_id = self.static_values.add(StaticValue::View(StaticView {
-                    type_id: function_params_view_type_id,
-                    elements: params_value_ids,
-                }));
+                let params_view_value_id =
+                    self.static_values.add_view(function_params_view_type_id, params_value_ids);
 
                 self.register_type_metainfo(fn_type.return_type, span);
                 let return_type_id_value_id =

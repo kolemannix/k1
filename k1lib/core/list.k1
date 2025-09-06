@@ -163,17 +163,21 @@ ns List {
     else .None
   }
 
+  fn clear[T](self: *mut List[T]): unit {
+    self.len* <- 0
+  }
+
   fn reverse[T](self: *mut List[T]): unit {
-    let mut i = 0:uword;
-    while (i < (self.len / 2:uword)) {
+    let i = 0uword;
+    while (i < (self.len / 2uword)) {
       let j = self.len - i - 1;
       self.swap(i, j);
-      i = i + 1;
+      i := i + 1;
     }
   }
 
   fn reversed[T](self: List[T]): List[T] {
-    let* mut clone = self.cloned();
+    let* clone = self.cloned();
     clone.reverse[T]();
     clone.*
   }
@@ -221,9 +225,9 @@ ns List {
     let halfIndex = input.len / 2;
     let pivot = input.*.get(halfIndex);
   
-    let* mut left = List/withCapacity[T](halfIndex);
-    let* mut right = List/withCapacity[T](halfIndex);
-    let* mut equal = List/withCapacity[T](4);
+    let* left = List/withCapacity[T](halfIndex);
+    let* right = List/withCapacity[T](halfIndex);
+    let* equal = List/withCapacity[T](4);
   
     for item in input.* do {
       switch item.compare(pivot) {
@@ -236,29 +240,30 @@ ns List {
     left.sort();
     right.sort();
   
-    let mut i: uword = 0;
+    let i: uword = 0;
     for item in left.* do {
       input.set(i, item);
-      i = i + 1;
+      i := i + 1;
     };
   
     for item in equal.* do {
       input.set(i, item);
-      i = i + 1;
+      i := i + 1;
     };
   
     for item in right.* do {
       input.set(i, item);
-      i = i + 1;
+      i := i + 1;
     };
   }
 
   fn sorted[T](self: List[T]): List[T] where T: Comparable {
-    let* mut copy = self.cloned();
+    let* copy = self.cloned();
     copy.sort();
     copy.*
   }
 
+  // TODO(stdlib) remove or tweak this; assumes global allocation
   fn join[T: Show](self: List[T], sep: string): string {
     let b = StringBuilder/new();
     for s in self do {
@@ -272,19 +277,19 @@ ns List {
   }
 
   fn map[T, U](self: List[T], f: some \T -> U): List[U] {
-    let* mut us = List/withCapacity[U](self.len);
+    let* us = List/withCapacity[U](self.len);
     for i in self do { us.push[U](f(i)) };
     us.*
   }
   
   fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
-    let* mut us = List/empty[U]();
+    let* us = List/empty[U]();
     for i in self do { us.appendList[U](f(i)) };
     us.*
   }
   
   fn filter[T](self: List[T], f: some \T -> bool): List[T] {
-    let* mut keep = List/empty[T]();
+    let* keep = List/empty[T]();
     for i in self do { if f(i) keep.push(i) };
     keep
   }
@@ -328,12 +333,9 @@ impl Equals for List[int] {
 impl[T: Equals] Equals for List[T] {
   fn equals(self: List[T], other: List[T]): bool {
     if self.len != other.len false else {
-      let mut i: uword = 0;
-      while i < self.len {
-        if self.get(i) != other.get(i) {
-          return(false);
-        };
-        i = i + 1;
+      for a in self do {
+        let b = other.get(itIndex);
+        if a != b return(false);
       };
       true
     }

@@ -36,7 +36,9 @@ ns StringBuilder {
     self.charList.push(b as char)
   }
   fn build(self: StringBuilder): string {
-    string/wrapList(self.charList)
+    let s = string/wrapList(self.charList);
+    self.charList.clear();
+    s
   }
 }
 

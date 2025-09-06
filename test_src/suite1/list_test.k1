@@ -1,15 +1,15 @@
 ns list_test;
 
 fn listFill(): int {
-  let* mut xs = List/empty[int]();
+  let* xs = List/empty[int]();
   assert(xs.cap() == 0);
   assert(xs.len == 0);
 
-  let mut i = 0: uword;
+  let i = 0: uword;
   while i < 5 {
     assert(xs.len == i);
     xs.push(i as int);
-    i = i + 1;
+    i := i + 1;
   };
   assert(xs.len == 5);
   assert(xs.get(0) == 0);
@@ -59,11 +59,11 @@ deftype Point = {
 }
 
 fn listOfStructs(): int {
-  let* mut xs = [{ x: 1, y: 2, z: 3}: Point];
-  let mut i = 0;
+  let* xs = [{ x: 1, y: 2, z: 3}: Point];
+  let i = 0;
   while i < 100 {
     xs.push({ x: 1, y: 2, z: 3});
-    i = i + 1;
+    i := i + 1;
   };
 
   assert(xs.len == 101);
@@ -129,7 +129,7 @@ fn testSort(): unit {
 }
 
 fn testSwap(): unit {
-  let* mut a = [1,2];
+  let* a = [1,2];
   a.swap(0,1);
   assert(a.* == [2,1]);
   a.swap(1,0);
@@ -140,15 +140,15 @@ fn testSwap(): unit {
 
 fn iterator(): int {
   let l = [1,2,3];
-  let* mut i = l.iterator();
+  let* i = l.iterator();
   assert(i.sizeHint().atLeast == 3);
   assert(i.next().! == 1);
   assert(i.next().! == 2);
   assert(i.next().! == 3);
   assert(i.next().isNone());
-  let* mut i2 = l.iterator();
+  let* i2 = l.iterator();
   assert(i2.nth(2) == .Some(3));
-  let* mut i3 = l.iterator();
+  let* i3 = l.iterator();
   assert(i3.nth(10) == .None);
   0
 }

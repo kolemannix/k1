@@ -66,14 +66,14 @@ fn indexToBit(index: u64): Bitboard {
 }
 
 fn printBitboard(b: Bitboard): unit {
-  let* mut l = List/empty[char]();
+  let* l = List/empty[char]();
   writeBitboard(l, b);
   println(string/wrapList(l))
 }
 
 fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
   // Scanlines by rank backwards so it reads naturally
-  let mut rank = 7;
+  let rank = 7;
   while rank >= 0 {
     let rankStart = rank * 8;
     // TODO(dogfood): formatUInt(base = 2) (also need padding specifier)
@@ -84,7 +84,7 @@ fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
       writer.writeChar(u8/toAsciiDigit(bit as u8));
     };
     writer.writeChar('\n');
-    rank = rank - 1;
+    rank := rank - 1;
   }
 }
 
@@ -108,8 +108,8 @@ ns GameState {
   }
 
   fn printGrid(self: GameState): unit {
-    let* mut writer = List/withCapacity[char](128);
-    let mut rank = 7;
+    let* writer = List/withCapacity[char](128);
+    let rank = 7;
     while rank >= 0 {
       let rankStart = rank * 8;
       for i in IntRange/make(rankStart, rankStart + 8) do {
@@ -129,7 +129,7 @@ ns GameState {
         else { writer.writeChar('.') };
       };
       writer.writeChar('\n');
-      rank = rank - 1;
+      rank := rank - 1;
     };
     print(string/wrapList(writer));
     println("--------\nabcdefgh");

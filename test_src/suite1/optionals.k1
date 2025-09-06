@@ -37,7 +37,7 @@ fn testComplex(): int {
     assert(false);
   };
 
-  let mut my_arr: List[?WeirdPoint] = [.Some({ x: .Some(42), y: 3}), .None];
+  let my_arr: List[?WeirdPoint] = [.Some({ x: .Some(42), y: 3}), .None];
   if my_arr.get(0) is .Some(a) {
     assert(a.y == 3);
   };

@@ -14,11 +14,11 @@ fn main(): i32 {
   left.sort(); 
   right.sort();
 
-  let mut sumDiffs = 0;
+  let sumDiffs = 0;
   for l in left.* do {
     let r = right.*.get(itIndex);
     let diff = if l > r l - r else r - l;
-    sumDiffs = sumDiffs + diff;
+    sumDiffs := sumDiffs + diff;
   };
   println("Answer: {sumDiffs}");
   0

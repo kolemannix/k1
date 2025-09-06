@@ -60,12 +60,17 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
 
+# From dogfood round
+- [ ] Introduce an "uninitialized" specifier, similar to `zeroed()`
+- [ ] Add 'zeroed()' static value special case for efficiency?
+- [ ] Or, provide a way to specify if globals are comptime available
+      or just runtime globals?
+
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
-
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
   - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope

@@ -21,11 +21,11 @@ ns test_meta;
 use core/meta/CodeBuilder
 
 fn simpleIncrement(): i32 {
-  let mut x = 10;
+  let x = 10;
   #meta {
     let code = CodeBuilder/new();
     for core/IntRange/upTo(5) do {
-      code.line("x = x + 1;");
+      code.line("x := x + 1;");
     };
     code.build()
   };
@@ -84,7 +84,7 @@ fn writeJson[T, W: Writer](context w: W)(t: T): unit {
 }
 
 fn toJson[T](t: T): string {
-  let* mut w = List/empty[char]();
+  let* w = List/empty[char]();
   writeJson(context w)(t);
   let s = string/wrapList(w);
   s

@@ -840,14 +840,20 @@ impl Type {
 pub struct TypeVariableInfo {
     pub inference_variable_count: u32,
     pub type_parameter_count: u32,
+    pub unresolved_static_count: u32,
 }
 
 impl TypeVariableInfo {
-    const EMPTY: TypeVariableInfo =
-        TypeVariableInfo { inference_variable_count: 0, type_parameter_count: 0 };
+    const EMPTY: TypeVariableInfo = TypeVariableInfo {
+        inference_variable_count: 0,
+        type_parameter_count: 0,
+        unresolved_static_count: 0,
+    };
 
     pub fn is_abstract(&self) -> bool {
-        self.inference_variable_count > 0 || self.type_parameter_count > 0
+        self.inference_variable_count > 0
+            || self.type_parameter_count > 0
+            || self.unresolved_static_count > 0
     }
 
     fn add(self, other: Self) -> Self {
@@ -855,6 +861,7 @@ impl TypeVariableInfo {
             inference_variable_count: self.inference_variable_count
                 + other.inference_variable_count,
             type_parameter_count: self.type_parameter_count + other.type_parameter_count,
+            unresolved_static_count: self.unresolved_static_count + other.unresolved_static_count,
         }
     }
 }
@@ -1371,18 +1378,25 @@ impl TypePool {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
         debug!("count_type_variables of {} {}", type_id, self.get_no_follow(type_id).kind_name());
         match self.get_no_follow(type_id) {
-            Type::TypeParameter(_tp) => {
-                TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 }
-            }
+            Type::TypeParameter(_tp) => TypeVariableInfo {
+                type_parameter_count: 1,
+                inference_variable_count: 0,
+                unresolved_static_count: 0,
+            },
             Type::FunctionTypeParameter(ftp) => {
-                let base_info =
-                    TypeVariableInfo { type_parameter_count: 1, inference_variable_count: 0 };
+                let base_info = TypeVariableInfo {
+                    type_parameter_count: 1,
+                    inference_variable_count: 0,
+                    unresolved_static_count: 0,
+                };
                 let fn_info = self.count_type_variables(ftp.function_type);
                 base_info.add(fn_info)
             }
-            Type::InferenceHole(_hole) => {
-                TypeVariableInfo { type_parameter_count: 0, inference_variable_count: 1 }
-            }
+            Type::InferenceHole(_hole) => TypeVariableInfo {
+                type_parameter_count: 0,
+                inference_variable_count: 1,
+                unresolved_static_count: 0,
+            },
             Type::Unit => EMPTY,
             Type::Char => EMPTY,
             Type::Integer(_) => EMPTY,
@@ -1431,13 +1445,26 @@ impl TypePool {
                 .add(self.count_type_variables(lambda.env_type)),
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => self.count_type_variables(co.function_type),
-            Type::Static(stat) => self.count_type_variables(stat.inner_type_id),
+            Type::Static(stat) => {
+                let this = if stat.value_id.is_none() {
+                    TypeVariableInfo {
+                        inference_variable_count: 0,
+                        type_parameter_count: 0,
+                        unresolved_static_count: 1,
+                    }
+                } else {
+                    EMPTY
+                };
+                let inner = self.count_type_variables(stat.inner_type_id);
+                this.add(inner)
+            }
             Type::Unresolved(_) => EMPTY,
             Type::RecursiveReference(rr) => {
                 if let Type::Generic(generic) = self.get(rr.root_type_id) {
                     TypeVariableInfo {
                         inference_variable_count: 0,
                         type_parameter_count: generic.params.len() as u32,
+                        unresolved_static_count: 0,
                     }
                 } else {
                     EMPTY

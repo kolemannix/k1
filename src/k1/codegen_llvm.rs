@@ -43,7 +43,7 @@ use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
-use crate::typer::static_value::StaticValuePool;
+use crate::typer::static_value::{StaticContainerKind, StaticValuePool};
 use crate::typer::types::{
     BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID,
     I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo,
@@ -1509,7 +1509,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.k1.variables.get(let_stmt.variable_id);
-        let mutable = variable.mutable();
+        let ever_reassigned = variable.reassigned();
         let name = self.get_ident_name(variable.name).to_string();
 
         let local_variable = self.debug.debug_builder.create_auto_variable(
@@ -1523,9 +1523,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             variable_type.rich_repr_layout().align,
         );
 
-        // Some 'lets' don't need an extra alloca; if they are not re-assignable
+        // Some 'lets' don't need an extra alloca; if they are not re-assigned
         // and they are not 'referencing' then the value representation is fine
-        let no_alloca_needed = !let_stmt.is_referencing && !mutable;
+        let no_alloca_needed = !let_stmt.is_referencing && !ever_reassigned;
         let variable_value = if no_alloca_needed {
             self.debug.insert_dbg_value_at_end(
                 value,
@@ -1852,54 +1852,66 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 enum_value.as_basic_value_enum()
             }
-            StaticValue::View(view) => {
-                let element_type = self.k1.types.get_as_view_instance(view.type_id).unwrap();
-                let element_backend_type = self.codegen_type(element_type)?;
-                let element_basic_type = element_backend_type.rich_repr_type();
-                let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
-                for elem in view.elements.iter() {
-                    let elem_basic_value = self.codegen_static_value_as_const(*elem)?;
-                    values.push(elem_basic_value);
+            StaticValue::LinearContainer(view) => {
+                let (element_type, _) =
+                    self.k1.types.get_as_container_instance(view.type_id).unwrap();
+                let array_value =
+                    self.codegen_static_elements_array(element_type, &view.elements)?;
+
+                match view.kind {
+                    StaticContainerKind::View => {
+                        let data_global = self.llvm_module.add_global(
+                            array_value.get_type(),
+                            None,
+                            &format!("elems_{}", static_value_id),
+                        );
+                        data_global.set_constant(true);
+                        data_global.set_unnamed_addr(true);
+                        data_global.set_initializer(&array_value);
+                        let view_struct = self
+                            .make_view_struct(
+                                view.type_id,
+                                view.len() as u64,
+                                data_global.as_pointer_value(),
+                            )
+                            .unwrap();
+                        view_struct.as_basic_value_enum()
+                    }
+                    StaticContainerKind::Array => array_value.as_basic_value_enum(),
                 }
-                let array_value = match element_basic_type {
-                    BasicTypeEnum::ArrayType(array_type) => array_type.const_array(
-                        &values.into_iter().map(|v| v.into_array_value()).collect_vec(),
-                    ),
-                    BasicTypeEnum::FloatType(float_type) => float_type.const_array(
-                        &values.into_iter().map(|v| v.into_float_value()).collect_vec(),
-                    ),
-                    BasicTypeEnum::IntType(int_type) => int_type
-                        .const_array(&values.into_iter().map(|v| v.into_int_value()).collect_vec()),
-                    BasicTypeEnum::PointerType(pointer_type) => pointer_type.const_array(
-                        &values.into_iter().map(|v| v.into_pointer_value()).collect_vec(),
-                    ),
-                    BasicTypeEnum::StructType(struct_type) => struct_type.const_array(
-                        &values.into_iter().map(|v| v.into_struct_value()).collect_vec(),
-                    ),
-                    BasicTypeEnum::VectorType(_) => unreachable!(),
-                    BasicTypeEnum::ScalableVectorType(_) => unreachable!(),
-                };
-                let data_global = self.llvm_module.add_global(
-                    array_value.get_type(),
-                    None,
-                    &format!("view_data_{}", static_value_id),
-                );
-                data_global.set_constant(true);
-                data_global.set_unnamed_addr(true);
-                data_global.set_initializer(&array_value);
-
-                let view_struct = self
-                    .make_view_struct(
-                        view.type_id,
-                        view.len() as u64,
-                        data_global.as_pointer_value(),
-                    )
-                    .unwrap();
-
-                view_struct.as_basic_value_enum()
             }
         };
         Ok(result)
+    }
+
+    fn codegen_static_elements_array(
+        &mut self,
+        element_type: TypeId,
+        elements: &[StaticValueId],
+    ) -> CodegenResult<ArrayValue<'ctx>> {
+        let element_backend_type = self.codegen_type(element_type)?;
+        let element_basic_type = element_backend_type.rich_repr_type();
+        let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
+        for elem in elements.iter() {
+            let elem_basic_value = self.codegen_static_value_as_const(*elem)?;
+            values.push(elem_basic_value);
+        }
+        let array_value = match element_basic_type {
+            BasicTypeEnum::ArrayType(array_type) => array_type
+                .const_array(&values.into_iter().map(|v| v.into_array_value()).collect_vec()),
+            BasicTypeEnum::FloatType(float_type) => float_type
+                .const_array(&values.into_iter().map(|v| v.into_float_value()).collect_vec()),
+            BasicTypeEnum::IntType(int_type) => {
+                int_type.const_array(&values.into_iter().map(|v| v.into_int_value()).collect_vec())
+            }
+            BasicTypeEnum::PointerType(pointer_type) => pointer_type
+                .const_array(&values.into_iter().map(|v| v.into_pointer_value()).collect_vec()),
+            BasicTypeEnum::StructType(struct_type) => struct_type
+                .const_array(&values.into_iter().map(|v| v.into_struct_value()).collect_vec()),
+            BasicTypeEnum::VectorType(_) => unreachable!(),
+            BasicTypeEnum::ScalableVectorType(_) => unreachable!(),
+        };
+        Ok(array_value)
     }
 
     fn codegen_static_value_as_code(
@@ -1999,7 +2011,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 enum_ptr.into()
             }
-            StaticValue::View(view) => {
+            StaticValue::LinearContainer(view) => {
                 let element_type = self.k1.types.get_as_view_instance(view.type_id).unwrap();
                 let element_backend_type = self.codegen_type(element_type)?;
                 let element_basic_type = element_backend_type.rich_repr_type();
@@ -2027,20 +2039,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     values.push(elem_basic_value);
                 }
 
-                let view_struct = self
-                    .make_view_struct(
-                        view.type_id,
-                        view.len() as u64,
-                        data_global.as_pointer_value(),
-                    )
-                    .unwrap();
+                match view.kind {
+                    StaticContainerKind::Array => {
+                        data_global.as_pointer_value().as_basic_value_enum()
+                    }
+                    StaticContainerKind::View => {
+                        let view_struct = self
+                            .make_view_struct(
+                                view.type_id,
+                                view.len() as u64,
+                                data_global.as_pointer_value(),
+                            )
+                            .unwrap();
 
-                let view_ptr =
-                    self.builder.build_alloca(view_struct.get_type(), "static_view").unwrap();
+                        let view_ptr = self
+                            .builder
+                            .build_alloca(view_struct.get_type(), "static_view")
+                            .unwrap();
 
-                // Ok to store an aggregate since it's known to have just the 2 fields
-                self.builder.build_store(view_ptr, view_struct).unwrap();
-                view_ptr.as_basic_value_enum()
+                        // Ok to store an aggregate since it's known to have just the 2 fields
+                        self.builder.build_store(view_ptr, view_struct).unwrap();
+                        view_ptr.as_basic_value_enum()
+                    }
+                }
             }
         };
         Ok(result)
@@ -3519,32 +3540,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     return Ok(rhs);
                 };
                 let lhs_pointer = match assignment.kind {
-                    AssignmentKind::Value => {
-                        match self.k1.exprs.get(assignment.destination) {
-                            // Value assignment is weird. We require an indirect
-                            // variable, since it must be 'mut' for this to typecheck.
-                            TypedExpr::Variable(v) => {
-                                let VariableValue::Indirect { pointer_value, .. } = *self
-                                    .variable_to_value
-                                    .get(&v.variable_id)
-                                    .expect("Missing variable")
-                                else {
-                                    self.k1.ice_with_span(
-                                        "Expect an indirect variable for value assignment",
-                                        v.span,
-                                    )
-                                };
-                                pointer_value
-                            }
-                            _ => {
-                                panic!(
-                                    "Invalid value assignment lhs: {}",
-                                    self.k1.expr_to_string(assignment.destination)
-                                )
-                            }
-                        }
+                    AssignmentKind::Set => {
+                        let TypedExpr::Variable(v) = self.k1.exprs.get(assignment.destination)
+                        else {
+                            self.k1.ice_with_span("Invalid value assignment lhs", assignment.span)
+                        };
+                        let VariableValue::Indirect { pointer_value, .. } =
+                            *self.variable_to_value.get(&v.variable_id).expect("Missing variable")
+                        else {
+                            self.k1.ice_with_span(
+                                "Expect an indirect variable for value assignment",
+                                v.span,
+                            )
+                        };
+                        pointer_value
                     }
-                    AssignmentKind::Reference => {
+                    AssignmentKind::Store => {
                         self.codegen_expr_basic_value(assignment.destination)?.into_pointer_value()
                     }
                 };
@@ -3967,6 +3978,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let is_reference_type = maybe_reference_type.is_some();
 
         if is_llvm_const_representable(&self.k1.static_values, initial_static_value_id) {
+            // eprintln!("{name} is const representable, is_reference_type={is_reference_type}");
             let initialized_basic_value =
                 self.codegen_static_value_as_const(initial_static_value_id)?;
             let llvm_global = self.llvm_module.add_global(
@@ -4235,8 +4247,8 @@ fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueI
             None => true,
             Some(payload_id) => is_llvm_const_representable(static_values, payload_id),
         },
-        StaticValue::View(v) => {
-            v.elements.iter().all(|elem_id| is_llvm_const_representable(static_values, *elem_id))
+        StaticValue::LinearContainer(cont) => {
+            cont.elements.iter().all(|elem_id| is_llvm_const_representable(static_values, *elem_id))
         }
     }
 }

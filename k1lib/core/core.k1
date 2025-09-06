@@ -41,6 +41,8 @@ ns iter {
 
 }
 
+fn inc(i: *mut uword): unit { i <- i.* + 1 }
+
 fn identity[T](value: T): T { value }
 
 fn printIt[T: Print](value: T): unit {
@@ -132,7 +134,6 @@ ns sys {
   }
 
   fn parseMainArgs(argCount: u32, args: Pointer): View[string] {
-    let mut i = 0: uword;
     let buf = Buffer/fromRawPointerAndCount[CString](
       count = argCount as uword,
       pointer = args
@@ -144,7 +145,7 @@ ns sys {
   }
 
   fn readLine(maxLengthBytes: uword): Result[string, string] {
-    let* mut buffer = Buffer/_allocate[byte](maxLengthBytes);
+    let* buffer = Buffer/_allocate[byte](maxLengthBytes);
     let bytesRead = posix/read(0, buffer.data as Pointer, buffer.len);
 
     if bytesRead < 0 {
@@ -220,7 +221,7 @@ ns char {
 
 impl[T: Print] Show for T {
   fn show(self: Self): string { 
-    let* mut charList = List/empty[char]();
+    let* charList = List/empty[char]();
     self.printTo(charList);
     string/wrapList(charList)
   }
@@ -247,14 +248,14 @@ fn formatUInt[W: Writer](context w: W)(value: uword, base: uword): unit {
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
   } else {
-    let mut remaining: uword = value;
+    let* remaining = value;
     // TODO(stdlib slow): Try to use stack space for small ones.
-    let* mut digits = List/withCapacity[char](8);
-    while remaining > 0 {
-      let d = remaining % base;
+    let* digits = List/withCapacity[char](8);
+    while remaining.* > 0 {
+      let d = remaining.* % base;
       let c = u8/toAsciiDigitBase(d as u8, base);
       digits.push(c);
-      remaining = remaining / base;
+      remaining <- remaining.* / base;
     };
 
     digits.reverse();
@@ -397,14 +398,14 @@ ns u8 {
 ns k1rt {
   extern("_k1_show_backtrace") fn _k1_show_backtrace(): unit
   // int _k1_sprintf_f32(char *buf, size_t size, const char *fmt, float arg)
-  extern("_k1_snprintf_f64") fn snprintf_f32(buf: Pointer, size: uword, float: f32): i32
-  extern("_k1_snprintf_f64") fn snprintf_f64(buf: Pointer, size: uword, float: f64): i32
+  extern("_k1_snprintf_f32") fn snprintf_f32(buf: Pointer, size: uword, float: f32, places: u32): i32
+  extern("_k1_snprintf_f64") fn snprintf_f64(buf: Pointer, size: uword, float: f64, places: u32): i32
 }
 
 ns f64 {
-  fn format[W: Writer](f: f64, w: W): unit {
-    let* mut stackBuf: *mut Array[32 x u8] = mem/zeroed();
-    let writtenLen = k1rt/snprintf_f64(stackBuf.getBase() as Pointer, 32, f);
+  fn format[W: Writer](f: f64, w: W, places: u32): unit {
+    let* stackBuf: *mut Array[32 x u8] = mem/zeroed();
+    let writtenLen = k1rt/snprintf_f64(stackBuf.getBase() as Pointer, 32, f, places);
     if writtenLen <= 0  crash("snprintf_f32 returned {writtenLen}");
     w.writeBytes(stackBuf.asView().slice(0, writtenLen as uword))
   }
@@ -420,12 +421,12 @@ impl Equals for f64 {
 
 impl Print for f32 {
   fn printTo[W: Writer](self: f32, w: W): unit {
-    f64/format(self as f64, w);
+    f64/format(self as f64, w, places = 6);
   }
 }
 
 impl Print for f64 {
   fn printTo[W: Writer](self: f64, w: W): unit {
-    f64/format(self, w);
+    f64/format(self, w, places = 6);
   }
 }

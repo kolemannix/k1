@@ -15,7 +15,7 @@ use crate::{
     pool::VPool,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
-        TyperResult, VariableId, make_error,
+        TyperResult, VariableId,
     },
 };
 

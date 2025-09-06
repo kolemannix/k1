@@ -32,15 +32,15 @@ fn test(): unit {
 
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
-    let mut msg = "Hello, World";
-    msg = "Goodbye, World!";
+    let msg = "Hello, World";
+    msg := "Goodbye, World!";
     msg
   };
   assertEquals[string](goodbye, "Goodbye, World!");
 
   let letAssign = #static {
-    let mut i = 22;
-    i = 10;
+    let i = 22;
+    i := 10;
     i
   };
   assertEquals[int](letAssign, 10);
@@ -56,7 +56,7 @@ fn test(): unit {
   assertEquals(padded.e, 5);
 
   let letRef = #static {
-    let* mut i = 10;
+    let* i = 10;
 
     //assert(i.* == 10);
     i <- core/identity(i.*);
@@ -91,17 +91,17 @@ fn test(): unit {
 
   //// Loops
   #if false assertEquals(#static {
-    let mut i = 0;
+    let i = 0;
     loop {
       if i >= 5 { break() };
-      i = i + 1
+      i := i + 1
     };
     i
   }, 5);
 
   #if false assertEquals(#static {
-    let mut i = 0;
-    while i < 5 { i = i + 1 };
+    let i = 0;
+    while i < 5 { i := i + 1 };
     i
   }, 5);
 
@@ -150,7 +150,7 @@ fn test(): unit {
   };
   assertEquals(view.fromStatic(), [1,2,3,4,5].asView());
   #static {
-    let* mut l = List/wrapBuffer(Buffer/copyFromView(INT_VIEW));
+    let* l = List/wrapBuffer(Buffer/copyFromView(INT_VIEW));
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));

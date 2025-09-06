@@ -19,16 +19,17 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{
     compiler::WordSize,
-    failf, int_binop,
+    errf, failf, int_binop,
     lex::SpanId,
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
         self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
-        MatchingConditionInstr, NameAndTypeId, StaticEnum, StaticStruct, StaticValue,
-        StaticValueId, StaticView, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
+        MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
+        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
         TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr,
-        VariableId, make_fail_span,
+        VariableId,
+        static_value::StaticContainerKind,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
             I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
@@ -78,10 +79,18 @@ pub mod k1_types {
 
         ///# Safety
         /// Really make sure its a char buffer
-        pub unsafe fn to_str<'a>(self) -> &'a str {
-            unsafe {
-                let slice = self.to_slice();
-                std::str::from_utf8(slice).unwrap()
+        pub unsafe fn to_str<'a>(self) -> Result<&'a str, &'static str> {
+            if self.data.is_null() {
+                if self.len == 0 {
+                    Ok("")
+                } else {
+                    Err("Null, non-empty K1 view cannot be converted to Rust str")
+                }
+            } else {
+                unsafe {
+                    let slice = self.to_slice();
+                    Ok(std::str::from_utf8(slice).unwrap())
+                }
             }
         }
     }
@@ -1140,29 +1149,37 @@ pub fn static_value_to_vm_value(
             };
             Ok(Value::Agg { type_id, ptr: enum_ptr })
         }
-        StaticValue::View(view) => {
-            let elements = view.elements.clone();
-            let element_type = k1.types.get_as_view_instance(view.type_id).unwrap();
+        StaticValue::LinearContainer(cont) => {
+            let elements = cont.elements.clone();
+            let (element_type, _) = k1.types.get_as_container_instance(cont.type_id).unwrap();
 
             let layout = k1.types.get_layout(element_type);
-            let view_allocation_layout = layout.array_me(view.len());
+            let view_allocation_layout = layout.array_me(cont.len());
 
             debug!(
-                "Pushing {} bytes for View {}",
+                "Pushing {} bytes for container {}",
                 view_allocation_layout.size,
                 k1.static_value_to_string(static_value_id)
             );
-            let base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
+            let data_base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
 
             for (index, elem_value_id) in elements.iter().enumerate() {
                 let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
-                let elem_dst_ptr = unsafe { base_mem.byte_add(index * layout.size as usize) };
+                let elem_dst_ptr = unsafe { data_base_mem.byte_add(index * layout.size as usize) };
                 store_value(&k1.types, elem_dst_ptr, elem_value);
             }
-            let rust_view = K1ViewLike { len: elements.len(), data: base_mem.cast_const() };
-            let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
+            match cont.kind {
+                StaticContainerKind::View => {
+                    let rust_view =
+                        K1ViewLike { len: elements.len(), data: data_base_mem.cast_const() };
+                    let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
 
-            Ok(Value::Agg { type_id: view.type_id, ptr: view_struct_ptr })
+                    Ok(Value::Agg { type_id: cont.type_id, ptr: view_struct_ptr })
+                }
+                StaticContainerKind::Array => {
+                    Ok(Value::Agg { type_id: cont.type_id, ptr: data_base_mem })
+                }
+            }
         }
     }
 }
@@ -1222,7 +1239,7 @@ pub fn execute_stmt(
             let v = execute_expr_return_exit!(vm, m, assgn.value)?;
 
             match assgn.kind {
-                typer::AssignmentKind::Value => {
+                typer::AssignmentKind::Set => {
                     let TypedExpr::Variable(destination_var) = m.exprs.get(assgn.destination)
                     else {
                         m.ice("Value assignment lhs was not a variable", None)
@@ -1230,7 +1247,7 @@ pub fn execute_stmt(
                     vm.insert_current_local(destination_var.variable_id, v);
                     Ok(VmResult::UNIT)
                 }
-                typer::AssignmentKind::Reference => {
+                typer::AssignmentKind::Store => {
                     let lhs_value = execute_expr_return_exit!(vm, m, assgn.destination)?;
                     let Value::Reference { ptr, .. } = lhs_value else {
                         m.ice(
@@ -1674,8 +1691,12 @@ fn execute_intrinsic(
                 CompilerMessageLevel::Warn => "warn",
                 CompilerMessageLevel::Error => "error",
             };
-            let message = value_to_string_id(k1, message_arg);
-            let filename = unsafe { location.filename.to_str() };
+            let message = value_to_string_id(k1, message_arg).map_err(|msg| {
+                errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+            })?;
+            let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
+                errf!(vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
+            })?;
             eprintln!(
                 "[{}:{} {}] {}",
                 filename,
@@ -2324,21 +2345,21 @@ fn execute_matching_condition(
 }
 
 /// Please don't hang on to this reference for very long
-pub fn value_to_rust_str(value: Value) -> &'static str {
+pub fn value_to_rust_str<'a>(value: Value) -> Result<&'a str, &'static str> {
     let ptr = value.expect_agg();
-    let k1_string = unsafe { (ptr as *const k1_types::K1ViewLike).read() };
-    eprintln!("value_to_rust_str {:?} {}", ptr, k1_string.len);
-    unsafe { k1_string.to_str() }
+    let view_ptr = ptr as *const k1_types::K1ViewLike;
+    let k1_view_like = unsafe { view_ptr.read() };
+    unsafe { k1_view_like.to_str() }
 }
 
-pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> StringId {
-    let rust_str = value_to_rust_str(value);
-    m.ast.strings.intern(rust_str)
+pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
+    let rust_str = value_to_rust_str(value)?;
+    Ok(m.ast.strings.intern(rust_str))
 }
 
-pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Ident {
-    let rust_str = value_to_rust_str(value);
-    m.ast.idents.intern(rust_str)
+pub fn value_to_ident(m: &mut TypedProgram, value: Value) -> Result<Ident, &'static str> {
+    let rust_str = value_to_rust_str(value)?;
+    Ok(m.ast.idents.intern(rust_str))
 }
 
 pub fn string_id_to_value(
@@ -2405,7 +2426,9 @@ pub fn vm_value_to_static_value(
         }
         Value::Agg { type_id, ptr } => {
             if type_id == STRING_TYPE_ID {
-                let box_str = value_to_string_id(m, vm_value);
+                let box_str = value_to_string_id(m, vm_value).map_err(|msg| {
+                    errf!(span, "Could not convert string to static value: {msg}")
+                })?;
                 StaticValue::String(box_str)
             } else if m.types.get_as_view_instance(type_id).is_some() {
                 let (view, element_type) = value_as_view(m, vm_value);
@@ -2421,7 +2444,11 @@ pub fn vm_value_to_static_value(
                     let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                     elements.push(elem_static);
                 }
-                StaticValue::View(StaticView { elements, type_id })
+                StaticValue::LinearContainer(StaticContainer {
+                    elements,
+                    kind: StaticContainerKind::View,
+                    type_id,
+                })
             } else if m.types.get_as_list_instance(type_id).is_some() {
                 #[allow(clippy::if_same_then_else)]
                 return failf!(
@@ -2500,9 +2527,13 @@ pub fn vm_value_to_static_value(
                             let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                             elements.push(elem_static);
                         }
-                        StaticValue::View(StaticView { elements, type_id })
+                        StaticValue::LinearContainer(StaticContainer {
+                            elements,
+                            kind: StaticContainerKind::Array,
+                            type_id,
+                        })
                     }
-                    _ => vm_crash(m, vm, "aggregate should be struct or enum"),
+                    _ => vm_crash(m, vm, "aggregate should be struct or enum or array"),
                 }
             }
         }

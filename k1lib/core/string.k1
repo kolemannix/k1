@@ -67,12 +67,8 @@ ns string {
 
 
   fn indexOf(self: string, c: char): i64 {
-    let mut i: uword = 0;
-    while i < self.len() {
-      if self.get(i) == c {
-        return(i as i64);
-      };
-      i = i + 1;
+    for self.view do {
+      if it == c return(itIndex as i64)
     };
     -1
   }
@@ -89,8 +85,8 @@ ns string {
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
-    let* mut ranges = List/empty[{ start: uword, len: uword }]();
-    let* mut r = { start: 0: uword, len: 0: uword };
+    let* ranges = List/empty[{ start: uword, len: uword }]();
+    let* r = { start: 0: uword, len: 0: uword };
 
     for c in self do {
       if c == delim {
@@ -114,14 +110,13 @@ ns string {
   }
 
   fn indexOfString(self: string, target: string): ?uword {
-    let mut i: uword = 0;
-    while i < self.len() {
+    for self.view do {
+      let i = itIndex;
       if i + target.len() >= self.len() {
         return(.None)
       };
       let sub = self.substring(i, i + target.len());
       if sub == target { return(.Some(i)) };
-      i = i + 1;
     };
     .None
   }
@@ -148,15 +143,15 @@ ns string {
   }
 
   fn fromCString(cString: Pointer): string {
-    let* mut chars = List/empty[char]();
-    let* mut i = 0: uword;
+    let* chars = List/empty[char]();
+    let i = 0: uword;
     loop {
       let c = cString.refAtIndex[char](i);
       if c.* == '\0' {
         break();
       } else {
         chars.push(c);
-        i <- i.* + 1;
+        i := i + 1;
       }
     };
     wrapList(chars)
@@ -166,17 +161,17 @@ ns string {
     if self.isEmpty() { return(.None) };
 
     let neg = self.get(0) == '-';
-    let mut i: uword = if neg 1 else 0;
-    let mut total: uword = 0;
+    let i = if neg 1uword else 0uword;
+    let total = 0uword;
     while i < self.len() {
       let c = self.get(i);
       let digit = c.toDigitValue();
       if digit is .Some(digit) {
-        total = (total * 10) + digit as uword;
+        total := (total * 10) + digit as uword;
       } else {
         return(.None);
       };
-      i = i + 1;
+      i := i + 1;
     };
 
     some(

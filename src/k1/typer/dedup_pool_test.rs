@@ -163,31 +163,34 @@ fn test_enum() {
 }
 
 #[test]
-fn test_buffer() {
+fn test_view() {
     let mut system = TestDedupSystem::new();
 
     let elem1 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(1)));
     let elem2 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(2)));
     let elem3 = system.add_static_value(StaticValue::Int(TypedIntValue::I32(1)));
 
-    let buffer1 = system.add_static_value(StaticValue::View(StaticView {
+    let view1 = system.add_static_value(StaticValue::LinearContainer(StaticContainer {
         type_id: TypeId::from(crate::nzu32_from_incr(1)),
+        kind: StaticContainerKind::View,
         elements: eco_vec![elem1, elem2],
     }));
 
-    let buffer2 = system.add_static_value(StaticValue::View(StaticView {
+    let view2 = system.add_static_value(StaticValue::LinearContainer(StaticContainer {
         type_id: TypeId::from(crate::nzu32_from_incr(1)),
+        kind: StaticContainerKind::View,
         elements: eco_vec![elem3, elem2],
     }));
 
-    let buffer3 = system.add_static_value(StaticValue::View(StaticView {
+    let view3 = system.add_static_value(StaticValue::LinearContainer(StaticContainer {
         type_id: TypeId::from(crate::nzu32_from_incr(1)),
+        kind: StaticContainerKind::View,
         elements: eco_vec![elem2, elem1],
     }));
 
     assert_eq!(elem1, elem3, "Elements should deduplicate first");
-    assert_eq!(buffer1, buffer2, "Views with equivalent elements should deduplicate");
-    assert_ne!(buffer1, buffer3, "Views with different element order should be different");
+    assert_eq!(view1, view2, "Views with equivalent elements should deduplicate");
+    assert_ne!(view1, view3, "Views with different element order should be different");
 }
 
 #[test]
@@ -204,14 +207,15 @@ fn test_recurse() {
         payload: Some(int_val),
     }));
 
-    let buffer_val = system.add_static_value(StaticValue::View(StaticView {
+    let view_val = system.add_static_value(StaticValue::LinearContainer(StaticContainer {
         type_id: TypeId::from(crate::nzu32_from_incr(20)),
+        kind: StaticContainerKind::View,
         elements: eco_vec![enum_val, enum_val],
     }));
 
     let struct_val1 = system.add_static_value(StaticValue::Struct(StaticStruct {
         type_id: TypeId::from(crate::nzu32_from_incr(30)),
-        fields: eco_vec![buffer_val],
+        fields: eco_vec![view_val],
     }));
 
     // Recreate identical nested structure - should deduplicate at every level
@@ -224,19 +228,20 @@ fn test_recurse() {
         payload: Some(int_val2),
     }));
 
-    let buffer_val2 = system.add_static_value(StaticValue::View(StaticView {
+    let view_val2 = system.add_static_value(StaticValue::LinearContainer(StaticContainer {
         type_id: TypeId::from(crate::nzu32_from_incr(20)),
+        kind: StaticContainerKind::View,
         elements: eco_vec![enum_val2, enum_val2],
     }));
 
     let struct_val2 = system.add_static_value(StaticValue::Struct(StaticStruct {
         type_id: TypeId::from(crate::nzu32_from_incr(30)),
-        fields: eco_vec![buffer_val2],
+        fields: eco_vec![view_val2],
     }));
 
     assert_eq!(int_val, int_val2, "Deep int values should deduplicate");
     assert_eq!(enum_val, enum_val2, "Deep enum values should deduplicate");
-    assert_eq!(buffer_val, buffer_val2, "Deep buffer values should deduplicate");
+    assert_eq!(view_val, view_val2, "Deep view values should deduplicate");
     assert_eq!(struct_val1, struct_val2, "Deep struct values should deduplicate");
 
     // Critical: only 4 unique values despite creating 8 (4 twice)

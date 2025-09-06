@@ -20,11 +20,11 @@ fn main(): i32 {
     green: 13,
     blue: 14
   };
-  let mut goodGamesSum: u64 = 0;
+  let goodGamesSum: u64 = 0;
   for line in input.splitByChar('\n') do {
     let id = itIndex + 1;
     let line = line.splitByChar(':').get(1);
-    let mut isGoodGame = true;
+    let isGoodGame = true;
     let rounds = for round in line.splitByChar(';') yield {
       let values = round.splitByChar(',');
       let values: List[{ amount: int, color: Color }] = for value in values yield {
@@ -45,12 +45,12 @@ fn main(): i32 {
           .Blue -> supply.blue
         };
         if value.amount > colorSupply {
-          isGoodGame = false;
+          isGoodGame := false;
           // println("Bad ".concat(value.amount.show()).concat(value.color.show()))
         };
       };
     };
-    if isGoodGame { goodGamesSum = goodGamesSum + id };
+    if isGoodGame { goodGamesSum := goodGamesSum + id };
     // println(line);
   };
   printUInt(goodGamesSum);

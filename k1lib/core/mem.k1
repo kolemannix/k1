@@ -142,9 +142,9 @@ ns mem {
     }
   }
 
-  let* mut _k1_tempArena: *mut Arena = zeroed[Arena]();
+  let* _k1_tempArena: *mut Arena = zeroed[Arena]();
 
-  let* mut _k1_currentAllocMode: *mut mem/AllocMode = AllocMode/SYSTEM_HEAP;
+  let* _k1_currentAllocMode: *mut mem/AllocMode = AllocMode/SYSTEM_HEAP;
 
   // Eventually, we want 'push'/'pop' for allocMode
   fn setDefaultAllocMode(mode: mem/AllocMode): unit {

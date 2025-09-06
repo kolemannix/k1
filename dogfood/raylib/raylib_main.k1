@@ -6,7 +6,7 @@ ns raylib {
   deftype Rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
-  extern("InitWindow") fn InitWindow(width: i32, height: i32, name: Pointer): unit
+  extern("InitWindow") fn init(width: i32, height: i32, name: Pointer): unit
   extern("CloseWindow") fn CloseWindow(): unit
   extern("WindowShouldClose") fn WindowShouldClose(): bool
 
@@ -24,7 +24,7 @@ let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
 
 fn main(): i32 {
     let context allocMode = core/mem/AllocMode/TEMP;
-    raylib/InitWindow(800, 450, "raylib [core] example - basic window".toCString().ptr);
+    raylib/init(800, 450, "raylib [core] example - basic window".toCString().ptr);
 
     use raylib/ClearBackground;
     use raylib/DrawText;

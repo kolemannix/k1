@@ -91,10 +91,10 @@ fn myAllocateIn[A: Allocator, T](context a: A)(size: uword): Buffer[T] {
 
 fn myFilledIn[A: Allocator, T](context a: A)(b: Buffer[T], size: uword, value: T): Buffer[T] {
   let buf: Buffer[T] = myAllocateIn[A, T](size);
-  let mut i = 0: uword;
+  let i = 0: uword;
   while i < size {
     buf.set(i, value);
-    i = i + 1;
+    i := i + 1;
   };
   buf
 }

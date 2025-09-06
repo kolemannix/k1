@@ -38,7 +38,7 @@ fn test(): unit {
   assertEquals(Secret/secret1(), 42);
   assertEquals(Secret/secret2(), 43);
 
-  let* mut ps = Point3List/empty();
+  let* ps = Point3List/empty();
   ps.push({ x: 5, y: 10, z: 15 });
   let p = ps.get(0);
   assertEquals(p.x, 5);

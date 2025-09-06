@@ -74,20 +74,61 @@ impl TypedProgram {
 
         // Stores the mapping from the function (or type's) type parameters to their
         // corresponding instantiated type holes for this inference context
-        let mut instantiation_set: SV8<TypeSubstitutionPair> =
+        let mut params_to_holes: SV8<TypeSubstitutionPair> =
             SmallVec::with_capacity(all_type_params.len());
 
-        let inference_var_count = self_.ictx().inference_vars.len();
+        let inference_var_count = self_.ictx().inference_vars.len() as u32;
         self_.ictx_mut().params.extend(all_type_params.iter().map(|nt| nt.type_id));
         for (idx, param) in all_type_params.iter().enumerate() {
-            let hole_index = idx + inference_var_count;
+            let hole_index = idx as u32 + inference_var_count;
 
             let type_hole = self_
                 .types
                 .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
+
+            // This was an experiment in instantiating the type to something that preserved
+            // structure for statically constrained type params to guide inference better, and
+            // recover info via a constraint. The core idea worked, unfortunately it was
+            // ill-conceived in that it produced scenarios that were impossible to solve correctly
+            // let is_static = self_
+            //     .types
+            //     .get(param.type_id)
+            //     .as_type_parameter()
+            //     .unwrap()
+            //     .static_constraint
+            //     .is_some();
+            // let instantiated_param = if is_static {
+            // If the type parameter is of the following format: [T: static string](t: T)
+            // The instantiation set should be T -> '0, constrain '0 -> static['1]
+            // And we refer to th
+
+            // let type_hole_2 = self_.types.add_anon(Type::InferenceHole(InferenceHoleType {
+            //     index: idx as u32 + type_hole_offset + 100,
+            // })); // '2
+            // type_hole_offset += 1;
+            // let static_wrapper = self_.types.add_static_type(type_hole_2, None);
+            // eprintln!(
+            //     "Adding constraint for extra hole: {}",
+            //     self_.pretty_print_type_substitutions(
+            //         &[spair! { type_hole => static_wrapper }],
+            //         ", "
+            //     )
+            // );
+            // self_.ictx_mut().constraints.push(spair! { type_hole => static_wrapper });
+            // static_wrapper // static['1]
+            //     type_hole
+            // } else {
+            //     type_hole
+            // };
+            // let instantiated_param = type_hole;
+            //instantiation_set.push(spair! { param.type_id() => instantiated_param });
             self_.ictx_mut().inference_vars.push(type_hole);
-            instantiation_set.push(TypeSubstitutionPair { from: param.type_id(), to: type_hole });
+            params_to_holes.push(spair! { param.type_id() => type_hole });
         }
+        debug!(
+            "[infer {infer_depth}] Instantiation set is:\n{}",
+            self_.pretty_print_type_substitutions(&params_to_holes, "\n")
+        );
 
         // Used for the error message, mainly
         let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
@@ -99,7 +140,7 @@ impl TypedProgram {
         for (index, InferenceInputPair { arg: expr, param_type: gen_param, allow_mismatch }) in
             inference_pairs.iter().enumerate()
         {
-            let instantiated_param_type = self_.substitute_in_type(*gen_param, &instantiation_set);
+            let instantiated_param_type = self_.substitute_in_type(*gen_param, &params_to_holes);
             debug!(
                 "[infer {infer_depth}] Instantiated parameter type for inference. Was: {}, is: {}",
                 self_.type_id_to_string(*gen_param),
@@ -220,15 +261,14 @@ impl TypedProgram {
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
         let mut all_solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
         for param in all_type_params.iter() {
-            let param_to_hole =
-                instantiation_set.iter().find(|p| p.from == param.type_id()).unwrap();
+            let param_to_hole = params_to_holes.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
             let is_must_solve = self_.named_types.slice_contains(must_solve_params, param);
             if let Some(solution) = final_substitutions.get(&corresponding_hole) {
+                all_solutions.push(NameAndType { name: param.name(), type_id: *solution });
                 if is_must_solve {
                     solutions.push(NameAndType { name: param.name(), type_id: *solution });
                 };
-                all_solutions.push(NameAndType { name: param.name(), type_id: *solution });
             } else {
                 if is_must_solve {
                     unsolved_params.push(*param);
@@ -410,7 +450,7 @@ impl TypedProgram {
         args_and_params: &ArgsAndParams,
     ) -> TyperResult<NamedTypeSlice> {
         debug!("infer_and_constrain_call_type_args");
-        debug_assert!(generic_function_sig.is_generic());
+        debug_assert!(generic_function_sig.has_type_params());
         let passed_type_args = fn_call.type_args;
         let passed_type_args_count = passed_type_args.len();
         let type_params_handle = generic_function_sig.type_params;
@@ -679,7 +719,11 @@ impl TypedProgram {
         Ok(function_type_args_handle)
     }
 
-    fn add_substitution(&self, set: &mut Vec<TypeSubstitutionPair>, pair: TypeSubstitutionPair) {
+    fn add_substitution(
+        &mut self,
+        set: &mut Vec<TypeSubstitutionPair>,
+        pair: TypeSubstitutionPair,
+    ) {
         debug!(
             "Applying substitution {} -> {} to set {}",
             self.type_id_to_string(pair.from),
@@ -694,6 +738,9 @@ impl TypedProgram {
                 existing.from = pair.to
             } else if existing.to == pair.from {
                 existing.to = pair.to
+            } else {
+                existing.from = self.substitute_in_type(existing.from, &[pair]);
+                existing.to = self.substitute_in_type(existing.to, &[pair]);
             };
         });
         set.retain(|pair| pair.from != pair.to);
@@ -850,7 +897,7 @@ impl TypedProgram {
     }
 
     pub(crate) fn unify_and_find_substitutions_rec(
-        &self,
+        &mut self,
         substitutions: &mut Vec<TypeSubstitutionPair>,
         passed_type: TypeId,
         slot_type: TypeId,
@@ -872,7 +919,7 @@ impl TypedProgram {
         // one day: Higher-order types (I dont see why not?)
         // List[int]              F[int]            -> F := List
         debug!(
-            "unify_and_find_substitutions passed {} in slot {}",
+            "unify_and_find_substitutions.\n  passed {}\n  slot   {}",
             self.type_id_to_string(passed_type).blue(),
             self.type_id_to_string(slot_type).blue()
         );
@@ -899,7 +946,7 @@ impl TypedProgram {
                 );
                 // We can directly 'solve' every appearance of a type param here
                 for (passed_type, arg_slot) in
-                    passed_info.type_args.iter().zip(arg_info.type_args.iter())
+                    passed_info.type_args.clone().iter().zip(arg_info.type_args.clone().iter())
                 {
                     self.unify_and_find_substitutions_rec(
                         substitutions,
@@ -914,8 +961,28 @@ impl TypedProgram {
             return TypeUnificationResult::Matching;
         }
 
+        let passed_type = match self.types.get_no_follow(passed_type) {
+            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                tp.static_constraint.unwrap()
+            }
+            _ => passed_type,
+        };
+
+        let slot_type = match self.types.get_no_follow(slot_type) {
+            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                tp.static_constraint.unwrap()
+            }
+            _ => slot_type,
+        };
+
+        debug!(
+            "  RESOLVED unify_and_find_substitutions.\n  passed {}\n  slot   {}",
+            self.type_id_to_string(passed_type).blue(),
+            self.type_id_to_string(slot_type).blue()
+        );
+
         match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
-            (Type::InferenceHole(_actual_hole), _expected_type) => {
+            (Type::InferenceHole(_passed_hole), _slot_type) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
@@ -925,7 +992,7 @@ impl TypedProgram {
                 );
                 TypeUnificationResult::Matching
             }
-            (_actual_type, Type::InferenceHole(_expected_hole)) => {
+            (_passed_type, Type::InferenceHole(_slot_hole)) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
@@ -954,8 +1021,8 @@ impl TypedProgram {
                 // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
                 //
                 // Structs must have all same field names in same order
-                let passed_fields = &passed_struct.fields;
-                let fields = &struc.fields;
+                let passed_fields = passed_struct.fields.clone();
+                let fields = struc.fields.clone();
                 if passed_fields.len() != fields.len() {
                     return TypeUnificationResult::NonMatching("field count");
                 }
@@ -983,8 +1050,8 @@ impl TypedProgram {
                 // passed_expr: Result<int, string>, argument_type: Result<T, E>
                 // passed_expr: enum Ok(int), Err(string), argument_type: enum Ok(T), Err(E)
                 // Enum must have same variants with same tags, walk each variant and recurse on its payload
-                let passed_variants = &passed_enum.variants;
-                let variants = &param_enum_type.variants;
+                let passed_variants = passed_enum.variants.clone();
+                let variants = param_enum_type.variants.clone();
                 if passed_variants.len() != variants.len() {
                     return TypeUnificationResult::NonMatching("variant count");
                 }
@@ -1017,6 +1084,8 @@ impl TypedProgram {
                     type_param_enabled,
                 ),
             (Type::Array(passed_array), Type::Array(slot_array)) => {
+                let passed_array_element_type = passed_array.element_type;
+                let slot_array_element_type = slot_array.element_type;
                 self.unify_and_find_substitutions_rec(
                     substitutions,
                     passed_array.size_type,
@@ -1025,8 +1094,8 @@ impl TypedProgram {
                 );
                 self.unify_and_find_substitutions_rec(
                     substitutions,
-                    passed_array.element_type,
-                    slot_array.element_type,
+                    passed_array_element_type,
+                    slot_array_element_type,
                     type_param_enabled,
                 );
                 TypeUnificationResult::Matching
@@ -1047,22 +1116,24 @@ impl TypedProgram {
                     )
                 }
             }
-            (Type::Function(passed_fn), Type::Function(param_fn)) => {
-                if passed_fn.logical_params().len() == param_fn.logical_params().len() {
-                    for (passed_param, param_param) in
-                        passed_fn.logical_params().iter().zip(param_fn.logical_params().iter())
+            (Type::Function(passed_fn), Type::Function(slot_fn)) => {
+                if passed_fn.logical_params().len() == slot_fn.logical_params().len() {
+                    let passed_fn = passed_fn.clone();
+                    let slot_fn = slot_fn.clone();
+                    for (passed_param, slot_param) in
+                        passed_fn.logical_params().iter().zip(slot_fn.logical_params().iter())
                     {
                         self.unify_and_find_substitutions_rec(
                             substitutions,
                             passed_param.type_id,
-                            param_param.type_id,
+                            slot_param.type_id,
                             type_param_enabled,
                         );
                     }
                     self.unify_and_find_substitutions_rec(
                         substitutions,
                         passed_fn.return_type,
-                        param_fn.return_type,
+                        slot_fn.return_type,
                         type_param_enabled,
                     )
                 } else {
@@ -1092,12 +1163,20 @@ impl TypedProgram {
                     param_static.inner_type_id,
                     type_param_enabled,
                 ),
-            (Type::Static(static_type), _) => self.unify_and_find_substitutions_rec(
+            (Type::Static(passed_static), _non_static) => self.unify_and_find_substitutions_rec(
                 substitutions,
-                static_type.inner_type_id,
+                passed_static.inner_type_id,
                 slot_type,
                 type_param_enabled,
             ),
+            (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
+                self.unify_and_find_substitutions_rec(
+                    substitutions,
+                    passed_type,
+                    static_slot.inner_type_id,
+                    type_param_enabled,
+                )
+            }
             (Type::TypeParameter(_actual_param), _expected_type) if type_param_enabled => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
@@ -1119,7 +1198,10 @@ impl TypedProgram {
                 TypeUnificationResult::Matching
             }
             _ if passed_type == slot_type => TypeUnificationResult::Matching,
-            _ => TypeUnificationResult::NonMatching("Unrelated types"),
+            _ => {
+                debug!("  -> Non-Matching");
+                TypeUnificationResult::NonMatching("Unrelated types")
+            }
         }
     }
 
