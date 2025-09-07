@@ -189,7 +189,7 @@ fn cmdInfo(): string {
   // println("option name Hash type spin default 16 min 1 max 32768");
   // println("option name Skill Level type spin default 20 min 0 max 20");
   [
-    "id name refchess alpha",
+    "id name refchess alpha": string,
     "id author Koleman Nix",
     "uciok"
   ].join("\n")

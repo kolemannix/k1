@@ -1668,10 +1668,10 @@ impl TypedExpr {
     }
 }
 
-enum CheckExprTypeResult {
+enum CheckExprTypeResult<'a> {
     Ok,
     Err(String),
-    Coerce(TypedExprId, &'static str),
+    Coerce(TypedExprId, Cow<'a, str>),
 }
 
 #[derive(Debug, Clone)]
@@ -4213,16 +4213,16 @@ impl TypedProgram {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    ParsedLiteral::Unit(span) => match target_type_id {
-                        UNIT_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralUnit(*span))),
+                    ParsedLiteral::Unit(span) => match self.types.get(target_type_id) {
+                        Type::Unit => Ok(self.patterns.add(TypedPattern::LiteralUnit(*span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type unit will never match {}",
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    ParsedLiteral::Char(c, span) => match target_type_id {
-                        CHAR_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
+                    ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
+                        Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "unrelated pattern type char will never match {}",
@@ -4263,24 +4263,26 @@ impl TypedProgram {
                             }
                         }
                     }
-                    ParsedLiteral::Bool(b, span) => match target_type_id {
-                        BOOL_TYPE_ID => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, *span))),
+                    ParsedLiteral::Bool(b, span) => match self.types.get(target_type_id) {
+                        Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, *span))),
                         _ => failf!(
                             self.ast.get_pattern_span(pat_expr),
                             "bool literal pattern will never match {}",
                             self.type_id_to_string(target_type_id)
                         ),
                     },
-                    ParsedLiteral::String(string_id, span) => match target_type_id {
-                        STRING_TYPE_ID => {
-                            Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
-                        }
-                        _ => failf!(
-                            self.ast.get_pattern_span(pat_expr),
-                            "string literal pattern will never match {}",
-                            self.type_id_to_string(target_type_id)
-                        ),
-                    },
+                    ParsedLiteral::String(string_id, span) => {
+                        match self.types.get_no_follow_static(target_type_id) {
+                            Type::Static(s) if s.inner_type_id == STRING_TYPE_ID => Ok(()),
+                            _ if target_type_id == STRING_TYPE_ID => Ok(()),
+                            _ => failf!(
+                                self.ast.get_pattern_span(pat_expr),
+                                "string literal pattern will never match {}",
+                                self.type_id_to_string(target_type_id)
+                            ),
+                        }?;
+                        Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
+                    }
                 }
             }
             ParsedPattern::Variable(ident_id, span) => {
@@ -4512,12 +4514,12 @@ impl TypedProgram {
     /// - Function arguments
     /// - Variable declarations
     /// - List literal elements
-    fn check_expr_type(
+    fn check_expr_type<'a>(
         &mut self,
         expected: TypeId,
         expr: TypedExprId,
         scope_id: ScopeId,
-    ) -> CheckExprTypeResult {
+    ) -> CheckExprTypeResult<'a> {
         let actual_type_id = self.exprs.get(expr).get_type();
 
         let check_result = self.check_types(expected, actual_type_id, scope_id);
@@ -4536,7 +4538,7 @@ impl TypedProgram {
             {
                 return CheckExprTypeResult::Coerce(
                     self.synth_cast(expr, actual_static.inner_type_id, CastType::StaticErase, None),
-                    "static_erase",
+                    "static_erase".into(),
                 );
             }
             // If we failed typechecking, and we expected a static, and we passed a non-static
@@ -4544,7 +4546,7 @@ impl TypedProgram {
             (Type::Static(expected_static), None) => {
                 if expected_static.inner_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                        return CheckExprTypeResult::Coerce(static_lifted, "static_lift");
+                        return CheckExprTypeResult::Coerce(static_lifted, "static_lift".into());
                     }
                 }
             }
@@ -4568,7 +4570,7 @@ impl TypedProgram {
                             target_type_id: lambda_object_type,
                             span,
                         })),
-                        "lam->lamobj",
+                        "lam->lamobj".into(),
                     );
                 }
             }
@@ -4581,7 +4583,7 @@ impl TypedProgram {
                     self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
                 let lambda_object_type = self.exprs.get(lambda_object).get_type();
                 if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
-                    return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj");
+                    return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj".into());
                 }
             }
         }
@@ -4600,7 +4602,10 @@ impl TypedProgram {
                                 CastType::ReferenceToReference,
                                 None,
                             );
-                            return CheckExprTypeResult::Coerce(casted_reference, "write->read");
+                            return CheckExprTypeResult::Coerce(
+                                casted_reference,
+                                "write->read".into(),
+                            );
                         }
                         Err(_) => {}
                     }
@@ -4608,6 +4613,9 @@ impl TypedProgram {
             }
         }
 
+        // Auto-deref: We only do this if the expected type is not a reference at all. Meaning,
+        // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
+        // This rule won't help you or do anything for nested references
         let expected_resolved = self.types.get(self.get_type_id_resolved(expected, scope_id));
         // If we don't expect a reference
         if expected_resolved.as_reference().is_none() {
@@ -4615,22 +4623,20 @@ impl TypedProgram {
             if let Type::FunctionTypeParameter(_tp) = expected_resolved {
             } else {
                 // But you pass a reference
-                if let Some(reference) = self.get_expr_type(expr).as_reference() {
-                    let span = self.exprs.get(expr).get_span();
-
-                    if self.check_types(expected, reference.inner_type, scope_id).is_ok() {
-                        // We only do this if the expected type is not a reference at all. Meaning,
-                        // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
-                        // This rule won't help you or do anything for nested references
-                        return CheckExprTypeResult::Coerce(
-                            self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
-                                kind: UnaryOpKind::Dereference,
-                                type_id: reference.inner_type,
-                                span,
-                                expr,
-                            })),
-                            "deref",
-                        );
+                if let Some(_reference) = self.get_expr_type(expr).as_reference() {
+                    // We want this final check to benefit from coercion (which we are currrently implementing)
+                    let dereferenced = self.synth_dereference(expr);
+                    match self.check_expr_type(expected, dereferenced, scope_id) {
+                        CheckExprTypeResult::Ok => {
+                            return CheckExprTypeResult::Coerce(dereferenced, "deref".into());
+                        }
+                        CheckExprTypeResult::Err(_) => {}
+                        CheckExprTypeResult::Coerce(typed_expr_id, reason1) => {
+                            return CheckExprTypeResult::Coerce(
+                                typed_expr_id,
+                                format!("deref -> {reason1}").into(),
+                            );
+                        }
                     }
                 }
             }
@@ -4665,6 +4671,10 @@ impl TypedProgram {
     // nocommit(3): We're now generating errors as a matter of course in successful compilation
     //              due to how 'coerce' works. We need to make sure generating these error strings
     //              is performant, currently it is very much not
+    //
+    //              Passing in a buffer for the errors to go is 1 thing
+    //              But often check_types calls 'type_id_to_string', which is an entire
+    //              other can of worms to optimize!
     pub fn check_types(
         &self,
         expected: TypeId,
@@ -5510,6 +5520,13 @@ impl TypedProgram {
         let args = specialized_ability.kind.arguments();
         let parameter_constraints: SV4<Option<TypeId>> =
             self.named_types.get_slice(args).iter().map(|nt| Some(nt.type_id)).collect();
+
+        // Follow 'statics' since we're never going to be implementing abilities for the
+        // specific static values but instead for the inner types
+        let self_type_id = match self.types.get_no_follow(self_type_id) {
+            Type::Static(stat) => stat.inner_type_id,
+            _ => self_type_id,
+        };
         self.find_ability_impl_for_type_or_generate_new(
             self_type_id,
             base_ability,
@@ -6597,20 +6614,21 @@ impl TypedProgram {
             None => ctx.expected_type_id,
         };
         let result_expr = self_.eval_expr_inner(expr_id, ctx)?;
-        if explicit_hint {
-            if let Some(expected_type_id) = ctx.expected_type_id {
-                if let Err(msg) = self_.check_types(
-                    expected_type_id,
-                    self_.exprs.get(result_expr).get_type(),
-                    ctx.scope_id,
-                ) {
-                    return failf!(
+        let result_expr = if explicit_hint {
+            let expected_type_id = ctx.expected_type_id.unwrap();
+            let coerced_expr = self_
+                .check_and_coerce_expr(expected_type_id, result_expr, ctx.scope_id)
+                .map_err(|e| {
+                    errf!(
                         self_.ast.exprs.get_span(expr_id),
-                        "Expression had incorrect type: {msg}"
-                    );
-                }
-            }
-        }
+                        "Expression did not conform to hint: {}",
+                        e.message
+                    )
+                })?;
+            coerced_expr
+        } else {
+            result_expr
+        };
 
         if log::log_enabled!(log::Level::Debug) {
             let expr_span = self_.ast.exprs.get_span(expr_id);
@@ -6678,9 +6696,16 @@ impl TypedProgram {
                 let expr = TypedExpr::Bool(*b, *span);
                 Ok(self.exprs.add(expr))
             }
-            ParsedExpr::Literal(ParsedLiteral::String(s, span)) => {
-                let expr = TypedExpr::String(*s, *span);
-                Ok(self.exprs.add(expr))
+            ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
+                if ctx.is_inference {
+                    let static_value_id = self.static_values.add(StaticValue::String(*string_id));
+                    let t = self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id));
+                    let expr = TypedExpr::StaticValue(static_value_id, t, *span);
+                    Ok(self.exprs.add(expr))
+                } else {
+                    let expr = TypedExpr::String(*string_id, *span);
+                    Ok(self.exprs.add(expr))
+                }
             }
             ParsedExpr::Variable(_variable) => Ok(self.eval_variable(expr_id, ctx.scope_id)?.1),
             ParsedExpr::FieldAccess(field_access) => {
@@ -7203,12 +7228,10 @@ impl TypedProgram {
                     }
                     debug!("Emitted raw content:\n---\n{content}\n---");
                     let generated_path = self.ast.config.out_dir.join(&generated_filename);
-                    let origin_file = self.ast.spans.get(span).file_id;
-                    let origin_source = self.ast.sources.get_source(origin_file);
                     let source_for_emission =
                         self.ast.sources.add_source(crate::parse::Source::make(
                             0,
-                            origin_source.directory.clone(),
+                            self.ast.config.out_dir.to_str().unwrap().to_owned(),
                             generated_filename,
                             content.clone(),
                         ));
@@ -8120,13 +8143,14 @@ impl TypedProgram {
             for pattern in arm_patterns.into_iter() {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
+                let pattern_eval_ctx = ctx.with_scope(arm_scope_id).with_no_expected_type();
                 let mut instrs = eco_vec![];
                 self.compile_pattern_into_values(
                     pattern,
                     target_expr,
                     &mut instrs,
                     false,
-                    arm_scope_id,
+                    pattern_eval_ctx,
                 )?;
 
                 match parsed_case.guard_condition_expr {
@@ -8255,7 +8279,7 @@ impl TypedProgram {
         target_expr: TypedExprId,
         instrs: &mut EcoVec<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
-        arm_scope_id: ScopeId,
+        ctx: EvalExprContext,
     ) -> TyperResult<()> {
         let target_expr_type = self.exprs.get(target_expr).get_type();
         match self.patterns.get(pattern) {
@@ -8291,7 +8315,7 @@ impl TypedProgram {
                         write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
                     });
                     let struct_field_variable =
-                        self.synth_variable_defn_simple(var_name, get_struct_field, arm_scope_id);
+                        self.synth_variable_defn_simple(var_name, get_struct_field, ctx.scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
                         let_stmt: struct_field_variable.defn_stmt,
                         variable_id: struct_field_variable.variable_id,
@@ -8301,7 +8325,7 @@ impl TypedProgram {
                         struct_field_variable.variable_expr,
                         instrs,
                         is_referencing,
-                        arm_scope_id,
+                        ctx,
                     )?;
                 }
                 Ok(())
@@ -8358,7 +8382,7 @@ impl TypedProgram {
                     let var_name =
                         self.ast.idents.intern(format!("payload_{}", self.ident_str(variant_name)));
                     let payload_variable =
-                        self.synth_variable_defn_simple(var_name, get_payload_expr, arm_scope_id);
+                        self.synth_variable_defn_simple(var_name, get_payload_expr, ctx.scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
                         let_stmt: payload_variable.defn_stmt,
                         variable_id: payload_variable.variable_id,
@@ -8368,7 +8392,7 @@ impl TypedProgram {
                         payload_variable.variable_expr,
                         instrs,
                         is_referencing,
-                        arm_scope_id,
+                        ctx,
                     )?;
                 };
                 Ok(())
@@ -8376,7 +8400,7 @@ impl TypedProgram {
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
                 let binding_variable =
-                    self.synth_variable_defn_visible(variable_ident, target_expr, arm_scope_id);
+                    self.synth_variable_defn_visible(variable_ident, target_expr, ctx.scope_id);
                 instrs.push(MatchingConditionInstr::Binding {
                     let_stmt: binding_variable.defn_stmt,
                     variable_id: binding_variable.variable_id,
@@ -8391,13 +8415,7 @@ impl TypedProgram {
                 } else {
                     target_expr
                 };
-                self.compile_pattern_into_values(
-                    inner_pattern,
-                    target_expr,
-                    instrs,
-                    true,
-                    arm_scope_id,
-                )?;
+                self.compile_pattern_into_values(inner_pattern, target_expr, instrs, true, ctx)?;
                 Ok(())
             }
             literal_pat => {
@@ -8472,7 +8490,7 @@ impl TypedProgram {
                     TypedPattern::LiteralString(string_id, span) => {
                         let string_expr = self.exprs.add(TypedExpr::String(*string_id, *span));
                         let condition =
-                            self.synth_equals_call(target_expr, string_expr, arm_scope_id, *span)?;
+                            self.synth_equals_call(target_expr, string_expr, ctx, *span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: condition });
                         Ok(())
                     }
@@ -8992,6 +9010,7 @@ impl TypedProgram {
             consequent
         };
         let consequent_type = self.exprs.get(consequent).get_type();
+
         let alternate = if let Some(parsed_alt) = if_expr.alt {
             let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
@@ -9006,16 +9025,21 @@ impl TypedProgram {
         let no_never = !cons_never && !alt_never;
 
         let overall_type = if no_never {
-            if let Err(msg) = self.check_types(consequent_type, alternate_type, ctx.scope_id) {
-                return failf!(
-                    alternate_span,
-                    "else branch type did not match then branch type: {}",
-                    msg,
-                );
-            };
             consequent_type
         } else {
             if cons_never { alternate_type } else { consequent_type }
+        };
+
+        let alternate = if no_never {
+            self.check_and_coerce_expr(consequent_type, alternate, ctx.scope_id).map_err(|e| {
+                errf!(
+                    alternate_span,
+                    "else branch type did not match then branch type: {}",
+                    e.message,
+                )
+            })?
+        } else {
+            alternate
         };
 
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
@@ -9148,7 +9172,7 @@ impl TypedProgram {
                     target_var.variable_expr,
                     instrs,
                     false,
-                    ctx.scope_id,
+                    ctx,
                 )?;
                 all_patterns.push(pattern);
 
@@ -9422,21 +9446,13 @@ impl TypedProgram {
         let lhs_type_id = self.exprs.get(lhs).get_type();
         let lhs_type = self.types.get(lhs_type_id);
         if lhs_type.is_scalar_int_value() {
-            panic!("Scalar ints shouldnt be passed to eval_equality_expr")
+            self.ice_with_span(
+                "Scalar ints shouldnt be passed to eval_equality_expr",
+                binary_op.span,
+            )
         }
         let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type_id)))?;
-        let rhs_type = self.exprs.get(rhs).get_type();
-        let equality_result = if rhs_type != lhs_type_id {
-            failf!(
-                binary_op.span,
-                "Right hand side type '{}' did not match {}",
-                self.type_id_to_string(rhs_type),
-                self.type_id_to_string(lhs_type_id)
-            )
-        } else {
-            let call_expr = self.synth_equals_call(lhs, rhs, ctx.scope_id, binary_op.span)?;
-            Ok(call_expr)
-        }?;
+        let equality_result = self.synth_equals_call(lhs, rhs, ctx, binary_op.span)?;
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
             BinaryOpKind::NotEquals => self.synth_typed_function_call(
@@ -10031,25 +10047,14 @@ impl TypedProgram {
         }
 
         let base_expr_type = self.exprs.get(base_expr).get_type();
-        let base_for_method_derefed = match self.types.get_no_follow_static(base_expr_type) {
-            Type::Reference(r) => r.inner_type,
-            Type::Static(stat) => stat.inner_type_id,
-            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
-                self.types
-                    .get_no_follow_static(tp.static_constraint.unwrap())
-                    .as_static()
-                    .unwrap()
-                    .inner_type_id
-            }
-            _ => base_expr_type,
-        };
+        let base_for_method = self.types.get_base_for_method(base_expr_type);
 
-        if let Type::Array(_array_type) = self.types.get(base_for_method_derefed) {
-            return self.handle_array_method_call(base_expr, base_for_method_derefed, call, ctx);
+        if let Type::Array(_array_type) = self.types.get(base_for_method) {
+            return self.handle_array_method_call(base_expr, base_for_method, call, ctx);
         }
 
         if let Some(companion_ns) =
-            self.types.get_defn_info(base_for_method_derefed).and_then(|d| d.companion_namespace)
+            self.types.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
         {
             let companion_scope = self.get_namespace_scope(companion_ns);
             if let Some(method_id) = companion_scope.find_function(fn_name) {
@@ -10311,6 +10316,13 @@ impl TypedProgram {
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
         let solved_self = self.named_types.get_nth(self_only, 0).type_id;
+
+        // Follow 'statics' since we're never going to be implementing abilities for the
+        // specific static values but instead for the inner types
+        let solved_self = match self.types.get_no_follow(solved_self) {
+            Type::Static(stat) => stat.inner_type_id,
+            _ => solved_self,
+        };
         let impl_handle = self
             .find_ability_impl_for_type_or_generate_new(
                 solved_self,
@@ -12088,12 +12100,9 @@ impl TypedProgram {
                 if let Some(payload_arg) = payload {
                     let payload_value =
                         self.eval_expr(payload_arg, ctx.with_expected_type(Some(payload_type)))?;
-                    let payload_value_type = self.exprs.get(payload_value).get_type();
-                    if let Err(msg) =
-                        self.check_types(payload_type, payload_value_type, ctx.scope_id)
-                    {
-                        return failf!(span, "Variant payload type mismatch: {}", msg);
-                    }
+                    let payload_value = self
+                        .check_and_coerce_expr(payload_type, payload_value, ctx.scope_id)
+                        .map_err(|e| errf!(span, "Variant payload type mismatch: {}", e.message))?;
                     Ok(Some(payload_value))
                 } else {
                     failf!(
@@ -14145,28 +14154,25 @@ impl TypedProgram {
             self.add_core_uses_to_scope(root_namespace_scope_id, SpanId::NONE)?;
         }
 
-        // Meta phase: Find meta namespace, if exists, and fully compile it
-        let mut meta_ns_id: Option<ParsedId> = None;
+        // Meta phase: Find pre namespace, if exists, and fully compile it
+        let mut pre_ns_id: Option<ParsedId> = None;
         let parsed_ns = self.ast.namespaces.get(module_root_parsed_namespace);
         if !is_core {
-            if let Some(meta_ns_parsed_id) = parsed_ns
+            if let Some(pre_ns_parsed_id) = parsed_ns
                 .definitions
                 .iter()
                 .filter_map(|d| d.as_namespace_id())
-                .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.meta)
+                .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
-                let ns = self.ast.namespaces.get(meta_ns_parsed_id);
-                if ns.name == self.ast.idents.b.meta {
-                    // Phase 1
-                    eprintln!(">> Phase 0.5 compile meta namespace");
-                    self.declare_namespace(meta_ns_parsed_id, root_namespace_scope_id)?;
-                    self.run_all_phases_on_ns(meta_ns_parsed_id, module_id, &[])?;
-                    meta_ns_id = Some(ParsedId::Namespace(meta_ns_parsed_id));
-                }
+                // Phase 1
+                eprintln!(">> Phase 0.5 compile pre namespace");
+                self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
+                self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
+                pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
             }
         }
 
-        let skip_defns = match meta_ns_id {
+        let skip_defns = match pre_ns_id {
             None => &[][..],
             Some(id) => &[id],
         };
@@ -14680,6 +14686,7 @@ impl TypedProgram {
             core!("assertEquals"),
             core!("assertMsg"),
             core!("crash"),
+            core!("meta"),
             core!("mem"),
             core!("types"),
             core!("k1"),
@@ -14728,7 +14735,8 @@ impl TypedProgram {
         };
 
         // .get will follow statics and recursives
-        let typ = self.types.get(type_id);
+        let chased_type_id = self.types.get_chased_id(type_id);
+        let typ = self.types.get_no_follow(chased_type_id);
         let static_enum = match typ {
             Type::Unit => make_variant(get_ident!(self, "Unit"), None),
             Type::Char => make_variant(get_ident!(self, "Char"), None),
@@ -14744,6 +14752,9 @@ impl TypedProgram {
                 enum_value
             }
             Type::Float(_float_type) => todo!("float schema"),
+            Type::Struct(struct_type) if chased_type_id == STRING_TYPE_ID => {
+                make_variant(get_ident!(self, "String"), None)
+            }
             Type::Struct(struct_type) => {
                 let struct_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Struct")).payload.unwrap();

@@ -228,7 +228,12 @@ impl[T: Print] Show for T {
 }
 
 
-impl Print for bool { fn printTo[W: Writer](self: bool, w: W): unit { w.writeString(if self "true" else "false") } }
+impl Print for bool {
+  fn printTo[W: Writer](self: bool, w: W): unit { 
+    let s = if self "true" else "false";
+    w.writeString(s)
+  }
+}
 // Direct specialized 'show' impl to avoid going through a buffer
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
 impl Print for char { fn printTo[W: Writer](self: char, w: W): unit { w.writeChar(self) } }

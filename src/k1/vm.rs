@@ -327,12 +327,12 @@ impl Value {
 
     pub fn set_type_id(&mut self, new_type_id: TypeId) {
         match self {
-            Value::Unit => panic!("Cannot set type_id on a scalar"),
-            Value::Bool(_) => panic!("Cannot set type_id on a scalar"),
-            Value::Char(_) => panic!("Cannot set type_id on a scalar"),
-            Value::Int(_) => panic!("Cannot set type_id on a scalar"),
-            Value::Float(_) => panic!("Cannot set type_id on a scalar"),
-            Value::Pointer(_) => panic!("Cannot set type_id on a scalar"),
+            Value::Unit => (),
+            Value::Bool(_) => (),
+            Value::Char(_) => (),
+            Value::Int(_) => (),
+            Value::Float(_) => (),
+            Value::Pointer(_) => (),
             Value::Reference { type_id, .. } => *type_id = new_type_id,
             Value::Agg { type_id, .. } => *type_id = new_type_id,
         }
@@ -787,7 +787,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::Cast(typed_cast) => {
             let cast = typed_cast.clone();
             let span = cast.span;
-            let base_value = execute_expr_return_exit!(vm, m, cast.base_expr)?;
+            let target_type = typed_cast.target_type_id;
+            let mut base_value = execute_expr_return_exit!(vm, m, cast.base_expr)?;
             match cast.cast_type {
                 CastType::IntegerCast(_direction) => {
                     let int_to_cast = base_value.expect_int();
@@ -942,8 +943,10 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     lambda_object.set_type_id(lambda_object_type);
                     Ok(lambda_object.into())
                 }
-                CastType::Transmute => Ok(VmResult::Value(base_value)),
-                CastType::StaticErase => Ok(VmResult::Value(base_value)),
+                CastType::Transmute | CastType::StaticErase => {
+                    base_value.set_type_id(target_type);
+                    Ok(VmResult::Value(base_value))
+                }
             }
         }
         TypedExpr::Return(typed_return) => {
@@ -1022,7 +1025,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     // scope is used for in check_types
                     m.scopes.get_root_scope_id(),
                 ) {
-                    eprintln!("{}", vm.dump_current_frame(m));
+                    //eprintln!("{}", vm.dump_current_frame(m));
                     return failf!(
                         vm.eval_span,
                         "vm eval type mismatch after executing '{}'\n{}",

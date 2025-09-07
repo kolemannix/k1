@@ -1,7 +1,5 @@
 ns static_parameter;
 
-use core/meta
-
 fn addStatic[I: static int](x: int): int {
   let i: int = core/meta/summonStatic[int, I]();
   i + x
