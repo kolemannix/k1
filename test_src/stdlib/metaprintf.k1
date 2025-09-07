@@ -1,0 +1,66 @@
+use meta/CodeBuilder
+
+// TODO: need to flesh this out more with format specifiers
+//           and other things
+fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
+  let* result: *mut List[char] = List/empty();
+  #meta(fmtString) {
+    let code = CodeBuilder/new();
+    let argsTypeId = types/typeId[Args]();
+    let schema = types/typeSchema(argsTypeId);
+    // This naive splitting doesn't work; we need to walk the format string
+    // emitting "string parts" or "arg specifiers"
+    // Then iterate that structure to produce the runtime
+    // code, which will need the baked string parts
+    let parts = (fmtString as string).splitByChar('?');
+
+    code.var("parts", parts.asView());
+    switch schema {
+      .String -> {
+        if parts.len != 1 {
+          crash("Got 1 format argument (a string) but format string has {parts.len}")
+        };
+        //meta/emitLine("its a string baby");
+        code.line("parts.get(0).printTo(result);");
+        code.line("result.writeString(args);");
+      },
+      .Struct({fields}) -> {
+        if parts.len != fields.len() {
+          crash("Mismatching format arg count")
+        };
+
+        for field in fields do {
+          code.line("let f{itIndex} = args.{field.name};")
+        };
+
+        for part in parts do {
+          code.line("parts.get({itIndex}).printTo(result);");
+          code.line("f{itIndex}.printTo(result);");
+        };
+
+      },
+      //.Bool -> {
+
+      //},
+      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]()}")
+    };
+    code.line("string/wrapList(result)");
+    code.build()
+  }
+}
+
+fn test(): unit {
+  let s1 = format("My value is: ? ?", {a: 42, b: true});
+  //let s1 = sprintf(args.get(1), {a: 42, b: true});
+  println(s1);
+  let s3 = format("My values are: ? and ?", {a: "asdf", b: true});
+  println(s3);
+
+  let s4 = format("My string is ?", "Hello, World!");
+  println(s4);
+
+  //let s5 = sprintf("My whatever is ?", true);
+  //println(s5);
+
+  ()
+}

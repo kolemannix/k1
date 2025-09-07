@@ -1,0 +1,8 @@
+  // test u8-64 and i8-64 suffixes in int literals rust style
+fn main(): i32 {
+    let x: string = "asdf";
+    x.len();
+    let* x2: *string = "asdf";
+    x2.len();
+    0
+}

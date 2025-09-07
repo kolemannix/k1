@@ -78,6 +78,7 @@ ns types {
     Float(either F32, F64),
     Bool,
     Pointer,
+    String,
     Reference({ innerTypeId: u64, mutable: bool }),
     Array({
       elementTypeId: u64,

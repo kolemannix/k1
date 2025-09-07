@@ -1,15 +1,16 @@
 // If you'd like to write some code that you need available
-// for metaprogramming, you can place it in your module's `meta`
-// namespace. The meta namespace is not different than any other
+// for metaprogramming, you can place it in your module's `pre`
+// namespace. The pre namespace is not different than any other
 // namespace, except that it gets fully compiled before the rest
 // of its enclosing module.
 
 // It's effectively the same thing as defining a 
-// separate module called, but more convenient
+// separate module, but more convenient
 
-// Can even appear above the meta ns
-#meta meta/makePoint("MyMetaPoint")
-ns meta {
+// Usage can even appear above the pre ns
+#meta pre/makePoint("MyMetaPoint")
+
+ns pre {
   let pi: f32 = 3.14;
   fn makePoint(name: string): string {
     "deftype {name} = {{ x: i32, y: i32 }";
@@ -18,7 +19,7 @@ ns meta {
 
 ns test_meta;
 
-use core/meta/CodeBuilder
+use meta/CodeBuilder
 
 fn simpleIncrement(): i32 {
   let x = 10;
@@ -47,8 +48,9 @@ fn _writeJsonFromSchema(code: CodeBuilder, name: string, typeId: u64): unit {
         let fieldLetName = `_{name}{f.name}`;
 
         code.string(
-         `let {fieldLetName} = {name}.{f.name};
-          w.writeString("\"{f.name}\":");`
+`let {fieldLetName} = {name}.{f.name};
+w.writeString("\"{f.name}\":");
+`
        ); //" fix quote
 
         _writeJsonFromSchema(code, fieldLetName, f.typeId);
@@ -61,7 +63,7 @@ fn _writeJsonFromSchema(code: CodeBuilder, name: string, typeId: u64): unit {
     },
     .Unit -> code.line(`w.writeString(\`"unit"\`);`),
     .Bool -> {
-      code.line(`w.writeString(if {name} "true" else "false");`)
+      code.line(`w.writeString(if {name} "true": string else "false");`)
     },
     .Word(_) or .Int(_) -> code.line(`{name}.printTo(w);`),
     .Either(_) -> {
@@ -104,7 +106,7 @@ fn test(): unit {
   testToJson();
 
   let x: MyMetaPoint = { x: 0, y: 42 };
-  meta/pi;
+  pre/pi;
   
   ()
 }

@@ -127,6 +127,7 @@ pub struct BuiltinIdents {
     pub unMut: Ident,
     pub data: Ident,
     pub meta: Ident,
+    pub pre: Ident,
     pub Iterator: Ident,
     pub Iterable: Ident,
     pub Opt: Ident,
@@ -135,6 +136,7 @@ pub struct BuiltinIdents {
     pub Buffer: Ident,
     pub mem: Ident,
     pub View: Ident,
+    pub Equals: Ident,
 
     pub param_0: Ident,
     pub param_1: Ident,
@@ -174,6 +176,7 @@ pub struct BuiltinFunctions {
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
     pub View_wrapBuffer: QIdent,
+    pub Equals_equals: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -272,12 +275,14 @@ impl IdentPool {
             unMut: intern!("unMut"),
             data: intern!("data"),
             meta: intern!("meta"),
+            pre: intern!("pre"),
             Opt: intern!("Opt"),
             Unwrap: intern!("Unwrap"),
             Try: intern!("Try"),
             Buffer: intern!("Buffer"),
             mem: intern!("mem"),
             View: intern!("View"),
+            Equals: intern!("Equals"),
             Iterator: intern!("Iterator"),
             Iterable: intern!("Iterable"),
             next: intern!("next"),
@@ -336,6 +341,8 @@ impl IdentPool {
 
         let View_wrapBuffer: QIdent = make_fn!(&[b.View], intern!("wrapBuffer"));
 
+        let Equals_equals: QIdent = make_fn!(&[b.Equals], b.equals);
+
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
@@ -360,6 +367,7 @@ impl IdentPool {
             Array_set,
             mem_zeroed,
             View_wrapBuffer,
+            Equals_equals,
         };
 
         Self { intern_pool: pool, slices, b, f }

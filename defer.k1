@@ -45,8 +45,9 @@ fn read_cpu_timer(): u64 {
 }
 
 fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
-    let parent_index = global_profiler_parent;
-    eprintln("begin {label} with index {anchor_index}");
+    let parent_index = global_profiler_parent.*;
+    //eprintln("begin {label} with index {anchor_index}");
+    //eprintln("  parent: {parent_index}");
     let anchor = global_profiler_anchors.getRef(anchor_index as uword);
     
     // Initialize anchor on first use
@@ -65,11 +66,11 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let start_tsc = read_cpu_timer();
     
     {
-      label: label,
-      old_tsc_elapsed_inclusive: old_tsc_elapsed_inclusive,
-      start_tsc: start_tsc,
-      parent_index: parent_index,
-      anchor_index: anchor_index
+      label,
+      old_tsc_elapsed_inclusive,
+      start_tsc,
+      parent_index,
+      anchor_index
     }
 }
 
@@ -92,14 +93,13 @@ fn end_profile_block(block: ProfileBlock): unit {
 // Print timing results for a single anchor
 fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
     let percent = 100.0: f64 * (anchor.tsc_elapsed_exclusive as f64) / (total_tsc_elapsed as f64);
-    print("  {anchor.label}[{anchor.hit_count}]: {anchor.tsc_elapsed_exclusive} ({percent}%");
-    // std.io.printf("  %s[%llu]: %llu (%.2f%%", anchor.label, anchor.hit_count, anchor.tsc_elapsed_exclusive, percent);
-    
+    print("  {anchor.label}[{anchor.hit_count}]: {percent}% ");
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
-        let percent_with_children = 100.0: f64 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
-        print(", {percent_with_children}% w/children");
+      let percent_with_children = 100.0: f64 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
+      print("({percent_with_children}% w/children) ");
     };
-    print(")\n")
+    println("({anchor.tsc_elapsed_exclusive} 'cycles')");
+    // std.io.printf("  %s[%llu]: %llu (%.2f%%", anchor.label, anchor.hit_count, anchor.tsc_elapsed_exclusive, percent);
 }
 
 // Print all anchor profiling data
@@ -129,37 +129,57 @@ fn end_and_print_profile(): unit {
 }
 
 fn time_block[Label: static string](label: Label, anchor_index: u32): ProfileBlock {
-    // nocommit
-    // let anchor_index: u32 = meta/specCount();
-    let anchor_index = anchor_index;
-    begin_profile_block(label, anchor_index)
+  let anchor_index = anchor_index;
+  begin_profile_block(label, anchor_index)
 }
 
-fn expensive_computation(n: iword): unit {
-    let block = time_block("expensive_computation".toStatic(), 0);
-    // defer end_profile_block(block)
+fn cheap_computation(n: iword): int {
+  let block = time_block("cheap_computation", 3);
+  // defer end_profile_block(block)
     
-    let* result = 0;
-    for IntRange/upTo(n) do {
-        println("{it * it}");
-    };
+  let result = 0;
+  for IntRange/upTo(n) do {
+    if itIndex % 2 == 0 { result := result + 3 }
+    else { result := result - 2 }
+  };
 
-    end_profile_block(block);
+  end_profile_block(block);
 
+  result
+}
+
+fn expensive_computation(n: iword): int {
+  let block = time_block("expensive_computation", 2);
+  // defer end_profile_block(block)
+    
+  let result = 0;
+  for IntRange/upTo(n) do {
+    if itIndex % 2 == 0 { result := result + 3 }
+    else { result := result - 2 }
+  };
+
+  result := result + cheap_computation(n / 10);
+
+  end_profile_block(block);
+
+  result
 }
 
 fn main(): i32 {
   begin_profile();
   
-  let main_block = time_block("main".toStatic(), 3);
+  let main_block = time_block("main", 1);
   // defer end_profile_block(main_block);
   
-  expensive_computation(1_000_0);
-  expensive_computation(1000);
-  expensive_computation(1000);
+  let result = 0;
+  for IntRange/upTo(10) do {
+    result := result + expensive_computation(10_000);
+  };
 
   end_profile_block(main_block);
-   
+
   end_and_print_profile();
+
+  println("result: {result}");
   0
 }

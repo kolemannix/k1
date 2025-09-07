@@ -1234,6 +1234,32 @@ impl TypePool {
         }
     }
 
+    pub fn get_chased_id(&self, type_id: TypeId) -> TypeId {
+        match self.get_no_follow(type_id) {
+            Type::RecursiveReference(rr) => rr.root_type_id,
+            Type::Static(stat) => stat.inner_type_id,
+            _ => type_id,
+        }
+    }
+
+    pub fn get_base_for_method(&self, type_id: TypeId) -> TypeId {
+        // Follow references
+        let static_chased = match self.get_no_follow(type_id) {
+            Type::Reference(r) => r.inner_type,
+            _ => type_id,
+        };
+
+        // Then follow statics
+        match self.get_no_follow(static_chased) {
+            Type::RecursiveReference(rr) => rr.root_type_id,
+            Type::Static(stat) => stat.inner_type_id,
+            Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
+                self.get_static_type_of_type(tp.static_constraint.unwrap()).unwrap().inner_type_id
+            }
+            _ => static_chased,
+        }
+    }
+
     #[track_caller]
     pub fn get_type_parameter(&self, type_id: TypeId) -> &TypeParameter {
         if let Type::TypeParameter(tv) = self.get(type_id) {

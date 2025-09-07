@@ -19,26 +19,32 @@ impl TypedProgram {
         &mut self,
         lhs: TypedExprId,
         rhs: TypedExprId,
-        scope_id: ScopeId,
+        ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
-        let lhs_type = self.exprs.get(lhs).get_type();
-        let implementation =
-            self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, scope_id, span)?;
-        let implementation = self.ability_impls.get(implementation.full_impl_id);
-        let ability = self.abilities.get(EQUALS_ABILITY_ID);
-        let equals_index = ability.find_function_by_name(self.ast.idents.b.equals).unwrap().index;
-        let equals_implementation = implementation.function_at_index(equals_index);
-        let call_id = self.calls.add(Call {
-            callee: Callee::from_ability_impl_fn(equals_implementation),
-            args: smallvec![lhs, rhs],
-            type_args: SliceHandle::empty(),
-            return_type: BOOL_TYPE_ID,
-            span,
-        });
-        let call_expr =
-            self.exprs.add(TypedExpr::Call { call_id, return_type: BOOL_TYPE_ID, span });
-        Ok(call_expr)
+        self.synth_typed_function_call(
+            self.ast.idents.f.Equals_equals.with_span(span),
+            &[],
+            &[lhs, rhs],
+            ctx.with_no_expected_type(),
+        )
+        // let lhs_type = self.exprs.get(lhs).get_type();
+        // let implementation =
+        //     self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, scope_id, span)?;
+        // let implementation = self.ability_impls.get(implementation.full_impl_id);
+        // let ability = self.abilities.get(EQUALS_ABILITY_ID);
+        // let equals_index = ability.find_function_by_name(self.ast.idents.b.equals).unwrap().index;
+        // let equals_implementation = implementation.function_at_index(equals_index);
+        // let call_id = self.calls.add(Call {
+        //     callee: Callee::from_ability_impl_fn(equals_implementation),
+        //     args: smallvec![lhs, rhs],
+        //     type_args: SliceHandle::empty(),
+        //     return_type: BOOL_TYPE_ID,
+        //     span,
+        // });
+        // let call_expr =
+        //     self.exprs.add(TypedExpr::Call { call_id, return_type: BOOL_TYPE_ID, span });
+        // Ok(call_expr)
     }
 
     pub(super) fn synth_if_else(
