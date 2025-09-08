@@ -45,9 +45,7 @@ ns HashMap {
     _make(0)
   }
 
-  fn grow[V: Print](self: *mut HashMap[V]): unit {
-    println("PREGROW");
-    self.dump();
+  fn grow[V](self: *mut HashMap[V]): unit {
     let origSize = self.size;
     let oldEntries = self.entries;
     let newCap = if oldEntries.cap() == 0 1: uword else oldEntries.cap() * 2;
@@ -60,8 +58,6 @@ ns HashMap {
         if not v.deleted self.insert(v.key, v.value)
       }
     };
-    println("POSTGROW");
-    self.dump();
     assertEquals(origSize, self.size)
   }
 
@@ -71,7 +67,6 @@ ns HashMap {
     index
   }
 
-  // Super naive fully linear probing
   fn _probe[V](self: *mut HashMap[V], startIndex: uword): *mut Entry[V] {
     let probeIndex = startIndex;
     loop {
@@ -92,7 +87,7 @@ ns HashMap {
     fillFactor
   }
 
-  fn insert[V: Print](self: *mut HashMap[V], key: string, value: V): unit {
+  fn insert[V](self: *mut HashMap[V], key: string, value: V): unit {
     if self.*.fillFactor() > 0.7 {
       self.grow();
     };
@@ -119,83 +114,80 @@ ns HashMap {
   fn get[V](self: *HashMap[V], key: string): ?V {
     let index = self._computeIndex(key);
     let slot = self.entries.get(index);
-    switch slot {
-      .None -> .None,
-      .Some({ key: existingKey, value: v, deleted }) -> {
-        if existingKey == key {
-          if deleted .None else .Some(v)
-        } else {
-          let probeIndex = index;
-          loop {
-            probeIndex := probeIndex + 1;
-            if probeIndex == self.entries.len { probeIndex := 0 };
+    require slot is .Some({ key: existingKey, value: v, deleted }) else {
+      return(.None)
+    };
+    if existingKey == key {
+      if deleted .None else .Some(v)
+    } else {
+      let probeIndex = index;
+      loop {
+        probeIndex := probeIndex + 1;
+        if probeIndex == self.entries.len { probeIndex := 0 };
 
-            switch self.entries.get(probeIndex) {
-              .Some({ key: existingKey, value: value, deleted }) -> {
-                if key == existingKey {
-                  if deleted break(.None)
-                  else break(.Some(value))
-                }
-              },
-              .None -> { break(.None) },
+        switch self.entries.get(probeIndex) {
+          .Some({ key: existingKey, value, deleted }) -> {
+            if key == existingKey {
+              if deleted break(.None)
+              else break(.Some(value))
             }
-          }
+          },
+          .None -> { break(.None) },
         }
       }
-    };
+    }
   }
 
   fn remove[V](self: *mut HashMap[V], key: string): bool {
     let index = self._computeIndex(key);
     let entryRef = self.entries*.getRef(index);
-    switch entryRef.* {
-      .None -> false,
-      .Some({ key: existingKey, value: value, deleted }) -> {
-        if key == existingKey {
-          entryRef.asSome().!.value*.deleted* <- true;
-          if not deleted { self.size* <- self.size - 1; };
-          not deleted
-        } else {
-          let probeIndex = index;
-          loop {
-            probeIndex := probeIndex + 1;
-            if probeIndex == self.entries.len { probeIndex := 0; };
+    require entryRef is .Some({ key: existingKey, value: value, deleted })* else {
+      return(false)
+    };
+    if key == existingKey {
+      if deleted.* {
+        (false)
+      } else {
+        deleted <- true;
+        self.size* <- self.size - 1;
+        true
+      }
+    } else {
+      let probeIndex = index;
+      loop {
+        probeIndex := probeIndex + 1;
+        if probeIndex == self.entries.len { probeIndex := 0; };
 
-            let probedEntryRef = self.entries*.getRef(probeIndex);
-            switch probedEntryRef {
-              .Some({ key: existingKey, value, deleted })* -> {
-                if key == existingKey.* {
-                  let wasDeleted = deleted.*;
-                  deleted <- true;
-                  if not wasDeleted {
-                    self.size* <- self.size - 1;
-                    break(true)
-                  } else {
-                    break(false)
-                  }
-                }
-              },
-              .None* -> { break(false) },
+        let probedEntryRef = self.entries*.getRef(probeIndex);
+        switch probedEntryRef {
+          .Some({ key: existingKey, value, deleted })* -> {
+            if key == existingKey.* {
+              let wasDeleted = deleted.*;
+              if not wasDeleted {
+                self.size* <- self.size - 1;
+                deleted <- true;
+                break(true)
+              } else {
+                break(false)
+              }
             }
-          }
+          },
+          .None* -> { break(false) },
         }
       }
     }
-
   }
 
   fn dump[V](self: HashMap[V]): unit where V: Print {
     let capacity = self.entries.len;
     let size = self.size;
-    println("Capacity: {capacity}");
-    println("Size: {size}");
-    println("");
+    println("Size: {size}, Capacity: {capacity}");
     for self.entries do {
-      print("{itIndex} ");
+      print("  SLOT {itIndex}: ");
       switch it {
         .None -> println("empty"),
         .Some({ key, value, deleted }) -> {
-            println("{key} -> {value} (d={deleted})");
+          println("{key} -> {value} (d={deleted})");
         }
       }
     }
