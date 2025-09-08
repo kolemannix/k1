@@ -47,7 +47,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `word` and `iword`.
+- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
 - [ ] implement iterator for Array
 - [ ] Do safe integer coercions automatically
 - [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
@@ -153,10 +153,11 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: Operator overloading
 - [ ] Operator 'overloading' story. I think the story is just abilities.
+        This will actually fix the really poor inference that binary ops currently have
 - [ ] Start with Add
 
-## Project: aarch64 ABI
-## Project: x86-64 ABI
+## Project: aarch64 struct passing ABI
+## Project: x86-64 struct passing ABI
 
 ## Introduce Warnings
 - [ ] Unused var

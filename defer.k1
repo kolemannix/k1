@@ -135,7 +135,7 @@ fn time_block[Label: static string](label: Label, anchor_index: u32): ProfileBlo
 
 fn cheap_computation(n: iword): int {
   let block = time_block("cheap_computation", 3);
-  // defer end_profile_block(block)
+  defer end_profile_block(block);
     
   let result = 0;
   for IntRange/upTo(n) do {
