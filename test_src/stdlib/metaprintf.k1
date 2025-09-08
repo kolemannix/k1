@@ -39,9 +39,6 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
         };
 
       },
-      //.Bool -> {
-
-      //},
       _ -> crash("Unsupported format arguments: {types/getTypeName[Args]()}")
     };
     code.line("string/wrapList(result)");
@@ -59,7 +56,7 @@ fn test(): unit {
   let s4 = format("My string is ?", "Hello, World!");
   println(s4);
 
-  //let s5 = sprintf("My whatever is ?", true);
+  //let s5 = format("My whatever is ?", true);
   //println(s5);
 
   ()

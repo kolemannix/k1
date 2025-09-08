@@ -1,9 +1,0 @@
-fn main(): i32 {
-  let dst = core/StringBuilder/new();
-  f64/format(3.14159, dst, places = 1);
-  assertEquals(dst.build(), "3.1");
-  f64/format(3.14159, dst, places = 2);
-  assertEquals(dst.build(), "3.14");
-
-  0
-}

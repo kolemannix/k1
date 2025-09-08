@@ -470,6 +470,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
 #[derive(Clone, Copy)]
 pub struct LoopInfo<'ctx> {
     pub break_value_ptr: Option<PointerValue<'ctx>>,
+    pub break_type: Option<TypeId>,
     pub end_block: BasicBlock<'ctx>,
 }
 
@@ -2480,7 +2481,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let loop_info = *self.loops.get(&break_.loop_scope).unwrap();
                 let break_value = self.codegen_expr_basic_value(break_.value)?;
                 if let Some(break_value_ptr) = loop_info.break_value_ptr {
-                    self.builder.build_store(break_value_ptr, break_value).unwrap();
+                    let break_type = self.codegen_type(loop_info.break_type.unwrap())?;
+                    self.store_k1_value(&break_type, break_value_ptr, break_value);
                 }
                 let branch_inst =
                     self.builder.build_unconditional_branch(loop_info.end_block).unwrap();
@@ -3634,7 +3636,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         self.loops.insert(
             body_block.scope_id,
-            LoopInfo { break_value_ptr: None, end_block: loop_end_block },
+            LoopInfo { break_value_ptr: None, break_type: None, end_block: loop_end_block },
         );
 
         self.builder.build_unconditional_branch(loop_entry_block).unwrap();
@@ -3673,7 +3675,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
         self.loops.insert(
             body_block.scope_id,
-            LoopInfo { break_value_ptr: Some(break_value_ptr), end_block: loop_end_block },
+            LoopInfo {
+                break_value_ptr: Some(break_value_ptr),
+                break_type: Some(loop_expr.break_type),
+                end_block: loop_end_block,
+            },
         );
 
         // Go to the body

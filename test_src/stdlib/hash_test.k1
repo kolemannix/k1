@@ -30,35 +30,20 @@ fn testResize(size: int): unit {
     i := i + 1
   };
   i := 0;
-  myMap.dump();
+  // myMap.dump();
   while i < size {
     let result = myMap.get(i.show());
     if i % 5 == 0 {
       assertMsg("{i} should be empty", result is .None);
     } else {
-      if result is .Some(v) { assert(v == i) } else { crash("Missing value {i}") }
+      if result is .Some(v) { assertEquals(v, i) } else { crash("Missing value {i}") }
     };
     i := i + 1
   };
-  myMap.dump();
+  // myMap.dump();
 }
 
 fn test(): unit {
   testBasic();
-  // nocommit(3): Debug the hash map at some point
-  // testResize(100)
-}
-
-fn randByte(): u8 {
-  (core/sys/arc4random_uniform(26) + 65) as u8
-}
-
-fn randString(len: uint): string {
-  let* chars = List/withCapacity[char](len);
-  let i = 0uword;
-  while i < len {
-    chars.push(randByte() as char);
-    i := i + 1
-  };
-  string/wrapList(chars.*)
+  #static testResize(1000);
 }
