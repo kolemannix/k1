@@ -11861,6 +11861,9 @@ impl TypedProgram {
                 }));
                 Ok(Some(stmt_id))
             }
+            ParsedStmt::Defer(defer) => {
+                failf!(defer.span, "Unimplemented")
+            }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = if coerce_expr {
                     self.eval_expr_with_coercion(*expression, ctx, false)?
@@ -14752,7 +14755,7 @@ impl TypedProgram {
                 enum_value
             }
             Type::Float(_float_type) => todo!("float schema"),
-            Type::Struct(struct_type) if chased_type_id == STRING_TYPE_ID => {
+            Type::Struct(_struct_type) if chased_type_id == STRING_TYPE_ID => {
                 make_variant(get_ident!(self, "String"), None)
             }
             Type::Struct(struct_type) => {

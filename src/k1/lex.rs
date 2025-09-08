@@ -192,6 +192,7 @@ pub enum TokenKind {
     KeywordContext,
     KeywordUse,
     KeywordRequire,
+    KeywordDefer,
 
     Slash,
     LineComment,
@@ -289,6 +290,7 @@ impl TokenKind {
             K::KeywordContext => Some("context"),
             K::KeywordUse => Some("use"),
             K::KeywordRequire => Some("require"),
+            K::KeywordDefer => Some("defer"),
 
             K::Slash => Some("/"),
             K::LineComment => Some("//"),
@@ -419,6 +421,7 @@ impl TokenKind {
             "context" => Some(K::KeywordContext),
             "use" => Some(K::KeywordUse),
             "require" => Some(K::KeywordRequire),
+            "defer" => Some(K::KeywordDefer),
             "==" => Some(K::EqualsEquals),
             "!=" => Some(K::BangEquals),
             "<=" => Some(K::LessThanEqual),
@@ -457,6 +460,7 @@ impl TokenKind {
             K::KeywordContext => true,
             K::KeywordUse => true,
             K::KeywordRequire => true,
+            K::KeywordDefer => true,
             _ => false,
         }
     }

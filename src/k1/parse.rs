@@ -80,10 +80,16 @@ nz_u32_id!(ParsedTypeExprId);
 pub struct ParsedPatternId(u32);
 nz_u32_id!(ParsedUseId);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedUse {
     pub target: QIdent,
     pub alias: Option<Ident>,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedDefer {
+    pub expr: ParsedExprId,
     pub span: SpanId,
 }
 
@@ -815,6 +821,7 @@ pub enum ParsedStmt {
     Require(ParsedRequire),       // require x is .Some(foo) else crash()
     Assign(AssignStmt),           // x := 42
     Store(StoreStmt),             // x <- 42
+    Defer(ParsedDefer),           // defer arena.reset()
     LoneExpression(ParsedExprId), // println("asdfasdf")
 }
 static_assert_size!(ParsedStmt, 24);
@@ -1491,6 +1498,7 @@ impl ParsedProgram {
             ParsedStmt::Require(g) => g.span,
             ParsedStmt::Assign(a) => a.span,
             ParsedStmt::Store(s) => s.span,
+            ParsedStmt::Defer(d) => d.span,
             ParsedStmt::LoneExpression(expr_id) => self.exprs.get_span(*expr_id),
         }
     }
@@ -3796,6 +3804,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(Some(self.ast.stmts.add(ParsedStmt::Let(let_stmt))))
         } else if let Some(require_stmt) = self.parse_require()? {
             Ok(Some(self.ast.stmts.add(ParsedStmt::Require(require_stmt))))
+        } else if let Some(defer_stmt) = self.parse_defer()? {
+            Ok(Some(self.ast.stmts.add(ParsedStmt::Defer(defer_stmt))))
         } else if let Some(expr) = self.parse_expression()? {
             let peeked = self.peek();
             // Assignment:
@@ -4241,6 +4251,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.ast.uses.add_use(ParsedUse { target: namespaced_ident, alias, span });
         Ok(Some(parsed_use_id))
     }
+
+    fn parse_defer(&mut self) -> ParseResult<Option<ParsedDefer>> {
+        let Some(defer_token) = self.maybe_consume_next(K::KeywordDefer) else {
+            return Ok(None);
+        };
+
+        let expr = self.expect_expression()?;
+        let span = self.extend_to_here(defer_token.span);
+        Ok(Some(ParsedDefer { expr, span }))
+    }
 }
 
 // Display
@@ -4625,6 +4645,11 @@ impl ParsedProgram {
                 self.display_expr_id(w, store.lhs)?;
                 write!(w, " <- ")?;
                 self.display_expr_id(w, store.rhs)?;
+                Ok(())
+            }
+            ParsedStmt::Defer(defer) => {
+                w.write_str("defer ")?;
+                self.display_expr_id(w, defer.expr)?;
                 Ok(())
             }
             ParsedStmt::LoneExpression(parsed_expression_id) => {
