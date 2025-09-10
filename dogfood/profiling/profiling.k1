@@ -143,14 +143,12 @@ fn cheap_computation(n: iword): int {
     else { result := result - 2 }
   };
 
-  end_profile_block(block);
-
   result
 }
 
 fn expensive_computation(n: iword): int {
   let block = time_block("expensive_computation", 2);
-  // defer end_profile_block(block)
+  defer end_profile_block(block);
     
   let result = 0;
   for IntRange/upTo(n) do {
@@ -160,25 +158,20 @@ fn expensive_computation(n: iword): int {
 
   result := result + cheap_computation(n / 10);
 
-  end_profile_block(block);
-
   result
 }
 
 fn main(): i32 {
   begin_profile();
+  defer end_and_print_profile();
   
   let main_block = time_block("main", 1);
-  // defer end_profile_block(main_block);
+  defer end_profile_block(main_block);
   
   let result = 0;
   for IntRange/upTo(10) do {
-    result := result + expensive_computation(10_000);
+    result := result + expensive_computation(10_000_000);
   };
-
-  end_profile_block(main_block);
-
-  end_and_print_profile();
 
   println("result: {result}");
   0

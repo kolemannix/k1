@@ -1583,7 +1583,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // }
 
         self.variable_to_value.insert(let_stmt.variable_id, variable_value);
-        Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+        Ok(self.builtin_types.unit_basic().into())
     }
 
     fn codegen_match(&mut self, match_expr: &TypedMatchExpr) -> CodegenResult<LlvmValue<'ctx>> {
@@ -1787,7 +1787,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         let result = match self.k1.static_values.get(static_value_id) {
-            StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
+            StaticValue::Unit => self.builtin_types.unit_basic(),
             StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -1937,7 +1937,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
-            StaticValue::Unit => self.builtin_types.unit_value.as_basic_value_enum(),
+            StaticValue::Unit => self.builtin_types.unit_basic(),
             StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -2202,7 +2202,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.set_debug_location_from_span(span);
         debug!("codegen expr\n{}", self.k1.expr_to_string_with_type(expr_id));
         match expr {
-            TypedExpr::Unit(_) => Ok(self.builtin_types.unit_value.as_basic_value_enum().into()),
+            TypedExpr::Unit(_) => Ok(self.builtin_types.unit_basic().into()),
             TypedExpr::Char(byte, _) => Ok(self
                 .builtin_types
                 .char
@@ -3519,7 +3519,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_block(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
-        let unit_value = self.builtin_types.unit_value.as_basic_value_enum().into();
+        let unit_value = self.builtin_types.unit_basic().into();
         let mut last: LlvmValue<'ctx> = unit_value;
         self.set_debug_location_from_span(block.span);
         for stmt in &block.statements {
@@ -3565,7 +3565,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let value_type =
                     self.codegen_type(self.k1.exprs.get(assignment.value).get_type())?;
                 self.store_k1_value(&value_type, lhs_pointer, rhs);
-                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+                Ok(self.builtin_types.unit_basic().into())
             }
             TypedStmt::Require(require_stmt) => {
                 let start_block = self.builder.get_insert_block().unwrap();
@@ -3588,8 +3588,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.position_at_end(require_continue_block);
                 }
 
-                Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+                Ok(self.builtin_types.unit_basic().into())
             }
+            TypedStmt::Defer(_defer) => Ok(self.builtin_types.unit_basic().into()),
         }
     }
 
@@ -3658,7 +3659,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
 
         self.builder.position_at_end(loop_end_block);
-        Ok(self.builtin_types.unit_value.as_basic_value_enum().into())
+        Ok(self.builtin_types.unit_basic().into())
     }
 
     fn codegen_loop_expr(&mut self, loop_expr: &LoopExpr) -> CodegenResult<LlvmValue<'ctx>> {
@@ -4164,15 +4165,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
-        if optimize {
-            self.llvm_module
-                .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
-                .unwrap();
-        } else {
-            self.llvm_module
-                .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
-                .unwrap();
-        }
+        // if optimize {
+        //     self.llvm_module
+        //         .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
+        //         .unwrap();
+        // } else {
+        //     self.llvm_module
+        //         .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
+        //         .unwrap();
+        // }
 
         self.llvm_module.verify().unwrap();
 
@@ -4202,6 +4203,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn output_llvm_ir_text(&self) -> String {
         self.llvm_module.print_to_string().to_string()
+    }
+
+    pub fn write_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {
+        self.llvm_module.write_bitcode_to_path(path)
     }
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {

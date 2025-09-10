@@ -401,8 +401,8 @@ pub fn write_executable(
     let clang_path = llvm_base.join("bin").join("clang");
     let mut build_cmd = std::process::Command::new(clang_path);
     let llvm_lib_base = llvm_base.join("lib");
-    let ll_name = out_dir.join(module_name.with_extension("ll"));
-    let ll_file = ll_name.to_str().unwrap();
+    let bc_name = out_dir.join(module_name.with_extension("bc"));
+    let bc_file = bc_name.to_str().unwrap();
     let out_name = out_dir.join(module_name);
     let out_file = out_name.to_str().unwrap();
     let k1rt_c_path = k1_lib_dir.join("k1rt.c");
@@ -447,7 +447,7 @@ pub fn write_executable(
     build_args.extend_from_slice(&[
         k1rt_c_path.to_str().unwrap(),
         k1rt_backtrace_path.to_str().unwrap(),
-        ll_file,
+        bc_file,
         "-o",
         out_file,
     ]);
@@ -498,11 +498,17 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     };
 
-    if args.write_llvm || do_write_executable {
+    if args.write_llvm {
         let llvm_text = codegen.output_llvm_ir_text();
         let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();
+    }
+    if do_write_executable {
+        let path = out_dir.join(module_name_path.with_extension("bc"));
+        if !codegen.write_bitcode_to_path(&path) {
+            bail!("Error writing bitcode to path: {}", path.display());
+        }
     }
 
     let k1_lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());

@@ -510,6 +510,12 @@ impl TypedProgram {
                 self.display_expr_id(require_stmt.else_body, writ, indentation)?;
                 Ok(())
             }
+            TypedStmt::Defer(defer) => {
+                writ.write_str("defer parsed<<")?;
+                self.ast.display_expr_id(writ, defer.parsed_expr)?;
+                writ.write_str(">>")?;
+                Ok(())
+            }
         }
     }
 
