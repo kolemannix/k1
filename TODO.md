@@ -106,8 +106,6 @@ New tagline? "C with typeclasses and tagged unions"
       Then we could do an LLVM interp platform and a rust interpreter platform
   - [x] All tests passing in #static mode
   - [x] Allow upgrading static buffers to fixed-length Arrays (so cool actually)
-  - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
-  - [ ] VM "PermSpace" for caching converted static values in their VM representation
 
 ## Project: Mutable and non-mutable reference types
 - [x] Change pointer syntax: `*<ty>`, `*<ty>`, `*mut <ty>`
@@ -116,19 +114,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Convert option to prefix syntax
 - [x] Add mutable/const bool to ReferenceType
 - [x] Update stdlib
-
-## Project: static reflection
-- [x] Runtime type info story
-- [x] typeOf, typeId
-- [x] TypeSchema for all types
-- [x] Test 'Any' type
-- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
-- [ ] (static only?) 'Type predicate' functions as type bounds
-
-## Project: Zero-Sized Types
-- [ ] Treat Unit and empty Struct as ZSTs
-- [ ] Treat statics as ZSTs
-- [ ] Make Result[T, never] == T ?
 
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 - [x] #meta First working version
@@ -148,6 +133,28 @@ New tagline? "C with typeclasses and tagged unions"
 
 ## Project: Defer
 - [x] Defer
+
+## Project: static reflection
+- [x] Runtime type info story
+- [x] typeOf, typeId
+- [x] TypeSchema for all types
+- [x] Test 'Any' type
+
+## Project: Arena-based core, builtins, stdlib 
+- [ ] Thread-local globals
+- [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
+
+## Project: Static Improvements
+- [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+- [ ] VM "PermSpace" for caching converted static values in their VM representation
+- [ ] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
+- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
+- [ ] (static only?) 'Type predicate' functions as type bounds
+
+## Project: Zero-Sized Types
+- [ ] Treat Unit and empty Struct as ZSTs
+- [ ] Treat statics as ZSTs
+- [ ] Make Result[T, never] == T ?
 
 ## Project: 'Write' ability and intrinsic fix
 
