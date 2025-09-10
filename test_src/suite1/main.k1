@@ -35,6 +35,7 @@ fn low(): unit {
 
 fn moderate(): unit {
   println("testing 'moderate'");
+  defer_test/test();
   never_everywhere/test();
   ns_extend/test();
   optionals/test();

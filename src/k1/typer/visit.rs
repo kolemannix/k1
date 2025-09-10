@@ -31,6 +31,7 @@ impl TypedProgram {
                 };
                 self.visit_expr_tree(typed_require_stmt.else_body, state, action)
             }
+            TypedStmt::Defer(defer) => None,
         }
     }
 

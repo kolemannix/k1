@@ -33,11 +33,11 @@ pub struct Mem {
 
 // We use NonZeroU32 so that the handles are niched, allowing for use
 // for no size cost in types like Option and Result
-pub struct AHandle<T>(NonZeroU32, std::marker::PhantomData<T>);
-static_assert_size!(AHandle<u128>, 4);
+pub struct MHandle<T>(NonZeroU32, std::marker::PhantomData<T>);
+static_assert_size!(MHandle<u128>, 4);
 
-impl<T> Copy for AHandle<T> {}
-impl<T> Clone for AHandle<T> {
+impl<T> Copy for MHandle<T> {}
+impl<T> Clone for MHandle<T> {
     fn clone(&self) -> Self {
         *self
     }
@@ -104,12 +104,12 @@ impl Mem {
         unsafe { self.base_ptr().add(offset.get() as usize) as *const T }
     }
 
-    fn pack_handle<T>(&self, ptr: *const T) -> AHandle<T> {
+    fn pack_handle<T>(&self, ptr: *const T) -> MHandle<T> {
         let offset = self.ptr_to_offset(ptr);
-        AHandle(offset, std::marker::PhantomData)
+        MHandle(offset, std::marker::PhantomData)
     }
 
-    fn unpack_handle<T>(&self, handle: AHandle<T>) -> *const T {
+    fn unpack_handle<T>(&self, handle: MHandle<T>) -> *const T {
         self.offset_to_ptr::<T>(handle.0)
     }
 
@@ -132,8 +132,8 @@ impl Mem {
         if ptr < self.base_ptr().addr() {
             panic!("Address not mine (less than base): {} < {}", ptr, self.base_ptr().addr());
         }
-        if ptr >= self.cursor.addr() {
-            panic!("Address is beyond cursor: {} >= {}", ptr, self.cursor.addr());
+        if ptr > self.cursor.addr() {
+            panic!("Address is beyond cursor: {} > {}", ptr, self.cursor.addr());
         }
     }
 
@@ -160,7 +160,7 @@ impl Mem {
         }
     }
 
-    pub fn push_h<T: Copy>(&mut self, t: T) -> AHandle<T> {
+    pub fn push_h<T: Copy>(&mut self, t: T) -> MHandle<T> {
         let t_ptr = self.push(t) as *const T;
         self.pack_handle(t_ptr)
     }
@@ -198,7 +198,7 @@ impl Mem {
         }
     }
 
-    pub fn get<T>(&self, handle: AHandle<T>) -> &T {
+    pub fn get<T>(&self, handle: MHandle<T>) -> &T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())
@@ -206,7 +206,7 @@ impl Mem {
         unsafe { &*ptr }
     }
 
-    pub fn get_copy<T: Copy>(&self, handle: AHandle<T>) -> T {
+    pub fn get_copy<T: Copy>(&self, handle: MHandle<T>) -> T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())

@@ -147,7 +147,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Add fixed length array types: `Array[<type expr> x <int literal>]`
 
 ## Project: Defer
-- [ ] Defer
+- [x] Defer
 
 ## Project: 'Write' ability and intrinsic fix
 

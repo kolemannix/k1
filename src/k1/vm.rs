@@ -27,8 +27,8 @@ use crate::{
         self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
         StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmtId, TyperResult, VariableExpr,
-        VariableId,
+        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult,
+        VariableExpr, VariableId,
         static_value::StaticContainerKind,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
@@ -1212,11 +1212,11 @@ pub fn execute_stmt(
     stmt_id: TypedStmtId,
 ) -> TyperResult<VmResult> {
     match m.stmts.get(stmt_id) {
-        typer::TypedStmt::Expr(typed_expr_id, _) => {
+        TypedStmt::Expr(typed_expr_id, _) => {
             let result = execute_expr(vm, m, *typed_expr_id)?;
             Ok(result)
         }
-        typer::TypedStmt::Let(let_stmt) => {
+        TypedStmt::Let(let_stmt) => {
             let let_stmt = *let_stmt;
             let v = execute_expr_return_exit!(vm, m, let_stmt.initializer)?;
             let to_store = if let_stmt.is_referencing {
@@ -1237,7 +1237,7 @@ pub fn execute_stmt(
             vm.insert_current_local(let_stmt.variable_id, to_store);
             Ok(VmResult::UNIT)
         }
-        typer::TypedStmt::Assignment(assgn) => {
+        TypedStmt::Assignment(assgn) => {
             let assgn = *assgn;
             let v = execute_expr_return_exit!(vm, m, assgn.value)?;
 
@@ -1266,7 +1266,7 @@ pub fn execute_stmt(
                 }
             }
         }
-        typer::TypedStmt::Require(require) => {
+        TypedStmt::Require(require) => {
             // TODO(vm perf): We are cloning MatchingConditions all over the VM
             let require = require.clone();
             let span = require.span;
@@ -1280,6 +1280,7 @@ pub fn execute_stmt(
 
             Ok(VmResult::UNIT)
         }
+        TypedStmt::Defer(_defer) => Ok(VmResult::UNIT),
     }
 }
 

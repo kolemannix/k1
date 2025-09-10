@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{AHandle, MSlice, MVec, Mem};
+use crate::kmem::{MHandle, MSlice, MVec, Mem};
 use crate::{DepEq, DepHash, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -196,26 +196,34 @@ pub enum ParseAdHocResult {
     Definitions(EcoVec<ParsedId>),
 }
 
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct EvalExprFlags: u8 {
+        const Inference = 1;
+        /// Indicates whether we are typechecking generic code
+        /// Most commonly, the body of a generic function
+        const GenericPass = 1 << 1;
+        const Defer = 1 << 2;
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
-    is_inference: bool,
     static_ctx: Option<StaticExecContext>,
     global_defn_name: Option<Ident>,
-    /// Indicates whether we are typechecking generic code
-    /// Most commonly, the body of a generic function
-    is_generic_pass: bool,
+    flags: EvalExprFlags,
 }
 impl EvalExprContext {
     fn make(scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext {
             scope_id,
             expected_type_id: None,
-            is_inference: false,
             static_ctx: None,
             global_defn_name: None,
-            is_generic_pass: false,
+            flags: EvalExprFlags::empty(),
         }
     }
 
@@ -236,7 +244,13 @@ impl EvalExprContext {
     }
 
     fn with_inference(&self, is_inference: bool) -> EvalExprContext {
-        EvalExprContext { is_inference, ..*self }
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Inference, is_inference);
+        EvalExprContext { flags, ..*self }
+    }
+
+    fn is_inference(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Inference)
     }
 
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
@@ -244,7 +258,19 @@ impl EvalExprContext {
     }
 
     pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
-        EvalExprContext { is_generic_pass, ..*self }
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::GenericPass, is_generic_pass);
+        EvalExprContext { flags, ..*self }
+    }
+
+    fn is_generic_pass(&self) -> bool {
+        self.flags.contains(EvalExprFlags::GenericPass)
+    }
+
+    pub fn with_is_defer(&self, defer: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Defer, defer);
+        EvalExprContext { flags, ..*self }
     }
 }
 
@@ -579,7 +605,7 @@ pub struct TypedReferencePattern {
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 
-type TypedPatternId = AHandle<TypedPattern>;
+type TypedPatternId = MHandle<TypedPattern>;
 
 pub struct TypedPatternPool {
     mem: Mem,
@@ -618,7 +644,7 @@ impl TypedPatternPool {
     }
     fn get_pattern_bindings_rec(
         &self,
-        pattern_id: AHandle<TypedPattern>,
+        pattern_id: MHandle<TypedPattern>,
         bindings: &mut SmallVec<[VariablePattern; 8]>,
     ) {
         match self.mem.get(pattern_id) {
@@ -1706,6 +1732,12 @@ pub struct TypedRequireStmt {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy)]
+pub struct TypedDeferStmt {
+    pub parsed_expr: ParsedExprId,
+    pub span: SpanId,
+}
+
 static_assert_size!(TypedStmt, 24);
 #[derive(Clone)]
 pub enum TypedStmt {
@@ -1713,6 +1745,7 @@ pub enum TypedStmt {
     Let(LetStmt),
     Assignment(AssignmentStmt),
     Require(TypedRequireStmt),
+    Defer(TypedDeferStmt),
 }
 
 impl TypedStmt {
@@ -2462,8 +2495,9 @@ impl TypedProgram {
         pattern_ctors.add(PatternCtor::FunctionPointer);
 
         eprintln!("clock init");
+        let init_start = std::time::Instant::now();
         let clock = quanta::Clock::new();
-        eprintln!("clock init done");
+        eprintln!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
@@ -2525,7 +2559,7 @@ impl TypedProgram {
 
     pub fn add_module(&mut self, src_path: &Path) -> anyhow::Result<ModuleId> {
         let total_start = self.timing.time_raw();
-        log::info!("Loading module {:?}...", src_path);
+        eprintln!("Loading module {:?}...", src_path);
         let src_path = src_path.canonicalize().map_err(|e| {
             anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
         })?;
@@ -2553,10 +2587,7 @@ impl TypedProgram {
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
-        log::info!(
-            "Parsing {} discovered files for module {src_path_name}",
-            files_to_compile.len()
-        );
+        eprintln!("Parsing {} discovered files for module {src_path_name}", files_to_compile.len());
         for path in &files_to_compile {
             let content = std::fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
@@ -2591,7 +2622,7 @@ impl TypedProgram {
         let parse_elapsed_us = self.timing.elapsed_nanos(parse_start) / 1_000;
         let parse_elapsed_ms = parse_elapsed_us / 1_000;
         let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
-        log::info!(
+        eprintln!(
             "parsing took {}ms. {}us/line incl. io",
             parse_elapsed_ms,
             parse_elapsed_us / lines as u64
@@ -2638,20 +2669,16 @@ impl TypedProgram {
         let typing_elapsed_ms =
             self.timing.clock.delta_as_nanos(type_start, self.timing.clock.raw()) / 1_000_000;
         // if self.ast.config.profile {
-        self.print_timing_info(&mut stderr()).unwrap();
         // }
         // self.named_types.print_size_info();
         // self.types.types.print_size_info();
-        log::info!("typing took {}ms", typing_elapsed_ms,);
+        eprintln!("typing took {}ms", typing_elapsed_ms,);
         let total_elapsed_ms = self.timing.elapsed_ms(total_start);
-        log::info!(
-            "module {} took {}ms (\n\t{} expressions,\n\t{} functions,\n\t{} types\n)",
-            src_path_name,
-            total_elapsed_ms,
-            self.exprs.len(),
-            self.function_iter().count(),
-            self.types.type_count()
-        );
+        eprintln!("module {} took {}ms", src_path_name, total_elapsed_ms);
+        eprintln!("\t{} expressions", self.exprs.len());
+        eprintln!("\t{} functions", self.functions.len());
+        eprintln!("\t{} types", self.types.type_count());
+        self.print_timing_info(&mut stderr()).unwrap();
 
         Ok(module_id)
     }
@@ -2789,16 +2816,17 @@ impl TypedProgram {
                     UNIT_TYPE_ID
                 }
             }
+            TypedStmt::Defer(_defer) => UNIT_TYPE_ID,
         }
     }
 
     pub fn get_stmt_span(&self, stmt: TypedStmtId) -> SpanId {
         match self.stmts.get(stmt) {
-            // Ugh 2 lookups for a span
             TypedStmt::Expr(e, _ty) => self.exprs.get(*e).get_span(),
             TypedStmt::Let(val_def) => val_def.span,
             TypedStmt::Assignment(assgn) => assgn.span,
             TypedStmt::Require(req) => req.span,
+            TypedStmt::Defer(defer) => defer.span,
         }
     }
 
@@ -4173,13 +4201,12 @@ impl TypedProgram {
             EvalExprContext {
                 scope_id: Scopes::ROOT_SCOPE_ID,
                 expected_type_id: Some(type_id),
-                is_inference: false,
                 static_ctx: Some(StaticExecContext {
                     is_metaprogram: false,
                     expected_return_type: None,
                 }),
                 global_defn_name: None,
-                is_generic_pass: false,
+                flags: EvalExprFlags::empty(),
             },
             false,
             &[],
@@ -4955,7 +4982,7 @@ impl TypedProgram {
         no_reset: bool,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
-        if ctx.is_inference {
+        if ctx.is_inference() {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
                 "#static cannot be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
@@ -5147,13 +5174,12 @@ impl TypedProgram {
         let ctx = EvalExprContext {
             scope_id,
             expected_type_id: Some(type_to_check),
-            is_inference: false,
             static_ctx: Some(StaticExecContext {
                 is_metaprogram: false,
                 expected_return_type: Some(type_to_check),
             }),
             global_defn_name: Some(global_name),
-            is_generic_pass: false,
+            flags: EvalExprFlags::empty(),
         };
         let vm_result = match vm_to_use {
             None => self.execute_static_expr(value_expr_id, ctx, false, &[]),
@@ -6697,7 +6723,7 @@ impl TypedProgram {
                 Ok(self.exprs.add(expr))
             }
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
-                if ctx.is_inference {
+                if ctx.is_inference() {
                     let static_value_id = self.static_values.add(StaticValue::String(*string_id));
                     let t = self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id));
                     let expr = TypedExpr::StaticValue(static_value_id, t, *span);
@@ -6910,14 +6936,18 @@ impl TypedProgram {
         fail: bool,
     ) -> TyperResult<TypedExprId> {
         let expr = self.eval_expr(expr_id, ctx)?;
-        let expected_type = ctx.expected_type_id.unwrap();
-        match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id) {
-            Ok(expr) => Ok(expr),
-            error @ Err(_) => {
-                if fail {
-                    error
-                } else {
-                    Ok(expr)
+        match ctx.expected_type_id {
+            None => self.eval_expr(expr_id, ctx),
+            Some(expected_type) => {
+                match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id) {
+                    Ok(expr) => Ok(expr),
+                    error @ Err(_) => {
+                        if fail {
+                            error
+                        } else {
+                            Ok(expr)
+                        }
+                    }
                 }
             }
         }
@@ -6980,7 +7010,7 @@ impl TypedProgram {
         let element_type = match element_type.or(expected_element_type) {
             Some(et) => et,
             None => {
-                if ctx.is_inference {
+                if ctx.is_inference() {
                     return failf!(span, "Not enough information to determine empty list type");
                 } else {
                     UNIT_TYPE_ID
@@ -7083,8 +7113,11 @@ impl TypedProgram {
 
         // We don't execute statics during the generic pass, since there's no point
         // since we don't know the real types or values
-        debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass);
-        if ctx.is_generic_pass {
+        debug!(
+            "eval_static_expr ctx.is_generic_pass={}",
+            ctx.flags.contains(EvalExprFlags::GenericPass)
+        );
+        if ctx.flags.contains(EvalExprFlags::GenericPass) {
             let typed_expr = match ctx.expected_type_id {
                 None => TypedExpr::Unit(span),
                 Some(expected) => {
@@ -7450,7 +7483,7 @@ impl TypedProgram {
         let output_instance_info = match self.types.get_instance_info(expected_struct_id).cloned() {
             None => None,
             Some(mut gi) => {
-                if ctx.is_inference {
+                if ctx.is_inference() {
                     debug!(
                         "I need to set the right info for {} from expected [{}] and my literal values [{}]",
                         self.type_id_to_string_ext(gi.generic_parent, true),
@@ -8947,7 +8980,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         // We just proceed as if it yielded 'true' in the generic case
-        let condition_bool = match ctx.is_generic_pass {
+        let condition_bool = match ctx.is_generic_pass() {
             false => self.execute_static_bool(if_expr.cond, ctx)?,
             true => true,
         };
@@ -9674,7 +9707,7 @@ impl TypedProgram {
 
     fn eval_return(
         &mut self,
-        parsed_expr: ParsedExprId,
+        parsed_expr: Option<ParsedExprId>,
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
@@ -9685,8 +9718,14 @@ impl TypedProgram {
         } else {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
-        let return_value =
-            self.eval_expr(parsed_expr, ctx.with_expected_type(expected_return_type))?;
+        let return_value = match parsed_expr {
+            None => self.exprs.add(TypedExpr::Unit(span)),
+            Some(parsed_expr) => self.eval_expr_with_coercion(
+                parsed_expr,
+                ctx.with_expected_type(expected_return_type),
+                true,
+            )?,
+        };
         let return_value_type = self.exprs.get(return_value).get_type();
         if return_value_type == NEVER_TYPE_ID {
             return failf!(
@@ -9694,14 +9733,46 @@ impl TypedProgram {
                 "return is dead since returned expression is divergent; remove the return"
             );
         }
-        if let Some(expected_return_type) = expected_return_type {
-            if let Err(msg) =
-                self.check_types(expected_return_type, return_value_type, ctx.scope_id)
-            {
-                return failf!(span, "Returned wrong type: {msg}");
+        let mut gathered_defers: SV4<ParsedExprId> = smallvec![];
+        let mut search_scope_id = ctx.scope_id;
+        loop {
+            if let Some(defers) = self.scopes.block_defers.get(&search_scope_id) {
+                gathered_defers.extend(defers.deferred_exprs.iter().copied());
+            }
+            let current_scope = self.scopes.get_scope(search_scope_id);
+            if current_scope.scope_type.is_top_of_function() {
+                break;
+            } else {
+                if let Some(parent_scope_id) = current_scope.parent {
+                    search_scope_id = parent_scope_id;
+                } else {
+                    self.ice_with_span(
+                        "Recursed all the way up without finding a Function or Lambda scope",
+                        span,
+                    )
+                }
             }
         }
-        Ok(self.exprs.add(TypedExpr::Return(TypedReturn { value: return_value, span })))
+        let return_expr =
+            self.exprs.add(TypedExpr::Return(TypedReturn { value: return_value, span }));
+        if gathered_defers.is_empty() {
+            Ok(return_expr)
+        } else {
+            let mut block = self.synth_block(ctx.scope_id, span);
+            // No need to reverse; they are already in fifo order due to the way
+            // we traverse upwards when gathering them
+            for deferred_parsed_expr in gathered_defers.into_iter() {
+                let deferred_expr =
+                    self.eval_expr(deferred_parsed_expr, ctx.with_no_expected_type())?;
+                let deferred_expr_type_id = self.exprs.get(deferred_expr).get_type();
+                self.push_block_stmt(
+                    &mut block,
+                    TypedStmt::Expr(deferred_expr, deferred_expr_type_id),
+                );
+            }
+            self.push_block_stmt(&mut block, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
+            Ok(self.exprs.add(TypedExpr::Block(block)))
+        }
     }
 
     ////////////////////////////////////////
@@ -9715,22 +9786,25 @@ impl TypedProgram {
         let call_span = fn_call.span;
         let calling_scope = ctx.scope_id;
         match self.ident_str(fn_call.name.name) {
-            "return" => match fn_call.args.len() {
-                0 => {
-                    let unit_value_id = self.exprs.add(TypedExpr::Unit(call_span));
-                    Ok(Some(self.exprs.add(TypedExpr::Return(TypedReturn {
-                        value: unit_value_id,
-                        span: call_span,
-                    }))))
+            "return" => {
+                if ctx.flags.contains(EvalExprFlags::Defer) {
+                    return failf!(fn_call.span, "return cannot be used inside `defer` blocks");
                 }
-                1 => {
-                    let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
-                    let return_result = self.eval_return(arg.value, ctx, call_span)?;
-                    Ok(Some(return_result))
-                }
-                _ => failf!(fn_call.span, "return(...) must have 0 or 1 arguments"),
-            },
+                let ret_value = match fn_call.args.len() {
+                    0 => Ok(None),
+                    1 => {
+                        let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
+                        Ok(Some(arg.value))
+                    }
+                    _ => failf!(fn_call.span, "return(...) must have 0 or 1 arguments"),
+                }?;
+                let return_expr_id = self.eval_return(ret_value, ctx, call_span)?;
+                Ok(Some(return_expr_id))
+            }
             "break" => {
+                if ctx.flags.contains(EvalExprFlags::Defer) {
+                    return failf!(fn_call.span, "break cannot be used inside `defer` blocks");
+                }
                 if fn_call.args.len() > 1 {
                     return failf!(call_span, "break(...) must have 0 or 1 argument");
                 }
@@ -9794,6 +9868,9 @@ impl TypedProgram {
                 }))))
             }
             "continue" => {
+                if ctx.flags.contains(EvalExprFlags::Defer) {
+                    return failf!(fn_call.span, "continue cannot be used inside `defer` blocks");
+                }
                 todo!("implement continue")
             }
             "testCompile" => {
@@ -11613,6 +11690,7 @@ impl TypedProgram {
                     TypedStmt::Let(let_stmt) => let_stmt.span,
                     TypedStmt::Assignment(a) => a.span,
                     TypedStmt::Require(r) => r.span,
+                    TypedStmt::Defer(defer) => defer.span,
                 },
             },
             TypedExpr::Match(typed_match_expr) => {
@@ -11862,7 +11940,16 @@ impl TypedProgram {
                 Ok(Some(stmt_id))
             }
             ParsedStmt::Defer(defer) => {
-                failf!(defer.span, "Unimplemented")
+                if ctx.flags.contains(EvalExprFlags::Defer) {
+                    return failf!(defer.span, "defer cannot be used inside `defer` blocks");
+                }
+                let defer = *defer;
+                let defer_stmt = self.stmts.add(TypedStmt::Defer(TypedDeferStmt {
+                    parsed_expr: defer.expr,
+                    span: defer.span,
+                }));
+
+                Ok(Some(defer_stmt))
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = if coerce_expr {
@@ -11877,14 +11964,17 @@ impl TypedProgram {
         }
     }
 
+    /// This block's scope is ALREADY PROVIDED AND SET IN CTX
     fn eval_block(
         &mut self,
         block: &ParsedBlock,
+        // This block's scope is ALREADY PROVIDED AND SET IN CTX
         ctx: EvalExprContext,
         needs_terminator: bool,
     ) -> TyperResult<TypedBlock> {
+        let block_scope = ctx.scope_id;
         if block.stmts.is_empty() {
-            return failf!(block.span, "Blocks must contain at least one statement or expression",);
+            return failf!(block.span, "Blocks must contain at least one statement or expression");
         }
         let mut stmts: EcoVec<TypedStmtId> = EcoVec::with_capacity(block.stmts.len());
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
@@ -11905,7 +11995,38 @@ impl TypedProgram {
             else {
                 continue;
             };
+
             let stmt = self.stmts.get(stmt_id);
+            if let TypedStmt::Defer(defer) = stmt {
+                eprintln!("Adding a defer to {}", block_scope.as_u32());
+                match self.scopes.block_defers.entry(block_scope) {
+                    Entry::Occupied(mut defers) => {
+                        defers.get_mut().deferred_exprs.push(defer.parsed_expr);
+                    }
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(ScopeDefers { deferred_exprs: smallvec![defer.parsed_expr] });
+                    }
+                }
+            }
+            let mut is_return = false;
+            if let TypedStmt::Expr(id, _) = stmt {
+                let e = self.exprs.get(*id);
+                let just_a_return = matches!(e, TypedExpr::Return(_));
+                if just_a_return {
+                    is_return = true;
+                } else {
+                    if let TypedExpr::Block(b) = e {
+                        if let Some(s) = b.statements.last() {
+                            if let TypedStmt::Expr(e2, _) = self.stmts.get(*s) {
+                                if let TypedExpr::Return(_) = self.exprs.get(*e2) {
+                                    is_return = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
             let stmt_span = self.get_stmt_span(stmt_id);
             last_expr_type = self.get_stmt_type(stmt_id);
             last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
@@ -11917,7 +12038,7 @@ impl TypedProgram {
                     // No action needed; terminator exists
                     stmts.push(stmt_id);
                 } else {
-                    match stmt {
+                    match self.stmts.get(stmt_id) {
                         TypedStmt::Expr(expr, _expr_type_id) => {
                             // Return this expr
                             let expr_span = self.exprs.get(*expr).get_span();
@@ -11929,7 +12050,10 @@ impl TypedProgram {
                                 self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
                             stmts.push(return_stmt);
                         }
-                        TypedStmt::Assignment(_) | TypedStmt::Let(_) | TypedStmt::Require(_) => {
+                        TypedStmt::Assignment(_)
+                        | TypedStmt::Let(_)
+                        | TypedStmt::Require(_)
+                        | TypedStmt::Defer(_) => {
                             let unit = self.exprs.add(TypedExpr::Unit(stmt_span));
                             let return_unit_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
                                 span: stmt_span,
@@ -11945,14 +12069,45 @@ impl TypedProgram {
             } else {
                 stmts.push(stmt_id);
             }
+
+            // Generate deferred expressions. We typecheck them NOW, meaning
+            // its as if the deferred code were textually pasted to the end of the function.
+            // There are more robust ways to handle this; namely, allow a closure like Go, where
+            // the user can decide exactly what to capture at defer-time and what to evaluate at
+            // block close time
+            // eval_return(...) handles deferred expressions itself
+            if is_last && !is_return {
+                let terminating = self.get_stmt_type(*stmts.last().unwrap()) == NEVER_TYPE_ID;
+                if let Some(this_scope_defers) = self.scopes.block_defers.get(&block_scope) {
+                    let deferred_exprs = this_scope_defers.deferred_exprs.clone();
+                    for deferred_parsed_expr in deferred_exprs.iter().rev() {
+                        let deferred_code = self.eval_expr(
+                            *deferred_parsed_expr,
+                            ctx.with_no_expected_type().with_is_defer(true),
+                        )?;
+                        let defer_type = self.exprs.get(deferred_code).get_type();
+                        let defer_stmt_id =
+                            self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
+                        if terminating {
+                            stmts.insert(stmts.len() - 1, defer_stmt_id);
+                        } else {
+                            stmts.push(defer_stmt_id)
+                        }
+                    }
+                };
+            }
         }
 
+        let has_defers = self.scopes.block_defers.contains_key(&block_scope);
         let typed_block = TypedBlock {
             expr_type: last_expr_type,
-            scope_id: ctx.scope_id,
+            scope_id: block_scope,
             statements: stmts,
             span: block.span,
         };
+        if has_defers {
+            eprintln!("TYPED BLOCK with defers:\n{}", self.block_to_string(&typed_block));
+        }
         Ok(typed_block)
     }
 
@@ -13602,10 +13757,9 @@ impl TypedProgram {
                         let eval_expr_ctx = EvalExprContext {
                             scope_id,
                             expected_type_id: None,
-                            is_inference: false,
                             static_ctx: Some(static_ctx),
                             global_defn_name: None,
-                            is_generic_pass: false,
+                            flags: EvalExprFlags::empty(),
                         };
                         if let Err(e) =
                             self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx)
@@ -14055,10 +14209,9 @@ impl TypedProgram {
                     let eval_expr_ctx = EvalExprContext {
                         scope_id: namespace_scope_id,
                         expected_type_id: None,
-                        is_inference: false,
                         static_ctx: Some(static_ctx),
                         global_defn_name: None,
-                        is_generic_pass: false,
+                        flags: EvalExprFlags::empty(),
                     };
                     let newly_parsed_defns =
                         match self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx) {
@@ -14168,7 +14321,7 @@ impl TypedProgram {
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
                 // Phase 1
-                eprintln!(">> Phase 0.5 compile pre namespace");
+                eprint!("\r>> Phase 0.5 compile pre namespace");
                 self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
                 pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
@@ -14191,7 +14344,7 @@ impl TypedProgram {
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
         let mut err_writer = stderr();
-        eprintln!(">> Phase 1 declare namespaces and run global #meta programs");
+        eprint!("\r>> Phase 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             bail!(
@@ -14202,7 +14355,7 @@ impl TypedProgram {
         }
 
         // Pending Type declaration phase
-        eprintln!(">> Phase 2 declare types");
+        eprint!("\r>> Phase 2 declare types");
         let type_defn_result =
             self.declare_types_in_namespace(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_defn_result {
@@ -14217,7 +14370,7 @@ impl TypedProgram {
             )
         }
         // Type evaluation phase
-        eprintln!(">> Phase 3 evaluate types");
+        eprint!("\r>> Phase 3 evaluate types");
         let type_eval_result =
             self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_eval_result {
@@ -14249,7 +14402,7 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
+        eprint!("\r>> Phase 4 declare rest of definitions (functions, globals, abilities)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             eprintln!(
@@ -14265,7 +14418,7 @@ impl TypedProgram {
             self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
         );
 
-        eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
+        eprint!("\r>> Phase 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
         let unresolved_uses: Vec<_> =
@@ -14290,7 +14443,7 @@ impl TypedProgram {
             )
         }
 
-        eprintln!(">> Phase 6 specialize function bodies");
+        eprintln!("\r>> Phase 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
@@ -15237,16 +15390,16 @@ impl TypedProgram {
         let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
         writeln!(
             out,
-            "infer: {:.2}ms. count: {} avg: {:.2}ms ",
-            infer_ms,
+            "\t{} infers: {:.2}ms. avg: {:.2}ms ",
             self.timing.total_infers,
+            infer_ms,
             if self.timing.total_infers > 0 {
                 infer_ms / self.timing.total_infers as f64
             } else {
                 0.0
             }
         )?;
-        writeln!(out, "vm: {:.2}ms", vm_ms)?;
+        writeln!(out, "\t{:.2}ms vm", vm_ms)?;
         Ok(())
     }
 }

@@ -8,10 +8,10 @@ use smallvec::SmallVec;
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
 use crate::{
-    errf,
+    SV4, errf,
     lex::SpanId,
     nz_u32_id,
-    parse::{IdentPool, IdentSlice, ParsedAbilityId, QIdent},
+    parse::{IdentPool, IdentSlice, ParsedAbilityId, ParsedExprId, QIdent},
     pool::VPool,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
@@ -57,6 +57,10 @@ impl ScopeType {
         }
     }
 
+    pub fn is_top_of_function(&self) -> bool {
+        matches!(self, ScopeType::FunctionScope | ScopeType::LambdaScope)
+    }
+
     pub fn loop_type(&self) -> Option<LoopType> {
         match self {
             ScopeType::FunctionScope => None,
@@ -92,10 +96,15 @@ pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
 }
 
+pub struct ScopeDefers {
+    pub deferred_exprs: SV4<ParsedExprId>,
+}
+
 pub struct Scopes {
     scopes: VPool<Scope, ScopeId>,
     lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
+    pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
     pub core_scope_id: ScopeId,
     pub k1_scope_id: ScopeId,
     pub types_scope_id: ScopeId,
@@ -110,6 +119,7 @@ impl Scopes {
             scopes: VPool::make_with_hint("scopes", 8192),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
+            block_defers: FxHashMap::new(),
             core_scope_id: ScopeId::PENDING,
             k1_scope_id: ScopeId::PENDING,
             types_scope_id: ScopeId::PENDING,

@@ -1,0 +1,45 @@
+ns defer_test;
+
+use core/inc
+
+fn loopTest(sensor: *mut uword): unit {
+  let i = 0uword;
+  // Every iteration, we increment i, then check that the sensor is right behind it,
+  // then increment the sensor
+  while i < 10 {
+    defer { assertEquals(i - 1, sensor.*); inc(sensor) };
+    i := i + 1;
+  };
+  ()
+}
+
+// An early return causes 'unwinding' of all defers in scope,
+// and if it appears at the end of a block, does NOT cause
+// duplicate insertion of that block's defers
+fn returnTest(sensor: *mut uword): unit {
+  defer { assertEquals(sensor.*, 2); inc(sensor) };
+  if true {
+    defer { assertEquals(sensor.*, 1); inc(sensor) };
+    if false { () } else {
+      defer { assertEquals(sensor.*, 0); inc(sensor) };
+      return()
+    }
+  } else {
+    assert(false)
+  };
+  ()
+}
+
+fn test(): unit {
+  // We use an integer so that we can detect if a defer
+  // runs too few or too many times!
+  let* sensor = 0uword;
+  loopTest(sensor);
+  assertEquals(sensor.*, 10);
+
+  sensor <- 0;
+  returnTest(sensor);
+  assertEquals(sensor.*, 3);
+  
+  ()
+}
