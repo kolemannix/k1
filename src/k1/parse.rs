@@ -311,7 +311,7 @@ pub struct ParsedCall {
 pub struct ParsedLet {
     pub name: Ident,
     pub type_expr: Option<ParsedTypeExprId>,
-    pub value: ParsedExprId,
+    pub value: Option<ParsedExprId>,
     pub span: SpanId,
     flags: u8,
 }
@@ -3530,16 +3530,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         trace!("parse_let");
-
-        let eaten_keyword = match self.peek() {
-            t if t.kind == K::KeywordLet => {
-                self.advance();
-                t
-            }
-            _ => {
-                return Ok(None);
-            }
-        };
+        let Some(eaten_keyword) = self.maybe_consume_next(K::KeywordLet) else { return Ok(None) };
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let is_context = self.maybe_consume_next(K::KeywordContext).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
@@ -3548,10 +3539,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Some(_) => self.parse_type_expression(),
         }?;
         self.expect_eat_token(K::Equals)?;
-        let initializer_expression =
-            Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span =
-            self.extend_span(eaten_keyword.span, self.get_expression_span(initializer_expression));
+        let next = self.peek();
+        let initializer_expression = if next.kind == K::Ident && self.token_chars(next) == "uninit"
+        {
+            self.advance();
+            None
+        } else {
+            Some(self.expect_expression()?)
+        };
+        let span = self.extend_to_here(eaten_keyword.span);
         Ok(Some(ParsedLet {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
@@ -4631,7 +4627,10 @@ impl ParsedProgram {
                     if let_stmt.is_context() { "context " } else { " " },
                     self.idents.get_name(let_stmt.name)
                 )?;
-                self.display_expr_id(w, let_stmt.value)?;
+                match let_stmt.value {
+                    None => w.write_str("uninit")?,
+                    Some(value) => self.display_expr_id(w, value)?,
+                };
                 Ok(())
             }
             ParsedStmt::Require(require_stmt) => {

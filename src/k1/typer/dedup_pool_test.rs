@@ -72,8 +72,8 @@ fn test_basic() {
     assert_ne!(int1, int3, "Different i32 values should be different");
     assert_ne!(int1, int4, "i32(42) and u32(42) should be different types");
 
-    let null1 = system.add_static_value(StaticValue::NullPointer);
-    let null2 = system.add_static_value(StaticValue::NullPointer);
+    let null1 = system.add_static_value(StaticValue::Zero(POINTER_TYPE_ID));
+    let null2 = system.add_static_value(StaticValue::Zero(POINTER_TYPE_ID));
 
     assert_eq!(null1, null2, "Null pointers should deduplicate");
 }

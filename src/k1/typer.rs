@@ -1704,7 +1704,7 @@ enum CheckExprTypeResult<'a> {
 pub struct LetStmt {
     pub variable_id: VariableId,
     pub variable_type: TypeId,
-    pub initializer: TypedExprId,
+    pub initializer: Option<TypedExprId>,
     pub is_referencing: bool,
     pub span: SpanId,
 }
@@ -11824,23 +11824,37 @@ impl TypedProgram {
                     }
                     None => (None, None),
                 };
-                let value_expr =
-                    self.eval_expr(parsed_let.value, ctx.with_expected_type(expected_rhs_type))?;
-                let value_expr = match expected_rhs_type {
-                    None => value_expr,
-                    Some(expected_type) => self
-                        .check_and_coerce_expr(expected_type, value_expr, ctx.scope_id)
+                let value_expr = match parsed_let.value {
+                    None => None,
+                    Some(value) => Some(
+                        self.eval_expr_with_coercion(
+                            value,
+                            ctx.with_expected_type(expected_rhs_type),
+                            true,
+                        )
                         .map_err(|e| {
-                            errf!(e.span, "Local variable type mismatch: {}", e.message)
+                            errf!(parsed_let.span, "Local variable type mismatch: {}", e.message)
                         })?,
+                    ),
                 };
-                let actual_type = self.exprs.get(value_expr).get_type();
+                let actual_type = match value_expr {
+                    None => None,
+                    Some(value_expr) => Some(self.exprs.get(value_expr).get_type()),
+                };
 
-                let variable_type = if parsed_let.is_referencing() {
-                    let mutable = provided_reference_mutability.unwrap_or(true);
-                    self.types.add_reference_type(actual_type, mutable)
-                } else {
-                    actual_type
+                let variable_type = match actual_type {
+                    None => match provided_type {
+                        None => return failf!(parsed_let.span, "Uninit let requires a type"),
+                        Some(t) => t,
+                    },
+                    Some(actual_type) => {
+                        if parsed_let.is_referencing() {
+                            let mutable = provided_reference_mutability.unwrap_or(true);
+                            self.types.add_reference_type(actual_type, mutable)
+                        } else {
+                            actual_type
+                        }
+                    }
                 };
 
                 let mut flags = VariableFlags::empty();

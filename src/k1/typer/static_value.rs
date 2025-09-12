@@ -60,7 +60,7 @@ pub enum StaticValue {
     Int(TypedIntValue),
     Float(TypedFloatValue),
     String(StringId),
-    NullPointer,
+    Zero(TypeId),
     Struct(StaticStruct),
     Enum(StaticEnum),
     LinearContainer(StaticContainer),
@@ -75,7 +75,7 @@ impl StaticValue {
             StaticValue::Int(i) => i.kind_name(),
             StaticValue::Float(_) => "float",
             StaticValue::String(_) => "string",
-            StaticValue::NullPointer => "nullptr",
+            StaticValue::Zero(_) => "zero",
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
             StaticValue::LinearContainer(c) => match c.kind {
@@ -93,7 +93,7 @@ impl StaticValue {
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
             StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
             StaticValue::String(_) => STRING_TYPE_ID,
-            StaticValue::NullPointer => POINTER_TYPE_ID,
+            StaticValue::Zero(type_id) => *type_id,
             StaticValue::Struct(s) => s.type_id,
             StaticValue::Enum(e) => e.variant_type_id,
             StaticValue::LinearContainer(v) => v.type_id,
@@ -146,7 +146,7 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
                 }
             }
             StaticValue::String(s) => s.hash(state),
-            StaticValue::NullPointer => {}
+            StaticValue::Zero(type_id) => type_id.hash(state),
             StaticValue::Struct(s) => {
                 s.type_id.hash(state);
                 s.fields.len().hash(state);
@@ -183,7 +183,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
             (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
             (StaticValue::Float(a), StaticValue::Float(b)) => a == b,
             (StaticValue::String(a), StaticValue::String(b)) => a == b,
-            (StaticValue::NullPointer, StaticValue::NullPointer) => true,
+            (StaticValue::Zero(t1), StaticValue::Zero(t2)) => *t1 == *t2,
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
                 a.type_id == b.type_id && a.fields.len() == b.fields.len() && a.fields == b.fields
             }

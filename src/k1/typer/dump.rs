@@ -493,7 +493,11 @@ impl TypedProgram {
                 }
                 self.display_variable(self.variables.get(let_stmt.variable_id), writ)?;
                 writ.write_str(" = ")?;
-                self.display_expr_id(let_stmt.initializer, writ, indentation)
+                match let_stmt.initializer {
+                    None => writ.write_str("uninit")?,
+                    Some(initializer) => self.display_expr_id(initializer, writ, indentation)?,
+                };
+                Ok(())
             }
             TypedStmt::Assignment(assignment) => {
                 self.display_expr_id(assignment.destination, writ, indentation)?;
@@ -799,8 +803,11 @@ impl TypedProgram {
             StaticValue::String(s) => {
                 write!(w, "\"{}\"", self.get_string(*s))
             }
-            StaticValue::NullPointer => {
-                write!(w, "NULL")
+            StaticValue::Zero(type_id) => {
+                write!(w, "zeroed[")?;
+                self.display_type_id(*type_id, false, w)?;
+                write!(w, "]()")?;
+                Ok(())
             }
             StaticValue::Struct(static_struct) => {
                 w.write_str("{ ")?;

@@ -61,10 +61,10 @@ New tagline? "C with typeclasses and tagged unions"
       `impl Unwrap<Inner = u32> for i64`
 
 # From dogfood round
-- [ ] Introduce an "uninitialized" specifier, similar to `zeroed()`
-- [ ] Add 'zeroed()' static value special case for efficiency?
-- [ ] Or, provide a way to specify if globals are comptime available
-      or just runtime globals?
+- [x] Introduce an "uninitialized" specifier, similar to `zeroed()`
+- [x] Add 'zeroed()' static value special case for efficiency?
+- [ ] provide a way to specify if globals are comptime available or just runtime globals?
+      I accidentally wrapped a global defn in #static...
 
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work

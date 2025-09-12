@@ -1118,7 +1118,14 @@ pub fn static_value_to_vm_value(
             let value = string_id_to_value(vm, dst_stack, k1, *string_id);
             Ok(value)
         }
-        StaticValue::NullPointer => Ok(Value::Pointer(0)),
+        StaticValue::Zero(type_id) => {
+            let layout = k1.types.get_layout(*type_id);
+            let ptr = vm.get_destination_stack(dst_stack).push_layout_uninit(layout);
+            unsafe { std::ptr::write_bytes(ptr, 0, layout.size as usize) };
+
+            let zero_value = zero_value(vm, k1, *type_id)?;
+            Ok(zero_value)
+        }
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
             for f in static_struct.fields.iter() {
@@ -1218,24 +1225,47 @@ pub fn execute_stmt(
         }
         TypedStmt::Let(let_stmt) => {
             let let_stmt = *let_stmt;
-            let v = execute_expr_return_exit!(vm, m, let_stmt.initializer)?;
-            let to_store = if let_stmt.is_referencing {
-                let reference_type = let_stmt.variable_type;
-                let value_type = v.get_type();
-                debug_assert_eq!(
-                    m.types.get(reference_type).expect_reference().inner_type,
-                    value_type
-                );
-                let value_ptr = match v.as_agg() {
-                    None => vm.stack.push_value(&m.types, v),
-                    Some(ptr) => ptr,
-                };
-                Value::Reference { type_id: reference_type, ptr: value_ptr }
-            } else {
-                v
-            };
-            vm.insert_current_local(let_stmt.variable_id, to_store);
-            Ok(VmResult::UNIT)
+            match let_stmt.initializer {
+                None => {
+                    let ty = m.types.get(let_stmt.variable_type);
+                    match ty.as_reference() {
+                        None => {}
+                        Some(r) => {
+                            let layout = m.types.get_layout(r.inner_type);
+                            let v = vm.stack.push_layout_uninit(layout);
+                            vm.insert_current_local(
+                                let_stmt.variable_id,
+                                Value::Reference {
+                                    type_id: let_stmt.variable_type,
+                                    ptr: v.cast_const(),
+                                },
+                            )
+                        }
+                    };
+                    Ok(VmResult::UNIT)
+                }
+                Some(initializer) => {
+                    let v = execute_expr_return_exit!(vm, m, initializer)?;
+
+                    let to_store = if let_stmt.is_referencing {
+                        let reference_type = let_stmt.variable_type;
+                        let value_type = v.get_type();
+                        debug_assert_eq!(
+                            m.types.get(reference_type).expect_reference().inner_type,
+                            value_type
+                        );
+                        let value_ptr = match v.as_agg() {
+                            None => vm.stack.push_value(&m.types, v),
+                            Some(ptr) => ptr,
+                        };
+                        Value::Reference { type_id: reference_type, ptr: value_ptr }
+                    } else {
+                        v
+                    };
+                    vm.insert_current_local(let_stmt.variable_id, to_store);
+                    Ok(VmResult::UNIT)
+                }
+            }
         }
         TypedStmt::Assignment(assgn) => {
             let assgn = *assgn;
@@ -1464,6 +1494,54 @@ fn execute_call(
     Ok(updated_value.into())
 }
 
+fn zero_value(vm: &mut Vm, k1: &TypedProgram, type_id: TypeId) -> TyperResult<Value> {
+    match k1.types.get(type_id) {
+        Type::Static(_) => {
+            failf!(vm.eval_span, "zeroed() for statically known values currently unsupported")
+        }
+        Type::Unit => Ok(Value::Unit),
+        Type::Char => Ok(Value::Char(0)),
+        Type::Bool => Ok(Value::Bool(false)),
+        Type::Pointer => Ok(Value::Pointer(0)),
+        Type::Integer(integer_type) => {
+            let zero_value = integer_type.zero();
+            Ok(Value::Int(zero_value))
+        }
+        Type::Float(float_type) => Ok(Value::Float(float_type.zero())),
+        Type::Reference(_) | Type::FunctionPointer(_) => {
+            Ok(Value::Reference { type_id, ptr: core::ptr::null() })
+        }
+        Type::Struct(_)
+        | Type::Enum(_)
+        | Type::EnumVariant(_)
+        | Type::Array(_)
+        | Type::Lambda(_)
+        | Type::LambdaObject(_) => {
+            debug_assert!(k1.types.is_aggregate_repr(type_id));
+            let layout = k1.types.get_layout(type_id);
+            let data: *mut u8 = vm.stack.push_layout_uninit(layout);
+
+            unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
+
+            Ok(Value::Agg { type_id, ptr: data })
+        }
+        Type::Never
+        | Type::Function(_)
+        | Type::Generic(_)
+        | Type::TypeParameter(_)
+        | Type::FunctionTypeParameter(_)
+        | Type::InferenceHole(_)
+        | Type::Unresolved(_)
+        | Type::RecursiveReference(_) => k1.ice_with_span(
+            format!(
+                "not a value type; zeroed() for type {} is undefined",
+                k1.types.get(type_id).kind_name()
+            ),
+            vm.eval_span,
+        ),
+    }
+}
+
 fn execute_intrinsic(
     vm: &mut Vm,
     k1: &mut TypedProgram,
@@ -1482,54 +1560,7 @@ fn execute_intrinsic(
         }
         IntrinsicOperation::Zeroed => {
             let type_id = k1.named_types.get_nth(type_args, 0).type_id;
-            let value = match k1.types.get(type_id) {
-                Type::Static(_) => {
-                    return failf!(
-                        vm.eval_span,
-                        "zeroed() for statically known values currently unsupported",
-                    );
-                }
-                Type::Unit => Value::Unit,
-                Type::Char => Value::Char(0),
-                Type::Bool => Value::Bool(false),
-                Type::Pointer => Value::Pointer(0),
-                Type::Integer(integer_type) => {
-                    let zero_value = integer_type.zero();
-                    Value::Int(zero_value)
-                }
-                Type::Float(float_type) => Value::Float(float_type.zero()),
-                Type::Reference(_) | Type::FunctionPointer(_) => {
-                    Value::Reference { type_id, ptr: core::ptr::null() }
-                }
-                Type::Struct(_)
-                | Type::Enum(_)
-                | Type::EnumVariant(_)
-                | Type::Array(_)
-                | Type::Lambda(_)
-                | Type::LambdaObject(_) => {
-                    debug_assert!(k1.types.is_aggregate_repr(type_id));
-                    let layout = k1.types.get_layout(type_id);
-                    let data: *mut u8 = vm.stack.push_layout_uninit(layout);
-
-                    unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
-
-                    Value::Agg { type_id, ptr: data }
-                }
-                Type::Never
-                | Type::Function(_)
-                | Type::Generic(_)
-                | Type::TypeParameter(_)
-                | Type::FunctionTypeParameter(_)
-                | Type::InferenceHole(_)
-                | Type::Unresolved(_)
-                | Type::RecursiveReference(_) => k1.ice_with_span(
-                    format!(
-                        "not a value type; zeroed() for type {} is undefined",
-                        k1.types.get(type_id).kind_name()
-                    ),
-                    vm.eval_span,
-                ),
-            };
+            let value = zero_value(vm, k1, type_id)?;
             Ok(VmResult::Value(value))
         }
         IntrinsicOperation::TypeId => {
@@ -2410,7 +2441,7 @@ pub fn vm_value_to_static_value(
         Value::Float(typed_float_value) => StaticValue::Float(typed_float_value),
         Value::Pointer(value) => {
             if value == 0 {
-                StaticValue::NullPointer
+                StaticValue::Zero(POINTER_TYPE_ID)
             } else {
                 return failf!(
                     span,
