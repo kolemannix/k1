@@ -1134,6 +1134,7 @@ pub struct ParsedGlobal {
     pub span: SpanId,
     pub id: ParsedGlobalId,
     pub is_referencing: bool,
+    pub thread_local: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3580,22 +3581,29 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let name_token = self.expect_eat_token(K::Ident)?;
+        let ident = self.expect_eat_token(K::Ident)?;
+        let (name_token, thread_local) = if self.token_chars(ident) == "tls" {
+            let name_token = self.expect_eat_token(K::Ident)?;
+            (name_token, true)
+        } else {
+            (ident, false)
+        };
         let _colon = self.expect_eat_token(K::Colon);
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(K::Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
         let span = self.extend_span(keyword_let_token.span, self.get_expression_span(value_expr));
         let name = self.intern_ident_token(name_token);
-        let constant_id = self.ast.add_global(ParsedGlobal {
+        let global_id = self.ast.add_global(ParsedGlobal {
             name,
             ty: typ,
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
             is_referencing,
+            thread_local,
         });
-        Ok(Some(constant_id))
+        Ok(Some(global_id))
     }
 
     fn expect_assignment(&mut self, lhs: ParsedExprId) -> ParseResult<AssignStmt> {

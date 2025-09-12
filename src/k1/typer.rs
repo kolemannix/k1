@@ -1849,6 +1849,7 @@ pub struct TypedGlobal {
     pub span: SpanId,
     pub is_constant: bool,
     pub is_referencing: bool,
+    pub is_tls: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
 }
@@ -2332,19 +2333,26 @@ pub enum ModuleRef {
 pub struct ModuleManifest {
     kind: ModuleKind,
     deps: Vec<ModuleRef>,
+    multithreading: bool,
 }
 
 pub struct Module {
     pub id: ModuleId,
     pub name: Ident,
-    pub dependencies: Vec<ModuleId>,
-    pub kind: ModuleKind,
+    pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
 }
 
+#[derive(Clone, Copy)]
+pub struct ProgramSettings {
+    pub multithreaded: bool,
+    pub executable: bool,
+}
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
+    pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
     functions: VPool<TypedFunction, FunctionId>,
     pub variables: VPool<Variable, VariableId>,
@@ -2501,6 +2509,7 @@ impl TypedProgram {
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
+            program_settings: ProgramSettings { multithreaded: false, executable: false },
             functions: VPool::make_with_hint("typed_functions", 8192),
             variables: VPool::make_with_hint("typed_variables", 8192),
             types,
@@ -2557,7 +2566,11 @@ impl TypedProgram {
         }
     }
 
-    pub fn add_module(&mut self, src_path: &Path) -> anyhow::Result<ModuleId> {
+    pub fn add_module(
+        &mut self,
+        src_path: &Path,
+        primary_module: bool,
+    ) -> anyhow::Result<ModuleId> {
         let total_start = self.timing.time_raw();
         eprintln!("Loading module {:?}...", src_path);
         let src_path = src_path.canonicalize().map_err(|e| {
@@ -2633,16 +2646,21 @@ impl TypedProgram {
         }
 
         let module_manifest = if is_core {
-            ModuleManifest { kind: ModuleKind::Library, deps: vec![] }
+            ModuleManifest { kind: ModuleKind::Library, deps: vec![], multithreading: false }
         } else {
             match self.get_module_manifest(parsed_namespace_id)? {
-                None => ModuleManifest { kind: ModuleKind::Executable, deps: vec![] },
+                None => ModuleManifest {
+                    kind: ModuleKind::Executable,
+                    deps: vec![],
+                    multithreading: false,
+                },
                 Some(manifest) => manifest,
             }
         };
 
         if module_manifest.kind == ModuleKind::Executable {
-            if let Some(m) = self.modules.iter().find(|m| m.kind == ModuleKind::Executable) {
+            if let Some(m) = self.modules.iter().find(|m| m.manifest.kind == ModuleKind::Executable)
+            {
                 bail!(
                     "Cannot compile a program with 2 executable modules. {} and {}",
                     self.ident_str(m.name),
@@ -2651,18 +2669,24 @@ impl TypedProgram {
             }
         }
 
+        // We take various program-wide settings from the primary module's manifest
+        // So that we can compile dependencies with them applied
+        if primary_module {
+            self.program_settings.multithreaded = module_manifest.multithreading;
+            self.program_settings.executable = module_manifest.kind == ModuleKind::Executable;
+        }
+
         for dep in module_manifest.deps.iter() {
             let src_path = match dep {
                 ModuleRef::Github { .. } => todo!(),
                 ModuleRef::Local { path } => path,
             };
             // Actually, module names need to be unique identifiers and provided up front
-            self.add_module(src_path)?;
+            self.add_module(src_path, false)?;
         }
 
         let type_start = self.timing.clock.raw();
-        let module_id =
-            self.run_on_module(module_name, parsed_namespace_id, module_manifest.kind)?;
+        let module_id = self.run_on_module(module_name, parsed_namespace_id, module_manifest)?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
@@ -2772,7 +2796,9 @@ impl TypedProgram {
     }
 
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
-        if let Some(exec_module) = self.modules.iter().find(|m| m.kind == ModuleKind::Executable) {
+        if let Some(exec_module) =
+            self.modules.iter().find(|m| m.manifest.kind == ModuleKind::Executable)
+        {
             self.scopes
                 .get_scope(exec_module.namespace_scope_id)
                 .find_function(self.ast.idents.b.main)
@@ -4224,8 +4250,9 @@ impl TypedProgram {
             i => panic!("Unecognized module kind index: {}", i),
         };
         let deps = vec![];
+        let multithreading = self.static_values.get(value.fields[2]).as_boolean().unwrap();
 
-        Ok(Some(ModuleManifest { kind, deps }))
+        Ok(Some(ModuleManifest { kind, deps, multithreading }))
     }
 
     fn eval_pattern(
@@ -5132,6 +5159,7 @@ impl TypedProgram {
             span: global_span,
             is_referencing,
             is_constant: !is_mutable,
+            is_tls: parsed_global.thread_local,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -6866,6 +6894,10 @@ impl TypedProgram {
                         Ok(self.exprs.add(TypedExpr::Bool(debug, *span)))
                     }
                     "IS_STATIC" => Ok(self.exprs.add(TypedExpr::Bool(false, *span))),
+                    "MULTITHREADING" => {
+                        let bool_value = self.program_settings.multithreaded;
+                        Ok(self.exprs.add(TypedExpr::Bool(bool_value, *span)))
+                    }
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
             }
@@ -14275,7 +14307,7 @@ impl TypedProgram {
         &mut self,
         module_name: Ident,
         module_root_parsed_namespace: ParsedNamespaceId,
-        kind: ModuleKind,
+        manifest: ModuleManifest,
     ) -> anyhow::Result<ModuleId> {
         let module_id = self.modules.next_id();
         self.module_in_progress = Some(module_id);
@@ -14298,8 +14330,7 @@ impl TypedProgram {
         let real_module_id = self.modules.add(Module {
             id: module_id,
             name: module_name,
-            dependencies: vec![],
-            kind,
+            manifest,
             namespace_id: typed_namespace_id,
             namespace_scope_id: root_namespace_scope_id,
         });

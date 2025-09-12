@@ -32,7 +32,7 @@ use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
     GlobalValue, InstructionValue, IntValue, PointerValue, StructValue,
 };
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
@@ -3764,6 +3764,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             _ => &self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
         };
+
         if self.llvm_module.get_function(llvm_name).is_some() {
             if let Some(LlvmLinkage::External) = llvm_linkage {
                 eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
@@ -3796,6 +3797,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             param_types.push(res);
         }
 
+        // TODO: Mark all Standard functions dso_local
         let function_value = self.llvm_module.add_function(
             llvm_name,
             llvm_function_type.llvm_function_type,
@@ -3996,6 +3998,19 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_global.set_constant(global.is_constant);
             llvm_global.set_initializer(&initialized_basic_value);
             llvm_global.set_unnamed_addr(true);
+            if self.k1.program_settings.multithreaded {
+                if global.is_tls {
+                    llvm_global.set_thread_local(true);
+                    let mode = if self.k1.program_settings.executable {
+                        ThreadLocalMode::InitialExecTLSModel
+                    } else {
+                        // We don't yet support dynamic library as a target
+                        // So all libraries can use InitialExec
+                        ThreadLocalMode::InitialExecTLSModel
+                    };
+                    llvm_global.set_thread_local_mode(Some(mode));
+                }
+            }
             let variable_value = if is_reference_type {
                 // Direct; global is a ptr, which is the correct type
                 // This will not be 'loaded' by load_variable_value

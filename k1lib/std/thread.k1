@@ -1,0 +1,26 @@
+ns thread;
+
+use core/Arena
+
+deftype alias Thread = *unit
+
+ns pthread {
+  extern("pthread_create") fn pthread_create(thread: *Thread, attrs: Pointer, start_routine: Pointer, input: Pointer): i32
+  extern("pthread_join") fn pthread_join(thread: Thread, retval: Pointer): i32
+}
+fn start[T](arena: *mut Arena, function: *\(*mut T) -> Pointer, input: *T): *Thread {
+  let thread: *Thread = arena.pushUninit[Thread]();
+  let ret = pthread/pthread_create(thread, Pointer/NULL, function as Pointer, input as Pointer);
+  if ret < 0 {
+    crash("pthread_create failed")
+  };
+  thread
+}
+
+fn join[T](thread: Thread, retval: *mut T): unit {
+  let ret = pthread/pthread_join(thread, retval as Pointer);
+  if ret < 0 {
+    crash("pthread_join failed")
+  };
+  ()
+}
