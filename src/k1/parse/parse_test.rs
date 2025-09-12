@@ -93,7 +93,7 @@ fn infix() -> Result<(), ParseError> {
     let mut parser = set_up("let x = a + b * doStuff(1, 2)", &mut module);
     let result = parser.parse_statement()?.unwrap();
     if let ParsedStmt::Let(ParsedLet { value: expr_id, .. }) = module.stmts.get(result) {
-        let ParsedExpr::BinaryOp(op) = module.exprs.get(*expr_id) else { panic!() };
+        let ParsedExpr::BinaryOp(op) = module.exprs.get(expr_id.unwrap()) else { panic!() };
         assert_eq!(op.op_kind, BinaryOpKind::Add);
         assert!(matches!(*module.exprs.get(op.lhs), ParsedExpr::Variable(_)));
         if let ParsedExpr::BinaryOp(BinaryOp {

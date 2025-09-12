@@ -239,7 +239,7 @@ impl TypedProgram {
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
-            initializer: initializer_id,
+            initializer: Some(initializer_id),
             is_referencing,
             span,
         }));

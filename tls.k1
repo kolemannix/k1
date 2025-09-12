@@ -1,11 +1,11 @@
 use core/Arena
 
-let MODULE_INFO: core/k1/ModuleManifest = (#static {
+let MODULE_INFO: core/k1/ModuleManifest = {
   let* m = core/mem/zeroed[core/k1/ModuleManifest]();
   m.multithreading* <- true;
   m.kind* <- .Executable;
   m.*
-}): core/k1/ModuleManifest;
+};
 
 let* tls myvar: *mut i32 = 0;
 

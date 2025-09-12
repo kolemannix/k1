@@ -1501,36 +1501,57 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
-        let value = self.codegen_expr(let_stmt.initializer)?;
+        let variable_type = self.codegen_type(let_stmt.variable_type)?;
+        let variable = self.k1.variables.get(let_stmt.variable_id);
+        let ever_reassigned = variable.reassigned();
+        let name = self.get_ident_name(variable.name).to_string();
+
+        let local_variable = if !variable_type.is_void() {
+            Some(self.debug.debug_builder.create_auto_variable(
+                self.debug.current_scope(),
+                &name,
+                self.debug.current_file(),
+                self.get_line_number(let_stmt.span),
+                variable_type.debug_type(),
+                true,
+                0,
+                variable_type.rich_repr_layout().align,
+            ))
+        } else {
+            None
+        };
+
+        // Some 'lets' don't need an extra alloca; if they are not re-assigned
+        // and they are not 'referencing' then the value representation is fine
+        let value = match let_stmt.initializer {
+            None => {
+                let variable_ptr = self.build_k1_alloca(&variable_type, &name);
+                self.variable_to_value.insert(
+                    let_stmt.variable_id,
+                    VariableValue::Indirect { pointer_value: variable_ptr },
+                );
+                self.debug.debug_builder.insert_declare_at_end(
+                    variable_ptr,
+                    local_variable,
+                    None,
+                    self.builder.get_current_debug_location().unwrap(),
+                    self.builder.get_insert_block().unwrap(),
+                );
+                return Ok(self.builtin_types.unit_basic().into());
+            }
+            Some(initializer) => self.codegen_expr(initializer)?,
+        };
 
         if let LlvmValue::Void(instr) = value {
             return Ok(LlvmValue::Void(instr));
         }
         let value = value.expect_basic_value();
 
-        let variable_type = self.codegen_type(let_stmt.variable_type)?;
-        let variable = self.k1.variables.get(let_stmt.variable_id);
-        let ever_reassigned = variable.reassigned();
-        let name = self.get_ident_name(variable.name).to_string();
-
-        let local_variable = self.debug.debug_builder.create_auto_variable(
-            self.debug.current_scope(),
-            &name,
-            self.debug.current_file(),
-            self.get_line_number(let_stmt.span),
-            variable_type.debug_type(),
-            true,
-            0,
-            variable_type.rich_repr_layout().align,
-        );
-
-        // Some 'lets' don't need an extra alloca; if they are not re-assigned
-        // and they are not 'referencing' then the value representation is fine
         let no_alloca_needed = !let_stmt.is_referencing && !ever_reassigned;
         let variable_value = if no_alloca_needed {
             self.debug.insert_dbg_value_at_end(
                 value,
-                local_variable,
+                local_variable.unwrap(),
                 None,
                 self.builder.get_current_debug_location().unwrap(),
                 self.builder.get_insert_block().unwrap(),
@@ -1538,6 +1559,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             VariableValue::Direct { value }
         } else {
             let variable_ptr = self.build_k1_alloca(&variable_type, &name);
+            self.debug.debug_builder.insert_declare_at_end(
+                variable_ptr,
+                local_variable,
+                None,
+                self.builder.get_current_debug_location().unwrap(),
+                self.builder.get_insert_block().unwrap(),
+            );
 
             let store_instr = if let_stmt.is_referencing {
                 // If this is a let*, then we put the rhs behind another alloca so that we end up
@@ -1561,13 +1589,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             } else {
                 self.store_k1_value(&variable_type, variable_ptr, value)
             };
-            self.debug.debug_builder.insert_declare_before_instruction(
-                variable_ptr,
-                Some(local_variable),
-                None,
-                self.builder.get_current_debug_location().unwrap(),
-                store_instr,
-            );
+
             VariableValue::Indirect { pointer_value: variable_ptr }
         };
 
@@ -1801,8 +1823,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let string_struct = self.codegen_string_id(*string_id).unwrap();
                 string_struct.get_initializer().unwrap()
             }
-            StaticValue::NullPointer => {
-                self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+            StaticValue::Zero(type_id) => {
+                let llvm_type = self.codegen_type(*type_id)?;
+                let zero = llvm_type.rich_repr_type().const_zero();
+                zero.as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
                 let mut type_fields = Vec::with_capacity(s.fields.len());
@@ -1951,8 +1975,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let string_ptr = self.codegen_string_id(*string_id).unwrap();
                 string_ptr.as_basic_value_enum()
             }
-            StaticValue::NullPointer => {
-                self.ctx.ptr_type(AddressSpace::default()).const_null().as_basic_value_enum()
+            StaticValue::Zero(type_id) => {
+                let llvm_type = self.codegen_type(*type_id)?;
+                let zero = llvm_type.rich_repr_type().const_zero();
+                zero.as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
                 let llvm_type = self.codegen_type(s.type_id)?;
@@ -4265,7 +4291,7 @@ fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueI
         StaticValue::Int(_) => true,
         StaticValue::Float(_) => true,
         StaticValue::String(_) => true,
-        StaticValue::NullPointer => true,
+        StaticValue::Zero(_) => true,
         StaticValue::Struct(s) => {
             s.fields.iter().all(|field_id| is_llvm_const_representable(static_values, *field_id))
         }

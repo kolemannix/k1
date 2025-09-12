@@ -13,7 +13,10 @@ impl TypedProgram {
         let stmt = self.stmts.get(stmt_id);
         match stmt {
             TypedStmt::Expr(e, _) => self.visit_expr_tree(*e, state, action),
-            TypedStmt::Let(val_def) => self.visit_expr_tree(val_def.initializer, state, action),
+            TypedStmt::Let(val_def) => match val_def.initializer {
+                None => None,
+                Some(initializer) => self.visit_expr_tree(initializer, state, action),
+            },
             TypedStmt::Assignment(assgn) => {
                 if let Some(r) = self.visit_expr_tree(assgn.destination, state, action) {
                     return Some(r);
