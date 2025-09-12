@@ -337,10 +337,14 @@ ns k1 {
     msg: string
   ): unit
 
-  // MUST MATCH k1_types::ModuleManifest
+  deftype ModuleKind = either(u8) Library, Executable, Script
+
   deftype ModuleManifest = {
-    kind: (either(u8) Library, Executable, Script),
+    kind: ModuleKind,
     deps: string,
+
+    // Primary module settings
+    multithreading: bool
   }
 
 }

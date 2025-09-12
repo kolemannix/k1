@@ -341,21 +341,21 @@ pub fn compile_module(
     let corelib_dir = lib_dir.join("core");
     let stdlib_dir = lib_dir.join("std");
 
-    if let Err(e) = p.add_module(&corelib_dir) {
+    if let Err(e) = p.add_module(&corelib_dir, false) {
         write_program_dump(&p);
         eprintln!("{}", e);
         return Err(CompileModuleError::TyperFailure(Box::new(p)));
     };
 
     if use_std {
-        if let Err(e) = p.add_module(&stdlib_dir) {
+        if let Err(e) = p.add_module(&stdlib_dir, false) {
             write_program_dump(&p);
             eprintln!("{}", e);
             return Err(CompileModuleError::TyperFailure(Box::new(p)));
         }
     }
 
-    if let Err(e) = p.add_module(src_path) {
+    if let Err(e) = p.add_module(src_path, true) {
         write_program_dump(&p);
         eprintln!("{}", e);
         return Err(CompileModuleError::TyperFailure(Box::new(p)));

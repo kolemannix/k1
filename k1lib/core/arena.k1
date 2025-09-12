@@ -57,6 +57,11 @@ ns Arena {
     dataStart as Pointer
   }
 
+  fn pushUninit[T](self: *mut Arena): *mut T {
+    let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
+    dataStart as *mut T
+  }
+
   fn push[T](self: *mut Arena, t: T): *mut T {
     let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
 

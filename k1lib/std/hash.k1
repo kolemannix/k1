@@ -12,10 +12,9 @@
 // - String handling
 // - Builds on List which is implemented in k1
 
-let MODULE_INFO: core/k1/ModuleManifest = {
-    kind: .Library,
-    deps: "",
-};
+// Demonstrates that the defaults of
+// Library, no dependencies, not multithreaded work
+let MODULE_INFO: core/k1/ModuleManifest = core/mem/zeroed();
 
 deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
 deftype HashMap[V] = {

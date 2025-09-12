@@ -1100,22 +1100,6 @@ impl TypedProgram {
                 );
                 TypeUnificationResult::Matching
             }
-            (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
-                if let Some(passed_function_type) =
-                    self.extract_function_type_from_functionlike(passed)
-                {
-                    self.unify_and_find_substitutions_rec(
-                        substitutions,
-                        passed_function_type,
-                        slot_function_type_param.function_type,
-                        type_param_enabled,
-                    )
-                } else {
-                    TypeUnificationResult::NonMatching(
-                        "Expected a function type parameter; passed unrelated",
-                    )
-                }
-            }
             (Type::Function(passed_fn), Type::Function(slot_fn)) => {
                 if passed_fn.logical_params().len() == slot_fn.logical_params().len() {
                     let passed_fn = passed_fn.clone();
@@ -1139,6 +1123,29 @@ impl TypedProgram {
                 } else {
                     TypeUnificationResult::NonMatching(
                         "Functions take a different number of arguments",
+                    )
+                }
+            }
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => self
+                .unify_and_find_substitutions_rec(
+                    substitutions,
+                    fp1.function_type_id,
+                    fp2.function_type_id,
+                    type_param_enabled,
+                ),
+            (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
+                if let Some(passed_function_type) =
+                    self.extract_function_type_from_functionlike(passed)
+                {
+                    self.unify_and_find_substitutions_rec(
+                        substitutions,
+                        passed_function_type,
+                        slot_function_type_param.function_type,
+                        type_param_enabled,
+                    )
+                } else {
+                    TypeUnificationResult::NonMatching(
+                        "Expected a function type parameter; passed unrelated",
                     )
                 }
             }

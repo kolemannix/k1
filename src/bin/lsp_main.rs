@@ -55,7 +55,7 @@ fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
     Url::from_directory_path(directory.as_ref()).unwrap().join(file.as_ref()).unwrap()
 }
 
-enum CompiledModule {
+enum CompiledProgram {
     Empty,
     Parsed(Box<ParsedProgram>),
     Typed(Box<TypedProgram>),
@@ -63,7 +63,7 @@ enum CompiledModule {
 
 struct Backend {
     client: Client,
-    module: Mutex<CompiledModule>,
+    module: Mutex<CompiledProgram>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
 }
@@ -72,7 +72,7 @@ impl Backend {
     fn new(client: Client) -> Backend {
         Backend {
             client,
-            module: Mutex::new(CompiledModule::Empty),
+            module: Mutex::new(CompiledProgram::Empty),
             workspace_uri: RwLock::new(None),
             compile_iteration: AtomicU32::new(0),
         }
@@ -81,9 +81,9 @@ impl Backend {
     fn with_ast<T>(&self, f: impl Fn(&ParsedProgram) -> T) -> Option<T> {
         let m_lock = self.module.lock().unwrap();
         match &*m_lock {
-            CompiledModule::Empty => None,
-            CompiledModule::Parsed(pm) => Some(f(pm)),
-            CompiledModule::Typed(tm) => Some(f(&tm.ast)),
+            CompiledProgram::Empty => None,
+            CompiledProgram::Parsed(pm) => Some(f(pm)),
+            CompiledProgram::Typed(tm) => Some(f(&tm.ast)),
         }
     }
 
@@ -110,7 +110,7 @@ impl Backend {
 
         let mut all_errors = parse_errors;
 
-        if let CompiledModule::Typed(module) = &*self.module.lock().unwrap() {
+        if let CompiledProgram::Typed(module) = &*self.module.lock().unwrap() {
             all_errors.extend(
                 module
                     .errors
@@ -141,10 +141,10 @@ impl Backend {
         };
         let compile_result = k1::compiler::compile_module(&args, &out_dir);
         let compiled_module = match compile_result {
-            Ok(module) => CompiledModule::Typed(Box::new(module)),
-            Err(CompileModuleError::TyperFailure(module)) => CompiledModule::Typed(module),
+            Ok(module) => CompiledProgram::Typed(Box::new(module)),
+            Err(CompileModuleError::TyperFailure(module)) => CompiledProgram::Typed(module),
             Err(CompileModuleError::ParseFailure(parsed_module)) => {
-                CompiledModule::Parsed(parsed_module)
+                CompiledProgram::Parsed(parsed_module)
             }
         };
 

@@ -1,0 +1,32 @@
+use core/Arena
+
+let MODULE_INFO: core/k1/ModuleManifest = (#static {
+  let* m = core/mem/zeroed[core/k1/ModuleManifest]();
+  m.multithreading* <- true;
+  m.kind* <- .Executable;
+  m.*
+}): core/k1/ModuleManifest;
+
+let* tls myvar: *mut i32 = 0;
+
+fn run(input: *mut iword): Pointer {
+  let value = myvar.*;
+  println("Input is: {input.*}");
+  myvar <- myvar.* + 1;
+  println("myvar is: {myvar.*}");
+  input as Pointer
+}
+
+fn main(): i32 {
+  myvar <- 1000;
+  let* arena = Arena/new(1);
+  let input = arena.push(42);
+  let output = arena.pushUninit[*int]();
+
+  let thread = std/thread/start(arena, run.toRef(), input);
+  std/thread/join(thread.*, output);
+
+  println("Output is: {output.*.*}");
+  println("myvar is: {myvar.*}");
+  0
+}
