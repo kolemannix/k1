@@ -999,7 +999,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     FloatType::F32 => self.ctx.f32_type(),
                     FloatType::F64 => self.ctx.f64_type(),
                 };
-                let layout = self.k1.types.get_layout(type_id);
                 let name = match float_type {
                     FloatType::F32 => "f32",
                     FloatType::F64 => "f64",
@@ -1489,7 +1488,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.k1.variables.get(let_stmt.variable_id);
-        let ever_reassigned = variable.reassigned();
         let name = self.get_ident_name(variable.name).to_string();
 
         let local_variable = if !variable_type.is_void() {
@@ -1530,7 +1528,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.get_insert_block().unwrap(),
             );
 
-            let store_instr = if let_stmt.is_referencing {
+            if let_stmt.is_referencing {
                 // If this is a let*, then we put the rhs behind another alloca so that we end up
                 // with a pointer to the value
                 let Type::Reference(reference_type) = self.k1.types.get(variable_type.type_id())
@@ -3787,9 +3785,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
 
         for param in function_type.physical_params.iter() {
-            let res = self.codegen_type(param.type_id)?;
-            param_metadata_types.push(BasicMetadataTypeEnum::from(res.canonical_repr_type()));
-            param_types.push(res);
+            let param_type = self.codegen_type(param.type_id)?;
+
+            param_metadata_types
+                .push(BasicMetadataTypeEnum::from(param_type.canonical_repr_type()));
+            param_types.push(param_type);
         }
 
         // TODO: Mark all Standard functions dso_local

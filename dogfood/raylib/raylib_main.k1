@@ -12,8 +12,8 @@ ns raylib {
 
   extern("BeginDrawing") fn BeginDrawing(): unit
   extern("EndDrawing") fn EndDrawing(): unit
-  extern("ClearBackground") fn ClearBackground(color: Color): unit
-  extern("DrawText") fn DrawText(text: Pointer, posX: i32, posY: i32, color: Color): unit
+  extern("ClearBackground") fn ClearBackground(color: u32): unit
+  extern("DrawText") fn DrawText(text: Pointer, posX: i32, posY: i32, color: u32): unit
 
 }
 // TODO: We need a good 'void' return because if you try to access the unit
@@ -21,6 +21,14 @@ ns raylib {
 
 let RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
 let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
+
+fn colorToU32(color: Color): u32 {
+    let v: u32 = color.r as u32;
+    v := v.bitOr((color.g as u32).shiftLeft(8));
+    v := v.bitOr((color.b as u32).shiftLeft(16));
+    v := v.bitOr((color.a as u32).shiftLeft(24));
+    v
+}
 
 fn main(): i32 {
     let context allocMode = core/mem/AllocMode/TEMP;
@@ -31,7 +39,7 @@ fn main(): i32 {
 
     while not raylib/WindowShouldClose() {
       raylib/BeginDrawing();
-      ClearBackground({ r: 250, g: 250, b: 250, a: 255 });
+      ClearBackground(colorToU32({ r: 250, g: 250, b: 250, a: 255 }));
       DrawText("Congrats!".toCString().ptr, 190, 200, GRAY);
       raylib/EndDrawing();
     };
