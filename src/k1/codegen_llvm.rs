@@ -894,17 +894,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let make_value_basic_type =
             |name: &str,
              type_id: TypeId,
-             int_type: BasicTypeEnum<'ctx>,
+             basic_type: BasicTypeEnum<'ctx>,
              encoding: llvm_sys::debuginfo::LLVMDWARFTypeEncoding| {
                 let layout = self.get_layout(type_id);
                 K1LlvmType::Value(LlvmValueType {
                     type_id,
-                    basic_type: int_type.as_basic_type_enum(),
+                    basic_type,
                     layout,
                     di_type: self
                         .debug
                         .debug_builder
-                        .create_basic_type(name, layout.size as u64, encoding, 0)
+                        .create_basic_type(name, layout.size_bits() as u64, encoding, 0)
                         .unwrap()
                         .as_type(),
                 })
@@ -1000,37 +1000,23 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     FloatType::F64 => self.ctx.f64_type(),
                 };
                 let layout = self.k1.types.get_layout(type_id);
-                let float_name = self.k1.type_id_to_string(type_id);
-                Ok(LlvmValueType {
+                let name = match float_type {
+                    FloatType::F32 => "f32",
+                    FloatType::F64 => "f64",
+                };
+                Ok(make_value_basic_type(
+                    name,
                     type_id,
-                    basic_type: llvm_type.as_basic_type_enum(),
-                    layout,
-                    di_type: self
-                        .debug
-                        .debug_builder
-                        .create_basic_type(&float_name, layout.size as u64, dw_ate_float, 0)
-                        .unwrap()
-                        .as_type(),
-                }
-                .into())
+                    llvm_type.as_basic_type_enum(),
+                    dw_ate_float,
+                ))
             }
-            Type::Bool => Ok(LlvmValueType {
-                type_id: BOOL_TYPE_ID,
-                basic_type: self.builtin_types.boolean.as_basic_type_enum(),
-                layout: self.get_layout(BOOL_TYPE_ID),
-                di_type: self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "bool",
-                        self.builtin_types.boolean.get_bit_width() as u64,
-                        dw_ate_boolean,
-                        0,
-                    )
-                    .unwrap()
-                    .as_type(),
-            }
-            .into()),
+            Type::Bool => Ok(make_value_basic_type(
+                "bool",
+                BOOL_TYPE_ID,
+                self.builtin_types.boolean.as_basic_type_enum(),
+                dw_ate_boolean,
+            )),
             Type::Pointer => {
                 let llvm_type = self.builtin_types.ptr.as_basic_type_enum();
                 Ok(make_value_basic_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
@@ -1524,40 +1510,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Some 'lets' don't need an extra alloca; if they are not re-assigned
         // and they are not 'referencing' then the value representation is fine
         let value = match let_stmt.initializer {
-            None => {
-                let variable_ptr = self.build_k1_alloca(&variable_type, &name);
-                self.variable_to_value.insert(
-                    let_stmt.variable_id,
-                    VariableValue::Indirect { pointer_value: variable_ptr },
-                );
-                self.debug.debug_builder.insert_declare_at_end(
-                    variable_ptr,
-                    local_variable,
-                    None,
-                    self.builder.get_current_debug_location().unwrap(),
-                    self.builder.get_insert_block().unwrap(),
-                );
-                return Ok(self.builtin_types.unit_basic().into());
+            None => None,
+            Some(initializer) => {
+                let value = self.codegen_expr(initializer)?;
+                if let LlvmValue::Void(instr) = value {
+                    return Ok(LlvmValue::Void(instr));
+                }
+                Some(value.expect_basic_value())
             }
-            Some(initializer) => self.codegen_expr(initializer)?,
         };
 
-        if let LlvmValue::Void(instr) = value {
-            return Ok(LlvmValue::Void(instr));
-        }
-        let value = value.expect_basic_value();
-
-        let no_alloca_needed = !let_stmt.is_referencing && !ever_reassigned;
-        let variable_value = if no_alloca_needed {
-            self.debug.insert_dbg_value_at_end(
-                value,
-                local_variable.unwrap(),
-                None,
-                self.builder.get_current_debug_location().unwrap(),
-                self.builder.get_insert_block().unwrap(),
-            );
-            VariableValue::Direct { value }
-        } else {
+        let variable_value = {
             let variable_ptr = self.build_k1_alloca(&variable_type, &name);
             self.debug.debug_builder.insert_declare_at_end(
                 variable_ptr,
@@ -1576,18 +1539,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 let reference_inner_llvm_type = self.codegen_type(reference_type.inner_type)?;
                 if reference_inner_llvm_type.is_aggregate() {
-                    debug_assert!(value.is_pointer_value());
-                    self.builder.build_store(variable_ptr, value).unwrap()
+                    if let Some(value) = value {
+                        debug_assert!(value.is_pointer_value());
+                        self.builder.build_store(variable_ptr, value).unwrap();
+                    }
                 } else {
                     // We need 2 allocas here because we need to store
                     // an address in an alloca, and the address needs to be
                     // a stack address.
                     let value_ptr = self.build_k1_alloca(&reference_inner_llvm_type, "");
-                    self.builder.build_store(value_ptr, value).unwrap();
-                    self.builder.build_store(variable_ptr, value_ptr).unwrap()
+                    if let Some(value) = value {
+                        self.builder.build_store(value_ptr, value).unwrap();
+                    }
+                    self.builder.build_store(variable_ptr, value_ptr).unwrap();
                 }
             } else {
-                self.store_k1_value(&variable_type, variable_ptr, value)
+                if let Some(value) = value {
+                    self.store_k1_value(&variable_type, variable_ptr, value);
+                }
             };
 
             VariableValue::Indirect { pointer_value: variable_ptr }

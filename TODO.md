@@ -115,6 +115,8 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Add mutable/const bool to ReferenceType
 - [x] Update stdlib
 
+## Project: Kill let* and add address-of operator
+
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 - [x] #meta First working version
 - [x] Multiline string literals,
