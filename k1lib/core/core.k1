@@ -435,3 +435,10 @@ impl Print for f64 {
     f64/format(self, w, places = 6);
   }
 }
+
+impl Print for Pointer {
+  fn printTo[W: Writer](self: Pointer, w: W): unit {
+    w.writeString("0x");
+    formatUInt(context w)(self as uword, base = 16);
+  }
+}

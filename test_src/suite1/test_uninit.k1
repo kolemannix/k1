@@ -1,0 +1,22 @@
+ns test_uninit;
+
+let* GLOB: *int = 50;
+
+fn test(): unit {
+  // pointer is initialized, but value is not
+  let* x: *mut int = uninit;
+  x <- 42;
+  assertEquals(x.*, 42);
+
+  let y: int = uninit;
+  y := 10;
+  assertEquals(y, 10);
+
+  // pointer itself is uninitialized
+  let p: *int = uninit;
+  p := GLOB;
+  assertEquals(p as Pointer, GLOB as Pointer);
+  assertEquals(p.*, 50);
+
+  ()
+}

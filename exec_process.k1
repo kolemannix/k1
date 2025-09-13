@@ -1,3 +1,5 @@
+// Disclaimer: Super claude-y sloppy but working fork/execve example
+
 // Process execution wrapper for K1  
 // Raw execve-based implementation
 
