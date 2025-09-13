@@ -1,6 +1,18 @@
 #include <pthread.h>
 #include <stdio.h>
 
+struct Color {
+  char r;
+  char g;
+  char b;
+  char a;
+};
+
+struct Color clear_red(struct Color c) {
+  c.r = 0;
+  return c;
+}
+
 void *go(void *arg) {
   printf("Hello from thread!\n");
   return NULL;

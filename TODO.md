@@ -116,6 +116,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Update stdlib
 
 ## Project: Kill let* and add address-of operator
+- [ ] Kill let* and add address-of operator
 
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 - [x] #meta First working version
@@ -143,8 +144,9 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Test 'Any' type
 
 ## Project: Arena-based core, builtins, stdlib 
-- [ ] Thread-local globals
+- [x] Thread-local globals
 - [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
+- [ ] transmute function (for struct ABI workarounds right now)
 
 ## Project: Static Improvements
 - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
