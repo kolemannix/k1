@@ -1,11 +1,13 @@
-mod subs_int {
-  fn sub(a: int, b: int): int {
-    a - b
-  }
+let MODULE_INFO: core/k1/ModuleManifest = {
+  name: "addlib",
+  kind: "lib",
+  dependencies: ["k1/stdlib", "./sublib"]
 }
 
-mod subs_float {
-  fn sub(a: float, b: float): float {
-    a - b
-  }
+fn sub(a: int, b: int): int {
+  a - b
+}
+
+fn sub(a: float, b: float): float {
+  a - b
 }

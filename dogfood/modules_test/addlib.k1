@@ -1,10 +1,7 @@
-// Someone has to write a module() function?
-fn module(): k1/Module {
-  {
-    name: "addlib",
-    kind: "lib",
-    dependencies: ["k1/stdlib", "./sublib"]
-  }
+let MODULE_INFO: core/k1/ModuleManifest = {
+  name: "moduletest",
+  kind: .Executable,
+  dependencies: ["k1/stdlib", "./sublib"]
 }
 
 fn main(): i32 {

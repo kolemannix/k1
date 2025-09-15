@@ -951,7 +951,7 @@ impl TypePool {
         this
     }
 
-    pub fn add_type(
+    pub fn add(
         &mut self,
         typ: Type,
         defn_info: Option<TypeDefnInfo>,
@@ -1106,7 +1106,7 @@ impl TypePool {
         parsed_id: ParsedTypeDefnId,
         info: TypeDefnInfo,
     ) -> TypeId {
-        let type_id = self.add_type(Type::Unresolved(parsed_id), Some(info), None);
+        let type_id = self.add(Type::Unresolved(parsed_id), Some(info), None);
         self.ast_type_defn_mapping.insert(parsed_id, type_id);
         type_id
     }
@@ -1171,18 +1171,8 @@ impl TypePool {
         self.add_anon(Type::Static(StaticType { inner_type_id, value_id }))
     }
 
-    pub fn add(
-        &mut self,
-        typ: Type,
-        defn_info: Option<TypeDefnInfo>,
-        instance_info: Option<GenericInstanceInfo>,
-    ) -> TypeId {
-        let type_id = self.add_type(typ, defn_info, instance_info);
-        type_id
-    }
-
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
-        self.add_type(typ, None, None)
+        self.add(typ, None, None)
     }
 
     #[inline]

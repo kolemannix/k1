@@ -31,15 +31,13 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Represent payload-less `either` types as ints not structs
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
-- [ ] ThreadLocal globals
-- [ ] LLVM Codegen callstack is too deep due to codegen_function_or_get
+- [x] ThreadLocal globals
+- [x] LLVM Codegen callstack is too deep due to codegen_function_or_get
 - [x] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
-- [ ] Use `perf` to look at branch info, cache info
 - [ ] Compile switches with no patterns or guards to LLVM switch
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
-- [ ] Are parameter names part of a function type. (for now they are to avoid bugs but it explodes the type count..)
-- [ ] c"" strings that are of type Pointer (what about interpolation?)
+- [ ] c"" string literals that are of type Pointer (what about interpolation?)
 - [ ] Make demo readme / site
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 - [ ] Support ability constraints on generics
@@ -59,6 +57,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
+- [ ] Bindings generator; `rust-bindgen` equivalent
 
 # From dogfood round
 - [x] Introduce an "uninitialized" specifier, similar to `zeroed()`

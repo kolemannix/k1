@@ -15,6 +15,11 @@ impl TypedProgram {
         expr_id
     }
 
+    pub(super) fn synth_bool(&mut self, value: bool, span: SpanId) -> TypedExprId {
+        let expr_id = self.exprs.add(TypedExpr::Bool(value, span));
+        expr_id
+    }
+
     pub(super) fn synth_equals_call(
         &mut self,
         lhs: TypedExprId,
@@ -22,29 +27,13 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
-        self.synth_typed_function_call(
+        self.synth_typed_call_typed_args(
             self.ast.idents.f.Equals_equals.with_span(span),
             &[],
             &[lhs, rhs],
             ctx.with_no_expected_type(),
+            false,
         )
-        // let lhs_type = self.exprs.get(lhs).get_type();
-        // let implementation =
-        //     self.expect_ability_implementation(lhs_type, EQUALS_ABILITY_ID, scope_id, span)?;
-        // let implementation = self.ability_impls.get(implementation.full_impl_id);
-        // let ability = self.abilities.get(EQUALS_ABILITY_ID);
-        // let equals_index = ability.find_function_by_name(self.ast.idents.b.equals).unwrap().index;
-        // let equals_implementation = implementation.function_at_index(equals_index);
-        // let call_id = self.calls.add(Call {
-        //     callee: Callee::from_ability_impl_fn(equals_implementation),
-        //     args: smallvec![lhs, rhs],
-        //     type_args: SliceHandle::empty(),
-        //     return_type: BOOL_TYPE_ID,
-        //     span,
-        // });
-        // let call_expr =
-        //     self.exprs.add(TypedExpr::Call { call_id, return_type: BOOL_TYPE_ID, span });
-        // Ok(call_expr)
     }
 
     pub(super) fn synth_if_else(
@@ -280,28 +269,29 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_typed_function_call(
+    pub(super) fn synth_typed_call_typed_args(
         &mut self,
         name: QIdent,
         type_args: &[TypeId],
         args: &[TypedExprId],
         ctx: EvalExprContext,
+        is_method: bool,
     ) -> TyperResult<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, &[], &[], false);
+        let call_id = self.synth_parsed_function_call(name, &[], &[], is_method);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx, None)
     }
 
-    pub(super) fn synth_typed_method_call(
+    pub(super) fn synth_typed_call_parsed_args(
         &mut self,
         name: QIdent,
-        type_args: &[TypeId],
-        args: &[TypedExprId],
+        type_args: &[ParsedTypeExprId],
+        args: &[ParsedExprId],
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let call_id = self.synth_parsed_function_call(name, &[], &[], true);
+        let call_id = self.synth_parsed_function_call(name, type_args, args, false);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
-        self.eval_function_call(&call, Some((type_args, args)), ctx, None)
+        self.eval_function_call(&call, None, ctx, None)
     }
 
     pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
@@ -322,11 +312,12 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let span = self.exprs.get(to_print).get_span();
         let writer_type_id = self.exprs.get(writer).get_type();
-        self.synth_typed_function_call(
+        self.synth_typed_call_typed_args(
             self.ast.idents.f.core_Print_printTo.with_span(span),
             &[writer_type_id],
             &[to_print, writer],
             ctx.with_no_expected_type(),
+            false,
         )
     }
 
@@ -398,11 +389,12 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let message_string_id = self.ast.strings.intern(message);
         let message_expr = self.exprs.add(TypedExpr::String(message_string_id, span));
-        self.synth_typed_function_call(
+        self.synth_typed_call_typed_args(
             self.ast.idents.f.core_crash.with_span(span),
             &[],
             &[message_expr],
             ctx,
+            false,
         )
     }
 
@@ -412,11 +404,12 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = self.exprs.get(value).get_span();
-        self.synth_typed_function_call(
+        self.synth_typed_call_typed_args(
             self.ast.idents.f.core_discard.with_span(span),
             &[],
             &[value],
             ctx,
+            false,
         )
     }
 }
