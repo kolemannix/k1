@@ -51,11 +51,11 @@ use crate::typer::types::{
 };
 use crate::typer::{
     AssignmentKind, BinaryOp, BinaryOpKind, Call, CallId, Callee, CastType, FunctionId,
-    IntegerCastDirection, IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, LetStmt,
-    Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr, StaticValue,
-    StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue, TypedFunction,
-    TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId,
-    UnaryOpKind, VariableId, WhileLoop,
+    IntegerCastDirection, IntrinsicArithOpKind, IntrinsicBitwiseBinopKind, IntrinsicOperation,
+    Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
+    StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
+    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
+    TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
 };
 
 #[derive(Debug)]
@@ -2328,7 +2328,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
-            TypedExpr::BinaryOp(bin_op) => self.codegen_binop(bin_op),
+            TypedExpr::BinaryOp(bin_op) => self.nocommit_codegen_binop(
+                bin_op.ty,
+                bin_op.kind,
+                bin_op.lhs,
+                bin_op.rhs,
+                bin_op.span,
+            ),
             TypedExpr::UnaryOp(unary_op) => {
                 let value = self.codegen_expr_basic_value(unary_op.expr)?;
                 match unary_op.kind {
@@ -2698,15 +2704,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn codegen_binop(&mut self, bin_op: &BinaryOp) -> CodegenResult<LlvmValue<'ctx>> {
+    fn nocommit_codegen_binop(
+        &mut self,
+        result_type: TypeId,
+        kind: BinaryOpKind,
+        lhs: TypedExprId,
+        rhs: TypedExprId,
+        span: SpanId,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
         // This would be simpler if we first matched on lhs than on result type,
         // because we have to branch on int vs float now for each result type
-        match self.k1.types.get(bin_op.ty) {
+        match self.k1.types.get(result_type) {
             Type::Integer(integer_type) => {
                 let signed = integer_type.is_signed();
-                let lhs_value = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
-                let rhs_value = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-                let op_res = match bin_op.kind {
+                let lhs_value = self.codegen_expr_basic_value(lhs)?.into_int_value();
+                let rhs_value = self.codegen_expr_basic_value(rhs)?.into_int_value();
+                let op_res = match kind {
                     BinaryOpKind::Add => self.builder.build_int_add(lhs_value, rhs_value, "add"),
                     BinaryOpKind::Subtract => {
                         self.builder.build_int_sub(lhs_value, rhs_value, "sub")
@@ -2731,16 +2744,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                     }
                     _ => {
-                        panic!("Unsupported bin op kind returning int: {}", bin_op.kind)
+                        panic!("Unsupported bin op kind returning int: {}", kind)
                     }
                 };
-                let op_int_value = op_res.to_err(bin_op.span)?;
+                let op_int_value = op_res.to_err(span)?;
                 Ok(op_int_value.as_basic_value_enum().into())
             }
             Type::Float(_float_type) => {
-                let lhs_value = self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
-                let rhs_value = self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
-                let op_res = match bin_op.kind {
+                let lhs_value = self.codegen_expr_basic_value(lhs)?.into_float_value();
+                let rhs_value = self.codegen_expr_basic_value(rhs)?.into_float_value();
+                let op_res = match kind {
                     BinaryOpKind::Add => self
                         .builder
                         .build_float_add(lhs_value, rhs_value, "fadd")
@@ -2769,125 +2782,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .unwrap()
                         .as_basic_value_enum(),
                     _ => {
-                        panic!("Unsupported bin op kind returning float: {}", bin_op.kind)
+                        panic!("Unsupported bin op kind returning float: {}", kind)
                     }
                 };
                 Ok(op_res.as_basic_value_enum().into())
             }
-            Type::Bool => match bin_op.kind {
+            Type::Bool => match kind {
                 BinaryOpKind::And | BinaryOpKind::Or => {
-                    let lhs = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
-                    let op = match bin_op.kind {
-                        BinaryOpKind::And => {
-                            let lhs_i1 = self.bool_to_i1(lhs, "lhs_for_cmp");
-                            let short_circuit_branch =
-                                self.build_conditional_branch(lhs_i1, "rhs_check", "short_circuit");
-                            let phi_destination = self.append_basic_block("and_result");
-
-                            // label: rhs_check; lhs was true
-                            self.builder.position_at_end(short_circuit_branch.then_block);
-                            let rhs = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-
-                            // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
-                            let rhs_incoming = self.builder.get_insert_block().unwrap();
-                            self.builder.build_unconditional_branch(phi_destination).unwrap();
-                            // return rhs
-
-                            // label: short_circuit; lhs was false
-                            self.builder.position_at_end(short_circuit_branch.else_block);
-                            self.builder.build_unconditional_branch(phi_destination).unwrap();
-                            // return lhs aka false
-
-                            // label: and_result
-                            self.builder.position_at_end(phi_destination);
-                            let result = self
-                                .builder
-                                .build_phi(self.builtin_types.boolean, "bool_and")
-                                .unwrap();
-                            result.add_incoming(&[
-                                (&rhs, rhs_incoming),
-                                (&self.builtin_types.false_value, short_circuit_branch.else_block),
-                            ]);
-                            result.as_basic_value().into_int_value()
-                        }
-                        BinaryOpKind::Or => {
-                            let rhs_int =
-                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-                            self.builder.build_or(lhs, rhs_int, "bool_or").unwrap()
-                        }
-                        BinaryOpKind::Equals => {
-                            let rhs_int =
-                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-                            self.builder
-                                .build_int_compare(IntPredicate::EQ, lhs, rhs_int, "bool_eq")
-                                .unwrap()
-                        }
-                        _ => panic!("Unhandled binop combo"),
-                    };
-                    Ok(op.as_basic_value_enum().into())
+                    unreachable!("moving to intrinsics")
                 }
                 BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                    match self.k1.get_expr_type(bin_op.lhs) {
-                        Type::Float(_) => {
-                            let lhs_float =
-                                self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
-                            let rhs_float =
-                                self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
-                            let cmp_result = self
-                                .builder
-                                .build_float_compare(
-                                    if bin_op.kind == BinaryOpKind::Equals {
-                                        FloatPredicate::OEQ
-                                    } else {
-                                        FloatPredicate::ONE
-                                    },
-                                    lhs_float,
-                                    rhs_float,
-                                    &format!("f{}_i1", bin_op.kind),
-                                )
-                                .unwrap();
-                            Ok(self
-                                .i1_to_bool(cmp_result, &format!("{}_res", bin_op.kind))
-                                .as_basic_value_enum()
-                                .into())
-                        }
-                        t if t.is_scalar_int_value() => {
-                            let lhs_int =
-                                self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
-                            let rhs_int =
-                                self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-                            let cmp_result = self
-                                .builder
-                                .build_int_compare(
-                                    if bin_op.kind == BinaryOpKind::Equals {
-                                        IntPredicate::EQ
-                                    } else {
-                                        IntPredicate::NE
-                                    },
-                                    lhs_int,
-                                    rhs_int,
-                                    &format!("{}_i1", bin_op.kind),
-                                )
-                                .unwrap();
-                            Ok(self
-                                .i1_to_bool(cmp_result, &format!("{}_res", bin_op.kind))
-                                .as_basic_value_enum()
-                                .into())
-                        }
-                        _ => unreachable!(
-                            "unreachable Equals/NotEquals call on type: {}",
-                            self.k1.expr_to_string_with_type(bin_op.lhs)
-                        ),
-                    }
+                    unreachable!("moving to intrinsics")
                 }
                 BinaryOpKind::Less
                 | BinaryOpKind::LessEqual
                 | BinaryOpKind::Greater
-                | BinaryOpKind::GreaterEqual => match self.k1.get_expr_type(bin_op.lhs) {
+                | BinaryOpKind::GreaterEqual => match self.k1.get_expr_type(lhs) {
                     Type::Integer(_) => {
-                        let lhs_int = self.codegen_expr_basic_value(bin_op.lhs)?.into_int_value();
-                        let rhs_int = self.codegen_expr_basic_value(bin_op.rhs)?.into_int_value();
-                        let pred = match bin_op.kind {
+                        let lhs_int = self.codegen_expr_basic_value(lhs)?.into_int_value();
+                        let rhs_int = self.codegen_expr_basic_value(rhs)?.into_int_value();
+                        let pred = match kind {
                             BinaryOpKind::Less => IntPredicate::SLT,
                             BinaryOpKind::LessEqual => IntPredicate::SLE,
                             BinaryOpKind::Greater => IntPredicate::SGT,
@@ -2896,24 +2810,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         };
                         let i1_compare = self
                             .builder
-                            .build_int_compare(
-                                pred,
-                                lhs_int,
-                                rhs_int,
-                                &format!("{}_i1", bin_op.kind),
-                            )
+                            .build_int_compare(pred, lhs_int, rhs_int, &format!("{}_i1", kind))
                             .unwrap();
                         Ok(self
-                            .i1_to_bool(i1_compare, &format!("{}_res", bin_op.kind))
+                            .i1_to_bool(i1_compare, &format!("{}_res", kind))
                             .as_basic_value_enum()
                             .into())
                     }
                     Type::Float(_) => {
-                        let lhs_float =
-                            self.codegen_expr_basic_value(bin_op.lhs)?.into_float_value();
-                        let rhs_float =
-                            self.codegen_expr_basic_value(bin_op.rhs)?.into_float_value();
-                        let pred = match bin_op.kind {
+                        let lhs_float = self.codegen_expr_basic_value(lhs)?.into_float_value();
+                        let rhs_float = self.codegen_expr_basic_value(rhs)?.into_float_value();
+                        let pred = match kind {
                             BinaryOpKind::Less => FloatPredicate::OLT,
                             BinaryOpKind::LessEqual => FloatPredicate::OLE,
                             BinaryOpKind::Greater => FloatPredicate::OGT,
@@ -2922,12 +2829,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         };
                         let i1_compare = self
                             .builder
-                            .build_float_compare(
-                                pred,
-                                lhs_float,
-                                rhs_float,
-                                &format!("f{}", bin_op.kind),
-                            )
+                            .build_float_compare(pred, lhs_float, rhs_float, &format!("f{}", kind))
                             .unwrap();
                         Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
                     }
@@ -3252,7 +3154,44 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let not_value = self.builder.build_not(input_value, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
             }
+            IntrinsicOperation::ArithBinop(op_kind) => {
+                let lhs = self.codegen_expr_basic_value(call.args[0])?;
+                let rhs = self.codegen_expr_basic_value(call.args[1])?;
+                match op_kind {
+                    IntrinsicArithOpKind::IntegerEquals => {
+                        let lhs_int = lhs.into_int_value();
+                        let rhs_int = rhs.into_int_value();
+                        let cmp_result = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "")
+                            .unwrap();
+                        Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
+                    }
+                    IntrinsicArithOpKind::IntegerAdd => {
+                        let lhs_int = lhs.into_int_value();
+                        let rhs_int = rhs.into_int_value();
+                        let add_result = self.builder.build_int_add(lhs_int, rhs_int, "").unwrap();
+                        Ok(add_result.as_basic_value_enum().into())
+                    }
+                    IntrinsicArithOpKind::FloatEquals => {
+                        let lhs_f = lhs.into_float_value();
+                        let rhs_f = rhs.into_float_value();
+                        let cmp_result = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OEQ, lhs_f, rhs_f, "")
+                            .unwrap();
+                        Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
+                    }
+                    IntrinsicArithOpKind::FloatAdd => {
+                        let lhs_f = lhs.into_float_value();
+                        let rhs_f = rhs.into_float_value();
+                        let add_result = self.builder.build_float_add(lhs_f, rhs_f, "").unwrap();
+                        Ok(add_result.as_basic_value_enum().into())
+                    }
+                }
+            }
             IntrinsicOperation::BitwiseBinop(op_kind) => {
+                // nocommit(2): Not true?
                 let is_operand_signed = true;
                 let sign_extend = is_operand_signed;
                 let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
@@ -3270,6 +3209,61 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 let result = result.to_err(call.span)?;
                 Ok(result.as_basic_value_enum().into())
+            }
+            IntrinsicOperation::LogicalAnd => {
+                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+
+                let lhs_i1 = self.bool_to_i1(lhs, "");
+                let short_circuit_branch =
+                    self.build_conditional_branch(lhs_i1, "rhs_check", "short_circuit");
+                let phi_destination = self.append_basic_block("and_result");
+
+                // label: rhs_check; lhs was true
+                self.builder.position_at_end(short_circuit_branch.then_block);
+                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+
+                // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
+                let rhs_incoming = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(phi_destination).unwrap();
+                // return rhs
+
+                // label: short_circuit; lhs was false
+                self.builder.position_at_end(short_circuit_branch.else_block);
+                self.builder.build_unconditional_branch(phi_destination).unwrap();
+                // return lhs aka false
+
+                // label: and_result
+                self.builder.position_at_end(phi_destination);
+                let result =
+                    self.builder.build_phi(self.builtin_types.boolean, "bool_and").unwrap();
+                result.add_incoming(&[
+                    (&rhs, rhs_incoming),
+                    (&self.builtin_types.false_value, short_circuit_branch.else_block),
+                ]);
+                Ok(result.as_basic_value().into())
+            }
+            IntrinsicOperation::LogicalOr => {
+                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+
+                let lhs_i1 = self.bool_to_i1(lhs, "");
+                let start_block = self.builder.get_insert_block().unwrap();
+                let short_circuit_branch =
+                    self.build_conditional_branch(lhs_i1, "or_result", "rhs_check");
+                let block_result = short_circuit_branch.then_block;
+                let block_rhs_check = short_circuit_branch.else_block;
+
+                self.builder.position_at_end(block_rhs_check);
+                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+                self.builder.build_unconditional_branch(block_result).unwrap();
+
+                self.builder.position_at_end(block_result);
+                let phi = self.builder.build_phi(self.builtin_types.boolean, "").unwrap();
+                phi.add_incoming(&[
+                    (&self.builtin_types.true_value, start_block),
+                    (&rhs.as_basic_value_enum(), block_rhs_check),
+                ]);
+
+                Ok(phi.as_basic_value().into())
             }
             IntrinsicOperation::TypeId => {
                 unreachable!("TypeId is handled in typer phase")

@@ -137,6 +137,8 @@ pub struct BuiltinIdents {
     pub mem: Ident,
     pub View: Ident,
     pub Equals: Ident,
+    pub Add: Ident,
+    pub add: Ident,
 
     pub param_0: Ident,
     pub param_1: Ident,
@@ -166,6 +168,8 @@ pub struct BuiltinFunctions {
     pub Try_getOk: QIdent,
     pub Try_getError: QIdent,
     pub bool_negated: QIdent,
+    pub bool_and: QIdent,
+    pub bool_or: QIdent,
     pub core_crash: QIdent,
     pub core_crashBounds: QIdent,
     pub core_discard: QIdent,
@@ -177,6 +181,7 @@ pub struct BuiltinFunctions {
     pub mem_zeroed: QIdent,
     pub View_wrapBuffer: QIdent,
     pub Equals_equals: QIdent,
+    pub Add_add: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -283,6 +288,8 @@ impl IdentPool {
             mem: intern!("mem"),
             View: intern!("View"),
             Equals: intern!("Equals"),
+            Add: intern!("Add"),
+            add: intern!("add"),
             Iterator: intern!("Iterator"),
             Iterable: intern!("Iterable"),
             next: intern!("next"),
@@ -319,6 +326,8 @@ impl IdentPool {
         let Opt_get = make_fn!(&[b.Opt], b.get);
 
         let bool_negated = make_fn!(&[intern!("bool")], intern!("negated"));
+        let bool_and = make_fn!(&[intern!("bool")], intern!("_and"));
+        let bool_or = make_fn!(&[intern!("bool")], intern!("_or"));
 
         let core_crash = make_fn!(&[b.core], intern!("crash"));
         let core_crashBounds = make_fn!(&[b.core], intern!("crashBounds"));
@@ -343,6 +352,8 @@ impl IdentPool {
 
         let Equals_equals: QIdent = make_fn!(&[b.Equals], b.equals);
 
+        let Add_add: QIdent = make_fn!(&[b.Add], b.add);
+
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
@@ -357,6 +368,8 @@ impl IdentPool {
             Try_getOk,
             Try_getError,
             bool_negated,
+            bool_and,
+            bool_or,
             core_crash,
             core_crashBounds,
             core_discard,
@@ -368,6 +381,7 @@ impl IdentPool {
             mem_zeroed,
             View_wrapBuffer,
             Equals_equals,
+            Add_add,
         };
 
         Self { intern_pool: pool, slices, b, f }

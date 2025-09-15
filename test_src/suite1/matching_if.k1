@@ -54,11 +54,12 @@ fn test(): unit {
   };
   assert(result);
 
-  let failure1 = testCompile({
-    if x is .Some(v) or foo == 3 {
-
+  // Illegal due to the 'or' breaking the 'matching condition' property
+  let failure1 = testCompile(
+    if x is .Some(illegal_binding) or true {
+      illegal_binding
     }
-  });
+  );
   assert(failure1 is .Some(_));
 
   let myPoint = { x: 1, y: 2 };

@@ -24,11 +24,11 @@ use crate::{
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
-        self, BinaryOpKind, CastType, FunctionId, IntrinsicOperation, Layout, MatchingCondition,
-        MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
-        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult,
-        VariableExpr, VariableId,
+        self, BinaryOpKind, CastType, FunctionId, IntrinsicArithOpKind, IntrinsicBitwiseBinopKind,
+        IntrinsicOperation, Layout, MatchingCondition, MatchingConditionInstr, NameAndTypeId,
+        StaticContainer, StaticEnum, StaticStruct, StaticValue, StaticValueId, TypedExpr,
+        TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram,
+        TypedStmt, TypedStmtId, TyperResult, VariableExpr, VariableId,
         static_value::StaticContainerKind,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
@@ -358,6 +358,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_int(&self) -> TypedIntValue {
         match self {
             Value::Int(i) => *i,
@@ -372,6 +373,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_bool(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
@@ -386,6 +388,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_ptr(&self) -> usize {
         match self {
             Value::Pointer(p) => *p,
@@ -393,6 +396,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_ref(&self) -> *const u8 {
         match self {
             Value::Reference { ptr, .. } => *ptr,
@@ -400,6 +404,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_agg(&self) -> *const u8 {
         match self {
             Value::Agg { ptr, .. } => *ptr,
@@ -407,6 +412,7 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_float(&self) -> TypedFloatValue {
         match self {
             Value::Float(fv) => *fv,
@@ -628,8 +634,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let not_equals = bin_op.kind == K::NotEquals;
                     let bool_value_pre = match (lhs, rhs) {
                         (Value::Unit, Value::Unit) => Ok(true),
-                        (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
                         (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
+                        (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
                         (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
                         (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
                         (lhs, rhs) => {
@@ -1609,18 +1615,92 @@ fn execute_intrinsic(
             let int = execute_expr_return_exit!(vm, k1, args[0])?.expect_int();
             Ok(Value::Int(int.bit_not()).into())
         }
+        IntrinsicOperation::ArithBinop(kind) => match kind {
+            IntrinsicArithOpKind::IntegerEquals => {
+                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                let bool_value = match (lhs, rhs) {
+                    (Value::Unit, Value::Unit) => Ok(true),
+                    (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
+                    (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
+                    (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
+                    (lhs, rhs) => {
+                        failf!(
+                            vm.eval_span,
+                            "Unexpected kinds for native equals: {} and {}",
+                            lhs.kind_name(),
+                            rhs.kind_name()
+                        )
+                    }
+                }?;
+                Ok(Value::Bool(bool_value).into())
+            }
+            IntrinsicArithOpKind::FloatEquals => {
+                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                let bool_value = match (lhs, rhs) {
+                    (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
+                    (lhs, rhs) => {
+                        failf!(
+                            vm.eval_span,
+                            "Unexpected kinds for float equals: {} and {}",
+                            lhs.kind_name(),
+                            rhs.kind_name()
+                        )
+                    }
+                }?;
+                Ok(Value::Bool(bool_value).into())
+            }
+            IntrinsicArithOpKind::IntegerAdd
+            | IntrinsicArithOpKind::IntegerSub
+            | IntrinsicArithOpKind::IntegerMul
+            | IntrinsicArithOpKind::IntegerDiv => {
+                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                Ok(binop::execute_arith_op(lhs, rhs, bin_op.kind).into())
+            }
+            IntrinsicArithOpKind::FloatAdd
+            | IntrinsicArithOpKind::FloatSub
+            | IntrinsicArithOpKind::FloatMul
+            | IntrinsicArithOpKind::FloatDiv => {
+                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                Ok(binop::execute_arith_op(lhs, rhs, bin_op.kind).into())
+            }
+        },
         IntrinsicOperation::BitwiseBinop(kind) => {
             let inta = execute_expr_return_exit!(vm, k1, args[0])?.expect_int();
             let intb = execute_expr_return_exit!(vm, k1, args[1])?.expect_int();
             use std::ops::{Shl, Shr};
             let int_value = match kind {
-                typer::IntrinsicBitwiseBinopKind::And => inta.bit_and(&intb),
-                typer::IntrinsicBitwiseBinopKind::Or => inta.bit_or(&intb),
-                typer::IntrinsicBitwiseBinopKind::Xor => inta.bit_xor(&intb),
-                typer::IntrinsicBitwiseBinopKind::ShiftLeft => int_binop!(inta, &intb, shl),
-                typer::IntrinsicBitwiseBinopKind::ShiftRight => int_binop!(inta, &intb, shr),
+                IntrinsicBitwiseBinopKind::And => inta.bit_and(&intb),
+                IntrinsicBitwiseBinopKind::Or => inta.bit_or(&intb),
+                IntrinsicBitwiseBinopKind::Xor => inta.bit_xor(&intb),
+                IntrinsicBitwiseBinopKind::ShiftLeft => int_binop!(inta, &intb, shl),
+                IntrinsicBitwiseBinopKind::ShiftRight => int_binop!(inta, &intb, shr),
             };
             Ok(Value::Int(int_value).into())
+        }
+        IntrinsicOperation::LogicalAnd => {
+            // The language semantics guarantee short-circuiting of And
+            let lhs = execute_expr_return_exit!(vm, k1, args[0])?.expect_bool();
+
+            if lhs {
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?.expect_bool();
+                Ok(Value::Bool(rhs).into())
+            } else {
+                Ok(Value::Bool(false).into())
+            }
+        }
+        IntrinsicOperation::LogicalOr => {
+            // The language semantics guarantee short-circuiting of Or
+            let lhs = execute_expr_return_exit!(vm, k1, args[0])?.expect_bool();
+            if lhs {
+                Ok(Value::Bool(true).into())
+            } else {
+                let rhs = execute_expr_return_exit!(vm, k1, args[1])?.expect_bool();
+                Ok(Value::Bool(rhs).into())
+            }
         }
         IntrinsicOperation::PointerIndex => {
             // intern fn refAtIndex[T](self: Pointer, index: uword): T*

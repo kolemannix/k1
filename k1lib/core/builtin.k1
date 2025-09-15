@@ -183,6 +183,20 @@ ability Bitwise {
   fn shiftRight(self: Self, other: Self): Self
 }
 
+ability Add[Rhs, impl Output] {
+  fn add(self: Self, rhs: Rhs): Output
+}
+
+//  fn sub(self: Self, other: Self): Self
+//  fn mul(self: Self, other: Self): Self
+//  fn div(self: Self, other: Self): Self
+//  fn rem(self: Self, other: Self): Self
+//
+//  fn lt(self: Self, other: Self): bool
+//  fn le(self: Self, other: Self): bool
+//  fn gt(self: Self, other: Self): bool
+//  fn ge(self: Self, other: Self): bool
+
 ability Comparable {
   fn compare(self: Self, other: Self): Ordering
 }
@@ -214,6 +228,17 @@ ability Iterator[impl Item] {
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
   fn iterator(self: Self): I
 }
+
+impl Add[Rhs = u8, Output =  u8] for  u8 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = u16, Output = u16] for u16 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = u32, Output = u32] for u32 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = u64, Output = u64] for u64 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = uword, Output = uword] for uword { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = i8, Output =  i8] for  i8 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = i16, Output = i16] for i16 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = i32, Output = i32] for i32 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = i64, Output = i64] for i64 { intern fn add(self: Self, rhs: Rhs): Output }
+impl Add[Rhs = iword, Output = iword] for iword { intern fn add(self: Self, rhs: Rhs): Output }
 
 /////////////////////////////////
 // Code that we want to have available very early
@@ -331,6 +356,8 @@ ns k1 {
   let OS_MACOS: bool = OS == "macos";
   let OS_POSIX: bool = OS == "macos" or OS == "linux";
 
+  let MULTITHREADING: bool = builtin;
+
   intern fn emitCompilerMessage(
     locn: compiler/SourceLocation,
     level: (either(u8) Info, Warn, Error),
@@ -391,27 +418,30 @@ impl Equals for Pointer {
 
 ns bool {
   intern fn negated(self: bool): bool
+  // Does not behave semantically like a regular function
+  // with respect to its arguments.
+  // Only conditionally evaluates b2
+  intern fn _and(self: bool, b2: bool): bool
+  intern fn _or(self: bool, b2: bool): bool
 }
 
-impl Equals for bool {
-  fn equals(self: bool, other: bool): bool {
-    // Since the type is known to be 'bool' here, this won't recursively call this function, but instead
-    // dispatch to builtin integer equality
-    self == other
-  }
-}
+impl Equals for unit { fn equals(self: unit, other: unit): bool { true } }
 
-impl Equals for u8 { fn equals(self: u8, other: u8): bool { self == other } }
-impl Equals for u16 { fn equals(self: u16, other: u16): bool { self == other } }
-impl Equals for u32 { fn equals(self: u32, other: u32): bool { self == other } }
-impl Equals for u64 { fn equals(self: u64, other: u64): bool { self == other } }
-impl Equals for uword { fn equals(self: Self, other: Self): bool { self == other } }
+impl Equals for bool { intern fn equals(self: bool, other: bool): bool }
 
-impl Equals for i8 { fn equals(self: i8, other: i8): bool { self == other } }
-impl Equals for i16 { fn equals(self: i16, other: i16): bool { self == other } }
-impl Equals for i32 { fn equals(self: i32, other: i32): bool { self == other } }
-impl Equals for i64 { fn equals(self: i64, other: i64): bool { self == other } }
-impl Equals for iword { fn equals(self: Self, other: Self): bool { self == other } }
+impl Equals for u8 { intern fn equals(self: u8, other: u8): bool }
+impl Equals for u16 { intern fn equals(self: u16, other: u16): bool }
+impl Equals for u32 { intern fn equals(self: u32, other: u32): bool }
+impl Equals for u64 { intern fn equals(self: u64, other: u64): bool }
+impl Equals for uword { intern fn equals(self: Self, other: Self): bool }
+
+impl Equals for i8 { intern fn equals(self: i8, other: i8): bool }
+impl Equals for i16 { intern fn equals(self: i16, other: i16): bool }
+impl Equals for i32 { intern fn equals(self: i32, other: i32): bool }
+impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
+impl Equals for iword { intern fn equals(self: Self, other: Self): bool }
+
+impl Equals for char { intern fn equals(self: char, other: char): bool }
 
 fn discard[T](t: T): unit { () }
 

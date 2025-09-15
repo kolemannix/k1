@@ -416,13 +416,9 @@ ns f64 {
   }
 }
 
-impl Equals for f32 {
-  fn equals(self: f32, other: f32): bool { self == other }
-}
+impl Equals for f32 { intern fn equals(self: f32, other: f32): bool }
 
-impl Equals for f64 {
-  fn equals(self: f64, other: f64): bool { self == other }
-}
+impl Equals for f64 { intern fn equals(self: f64, other: f64): bool }
 
 impl Print for f32 {
   fn printTo[W: Writer](self: f32, w: W): unit {

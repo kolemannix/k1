@@ -200,7 +200,7 @@ impl TypedProgram {
                             } else {
                                 return failf!(
                                     e.span,
-                                    "Failed to determine type of argument for inference\n    {} (used expected type: {})",
+                                    "{}\n  Occurred while trying to determine type of argument for inference using expected type: {}",
                                     e.message,
                                     self_.type_id_to_string(expected_type_so_far)
                                 );

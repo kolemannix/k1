@@ -29,7 +29,7 @@ use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
 use crate::kmem::{MHandle, MSlice, MVec, Mem};
-use crate::{DepEq, DepHash, kmem};
+use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
 use colored::Colorize;
@@ -102,11 +102,12 @@ pub const WRITER_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
 pub const WRITE_TEXT_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
 pub const SHOW_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
 pub const BITWISE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
-pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
-pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
-pub const TRY_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
-pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
-pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ADD_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
+pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
+pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
+pub const TRY_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
+pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
@@ -1928,6 +1929,37 @@ pub enum IntrinsicBitwiseBinopKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicArithOpClass {
+    Float,
+    Int,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicArithOpOp {
+    Equals,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IntrinsicArithOpKind {
+    class: IntrinsicArithOpClass,
+    op: IntrinsicArithOpOp,
+}
+
+impl IntrinsicArithOpKind {
+    pub fn int(op: IntrinsicArithOpOp) -> Self {
+        IntrinsicArithOpKind { class: IntrinsicArithOpClass::Int, op }
+    }
+    pub fn float(op: IntrinsicArithOpOp) -> Self {
+        IntrinsicArithOpKind { class: IntrinsicArithOpClass::Float, op }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicOperation {
     SizeOf,
     SizeOfStride,
@@ -1941,7 +1973,10 @@ pub enum IntrinsicOperation {
 
     BoolNegate,
     BitNot,
+    ArithBinop(IntrinsicArithOpKind),
     BitwiseBinop(IntrinsicBitwiseBinopKind),
+    LogicalAnd,
+    LogicalOr,
     PointerIndex,
 
     // Actual functions
@@ -1975,7 +2010,10 @@ impl IntrinsicOperation {
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
             IntrinsicOperation::BitNot => false,
+            IntrinsicOperation::ArithBinop(_) => false,
             IntrinsicOperation::BitwiseBinop(_) => false,
+            IntrinsicOperation::LogicalAnd => false,
+            IntrinsicOperation::LogicalOr => false,
             IntrinsicOperation::PointerIndex => false,
             IntrinsicOperation::CompilerMessage => false,
             IntrinsicOperation::Allocate => false,
@@ -2004,7 +2042,10 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::BoolNegate => true,
             IntrinsicOperation::BitNot => true,
+            IntrinsicOperation::ArithBinop(_) => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
+            IntrinsicOperation::LogicalAnd => true,
+            IntrinsicOperation::LogicalOr => true,
             IntrinsicOperation::PointerIndex => true,
             IntrinsicOperation::CompilerSourceLocation => true,
             IntrinsicOperation::CompilerMessage => true,
@@ -3564,7 +3605,7 @@ impl TypedProgram {
         instance_info: Option<GenericInstanceInfo>,
     ) -> TypeId {
         match defn_type_id {
-            None => self.types.add_type(type_value, defn_info, instance_info),
+            None => self.types.add(type_value, defn_info, instance_info),
             Some(t) => {
                 self.types.resolve_unresolved(t, type_value, instance_info);
                 t
@@ -4535,9 +4576,9 @@ impl TypedProgram {
     }
 
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
-        let lookup_result = self.types.get_no_follow_static(type_id);
-        if let Type::TypeParameter(tvar) = lookup_result {
-            match self.scopes.find_type(scope_id, tvar.name) {
+        let lookup_result = self.types.get_no_follow(type_id);
+        match lookup_result {
+            Type::TypeParameter(tvar) => match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
                     debug!(
                         "*********************\nUnresolved type parameter. {} in {}",
@@ -4553,9 +4594,9 @@ impl TypedProgram {
                         self.get_type_id_resolved(resolved, scope_id)
                     }
                 }
-            }
-        } else {
-            type_id
+            },
+            Type::RecursiveReference(rr) => rr.root_type_id,
+            _ => type_id,
         }
     }
 
@@ -6394,11 +6435,12 @@ impl TypedProgram {
                         base_expr,
                         block_scope,
                     );
-                    let has_value = self.synth_typed_function_call(
+                    let has_value = self.synth_typed_call_typed_args(
                         self.ast.idents.f.Opt_isSome.with_span(span),
                         &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
+                        false,
                     )?;
 
                     let Type::Struct(struct_type) = self.types.get(opt_inner_type) else {
@@ -6419,11 +6461,12 @@ impl TypedProgram {
                         })?;
                     let field_type = target_field.type_id;
                     let field_name = target_field.name;
-                    let opt_unwrap = self.synth_typed_function_call(
+                    let opt_unwrap = self.synth_typed_call_typed_args(
                         self.ast.idents.f.Opt_get.with_span(span),
                         &[opt_inner_type],
                         &[base_expr_var.variable_expr],
                         ctx.with_scope(block_scope).with_no_expected_type(),
+                        false,
                     )?;
                     let (consequent, consequent_type_id) =
                         self.synth_optional_some(TypedExpr::StructFieldAccess(FieldAccess {
@@ -6521,28 +6564,31 @@ impl TypedProgram {
             result_block.scope_id,
         );
         let result_block_ctx = ctx.with_scope(result_block.scope_id).with_no_expected_type();
-        let is_ok_call = self.synth_typed_function_call(
+        let is_ok_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Try_isOk.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
+            false,
         )?;
-        let get_ok_call = self.synth_typed_function_call(
+        let get_ok_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Try_getOk.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
+            false,
         )?;
         // FIXME: Consider alternatives for locating the block's makeError function
         //        in a less brittle way
         let block_make_error_fn =
             self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(0);
 
-        let get_error_call = self.synth_typed_function_call(
+        let get_error_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Try_getError.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
+            false,
         )?;
         let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
@@ -6584,11 +6630,12 @@ impl TypedProgram {
             ctx.scope_id,
             span,
         )?;
-        self.synth_typed_function_call(
+        self.synth_typed_call_typed_args(
             self.ast.idents.f.Unwrap_unwrap.with_span(span),
             &[],
             &[operand_expr],
             ctx,
+            false,
         )
     }
 
@@ -6687,7 +6734,7 @@ impl TypedProgram {
         if log::log_enabled!(log::Level::Debug) {
             let expr_span = self_.ast.exprs.get_span(expr_id);
             debug!(
-                "DEBUG EXPR `{}` (hint {}) -> RESULT `{}`",
+                "COMPILED `{}` (hint {})\n`{}`",
                 self_.ast.get_span_content(expr_span),
                 self_.type_id_option_to_string(ctx.expected_type_id),
                 self_.expr_to_string_with_type(result_expr)
@@ -6877,7 +6924,7 @@ impl TypedProgram {
                 match self.ident_str(defn_name) {
                     "TEST" => {
                         let is_test_build = self.ast.config.is_test_build;
-                        Ok(self.exprs.add(TypedExpr::Bool(is_test_build, *span)))
+                        Ok(self.synth_bool(is_test_build, *span))
                     }
                     "OS" => {
                         // TODO: Ideally this is an enum! But we don't support comptime enums yet
@@ -6887,16 +6934,16 @@ impl TypedProgram {
                     }
                     "NO_STD" => {
                         let no_std = self.ast.config.no_std;
-                        Ok(self.exprs.add(TypedExpr::Bool(no_std, *span)))
+                        Ok(self.synth_bool(no_std, *span))
                     }
                     "DEBUG" => {
                         let debug = self.ast.config.debug;
-                        Ok(self.exprs.add(TypedExpr::Bool(debug, *span)))
+                        Ok(self.synth_bool(debug, *span))
                     }
                     "IS_STATIC" => Ok(self.exprs.add(TypedExpr::Bool(false, *span))),
                     "MULTITHREADING" => {
                         let bool_value = self.program_settings.multithreaded;
-                        Ok(self.exprs.add(TypedExpr::Bool(bool_value, *span)))
+                        Ok(self.synth_bool(bool_value, *span))
                     }
                     s => failf!(*span, "Unknown builtin name: {s}"),
                 }
@@ -7015,10 +7062,8 @@ impl TypedProgram {
             let mut elements = Vec::with_capacity(element_count);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
-                let element_expr = self.eval_expr(
-                    *elem,
-                    ctx.with_expected_type(element_type.or(expected_element_type)),
-                )?;
+                let element_expr =
+                    self.eval_expr(*elem, ctx.with_expected_type(current_expected_type))?;
                 let element_expr_checked = match current_expected_type {
                     None => element_expr,
                     Some(current_expected_type) => self
@@ -7029,7 +7074,9 @@ impl TypedProgram {
                 };
                 let this_element_type = self.exprs.get(element_expr_checked).get_type();
                 if element_type.is_none() {
-                    element_type = Some(this_element_type)
+                    // Erase static type info
+                    let chased_type = self.types.get_chased_id(this_element_type);
+                    element_type = Some(chased_type)
                 };
                 elements.push(element_expr_checked);
             }
@@ -7052,24 +7099,27 @@ impl TypedProgram {
         let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
         let count_expr = self.synth_uword(element_count, span);
         let make_dest_coll = match list_kind {
-            ContainerKind::List => self.synth_typed_function_call(
+            ContainerKind::List => self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
+                false,
             )?,
-            ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
+            ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
                 self.ast.idents.f.Buffer__allocate.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
+                false,
             )?,
             // Unlike the others, the array literal should go on the stack!
-            ContainerKind::Array(array_type_id) => self.synth_typed_function_call(
+            ContainerKind::Array(array_type_id) => self.synth_typed_call_typed_args(
                 self.ast.idents.f.mem_zeroed.with_span(span),
                 &[array_type_id],
                 &[],
                 list_lit_ctx,
+                false,
             )?,
         };
         let is_referencing_let = match list_kind {
@@ -7085,30 +7135,35 @@ impl TypedProgram {
             is_referencing_let,
             list_lit_scope,
         );
+        // nocommit: Clean up these allocations; size is known and the block stmts are allocated
+        //           already
         let mut set_elements_statements = Vec::with_capacity(element_count);
         for (index, element_value_expr) in elements.into_iter().enumerate() {
             let index_expr = self.synth_uword(index, span);
             let push_call = match list_kind {
-                ContainerKind::List => self.synth_typed_function_call(
+                ContainerKind::List => self.synth_typed_call_typed_args(
                     self.ast.idents.f.List_push.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, element_value_expr],
                     list_lit_ctx,
+                    false,
                 )?,
-                ContainerKind::Buffer | ContainerKind::View => self.synth_typed_function_call(
+                ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
                     self.ast.idents.f.Buffer_set.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
                     list_lit_ctx,
+                    false,
                 )?,
                 ContainerKind::Array(array_type_id) => {
                     // fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit
                     let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
-                    self.synth_typed_function_call(
+                    self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
                         &[size_type, element_type],
                         &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
                         list_lit_ctx,
+                        false,
                     )?
                 }
             };
@@ -7121,11 +7176,12 @@ impl TypedProgram {
         let final_expression = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
-            ContainerKind::View => self.synth_typed_function_call(
+            ContainerKind::View => self.synth_typed_call_typed_args(
                 self.ast.idents.f.View_wrapBuffer.with_span(span),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
+                false,
             )?,
             ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
@@ -7684,11 +7740,12 @@ impl TypedProgram {
             if self.ast.config.no_std {
                 return failf!(span, "Interpolated strings are not supported in no_std mode");
             }
-            let new_string_builder = self.synth_typed_function_call(
+            let new_string_builder = self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(span),
                 &[CHAR_TYPE_ID],
                 &[part_count_expr],
                 block_ctx,
+                false,
             )?;
             let string_builder_var = self.synth_variable_defn(
                 get_ident!(self, "sb"),
@@ -7721,11 +7778,12 @@ impl TypedProgram {
                 self.add_expr_id_to_block(&mut block, print_expr);
             }
             let sb_deref = self.synth_dereference(string_builder_var.variable_expr);
-            let build_call = self.synth_typed_function_call(
+            let build_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.core_string_wrapList.with_span(span),
                 &[],
                 &[sb_deref],
                 block_ctx,
+                false,
             )?;
             self.add_expr_id_to_block(&mut block, build_call);
             Ok(self.exprs.add(TypedExpr::Block(block)))
@@ -8144,7 +8202,8 @@ impl TypedProgram {
         let target_expr_span = self.exprs.get(target_expr).get_span();
         for parsed_case in cases.iter() {
             let arm_expr_span = self.ast.exprs.get_span(parsed_case.expression);
-            let mut arm_patterns = Vec::with_capacity(parsed_case.patterns.len());
+            let mut arm_patterns: SV2<MHandle<TypedPattern>> =
+                SmallVec::with_capacity(parsed_case.patterns.len());
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
             for parsed_pattern_id in parsed_case.patterns.iter() {
@@ -8514,6 +8573,7 @@ impl TypedProgram {
                         Ok(())
                     }
                     TypedPattern::LiteralInteger(int_value, span) => {
+                        // nocommit pattern match integer equals
                         let equals_pattern_int = BinaryOp {
                             kind: BinaryOpKind::Equals,
                             ty: BOOL_TYPE_ID,
@@ -8780,11 +8840,12 @@ impl TypedProgram {
         let iterator_initializer = if target_is_iterator {
             iterable_expr
         } else {
-            self.synth_typed_function_call(
+            self.synth_typed_call_typed_args(
                 self.ast.idents.f.Iterable_iterator.with_span(body_span),
                 &[],
                 &[iterable_expr],
                 ctx.with_scope(outer_for_expr_scope).with_no_expected_type(),
+                false,
             )?
         };
         let iterator_variable = self.synth_variable_defn(
@@ -8805,22 +8866,24 @@ impl TypedProgram {
         let mut consequent_block = self.synth_block(loop_scope_id, iterable_span);
 
         let loop_scope_ctx = ctx.with_scope(loop_scope_id).with_no_expected_type();
-        let iterator_next_call = self.synth_typed_function_call(
+        let iterator_next_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Iterator_next.with_span(body_span),
             &[],
             &[iterator_variable.variable_expr],
             loop_scope_ctx,
+            false,
         )?;
         let next_variable = self.synth_variable_defn_simple(
             get_ident!(self, "next"),
             iterator_next_call,
             loop_scope_id,
         );
-        let next_unwrap_call = self.synth_typed_function_call(
+        let next_unwrap_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Unwrap_unwrap.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
             ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
+            false,
         )?;
         let binding_variable = self.synth_variable_defn_visible(
             binding_ident,
@@ -8841,11 +8904,12 @@ impl TypedProgram {
         };
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
         let yielded_coll_variable = if !is_do_block {
-            let size_hint_call = self.synth_typed_function_call(
+            let size_hint_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.Iterator_sizeHint.with_span(body_span),
                 &[],
                 &[iterator_variable.variable_expr],
                 outer_for_expr_ctx,
+                false,
             )?;
             let size_hint_ret_type = self.exprs.get(size_hint_call).get_type();
             let size_hint_lower_bound = self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
@@ -8857,11 +8921,12 @@ impl TypedProgram {
                 is_referencing: false,
                 span: iterable_span,
             }));
-            let synth_function_call = self.synth_typed_function_call(
+            let synth_function_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(body_span),
                 &[body_block_result_type],
                 &[size_hint_lower_bound],
                 outer_for_expr_ctx,
+                false,
             )?;
             Some(self.synth_variable_defn(
                 self.ast.idents.b.yieldDest,
@@ -8888,20 +8953,22 @@ impl TypedProgram {
         consequent_block.statements.push(user_block_variable.defn_stmt);
         // Push element to yielded list
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
-            let list_push_call = self.synth_typed_function_call(
+            let list_push_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_push.with_span(body_span),
                 &[body_block_result_type],
                 &[yielded_coll_variable.variable_expr, user_block_variable.variable_expr],
                 outer_for_expr_ctx,
+                false,
             )?;
             self.add_expr_id_to_block(&mut consequent_block, list_push_call);
         }
 
-        let next_is_some_call = self.synth_typed_function_call(
+        let next_is_some_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Opt_isSome.with_span(body_span),
             &[item_type],
             &[next_variable.variable_expr],
             loop_scope_ctx,
+            false,
         )?;
         let unit_break = self.exprs.add(TypedExpr::Unit(body_span));
         let break_expr = self.add_expr_stmt(TypedExpr::Break(TypedBreak {
@@ -9130,6 +9197,7 @@ impl TypedProgram {
         condition: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<MatchingCondition> {
+        debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
         let mut instrs: EcoVec<MatchingConditionInstr> = EcoVec::new();
@@ -9214,7 +9282,7 @@ impl TypedProgram {
         instrs: &mut EcoVec<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
-        debug!("hmirec {allow_bindings}: {}", self.ast.expr_id_to_string(parsed_expr_id));
+        debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
         match self.ast.exprs.get(parsed_expr_id) {
             ParsedExpr::Is(is_expr) => {
                 let target_expr = is_expr.target_expression;
@@ -9279,57 +9347,91 @@ impl TypedProgram {
         }
     }
 
+    fn eval_standalone_matching_condition(
+        &mut self,
+        expr_id: ParsedExprId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let condition_scope =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
+        let matching_condition = self.eval_matching_condition(expr_id, condition_ctx)?;
+        let span = self.ast.exprs.get(expr_id).get_span();
+        let true_arm = TypedMatchArm {
+            condition: matching_condition,
+            consequent_expr: self.synth_bool(true, span),
+        };
+        let false_arm = TypedMatchArm {
+            condition: MatchingCondition {
+                patterns: MSlice::empty(),
+                instrs: eco_vec![MatchingConditionInstr::Cond {
+                    value: self.synth_bool(true, span)
+                }],
+                binding_eligible: true,
+                diverges: false,
+            },
+            consequent_expr: self.synth_bool(false, span),
+        };
+        let match_expr = TypedExpr::Match(TypedMatchExpr {
+            initial_let_statements: eco_vec![],
+            result_type: BOOL_TYPE_ID,
+            arms: eco_vec![true_arm, false_arm],
+            span,
+        });
+        Ok(self.exprs.add(match_expr))
+    }
+
     fn eval_binary_op(
         &mut self,
         binary_op_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        fn is_scalar_for_equals(type_id: TypeId) -> bool {
-            match type_id {
-                UNIT_TYPE_ID | CHAR_TYPE_ID | U8_TYPE_ID | U16_TYPE_ID | U32_TYPE_ID
-                | U64_TYPE_ID | I8_TYPE_ID | I16_TYPE_ID | I32_TYPE_ID | I64_TYPE_ID
-                | UWORD_TYPE_ID | IWORD_TYPE_ID | BOOL_TYPE_ID => true,
-                F32_TYPE_ID | F64_TYPE_ID => true,
-                _other => false,
-            }
-        }
         let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
 
-        // if ctx.is_static {
-        //     if binary_op.op_kind == BinaryOpKind::Equals {
-        //         let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
-        //         let lhs_type = self.exprs.get(lhs).get_type();
-        //         let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type)))?;
-        //         let rhs_type = self.exprs.get(rhs).get_type();
-        //         if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
-        //             return failf!(binary_op.span, "comptime equals type mismatch: {msg}");
-        //         }
-        //         return Ok(self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
-        //             kind: BinaryOpKind::Equals,
-        //             ty: BOOL_TYPE_ID,
-        //             lhs,
-        //             rhs,
-        //             span: binary_op.span,
-        //         })));
-        //     }
-        // }
-
-        // Special cases: Equality, OptionalElse, and Pipe
+        // Special cases: Matching 'and' chain, Equality, OptionalElse, and Pipe
         match binary_op.op_kind {
+            BinaryOpKind::And => {
+                let lhs_is = match self.ast.exprs.get(binary_op.lhs) {
+                    ParsedExpr::Is(_) => true,
+                    _ => false,
+                };
+                if lhs_is {
+                    return self.eval_standalone_matching_condition(binary_op_id, ctx);
+                } else {
+                    return self.synth_typed_call_parsed_args(
+                        self.ast.idents.f.bool_and,
+                        &[],
+                        &[binary_op.lhs, binary_op.rhs],
+                        ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                    );
+                }
+            }
+            BinaryOpKind::Or => {
+                return self.synth_typed_call_parsed_args(
+                    self.ast.idents.f.bool_or,
+                    &[],
+                    &[binary_op.lhs, binary_op.rhs],
+                    ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                );
+            }
             BinaryOpKind::Pipe => {
                 return self.eval_pipe_expr(binary_op.lhs, binary_op.rhs, ctx, binary_op.span);
             }
             BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                let lhs = self.eval_expr(binary_op.lhs, ctx.with_no_expected_type())?;
-                let lhs_type = self.exprs.get(lhs).get_type();
-                if !is_scalar_for_equals(lhs_type) {
-                    return self.eval_equality_expr(binary_op_id, lhs, ctx.with_no_expected_type());
-                }
+                return self.eval_equality_expr(binary_op_id, ctx);
             }
             BinaryOpKind::OptionalElse => {
                 return self.eval_optional_else(binary_op.lhs, binary_op.rhs, ctx, binary_op.span);
+            }
+            BinaryOpKind::Add => {
+                return self.synth_typed_call_parsed_args(
+                    self.ast.idents.f.Add_add,
+                    &[],
+                    &[binary_op.lhs, binary_op.rhs],
+                    ctx.with_no_expected_type(),
+                );
             }
             _ => {}
         };
@@ -9472,17 +9574,19 @@ impl TypedProgram {
             coalesce_block.scope_id,
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
-        let lhs_has_value = self.synth_typed_function_call(
+        let lhs_has_value = self.synth_typed_call_typed_args(
             self.ast.idents.f.Unwrap_hasValue.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
+            false,
         )?;
-        let lhs_get_expr = self.synth_typed_function_call(
+        let lhs_get_expr = self.synth_typed_call_typed_args(
             self.ast.idents.f.Unwrap_unwrap.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
+            false,
         )?;
 
         let if_else = self.synth_if_else(
@@ -9501,30 +9605,29 @@ impl TypedProgram {
     fn eval_equality_expr(
         &mut self,
         binary_op_id: ParsedExprId,
-        lhs: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
 
-        let lhs_type_id = self.exprs.get(lhs).get_type();
-        let lhs_type = self.types.get(lhs_type_id);
-        if lhs_type.is_scalar_int_value() {
-            self.ice_with_span(
-                "Scalar ints shouldnt be passed to eval_equality_expr",
-                binary_op.span,
-            )
-        }
-        let rhs = self.eval_expr(binary_op.rhs, ctx.with_expected_type(Some(lhs_type_id)))?;
-        let equality_result = self.synth_equals_call(lhs, rhs, ctx, binary_op.span)?;
+        let parsed_equals_call = self.synth_parsed_function_call(
+            self.ast.idents.f.Equals_equals,
+            &[],
+            &[binary_op.lhs, binary_op.rhs],
+            false,
+        );
+        let call = self.ast.exprs.get(parsed_equals_call).expect_call().clone();
+        let equality_result =
+            self.eval_function_call(&call, None, ctx.with_expected_type(Some(BOOL_TYPE_ID)), None)?;
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
-            BinaryOpKind::NotEquals => self.synth_typed_function_call(
+            BinaryOpKind::NotEquals => self.synth_typed_call_typed_args(
                 self.ast.idents.f.bool_negated.with_span(binary_op.span),
                 &[],
                 &[equality_result],
-                ctx,
+                ctx.with_no_expected_type(),
+                false,
             )?,
             _ => unreachable!(),
         };
@@ -10003,11 +10106,12 @@ impl TypedProgram {
                         is_referencing,
                         span,
                     }));
-                let array_length_expr = self.synth_typed_method_call(
+                let array_length_expr = self.synth_typed_call_typed_args(
                     QIdent::naked(self.ast.idents.b.len, span),
                     &[],
                     &[base],
                     ctx.with_no_expected_type(),
+                    true,
                 )?;
                 let is_in_bounds = self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
                     kind: BinaryOpKind::Less,
@@ -10017,11 +10121,12 @@ impl TypedProgram {
                     span,
                 }));
                 let crash_message = self.synth_string_literal("Array index out of bounds", span);
-                let crash_oob = self.synth_typed_function_call(
+                let crash_oob = self.synth_typed_call_typed_args(
                     self.ast.idents.f.core_crashBounds.with_span(span),
                     &[],
                     &[array_length_expr, index_expr, crash_message],
                     ctx.with_no_expected_type(),
+                    false,
                 )?;
                 let if_else_expr = self.synth_if_else(
                     MSlice::empty(),
@@ -10445,7 +10550,7 @@ impl TypedProgram {
                     call_span,
                     "Call to {}/{} with Self := {} does not work\n{}\nFunction type: {}",
                     self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
-                    self.qident_to_string(&fn_call.name),
+                    self.ident_str(fn_call.name.name),
                     self.type_id_to_string(solved_self),
                     msg,
                     self.type_id_to_string(function_type_id),
@@ -12044,7 +12149,6 @@ impl TypedProgram {
 
             let stmt = self.stmts.get(stmt_id);
             if let TypedStmt::Defer(defer) = stmt {
-                eprintln!("Adding a defer to {}", block_scope.as_u32());
                 match self.scopes.block_defers.entry(block_scope) {
                     Entry::Occupied(mut defers) => {
                         defers.get_mut().deferred_exprs.push(defer.parsed_expr);
@@ -12152,7 +12256,7 @@ impl TypedProgram {
             span: block.span,
         };
         if has_defers {
-            eprintln!("TYPED BLOCK with defers:\n{}", self.block_to_string(&typed_block));
+            debug!("TYPED BLOCK with defers:\n{}", self.block_to_string(&typed_block));
         }
         Ok(typed_block)
     }
@@ -12169,13 +12273,25 @@ impl TypedProgram {
             match (ability_id, self.types.get(ability_impl_type_id)) {
                 // Leaving this example of how to do intrinsic ability fns
                 // Even though we have bitwise below
-                // (EQUALS_ABILITY_ID, _t) if ability_impl_type_id == STRING_TYPE_ID => {
-                //     if fn_name_str == "equals" {
-                //         Some(IntrinsicFunction::StringEquals)
-                //     } else {
-                //         None
-                //     }
-                // }
+                (EQUALS_ABILITY_ID, t) => {
+                    if fn_name_str == "equals" {
+                        match t {
+                            Type::Unit
+                            | Type::Char
+                            | Type::Bool
+                            | Type::Pointer
+                            | Type::Integer(_) => Some(IntrinsicOperation::ArithBinop(
+                                IntrinsicArithOpKind::int(IntrinsicArithOpOp::Equals),
+                            )),
+                            Type::Float(_) => Some(IntrinsicOperation::ArithBinop(
+                                IntrinsicArithOpKind::float(IntrinsicArithOpOp::Equals),
+                            )),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
                 (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
                     "bitNot" => Some(IntrinsicOperation::BitNot),
                     "bitAnd" => {
@@ -12191,6 +12307,14 @@ impl TypedProgram {
                     "shiftRight" => Some(IntrinsicOperation::BitwiseBinop(
                         IntrinsicBitwiseBinopKind::ShiftRight,
                     )),
+                    _ => None,
+                },
+                (ADD_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
+                    "add" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind::IntegerAdd)),
+                    _ => None,
+                },
+                (ADD_ABILITY_ID, Type::Float(_)) => match fn_name_str {
+                    "add" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind::FloatAdd)),
                     _ => None,
                 },
                 _ => None,
@@ -12232,6 +12356,8 @@ impl TypedProgram {
                 },
                 Some("bool") => match fn_name_str {
                     "negated" => Some(IntrinsicOperation::BoolNegate),
+                    "_and" => Some(IntrinsicOperation::LogicalAnd),
+                    "_or" => Some(IntrinsicOperation::LogicalOr),
                     _ => None,
                 },
                 Some("string") => None,
@@ -14197,7 +14323,6 @@ impl TypedProgram {
         let mut defns_to_add: SV4<(usize, EcoVec<ParsedId>)> = smallvec![];
         for (index, defn) in ast_namespace.definitions.iter().enumerate() {
             if skip_defns.contains(defn) {
-                eprintln!("Skipping defn: {}", defn);
                 continue;
             }
             match *defn {

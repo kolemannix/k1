@@ -644,12 +644,12 @@ impl TypedProgram {
                 w.write_str("switch {\n")?;
                 for (idx, case) in typed_match.arms.iter().enumerate() {
                     w.write_str(&"  ".repeat(indentation + 1))?;
-                    writeln!(w, "ARM {idx:02}").unwrap();
-                    self.display_matching_condition(w, &case.condition, indentation)?;
+                    writeln!(w, "ARM {idx}").unwrap();
+                    self.display_matching_condition(w, &case.condition, indentation + 1)?;
 
                     w.write_str(&"  ".repeat(indentation + 2))?;
                     w.write_str("-> ")?;
-                    self.display_expr_id(case.consequent_expr, w, indentation)?;
+                    self.display_expr_id(case.consequent_expr, w, indentation + 2)?;
                     if idx < typed_match.arms.len() - 1 {
                         w.write_str("\n")?;
                     }
@@ -880,23 +880,29 @@ impl TypedProgram {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        for (idx, &pattern) in self.patterns.get_slice(cond.patterns).iter().enumerate() {
-            self.display_pattern(pattern, w)?;
-            if idx != cond.patterns.len() as usize - 1 {
-                w.write_str(" and ")?;
+        if cond.patterns.len() == 0 {
+            writeln!(w, "<no patterns>")?;
+        } else {
+            writeln!(w, "Patterns: ")?;
+            for (idx, &pattern) in self.patterns.get_slice(cond.patterns).iter().enumerate() {
+                w.write_str(&"  ".repeat(indentation))?;
+                self.display_pattern(pattern, w)?;
+                if idx != cond.patterns.len() as usize - 1 {
+                    w.write_str(" and ")?;
+                }
             }
+            writeln!(w)?;
         }
 
         for instr in &cond.instrs {
             match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
-                    self.display_stmt(*let_stmt, w, indentation + 1)?;
+                    self.display_stmt(*let_stmt, w, indentation)?;
                 }
                 MatchingConditionInstr::Cond { value } => {
-                    w.write_str(&"  ".repeat(indentation + 1))?;
-                    w.write_str("cond(")?;
-                    self.display_expr_id(*value, w, indentation + 1)?;
-                    w.write_str(")")?;
+                    w.write_str(&"  ".repeat(indentation))?;
+                    w.write_str("cond ")?;
+                    self.display_expr_id(*value, w, indentation)?;
                 }
             }
             w.write_str("\n")?;
