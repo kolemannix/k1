@@ -5,5 +5,5 @@ fn test(): unit {
     { let foo = 100 };
     assert(foo == 100);
   });
-  assert(#debug (result is .Some(msg) and msg.startsWith("Variable 'foo' is not defined")))
+  assert(result is .Some(msg) and msg.startsWith("Variable 'foo' is not defined"))
 }

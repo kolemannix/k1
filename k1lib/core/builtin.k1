@@ -169,7 +169,10 @@ ability Print {
 
 // Show must have ability id 4
 // TODO: Show does not belong in k1 long term because it says nothing about where the data
-//       is allocated, and the name is esoteric. POSSIBLY we could keep it as like To(Temp)String
+//       is allocated, and the name is too Haskelly, which is to say
+//       both erudite and pedestrian at the same time? Looking at you,
+//       'Just'
+//       POSSIBLY we could keep it as like To(Temp)String
 ability Show {
   fn show(self: Self): string
 }
@@ -183,19 +186,141 @@ ability Bitwise {
   fn shiftRight(self: Self, other: Self): Self
 }
 
-ability Add[Rhs, impl Output] {
-  fn add(self: Self, rhs: Rhs): Output
+ability Add { fn add(self: Self, rhs: Self): Self }
+ability Sub { fn sub(self: Self, rhs: Self): Self }
+ability Mul { fn mul(self: Self, rhs: Self): Self }
+ability Div { fn div(self: Self, rhs: Self): Self }
+ability Rem { fn rem(self: Self, rhs: Self): Self }
+
+// I understand this is a 'Closed', more simple notion of Add
+// than Rust's std::ops::Add, generic over Rhs and Output. However,
+// being able to assume a symmetric add gives us much better and simpler
+// type inference for 99% of cases. If we ever do Defaults, where
+// we could default Rhs and Output to Self, and also somehow use
+// that information while inferring... then maybe. But I don't want
+// to achieve it by doing "try the call with every impl" for performance reasons
+impl Add for u8  {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u16 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u32 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u64 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i8  {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i16 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i32 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i64 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for uword { intern fn add(self: Self, rhs: Self): Self }
+impl Add for iword { intern fn add(self: Self, rhs: Self): Self }
+
+impl Sub for u8  {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u16 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u32 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u64 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i8  {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i16 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i32 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i64 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for uword { intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for iword { intern fn sub(self: Self, rhs: Self): Self }
+
+impl Mul for u8    { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u16   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u32   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u64   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i8    { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i16   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i32   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i64   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for uword { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for iword { intern fn mul(self: Self, rhs: Self): Self }
+  
+impl Div for u8    { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u16   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u32   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u64   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i8    { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i16   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i32   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i64   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for uword { intern fn div(self: Self, rhs: Self): Self }
+impl Div for iword { intern fn div(self: Self, rhs: Self): Self }
+
+impl Rem for u8    { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u16   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u32   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u64   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i8    { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i16   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i32   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i64   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for uword { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for iword { intern fn rem(self: Self, rhs: Self): Self }
+
+ability ScalarCmp {
+  fn lt(self: Self, other: Self): bool
+  fn le(self: Self, other: Self): bool
+  fn gt(self: Self, other: Self): bool
+  fn ge(self: Self, other: Self): bool
 }
 
-//  fn sub(self: Self, other: Self): Self
-//  fn mul(self: Self, other: Self): Self
-//  fn div(self: Self, other: Self): Self
-//  fn rem(self: Self, other: Self): Self
-//
-//  fn lt(self: Self, other: Self): bool
-//  fn le(self: Self, other: Self): bool
-//  fn gt(self: Self, other: Self): bool
-//  fn ge(self: Self, other: Self): bool
+impl ScalarCmp for u8 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u16 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u32 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u64 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for uword {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i8 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i16 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i32 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i64 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for iword {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
 
 ability Comparable {
   fn compare(self: Self, other: Self): Ordering
@@ -228,17 +353,6 @@ ability Iterator[impl Item] {
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
   fn iterator(self: Self): I
 }
-
-impl Add[Rhs = u8, Output =  u8] for  u8 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = u16, Output = u16] for u16 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = u32, Output = u32] for u32 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = u64, Output = u64] for u64 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = uword, Output = uword] for uword { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = i8, Output =  i8] for  i8 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = i16, Output = i16] for i16 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = i32, Output = i32] for i32 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = i64, Output = i64] for i64 { intern fn add(self: Self, rhs: Rhs): Output }
-impl Add[Rhs = iword, Output = iword] for iword { intern fn add(self: Self, rhs: Rhs): Output }
 
 /////////////////////////////////
 // Code that we want to have available very early
@@ -464,10 +578,10 @@ ns Array {
 
   fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[N x T] {
     let arrayUninit = allocate[N, T]();
-    let* i = 0uword;
-    while i.* < n.fromStatic() {
-      arrayUninit.getRef(i.*) <- t;
-      i <- i.* + 1;
+    let i = 0uword;
+    while i < n.fromStatic() {
+      arrayUninit.getRef(i) <- t;
+      i := i + 1uword;
     };
     arrayUninit
   }
@@ -527,7 +641,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     posix/write(
       fileNo = 1,
       data = s.view().dataPointer(),
-      count = s.view().len() - 1,
+      count = s.view().len() - 1uword,
     );
     sys/exit(1)
   } else if k1/IS_STATIC {

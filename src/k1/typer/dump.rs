@@ -166,7 +166,7 @@ impl TypedProgram {
         expand: bool,
     ) -> std::fmt::Result {
         writ.write_str("[")?;
-        for (index, t) in spec_info.type_args.iter().enumerate() {
+        for (index, t) in self.types.type_slices.get_slice(spec_info.type_args).iter().enumerate() {
             self.display_type_id(*t, expand, writ)?;
             let last = index == spec_info.type_args.len() - 1;
             if !last {
@@ -677,11 +677,6 @@ impl TypedProgram {
                     w.write_str(".*")
                 }
             },
-            TypedExpr::BinaryOp(binary_op) => {
-                self.display_expr_id(binary_op.lhs, w, indentation)?;
-                write!(w, " {} ", binary_op.kind)?;
-                self.display_expr_id(binary_op.rhs, w, indentation)
-            }
             TypedExpr::EnumConstructor(enum_constr) => {
                 w.write_str(".")?;
                 let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();
@@ -1138,6 +1133,10 @@ impl TypedProgram {
             first = false;
         }
         s
+    }
+
+    pub fn pretty_print_type_slice(&self, type_slice: TypeIdSlice, sep: &str) -> String {
+        self.pretty_print_types(self.types.type_slices.get_slice(type_slice), sep)
     }
 
     pub fn pretty_print_type_substitutions(

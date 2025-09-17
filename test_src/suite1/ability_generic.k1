@@ -1,33 +1,33 @@
 ns ability_generic {
 
-  impl Add[Rhs = i32, Output = i32] for i32 {
-    fn add(self: i32, rhs: Rhs): i32 { self + rhs }
+  impl GAdd[Rhs = i32, Output = i32] for i32 {
+    fn gadd(self: i32, rhs: Rhs): i32 { self + rhs }
   }
 
-  impl Add[Rhs = i64, Output = i64] for i32 {
-   fn add(self: i32, rhs: i64): i64 { (self as i64) + rhs }
+  impl GAdd[Rhs = i64, Output = i64] for i32 {
+   fn gadd(self: i32, rhs: i64): i64 { (self as i64) + rhs }
   }
 
   ns Foob {
     deftype alias myInt = int
 
-    impl Add[Rhs = myInt, Output = myInt] for myInt {
-      fn add(self: myInt, rhs: myInt): myInt { self + rhs }
+    impl GAdd[Rhs = myInt, Output = myInt] for myInt {
+      fn gadd(self: myInt, rhs: myInt): myInt { self + rhs }
     }
   }
 
   deftype GenericPoint[T] = { x: T, y: T }
-  ability Add[Rhs, impl Output] {
-    fn add(self: Self, rhs: Rhs): Output
+  ability GAdd[Rhs, impl Output] {
+    fn gadd(self: Self, rhs: Rhs): Output
   }
-  impl[T: Add[Rhs = T, Output = T] and Show]
-    Add[Rhs = GenericPoint[T], Output = GenericPoint[T]]
+  impl[T: GAdd[Rhs = T, Output = T] and Show]
+    GAdd[Rhs = GenericPoint[T], Output = GenericPoint[T]]
     for GenericPoint[T] {
-      fn add(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] {
-        let newX: T = self.x.add(other.x);
+      fn gadd(self: GenericPoint[T], other: GenericPoint[T]): GenericPoint[T] {
+        let newX: T = self.x.gadd(other.x);
         //let a = self.x; let b = other.x;
         //println("GenericPoint.add X {a} + {b} = {newX}");
-        let newY: T = self.y.add(other.y);
+        let newY: T = self.y.gadd(other.y);
         //let a = self.y; let b = other.y;
         //println("GenericPoint.add Y {a} + {b} = {newY}");
         { x: newX, y: newY }
@@ -61,16 +61,16 @@ ns ability_generic {
 
     let x: i32 = 4;
 
-    let add32 = x.add(10: i32);
+    let add32 = x.gadd(10: i32);
     //assert(add32 == 14);
 
-    let add64 = x.add(12: i64);
+    let add64 = x.gadd(12: i64);
     assert(add64 == 16: i64);
 
     // Blanket Impls
     let p: GenericPoint[i32] = { x: 1, y: 2 };
 
-    let added: GenericPoint[i32] = p.add(p);
+    let added: GenericPoint[i32] = p.gadd(p);
     assertEquals(added.x, (1 + 1) as i32);
     assertEquals(added.y, (2 + 2) as i32);
 

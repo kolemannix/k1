@@ -24,11 +24,12 @@ use crate::{
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
-        self, BinaryOpKind, CastType, FunctionId, IntrinsicArithOpKind, IntrinsicBitwiseBinopKind,
-        IntrinsicOperation, Layout, MatchingCondition, MatchingConditionInstr, NameAndTypeId,
-        StaticContainer, StaticEnum, StaticStruct, StaticValue, StaticValueId, TypedExpr,
-        TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram,
-        TypedStmt, TypedStmtId, TyperResult, VariableExpr, VariableId,
+        self, CastType, FunctionId, IntrinsicArithOpKind, IntrinsicArithOpOp,
+        IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, MatchingCondition,
+        MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
+        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
+        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult,
+        VariableExpr, VariableId,
         static_value::StaticContainerKind,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
@@ -460,6 +461,7 @@ pub fn execute_single_expr_with_vm(
     }
 
     let span = m.exprs.get(expr).get_span();
+    vm.eval_span = span;
     vm.stack.push_new_frame(None, Some(span));
 
     // Bind a local variable in the VM for each input_parameter
@@ -621,68 +623,6 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     };
                     let v = load_value(vm, m, target_type, ptr, true)?;
                     Ok(v.into())
-                }
-            }
-        }
-        TypedExpr::BinaryOp(bin_op) => {
-            let bin_op = *bin_op;
-            use BinaryOpKind as K;
-            match bin_op.kind {
-                K::Equals | K::NotEquals => {
-                    let lhs = execute_expr_return_exit!(vm, m, bin_op.lhs)?;
-                    let rhs = execute_expr_return_exit!(vm, m, bin_op.rhs)?;
-                    let not_equals = bin_op.kind == K::NotEquals;
-                    let bool_value_pre = match (lhs, rhs) {
-                        (Value::Unit, Value::Unit) => Ok(true),
-                        (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
-                        (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
-                        (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
-                        (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
-                        (lhs, rhs) => {
-                            failf!(
-                                bin_op.span,
-                                "static equality over {} and {} is unimplemented",
-                                lhs.kind_name(),
-                                rhs.kind_name()
-                            )
-                        }
-                    }?;
-                    let bool_value = if not_equals { !bool_value_pre } else { bool_value_pre };
-                    Ok(Value::Bool(bool_value).into())
-                }
-                K::Add | K::Subtract | K::Multiply | K::Divide | K::Rem => {
-                    let lhs = execute_expr_return_exit!(vm, m, bin_op.lhs)?;
-                    let rhs = execute_expr_return_exit!(vm, m, bin_op.rhs)?;
-                    Ok(binop::execute_arith_op(lhs, rhs, bin_op.kind).into())
-                }
-                K::Less | K::LessEqual | K::Greater | K::GreaterEqual => {
-                    let lhs = execute_expr_return_exit!(vm, m, bin_op.lhs)?;
-                    let rhs = execute_expr_return_exit!(vm, m, bin_op.rhs)?;
-                    Ok(binop::execute_cmp_op(lhs, rhs, bin_op.kind).into())
-                }
-                K::And => {
-                    // The language semantics guarantee short-circuiting of And
-                    let lhs = execute_expr_return_exit!(vm, m, bin_op.lhs)?.expect_bool();
-
-                    if lhs {
-                        let rhs = execute_expr_return_exit!(vm, m, bin_op.rhs)?.expect_bool();
-                        Ok(Value::Bool(rhs).into())
-                    } else {
-                        Ok(Value::Bool(false).into())
-                    }
-                }
-                K::Or => {
-                    // The language semantics guarantee short-circuiting of Or
-                    let lhs = execute_expr_return_exit!(vm, m, bin_op.lhs)?.expect_bool();
-                    if lhs {
-                        Ok(Value::Bool(true).into())
-                    } else {
-                        let rhs = execute_expr_return_exit!(vm, m, bin_op.rhs)?.expect_bool();
-                        Ok(Value::Bool(rhs).into())
-                    }
-                }
-                _ => {
-                    failf!(bin_op.span, "Unsupported static binary op: {}", m.expr_to_string(expr))
                 }
             }
         }
@@ -1615,59 +1555,44 @@ fn execute_intrinsic(
             let int = execute_expr_return_exit!(vm, k1, args[0])?.expect_int();
             Ok(Value::Int(int.bit_not()).into())
         }
-        IntrinsicOperation::ArithBinop(kind) => match kind {
-            IntrinsicArithOpKind::IntegerEquals => {
-                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
-                let bool_value = match (lhs, rhs) {
-                    (Value::Unit, Value::Unit) => Ok(true),
-                    (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
-                    (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
-                    (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
-                    (lhs, rhs) => {
-                        failf!(
-                            vm.eval_span,
-                            "Unexpected kinds for native equals: {} and {}",
-                            lhs.kind_name(),
-                            rhs.kind_name()
-                        )
-                    }
-                }?;
-                Ok(Value::Bool(bool_value).into())
+        IntrinsicOperation::ArithBinop(kind) => {
+            use IntrinsicArithOpOp as Op;
+            match kind {
+                IntrinsicArithOpKind { op: Op::Equals, .. } => {
+                    let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                    let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                    let bool_value = match (lhs, rhs) {
+                        (Value::Unit, Value::Unit) => Ok(true),
+                        (Value::Char(c1), Value::Char(c2)) => Ok(c1 == c2),
+                        (Value::Bool(b1), Value::Bool(b2)) => Ok(b1 == b2),
+                        (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
+                        (Value::Int(i1), Value::Int(i2)) => Ok(i1 == i2),
+                        (lhs, rhs) => {
+                            failf!(
+                                vm.eval_span,
+                                "Unexpected kinds for native equals: {} and {}",
+                                lhs.kind_name(),
+                                rhs.kind_name()
+                            )
+                        }
+                    }?;
+                    Ok(Value::Bool(bool_value).into())
+                }
+                k @ IntrinsicArithOpKind {
+                    op: Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem,
+                    ..
+                } => {
+                    let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                    let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                    Ok(binop::execute_arith_op(lhs, rhs, k.op).into())
+                }
+                k @ IntrinsicArithOpKind { op: Op::Lt | Op::Le | Op::Gt | Op::Ge, .. } => {
+                    let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
+                    let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
+                    Ok(binop::execute_cmp_op(lhs, rhs, k.op).into())
+                }
             }
-            IntrinsicArithOpKind::FloatEquals => {
-                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
-                let bool_value = match (lhs, rhs) {
-                    (Value::Float(f1), Value::Float(f2)) => Ok(f1 == f2),
-                    (lhs, rhs) => {
-                        failf!(
-                            vm.eval_span,
-                            "Unexpected kinds for float equals: {} and {}",
-                            lhs.kind_name(),
-                            rhs.kind_name()
-                        )
-                    }
-                }?;
-                Ok(Value::Bool(bool_value).into())
-            }
-            IntrinsicArithOpKind::IntegerAdd
-            | IntrinsicArithOpKind::IntegerSub
-            | IntrinsicArithOpKind::IntegerMul
-            | IntrinsicArithOpKind::IntegerDiv => {
-                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
-                Ok(binop::execute_arith_op(lhs, rhs, bin_op.kind).into())
-            }
-            IntrinsicArithOpKind::FloatAdd
-            | IntrinsicArithOpKind::FloatSub
-            | IntrinsicArithOpKind::FloatMul
-            | IntrinsicArithOpKind::FloatDiv => {
-                let lhs = execute_expr_return_exit!(vm, k1, args[0])?;
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?;
-                Ok(binop::execute_arith_op(lhs, rhs, bin_op.kind).into())
-            }
-        },
+        }
         IntrinsicOperation::BitwiseBinop(kind) => {
             let inta = execute_expr_return_exit!(vm, k1, args[0])?.expect_int();
             let intb = execute_expr_return_exit!(vm, k1, args[1])?.expect_int();

@@ -1,5 +1,5 @@
 fn main(): i32 {
-  // nocommit test short-circuiting or and and
+  // nocommit: commit this test of short-circuiting or and and
   if true or { println("RHS 1"); false } {
     println("t")
   } else { println("f")};

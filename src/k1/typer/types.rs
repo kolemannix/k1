@@ -31,7 +31,7 @@ pub struct StructLayout {
 #[derive(Debug, Clone)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
-    pub type_args: SV4<TypeId>,
+    pub type_args: TypeIdSlice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -186,8 +186,6 @@ impl TypedEnum {
 pub struct GenericType {
     pub params: SliceHandle<NameAndTypeId>,
     pub inner: TypeId,
-    // TODO(perf): get specializations HashMap off of GenericType
-    pub specializations: FxHashMap<SV4<TypeId>, TypeId>,
 }
 
 impl GenericType {}
@@ -371,7 +369,7 @@ pub struct FunctionPointerType {
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
-static_assert_size!(Type, 56);
+static_assert_size!(Type, 48);
 #[derive(Debug, Clone)]
 pub enum Type {
     Unit,
@@ -893,12 +891,15 @@ pub struct TypePool {
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
+    pub specializations: FxHashMap<(TypeId, TypeIdSlice), TypeId>,
 
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
 
     pub builtins: BuiltinTypes,
+
+    pub type_slices: VPool<TypeId, TypeSliceId>,
 
     pub config: TypesConfig,
 }
@@ -908,7 +909,7 @@ impl TypePool {
         const EXPECTED_TYPE_COUNT: usize = 65536;
         TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
-            hashes: FxHashMap::default(),
+            hashes: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT),
 
             layouts: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
             type_variable_counts: VPool::make_with_hint(
@@ -918,11 +919,14 @@ impl TypePool {
             instance_info: VPool::make_with_hint("instance_info", EXPECTED_TYPE_COUNT),
 
             defn_info: FxHashMap::default(),
+            specializations: FxHashMap::default(),
 
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
 
             builtins: BuiltinTypes::default(),
+
+            type_slices: VPool::make_with_hint("type_slices", EXPECTED_TYPE_COUNT),
 
             config: TypesConfig { ptr_size_bits: 64 },
         }
@@ -1649,7 +1653,7 @@ impl TypePool {
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == LIST_TYPE_ID {
-                Some(ListType { element_type: spec_info.type_args[0] })
+                Some(ListType { element_type: *self.type_slices.get_nth(spec_info.type_args, 0) })
             } else {
                 None
             }
@@ -1659,7 +1663,7 @@ impl TypePool {
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == BUFFER_TYPE_ID {
-                Some(spec_info.type_args[0])
+                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
@@ -1669,7 +1673,7 @@ impl TypePool {
     pub fn get_as_view_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == VIEW_TYPE_ID {
-                Some(spec_info.type_args[0])
+                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
@@ -1679,11 +1683,11 @@ impl TypePool {
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
             if info.generic_parent == LIST_TYPE_ID {
-                Some((info.type_args[0], ContainerKind::List))
+                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::List))
             } else if info.generic_parent == BUFFER_TYPE_ID {
-                Some((info.type_args[0], ContainerKind::Buffer))
+                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::Buffer))
             } else if info.generic_parent == VIEW_TYPE_ID {
-                Some((info.type_args[0], ContainerKind::View))
+                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::View))
             } else {
                 None
             }
@@ -1697,11 +1701,28 @@ impl TypePool {
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == OPTIONAL_TYPE_ID {
-                Some(spec_info.type_args[0])
+                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
         })
+    }
+
+    pub fn get_specialization(
+        &self,
+        base: TypeId,
+        args: SliceHandle<TypeSliceId>,
+    ) -> Option<TypeId> {
+        self.specializations.get(&(base, args)).copied()
+    }
+
+    pub fn insert_specialization(
+        &mut self,
+        base: TypeId,
+        args: SliceHandle<TypeSliceId>,
+        specialized: TypeId,
+    ) {
+        self.specializations.insert((base, args), specialized);
     }
 }
 

@@ -50,8 +50,8 @@ use crate::typer::types::{
     TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
-    AssignmentKind, BinaryOp, BinaryOpKind, Call, CallId, Callee, CastType, FunctionId,
-    IntegerCastDirection, IntrinsicArithOpKind, IntrinsicBitwiseBinopKind, IntrinsicOperation,
+    AssignmentKind, Call, CallId, Callee, CastType, FunctionId, IntegerCastDirection,
+    IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind, IntrinsicOperation,
     Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
     StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
     TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
@@ -2328,13 +2328,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
-            TypedExpr::BinaryOp(bin_op) => self.nocommit_codegen_binop(
-                bin_op.ty,
-                bin_op.kind,
-                bin_op.lhs,
-                bin_op.rhs,
-                bin_op.span,
-            ),
             TypedExpr::UnaryOp(unary_op) => {
                 let value = self.codegen_expr_basic_value(unary_op.expr)?;
                 match unary_op.kind {
@@ -2704,145 +2697,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn nocommit_codegen_binop(
-        &mut self,
-        result_type: TypeId,
-        kind: BinaryOpKind,
-        lhs: TypedExprId,
-        rhs: TypedExprId,
-        span: SpanId,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
-        // This would be simpler if we first matched on lhs than on result type,
-        // because we have to branch on int vs float now for each result type
-        match self.k1.types.get(result_type) {
-            Type::Integer(integer_type) => {
-                let signed = integer_type.is_signed();
-                let lhs_value = self.codegen_expr_basic_value(lhs)?.into_int_value();
-                let rhs_value = self.codegen_expr_basic_value(rhs)?.into_int_value();
-                let op_res = match kind {
-                    BinaryOpKind::Add => self.builder.build_int_add(lhs_value, rhs_value, "add"),
-                    BinaryOpKind::Subtract => {
-                        self.builder.build_int_sub(lhs_value, rhs_value, "sub")
-                    }
-                    BinaryOpKind::Multiply => {
-                        self.builder.build_int_mul(lhs_value, rhs_value, "mul")
-                    }
-                    BinaryOpKind::Divide => {
-                        if signed {
-                            self.builder.build_int_signed_div(lhs_value, rhs_value, "sdiv")
-                        } else {
-                            self.builder.build_int_unsigned_div(lhs_value, rhs_value, "udiv")
-                        }
-                    }
-                    BinaryOpKind::And => unreachable!("bitwise 'and' is handled by an ability"),
-                    BinaryOpKind::Or => unreachable!("bitwise 'or' is handled by an ability"),
-                    BinaryOpKind::Rem => {
-                        if signed {
-                            self.builder.build_int_signed_rem(lhs_value, rhs_value, "srem")
-                        } else {
-                            self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "urem")
-                        }
-                    }
-                    _ => {
-                        panic!("Unsupported bin op kind returning int: {}", kind)
-                    }
-                };
-                let op_int_value = op_res.to_err(span)?;
-                Ok(op_int_value.as_basic_value_enum().into())
-            }
-            Type::Float(_float_type) => {
-                let lhs_value = self.codegen_expr_basic_value(lhs)?.into_float_value();
-                let rhs_value = self.codegen_expr_basic_value(rhs)?.into_float_value();
-                let op_res = match kind {
-                    BinaryOpKind::Add => self
-                        .builder
-                        .build_float_add(lhs_value, rhs_value, "fadd")
-                        .unwrap()
-                        .as_basic_value_enum(),
-                    BinaryOpKind::Subtract => self
-                        .builder
-                        .build_float_sub(lhs_value, rhs_value, "fsub")
-                        .unwrap()
-                        .as_basic_value_enum(),
-                    BinaryOpKind::Multiply => self
-                        .builder
-                        .build_float_mul(lhs_value, rhs_value, "fmul")
-                        .unwrap()
-                        .as_basic_value_enum(),
-                    BinaryOpKind::Divide => self
-                        .builder
-                        .build_float_div(lhs_value, rhs_value, "fdiv")
-                        .unwrap()
-                        .as_basic_value_enum(),
-                    BinaryOpKind::And => unreachable!("bitwise 'and' is unsupported on float"),
-                    BinaryOpKind::Or => unreachable!("bitwise 'or' is unsupported on float"),
-                    BinaryOpKind::Rem => self
-                        .builder
-                        .build_float_rem(lhs_value, rhs_value, "frem")
-                        .unwrap()
-                        .as_basic_value_enum(),
-                    _ => {
-                        panic!("Unsupported bin op kind returning float: {}", kind)
-                    }
-                };
-                Ok(op_res.as_basic_value_enum().into())
-            }
-            Type::Bool => match kind {
-                BinaryOpKind::And | BinaryOpKind::Or => {
-                    unreachable!("moving to intrinsics")
-                }
-                BinaryOpKind::Equals | BinaryOpKind::NotEquals => {
-                    unreachable!("moving to intrinsics")
-                }
-                BinaryOpKind::Less
-                | BinaryOpKind::LessEqual
-                | BinaryOpKind::Greater
-                | BinaryOpKind::GreaterEqual => match self.k1.get_expr_type(lhs) {
-                    Type::Integer(_) => {
-                        let lhs_int = self.codegen_expr_basic_value(lhs)?.into_int_value();
-                        let rhs_int = self.codegen_expr_basic_value(rhs)?.into_int_value();
-                        let pred = match kind {
-                            BinaryOpKind::Less => IntPredicate::SLT,
-                            BinaryOpKind::LessEqual => IntPredicate::SLE,
-                            BinaryOpKind::Greater => IntPredicate::SGT,
-                            BinaryOpKind::GreaterEqual => IntPredicate::SGE,
-                            _ => unreachable!("unexpected binop kind"),
-                        };
-                        let i1_compare = self
-                            .builder
-                            .build_int_compare(pred, lhs_int, rhs_int, &format!("{}_i1", kind))
-                            .unwrap();
-                        Ok(self
-                            .i1_to_bool(i1_compare, &format!("{}_res", kind))
-                            .as_basic_value_enum()
-                            .into())
-                    }
-                    Type::Float(_) => {
-                        let lhs_float = self.codegen_expr_basic_value(lhs)?.into_float_value();
-                        let rhs_float = self.codegen_expr_basic_value(rhs)?.into_float_value();
-                        let pred = match kind {
-                            BinaryOpKind::Less => FloatPredicate::OLT,
-                            BinaryOpKind::LessEqual => FloatPredicate::OLE,
-                            BinaryOpKind::Greater => FloatPredicate::OGT,
-                            BinaryOpKind::GreaterEqual => FloatPredicate::OGE,
-                            _ => unreachable!("unexpected binop kind"),
-                        };
-                        let i1_compare = self
-                            .builder
-                            .build_float_compare(pred, lhs_float, rhs_float, &format!("f{}", kind))
-                            .unwrap();
-                        Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
-                    }
-                    _ => unreachable!("unexpected comparison operand; not float or int"),
-                },
-                other => panic!("Unsupported binary operation {other:?} returning Bool"),
-            },
-            Type::Unit => panic!("No unit-returning binary ops"),
-            Type::Char => panic!("No char-returning binary ops"),
-            _other => unreachable!("codegen for binary ops on other types"),
-        }
-    }
-
     fn build_conditional_branch(
         &mut self,
         cond: IntValue<'ctx>,
@@ -3155,38 +3009,150 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(not_value.as_basic_value_enum().into())
             }
             IntrinsicOperation::ArithBinop(op_kind) => {
+                use IntrinsicArithOpOp as Op;
                 let lhs = self.codegen_expr_basic_value(call.args[0])?;
                 let rhs = self.codegen_expr_basic_value(call.args[1])?;
-                match op_kind {
-                    IntrinsicArithOpKind::IntegerEquals => {
+                match op_kind.class {
+                    IntrinsicArithOpClass::Int => {
                         let lhs_int = lhs.into_int_value();
                         let rhs_int = rhs.into_int_value();
-                        let cmp_result = self
-                            .builder
-                            .build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "")
-                            .unwrap();
-                        Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
+                        match op_kind.op {
+                            Op::Equals => {
+                                let cmp_result = self
+                                    .builder
+                                    .build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "")
+                                    .unwrap();
+                                Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
+                            }
+                            Op::Add => {
+                                let add_result =
+                                    self.builder.build_int_add(lhs_int, rhs_int, "").unwrap();
+                                Ok(add_result.as_basic_value_enum().into())
+                            }
+                            Op::Sub => {
+                                let sub_result =
+                                    self.builder.build_int_sub(lhs_int, rhs_int, "").unwrap();
+                                Ok(sub_result.as_basic_value_enum().into())
+                            }
+                            Op::Mul => {
+                                let mul_result =
+                                    self.builder.build_int_mul(lhs_int, rhs_int, "").unwrap();
+                                Ok(mul_result.as_basic_value_enum().into())
+                            }
+                            Op::Div => {
+                                // nocommit: Put Signed/Unsigned in the op itself
+                                let return_type = self.k1.types.get(call.return_type);
+                                let is_signed = match return_type {
+                                    Type::Integer(int_type) => int_type.is_signed(),
+                                    // The other types that compile to llvm int types are things like
+                                    // bool, char, which should be considered unsigned
+                                    _ => false,
+                                };
+                                let div_result = if is_signed {
+                                    self.builder.build_int_signed_div(lhs_int, rhs_int, "").unwrap()
+                                } else {
+                                    self.builder
+                                        .build_int_unsigned_div(lhs_int, rhs_int, "")
+                                        .unwrap()
+                                };
+                                Ok(div_result.as_basic_value_enum().into())
+                            }
+                            Op::Rem => {
+                                let return_type = self.k1.types.get(call.return_type);
+                                let is_signed = match return_type {
+                                    Type::Integer(int_type) => int_type.is_signed(),
+                                    // The other types that compile to llvm int types are things like
+                                    // bool, char, which should be considered unsigned
+                                    _ => false,
+                                };
+                                let rem_result = if is_signed {
+                                    self.builder.build_int_signed_rem(lhs_int, rhs_int, "").unwrap()
+                                } else {
+                                    self.builder
+                                        .build_int_unsigned_rem(lhs_int, rhs_int, "")
+                                        .unwrap()
+                                };
+                                Ok(rem_result.as_basic_value_enum().into())
+                            }
+                            Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                                let arg1_type =
+                                    self.k1.types.get(self.k1.exprs.get(call.args[0]).get_type());
+                                let is_signed = match arg1_type {
+                                    Type::Integer(int_type) => int_type.is_signed(),
+                                    // The other types that compile to llvm int types are things like
+                                    // bool, char, which should be considered unsigned
+                                    _ => false,
+                                };
+                                let pred = match (is_signed, op_kind.op) {
+                                    (true, Op::Lt) => IntPredicate::SLT,
+                                    (true, Op::Le) => IntPredicate::SLE,
+                                    (true, Op::Gt) => IntPredicate::SGT,
+                                    (true, Op::Ge) => IntPredicate::SGE,
+                                    (false, Op::Lt) => IntPredicate::ULT,
+                                    (false, Op::Le) => IntPredicate::ULE,
+                                    (false, Op::Gt) => IntPredicate::UGT,
+                                    (false, Op::Ge) => IntPredicate::UGE,
+                                    _ => unreachable!("unexpected binop kind"),
+                                };
+                                let i1_compare = self
+                                    .builder
+                                    .build_int_compare(pred, lhs_int, rhs_int, "")
+                                    .unwrap();
+                                Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
+                            }
+                        }
                     }
-                    IntrinsicArithOpKind::IntegerAdd => {
-                        let lhs_int = lhs.into_int_value();
-                        let rhs_int = rhs.into_int_value();
-                        let add_result = self.builder.build_int_add(lhs_int, rhs_int, "").unwrap();
-                        Ok(add_result.as_basic_value_enum().into())
-                    }
-                    IntrinsicArithOpKind::FloatEquals => {
+                    IntrinsicArithOpClass::Float => {
                         let lhs_f = lhs.into_float_value();
                         let rhs_f = rhs.into_float_value();
-                        let cmp_result = self
-                            .builder
-                            .build_float_compare(FloatPredicate::OEQ, lhs_f, rhs_f, "")
-                            .unwrap();
-                        Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
-                    }
-                    IntrinsicArithOpKind::FloatAdd => {
-                        let lhs_f = lhs.into_float_value();
-                        let rhs_f = rhs.into_float_value();
-                        let add_result = self.builder.build_float_add(lhs_f, rhs_f, "").unwrap();
-                        Ok(add_result.as_basic_value_enum().into())
+                        match op_kind.op {
+                            Op::Equals => {
+                                let cmp_result = self
+                                    .builder
+                                    .build_float_compare(FloatPredicate::OEQ, lhs_f, rhs_f, "")
+                                    .unwrap();
+                                Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
+                            }
+                            Op::Add => {
+                                let add_result =
+                                    self.builder.build_float_add(lhs_f, rhs_f, "").unwrap();
+                                Ok(add_result.as_basic_value_enum().into())
+                            }
+                            Op::Sub => {
+                                let result =
+                                    self.builder.build_float_sub(lhs_f, rhs_f, "").unwrap();
+                                Ok(result.as_basic_value_enum().into())
+                            }
+                            Op::Mul => {
+                                let result =
+                                    self.builder.build_float_mul(lhs_f, rhs_f, "").unwrap();
+                                Ok(result.as_basic_value_enum().into())
+                            }
+                            Op::Div => {
+                                let result =
+                                    self.builder.build_float_div(lhs_f, rhs_f, "").unwrap();
+                                Ok(result.as_basic_value_enum().into())
+                            }
+                            Op::Rem => {
+                                let result =
+                                    self.builder.build_float_rem(lhs_f, rhs_f, "").unwrap();
+                                Ok(result.as_basic_value_enum().into())
+                            }
+                            Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                                let pred = match op_kind.op {
+                                    Op::Lt => FloatPredicate::OLT,
+                                    Op::Le => FloatPredicate::OLE,
+                                    Op::Gt => FloatPredicate::OGT,
+                                    Op::Ge => FloatPredicate::OGE,
+                                    _ => unreachable!("unexpected binop kind"),
+                                };
+                                let i1_compare = self
+                                    .builder
+                                    .build_float_compare(pred, lhs_f, rhs_f, "")
+                                    .unwrap();
+                                Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
+                            }
+                        }
                     }
                 }
             }

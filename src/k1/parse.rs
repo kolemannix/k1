@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Write};
 
 use crate::compiler::CompilerConfig;
 use crate::pool::{SliceHandle, VPool};
-use crate::typer::{BinaryOpKind, ErrorLevel, Linkage};
+use crate::typer::{ErrorLevel, Linkage};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
@@ -381,6 +381,115 @@ pub struct UnaryOp {
     pub op_kind: ParsedUnaryOpKind,
     pub expr: ParsedExprId,
     pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOpKind {
+    // Arith
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Rem,
+
+    // Cmp
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+
+    // Boolean operations
+    And,
+    Or,
+
+    // Equality
+    Equals,
+    NotEquals,
+
+    // Other
+    OptionalElse,
+    Pipe,
+}
+
+impl BinaryOpKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BinaryOpKind::Add => "add",
+            BinaryOpKind::Subtract => "sub",
+            BinaryOpKind::Multiply => "mul",
+            BinaryOpKind::Divide => "div",
+            BinaryOpKind::Rem => "rem",
+            BinaryOpKind::Less => "lt",
+            BinaryOpKind::LessEqual => "le",
+            BinaryOpKind::Greater => "gt",
+            BinaryOpKind::GreaterEqual => "ge",
+            BinaryOpKind::And => "and",
+            BinaryOpKind::Or => "or",
+            BinaryOpKind::Equals => "eq",
+            BinaryOpKind::NotEquals => "neq",
+            BinaryOpKind::OptionalElse => "else",
+            BinaryOpKind::Pipe => "pipe",
+        }
+    }
+}
+
+impl Display for BinaryOpKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOpKind::Add => f.write_char('+'),
+            BinaryOpKind::Subtract => f.write_char('-'),
+            BinaryOpKind::Multiply => f.write_char('*'),
+            BinaryOpKind::Divide => f.write_char('/'),
+            BinaryOpKind::Rem => f.write_char('%'),
+            BinaryOpKind::Less => f.write_char('<'),
+            BinaryOpKind::Greater => f.write_char('>'),
+            BinaryOpKind::LessEqual => f.write_str("<="),
+            BinaryOpKind::GreaterEqual => f.write_str(">="),
+            BinaryOpKind::And => f.write_str("and"),
+            BinaryOpKind::Or => f.write_str("or"),
+            BinaryOpKind::Equals => f.write_str("=="),
+            BinaryOpKind::NotEquals => f.write_str("!="),
+            BinaryOpKind::OptionalElse => f.write_str("?"),
+            BinaryOpKind::Pipe => f.write_str("|"),
+        }
+    }
+}
+
+impl BinaryOpKind {
+    pub fn precedence(&self) -> usize {
+        use BinaryOpKind as B;
+        match self {
+            B::Pipe => 102,
+            B::Rem => 101,
+            B::Multiply | B::Divide => 100,
+            B::Add | B::Subtract => 90,
+            B::Less | B::LessEqual | B::Greater | B::GreaterEqual | B::Equals | B::NotEquals => 80,
+            B::And => 70,
+            B::Or => 66,
+            B::OptionalElse => 65,
+        }
+    }
+
+    pub fn from_tokenkind(kind: TokenKind) -> Option<BinaryOpKind> {
+        match kind {
+            TokenKind::Plus => Some(BinaryOpKind::Add),
+            TokenKind::Minus => Some(BinaryOpKind::Subtract),
+            TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
+            TokenKind::Slash => Some(BinaryOpKind::Divide),
+            TokenKind::LeftAngle => Some(BinaryOpKind::Less),
+            TokenKind::RightAngle => Some(BinaryOpKind::Greater),
+            TokenKind::LessThanEqual => Some(BinaryOpKind::LessEqual),
+            TokenKind::GreaterThanEqual => Some(BinaryOpKind::GreaterEqual),
+            TokenKind::KeywordAnd => Some(BinaryOpKind::And),
+            TokenKind::KeywordOr => Some(BinaryOpKind::Or),
+            TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
+            TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
+            TokenKind::QuestionMark => Some(BinaryOpKind::OptionalElse),
+            TokenKind::Percent => Some(BinaryOpKind::Rem),
+            TokenKind::Pipe => Some(BinaryOpKind::Pipe),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

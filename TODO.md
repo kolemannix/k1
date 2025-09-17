@@ -162,9 +162,11 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: 'Write' ability and intrinsic fix
 
 ## Project: Operator overloading
-- [ ] Operator 'overloading' story. I think the story is just abilities.
+- [x] Operator 'overloading' story. I think the story is just abilities.
         This will actually fix the really poor inference that binary ops currently have
-- [ ] Start with Add
+- [x] Start with Equals
+- [x] Do add
+- [x] Move all the binary operations to intrinsic calls; and remove BinaryOp from the Typed AST
 
 ## Project: aarch64 struct passing ABI
 ## Project: x86-64 struct passing ABI

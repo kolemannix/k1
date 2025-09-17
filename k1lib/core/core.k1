@@ -417,8 +417,35 @@ ns f64 {
 }
 
 impl Equals for f32 { intern fn equals(self: f32, other: f32): bool }
-
 impl Equals for f64 { intern fn equals(self: f64, other: f64): bool }
+
+impl Add for f32 { intern fn add(self: Self, other: Self): Self }
+impl Add for f64 { intern fn add(self: Self, other: Self): Self }
+
+impl Sub for f32 { intern fn sub(self: Self, other: Self): Self }
+impl Sub for f64 { intern fn sub(self: Self, other: Self): Self }
+
+impl Mul for f32 { intern fn mul(self: Self, other: Self): Self }
+impl Mul for f64 { intern fn mul(self: Self, other: Self): Self }
+
+impl Div for f32 { intern fn div(self: Self, other: Self): Self }
+impl Div for f64 { intern fn div(self: Self, other: Self): Self }
+
+impl Rem for f32 { intern fn rem(self: Self, other: Self): Self }
+impl Rem for f64 { intern fn rem(self: Self, other: Self): Self }
+
+impl ScalarCmp for f32 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for f64 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
 
 impl Print for f32 {
   fn printTo[W: Writer](self: f32, w: W): unit {
