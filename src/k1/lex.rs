@@ -6,9 +6,9 @@ use std::fmt::{Display, Formatter};
 use std::str::Chars;
 
 use crate::nz_u32_id;
+use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
 use crate::pool::VPool;
-use crate::typer::BinaryOpKind;
 use TokenKind as K;
 use log::debug;
 

@@ -68,10 +68,10 @@ ns Buffer {
     //  mem/set(dst = buf.dataPointer(), value = value, count = size)
     //} else {
     //println("unspecialized Buffer/filledIn");
-      let* i = 0: uword;
-      while i.* < size {
-        buf.getRefUnchecked(i.*) <- value;
-        i <- i.* + 1;
+      let i = 0uword;
+      while i < size {
+        buf.getRefUnchecked(i) <- value;
+        i := i + 1;
       };
     //};
     buf

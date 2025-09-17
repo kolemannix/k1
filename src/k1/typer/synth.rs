@@ -36,6 +36,22 @@ impl TypedProgram {
         )
     }
 
+    pub(super) fn synth_add_call(
+        &mut self,
+        lhs: TypedExprId,
+        rhs: TypedExprId,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> TyperResult<TypedExprId> {
+        self.synth_typed_call_typed_args(
+            self.ast.idents.f.Add_add.with_span(span),
+            &[],
+            &[lhs, rhs],
+            ctx.with_no_expected_type(),
+            false,
+        )
+    }
+
     pub(super) fn synth_if_else(
         &mut self,
         patterns: MSlice<TypedPatternId>,
@@ -89,7 +105,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
-        self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![inner_type])
+        let args = self.types.type_slices.add_slice_copy(&[inner_type]);
+        self.instantiate_generic_type(OPTIONAL_TYPE_ID, args)
     }
 
     pub(super) fn synth_optional_some(&mut self, expression: TypedExpr) -> (TypedExprId, TypeId) {
@@ -115,7 +132,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
-        let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, smallvec![type_id]);
+        let optional_type = self.synth_optional_type(type_id);
         let none_variant = self
             .types
             .get(optional_type)
@@ -131,21 +148,6 @@ impl TypedProgram {
         let casted =
             self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum, None);
         casted
-    }
-
-    pub(super) fn synth_equals_binop(
-        &mut self,
-        lhs: TypedExprId,
-        rhs: TypedExprId,
-        span: SpanId,
-    ) -> TypedExprId {
-        self.exprs.add(TypedExpr::BinaryOp(BinaryOp {
-            kind: BinaryOpKind::Equals,
-            ty: BOOL_TYPE_ID,
-            span,
-            lhs,
-            rhs,
-        }))
     }
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {

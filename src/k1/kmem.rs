@@ -25,7 +25,7 @@ macro_rules! fuckit {
 }
 
 use core::mem::{align_of, size_of};
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Deref};
 pub struct Mem {
     mmap: memmap2::MmapMut,
     cursor: *const u8,
@@ -230,6 +230,7 @@ impl Mem {
     }
 }
 
+/// A fixed-size Vec-like collection pointing into a Mem's data
 pub struct MVec<T> {
     buf: *mut [T],
     len: usize,
@@ -275,6 +276,20 @@ impl<T> MVec<T> {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.as_slice_mut().iter_mut()
+    }
+}
+
+impl<T> std::ops::Index<usize> for MVec<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
+impl<T> Deref for MVec<T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
     }
 }
 

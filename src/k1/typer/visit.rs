@@ -111,12 +111,6 @@ impl TypedProgram {
                 recurse!(array_get.index);
             }
             TypedExpr::Variable(_) => (),
-            TypedExpr::BinaryOp(binary_op) => {
-                let lhs = binary_op.lhs;
-                let rhs = binary_op.rhs;
-                recurse!(lhs);
-                recurse!(rhs);
-            }
             TypedExpr::UnaryOp(unary_op) => {
                 recurse!(unary_op.expr);
             }

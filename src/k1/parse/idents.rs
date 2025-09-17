@@ -139,6 +139,19 @@ pub struct BuiltinIdents {
     pub Equals: Ident,
     pub Add: Ident,
     pub add: Ident,
+    pub Sub: Ident,
+    pub sub: Ident,
+    pub Mul: Ident,
+    pub mul: Ident,
+    pub Div: Ident,
+    pub div: Ident,
+    pub Rem: Ident,
+    pub rem: Ident,
+    ScalarCmp: Ident,
+    lt: Ident,
+    le: Ident,
+    gt: Ident,
+    ge: Ident,
 
     pub param_0: Ident,
     pub param_1: Ident,
@@ -182,6 +195,14 @@ pub struct BuiltinFunctions {
     pub View_wrapBuffer: QIdent,
     pub Equals_equals: QIdent,
     pub Add_add: QIdent,
+    pub Sub_sub: QIdent,
+    pub Mul_mul: QIdent,
+    pub Div_div: QIdent,
+    pub Rem_rem: QIdent,
+    pub ScalarCmp_lt: QIdent,
+    pub ScalarCmp_le: QIdent,
+    pub ScalarCmp_gt: QIdent,
+    pub ScalarCmp_ge: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -290,6 +311,19 @@ impl IdentPool {
             Equals: intern!("Equals"),
             Add: intern!("Add"),
             add: intern!("add"),
+            Sub: intern!("Sub"),
+            sub: intern!("sub"),
+            Mul: intern!("Mul"),
+            mul: intern!("mul"),
+            Div: intern!("Div"),
+            div: intern!("div"),
+            Rem: intern!("Rem"),
+            rem: intern!("rem"),
+            ScalarCmp: intern!("ScalarCmp"),
+            lt: intern!("lt"),
+            le: intern!("le"),
+            gt: intern!("gt"),
+            ge: intern!("ge"),
             Iterator: intern!("Iterator"),
             Iterable: intern!("Iterable"),
             next: intern!("next"),
@@ -353,6 +387,15 @@ impl IdentPool {
         let Equals_equals: QIdent = make_fn!(&[b.Equals], b.equals);
 
         let Add_add: QIdent = make_fn!(&[b.Add], b.add);
+        let Sub_sub: QIdent = make_fn!(&[b.Sub], b.sub);
+        let Mul_mul: QIdent = make_fn!(&[b.Mul], b.mul);
+        let Div_div: QIdent = make_fn!(&[b.Div], b.div);
+        let Rem_rem: QIdent = make_fn!(&[b.Rem], b.rem);
+
+        let ScalarCmp_lt: QIdent = make_fn!(&[b.ScalarCmp], b.lt);
+        let ScalarCmp_le: QIdent = make_fn!(&[b.ScalarCmp], b.le);
+        let ScalarCmp_gt: QIdent = make_fn!(&[b.ScalarCmp], b.gt);
+        let ScalarCmp_ge: QIdent = make_fn!(&[b.ScalarCmp], b.ge);
 
         let f = BuiltinFunctions {
             List_withCapacity,
@@ -382,6 +425,14 @@ impl IdentPool {
             View_wrapBuffer,
             Equals_equals,
             Add_add,
+            Sub_sub,
+            Mul_mul,
+            Div_div,
+            Rem_rem,
+            ScalarCmp_lt,
+            ScalarCmp_le,
+            ScalarCmp_gt,
+            ScalarCmp_ge,
         };
 
         Self { intern_pool: pool, slices, b, f }

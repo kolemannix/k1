@@ -34,6 +34,8 @@ fn run() -> anyhow::Result<ExitCode> {
             .build(),
     ));
     log::set_logger(l).unwrap();
+    // For permanent debug:
+    // log::set_max_level(log::LevelFilter::Debug);
     log::set_max_level(log::LevelFilter::Info);
     let args = Args::parse();
     info!("{:#?}", args);

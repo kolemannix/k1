@@ -945,8 +945,12 @@ impl TypedProgram {
                     self.type_id_to_string(arg_info.generic_parent)
                 );
                 // We can directly 'solve' every appearance of a type param here
-                for (passed_type, arg_slot) in
-                    passed_info.type_args.clone().iter().zip(arg_info.type_args.clone().iter())
+                for (passed_type, arg_slot) in self
+                    .types
+                    .type_slices
+                    .copy_slice_sv4(passed_info.type_args)
+                    .iter()
+                    .zip(self.types.type_slices.copy_slice_sv4(arg_info.type_args).iter())
                 {
                     self.unify_and_find_substitutions_rec(
                         substitutions,

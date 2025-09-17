@@ -1,29 +1,46 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
+use std::hash::{Hash, Hasher};
 use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;
 mod virt_pool;
 
 pub trait PoolIndex:
-    Copy + Into<NonZeroU32> + From<NonZeroU32> + Eq + Add<Self, Output = Self> + Add<u32, Output = Self>
+    Copy
+    + Into<NonZeroU32>
+    + From<NonZeroU32>
+    + PartialEq
+    + Eq
+    + Add<Self, Output = Self>
+    + Add<u32, Output = Self>
+    + Hash
 {
 }
 impl<
     T: Copy
         + Into<NonZeroU32>
         + From<NonZeroU32>
+        + PartialEq
         + Eq
         + Add<Self, Output = Self>
-        + Add<u32, Output = Self>,
+        + Add<u32, Output = Self>
+        + Hash,
 > PoolIndex for T
 {
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SliceHandle<Index: PoolIndex> {
     index: Option<Index>,
     len: u32,
+}
+
+impl<Index: PoolIndex> Hash for SliceHandle<Index> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        self.len.hash(state);
+    }
 }
 
 impl<Index: PoolIndex> SliceHandle<Index> {
