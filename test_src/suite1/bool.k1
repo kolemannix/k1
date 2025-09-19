@@ -1,5 +1,9 @@
 ns bool_test;
 
+fn crashBool(): bool {
+  crash("secret crash")
+}
+
 fn test(): unit {
   let t = true;
   let f = false;
@@ -8,4 +12,14 @@ fn test(): unit {
   assert(t and t);
   assert(not (f and f));
   assert(not (f or f));
+
+  // The point is that crashBool never runs
+  let r1 = if true or crashBool() true else false;
+  assert(r1);
+
+  // The point is that crashBool never runs
+  let r2 = if false and crashBool() false else true;
+  assert(r2);
+
+  ()
 }

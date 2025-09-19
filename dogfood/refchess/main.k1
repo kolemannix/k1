@@ -45,7 +45,7 @@ deftype GameState = {
 }
 
 fn valueAtSquare(b: Bitboard, index: u64): u64 {
-  let shifted = Bitwise/shiftRight(b, index);
+  let shifted = Bitwise/shiftRight(b, index as uword);
   let masked = Bitwise/bitAnd(shifted, 1: u64);
   masked
 }
@@ -56,13 +56,13 @@ fn isSet(b: Bitboard, index: u64): bool {
 
 fn valueAtRank(b: Bitboard, rank: u64): u64 {
   let rankStart = rank * 8;
-  let shifted = Bitwise/shiftRight(b, rankStart);
+  let shifted = Bitwise/shiftRight(b, rankStart as uword);
   let masked = Bitwise/bitAnd(shifted, RANK_1);
   masked
 }
 
 fn indexToBit(index: u64): Bitboard {
-  (1: u64).shiftLeft(index)
+  (1: u64).shiftLeft(index as uword)
 }
 
 fn printBitboard(b: Bitboard): unit {
@@ -172,8 +172,8 @@ ns GameState {
      println("White double push");
      printBitboard(doublePush);
      if self.enPassantFile != -1 {
-        let enPassantTargetSquareIndex = self.enPassantFile as u64 + ((5*8) as u64);
-        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex);
+        let enPassantTargetSquareIndex = self.enPassantFile + 5*8;
+        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex as u64);
         let enPassantTargetSquareOccupied = enPassantTargetSquareBit.bitAnd(self.bOccupied());
         let enPassantAttackers = enPassantTargetSquareOccupied.bitAnd(enPassantTargetSquareBit.shiftLeft(1)).bitAnd(enPassantTargetSquareBit.shiftRight(1));
         printBitboard(enPassantTargetSquareOccupied);

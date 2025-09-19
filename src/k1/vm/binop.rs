@@ -5,7 +5,7 @@ use crate::typer::{IntrinsicArithOpOp as Op, TypedFloatValue, TypedIntValue};
 
 use crate::vm::Value;
 
-// NOTE: Uses wrapping arithmetic to match C and achieve consistent behavior across debug/release builds.
+// NOTE: Always wraps, for signed and unsigned.
 pub fn execute_arith_op(lhs: Value, rhs: Value, op: Op) -> Value {
     debug_assert!(matches!(op, Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem));
     match (lhs, rhs) {

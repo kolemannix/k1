@@ -1,17 +1,18 @@
 # k1 Programming Language
 
-`k1` is like C with typeclasses, ADTs, capturing lambdas, pattern matching, and a powerful generic typesystem.
+`k1` is like C with typeclasses, ADTs\*, capturing lambdas, pattern matching, and a powerful generic typesystem.
 
-`k1` is what resulted from me wanting to write similar code to what I write in Scala but have it compile and run 100x faster.
+`k1` is what resulted from me wanting to write similar code to what I write in Scala but have it compile and run 1000x faster.
+
 
 Core ideas
 - The compiler should be uncompromisingly fast
 - The generated code should be as optimal as possible
 - Compile-time reflection should enable powerful metaprogramming
 
-** Disclaimer: k1 is a hobby project intended for learning and exploration, not for use (yet). **
-
 Check out the [TODO](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
+
+\*structs for product types and first-class tagged unions for sum types via the `either` keyword
 
 # About the project
 
@@ -19,10 +20,18 @@ Just exploring the PL dev world by designing and implementing a toy language. Th
 and also explore some interesting ideas. I am trying not to have any aspirations for this project
 except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023 in this language.
 
-The project isn't mature enough yet to make this list but the spirit of the effort is this: https://justforfunnoreally.dev/
+Inspiration
+
+https://justforfunnoreally.dev/
 
 > The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself.
 - Brooks
+
+> The way to fall asleep is by pretending to be someone who is asleep. And that's how everything works
+- Someone on twitter
+
+> You can just do things
+- Popular memes archive, 2024
 
 ## Example
 

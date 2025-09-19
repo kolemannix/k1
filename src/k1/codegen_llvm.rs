@@ -64,6 +64,15 @@ pub struct CodegenError {
     pub span: SpanId,
 }
 
+macro_rules! return_void {
+    ($e:expr) => {
+        match $e {
+            LlvmValue::BasicValue(v) => v,
+            other => return Ok(other),
+        }
+    };
+}
+
 macro_rules! failf {
     ($span:expr, $($format_args:expr),*) => {
         {
@@ -2997,23 +3006,25 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             IntrinsicOperation::BoolNegate => {
-                let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+                let input_value = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
                 let truncated = self.bool_to_i1(input_value, "");
                 let negated = self.builder.build_not(truncated, "").unwrap();
                 let promoted = self.i1_to_bool(negated, "");
                 Ok(promoted.as_basic_value_enum().into())
             }
             IntrinsicOperation::BitNot => {
-                let input_value = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
-                let not_value = self.builder.build_not(input_value, "not").unwrap();
+                let input_value = return_void!(self.codegen_expr(call.args[0])?);
+                let input_value_int = input_value.into_int_value();
+                let not_value = self.builder.build_not(input_value_int, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
             }
             IntrinsicOperation::ArithBinop(op_kind) => {
+                let lhs = return_void!(self.codegen_expr(call.args[0])?);
+                let rhs = return_void!(self.codegen_expr(call.args[1])?);
                 use IntrinsicArithOpOp as Op;
-                let lhs = self.codegen_expr_basic_value(call.args[0])?;
-                let rhs = self.codegen_expr_basic_value(call.args[1])?;
                 match op_kind.class {
-                    IntrinsicArithOpClass::Int => {
+                    IntrinsicArithOpClass::SignedInt | IntrinsicArithOpClass::UnsignedInt => {
+                        let is_signed = op_kind.class.is_signed_int();
                         let lhs_int = lhs.into_int_value();
                         let rhs_int = rhs.into_int_value();
                         match op_kind.op {
@@ -3040,14 +3051,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 Ok(mul_result.as_basic_value_enum().into())
                             }
                             Op::Div => {
-                                // nocommit: Put Signed/Unsigned in the op itself
-                                let return_type = self.k1.types.get(call.return_type);
-                                let is_signed = match return_type {
-                                    Type::Integer(int_type) => int_type.is_signed(),
-                                    // The other types that compile to llvm int types are things like
-                                    // bool, char, which should be considered unsigned
-                                    _ => false,
-                                };
                                 let div_result = if is_signed {
                                     self.builder.build_int_signed_div(lhs_int, rhs_int, "").unwrap()
                                 } else {
@@ -3058,13 +3061,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 Ok(div_result.as_basic_value_enum().into())
                             }
                             Op::Rem => {
-                                let return_type = self.k1.types.get(call.return_type);
-                                let is_signed = match return_type {
-                                    Type::Integer(int_type) => int_type.is_signed(),
-                                    // The other types that compile to llvm int types are things like
-                                    // bool, char, which should be considered unsigned
-                                    _ => false,
-                                };
                                 let rem_result = if is_signed {
                                     self.builder.build_int_signed_rem(lhs_int, rhs_int, "").unwrap()
                                 } else {
@@ -3075,14 +3071,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 Ok(rem_result.as_basic_value_enum().into())
                             }
                             Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                                let arg1_type =
-                                    self.k1.types.get(self.k1.exprs.get(call.args[0]).get_type());
-                                let is_signed = match arg1_type {
-                                    Type::Integer(int_type) => int_type.is_signed(),
-                                    // The other types that compile to llvm int types are things like
-                                    // bool, char, which should be considered unsigned
-                                    _ => false,
-                                };
                                 let pred = match (is_signed, op_kind.op) {
                                     (true, Op::Lt) => IntPredicate::SLT,
                                     (true, Op::Le) => IntPredicate::SLE,
@@ -3157,11 +3145,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             IntrinsicOperation::BitwiseBinop(op_kind) => {
-                // nocommit(2): Not true?
-                let is_operand_signed = true;
-                let sign_extend = is_operand_signed;
-                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
-                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+                let lhs = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
+                let rhs = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
                 let result = match op_kind {
                     IntrinsicBitwiseBinopKind::And => self.builder.build_and(lhs, rhs, ""),
                     IntrinsicBitwiseBinopKind::Xor => self.builder.build_xor(lhs, rhs, ""),
@@ -3169,15 +3154,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     IntrinsicBitwiseBinopKind::ShiftLeft => {
                         self.builder.build_left_shift(lhs, rhs, "")
                     }
-                    IntrinsicBitwiseBinopKind::ShiftRight => {
-                        self.builder.build_right_shift(lhs, rhs, sign_extend, "")
+                    IntrinsicBitwiseBinopKind::SignedShiftRight => {
+                        self.builder.build_right_shift(lhs, rhs, true, "")
+                    }
+                    IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                        self.builder.build_right_shift(lhs, rhs, false, "")
                     }
                 };
                 let result = result.to_err(call.span)?;
                 Ok(result.as_basic_value_enum().into())
             }
             IntrinsicOperation::LogicalAnd => {
-                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+                let lhs = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
 
                 let lhs_i1 = self.bool_to_i1(lhs, "");
                 let short_circuit_branch =
@@ -3186,7 +3174,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 // label: rhs_check; lhs was true
                 self.builder.position_at_end(short_circuit_branch.then_block);
-                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+                let rhs = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
 
                 // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
                 let rhs_incoming = self.builder.get_insert_block().unwrap();
@@ -3209,7 +3197,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(result.as_basic_value().into())
             }
             IntrinsicOperation::LogicalOr => {
-                let lhs = self.codegen_expr_basic_value(call.args[0])?.into_int_value();
+                let lhs = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
 
                 let lhs_i1 = self.bool_to_i1(lhs, "");
                 let start_block = self.builder.get_insert_block().unwrap();
@@ -3219,7 +3207,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let block_rhs_check = short_circuit_branch.else_block;
 
                 self.builder.position_at_end(block_rhs_check);
-                let rhs = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+                let rhs = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
                 self.builder.build_unconditional_branch(block_result).unwrap();
 
                 self.builder.position_at_end(block_result);
@@ -3239,8 +3227,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
                 let pointee_ty_arg = self.k1.named_types.get_nth(call.type_args, 0);
                 let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
-                let ptr = self.codegen_expr_basic_value(call.args[0])?.into_pointer_value();
-                let index = self.codegen_expr_basic_value(call.args[1])?.into_int_value();
+                let ptr = return_void!(self.codegen_expr(call.args[0])?).into_pointer_value();
+                let index = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
                 let result_pointer = unsafe {
                     self.builder
                         .build_in_bounds_gep(
@@ -3490,10 +3478,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedStmt::Expr(expr, _) => self.codegen_expr(*expr),
             TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
             TypedStmt::Assignment(assignment) => {
-                let rhs = self.codegen_expr(assignment.value)?;
-                let LlvmValue::BasicValue(rhs) = rhs else {
-                    return Ok(rhs);
-                };
+                let rhs = return_void!(self.codegen_expr(assignment.value)?);
                 let lhs_pointer = match assignment.kind {
                     AssignmentKind::Set => {
                         let TypedExpr::Variable(v) = self.k1.exprs.get(assignment.destination)
@@ -3511,7 +3496,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         pointer_value
                     }
                     AssignmentKind::Store => {
-                        self.codegen_expr_basic_value(assignment.destination)?.into_pointer_value()
+                        let dest = return_void!(self.codegen_expr(assignment.destination)?);
+                        dest.into_pointer_value()
                     }
                 };
 

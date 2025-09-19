@@ -11,7 +11,7 @@ deftype Command = either
   Perft({ depth: u32 })
 
 fn parseCommand(cmd: string): Result[Command, string] {
-  println("[debug] received: {cmd}");
+  println("[debug] received: `{cmd}`");
   
   switch cmd {
     // Initial handshake: GUI sends "uci", engine responds with id and options
