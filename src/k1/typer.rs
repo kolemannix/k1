@@ -1791,13 +1791,28 @@ pub enum IntrinsicBitwiseBinopKind {
     Or,
     Xor,
     ShiftLeft,
-    ShiftRight,
+    SignedShiftRight,
+    UnsignedShiftRight,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicArithOpClass {
     Float,
-    Int,
+    UnsignedInt,
+    SignedInt,
+}
+
+impl IntrinsicArithOpClass {
+    pub fn is_signed_int(self) -> bool {
+        matches!(self, IntrinsicArithOpClass::SignedInt)
+    }
+    pub fn from_int_type(i: IntegerType) -> Self {
+        if i.is_signed() {
+            IntrinsicArithOpClass::SignedInt
+        } else {
+            IntrinsicArithOpClass::UnsignedInt
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1821,8 +1836,11 @@ pub struct IntrinsicArithOpKind {
 }
 
 impl IntrinsicArithOpKind {
-    pub fn int(op: IntrinsicArithOpOp) -> Self {
-        IntrinsicArithOpKind { class: IntrinsicArithOpClass::Int, op }
+    pub fn uint(op: IntrinsicArithOpOp) -> Self {
+        IntrinsicArithOpKind { class: IntrinsicArithOpClass::UnsignedInt, op }
+    }
+    pub fn sint(op: IntrinsicArithOpOp) -> Self {
+        IntrinsicArithOpKind { class: IntrinsicArithOpClass::SignedInt, op }
     }
     pub fn float(op: IntrinsicArithOpOp) -> Self {
         IntrinsicArithOpKind { class: IntrinsicArithOpClass::Float, op }
@@ -6943,8 +6961,8 @@ impl TypedProgram {
         list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: Vec<TypedExprId> = {
-            let mut elements = Vec::with_capacity(element_count);
+        let elements: MVec<TypedExprId> = {
+            let mut elements = self.tmp.new_vec(element_count);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
                 let element_expr =
@@ -7020,23 +7038,22 @@ impl TypedProgram {
             is_referencing_let,
             list_lit_scope,
         );
-        // nocommit: Clean up these allocations; size is known and the block stmts are allocated
-        //           already
-        let mut set_elements_statements = Vec::with_capacity(element_count);
-        for (index, element_value_expr) in elements.into_iter().enumerate() {
+
+        list_lit_block.statements.push(dest_coll_variable.defn_stmt);
+        for (index, element_value_expr) in elements.iter().enumerate() {
             let index_expr = self.synth_uword(index, span);
             let push_call = match list_kind {
                 ContainerKind::List => self.synth_typed_call_typed_args(
                     self.ast.idents.f.List_push.with_span(span),
                     &[element_type],
-                    &[dest_coll_variable.variable_expr, element_value_expr],
+                    &[dest_coll_variable.variable_expr, *element_value_expr],
                     list_lit_ctx,
                     false,
                 )?,
                 ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
                     self.ast.idents.f.Buffer_set.with_span(span),
                     &[element_type],
-                    &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
+                    &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
                     list_lit_ctx,
                     false,
                 )?,
@@ -7046,7 +7063,7 @@ impl TypedProgram {
                     self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
                         &[size_type, element_type],
-                        &[dest_coll_variable.variable_expr, index_expr, element_value_expr],
+                        &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
                         list_lit_ctx,
                         false,
                     )?
@@ -7054,10 +7071,8 @@ impl TypedProgram {
             };
             let type_id = self.exprs.get(push_call).get_type();
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-            set_elements_statements.push(push_stmt);
+            self.push_block_stmt_id(&mut list_lit_block, push_stmt);
         }
-        self.push_block_stmt_id(&mut list_lit_block, dest_coll_variable.defn_stmt);
-        list_lit_block.statements.extend(set_elements_statements);
         let final_expression = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
@@ -7357,6 +7372,9 @@ impl TypedProgram {
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get(expr).get_type();
+            if expr_type == NEVER_TYPE_ID {
+                return failf!(ast_field.span, "never is not allowed in struct literals");
+            }
             field_defns.push(StructTypeField { name: ast_field.name, type_id: expr_type });
             field_values.push(StructField { name: ast_field.name, expr });
         }
@@ -7449,6 +7467,9 @@ impl TypedProgram {
                     )
                 })?;
             let expr_type = self.exprs.get(expr).get_type();
+            if expr_type == NEVER_TYPE_ID {
+                return failf!(passed_field.span, "never is not allowed in struct literals");
+            }
             field_types.push(StructTypeField { name: expected_field.name, type_id: expr_type });
             field_values.push(StructField { name: expected_field.name, expr });
         }
@@ -9286,7 +9307,7 @@ impl TypedProgram {
                         self.ast.idents.f.bool_and.with_span(binary_op.span),
                         &[],
                         &[binary_op.lhs, binary_op.rhs],
-                        ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                        ctx,
                     )
                 }
             }
@@ -9294,7 +9315,7 @@ impl TypedProgram {
                 self.ast.idents.f.bool_or.with_span(binary_op.span),
                 &[],
                 &[binary_op.lhs, binary_op.rhs],
-                ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                ctx,
             ),
             // We convert most binary ops into ability function calls by rewriting to parsed calls
             // and compiling the code
@@ -9324,7 +9345,7 @@ impl TypedProgram {
                     fn_ident.with_span(binary_op.span),
                     &[],
                     &[binary_op.lhs, binary_op.rhs],
-                    ctx.with_no_expected_type(),
+                    ctx,
                 )
             }
         }
@@ -12061,138 +12082,119 @@ impl TypedProgram {
         let second = namespace_chain.get(2).map(|id| self.ident_str(*id));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            match (base_ability_id, self.types.get(ability_impl_type_id)) {
+            use IntrinsicArithOpClass as Class;
+            use IntrinsicArithOpKind as OpKind;
+            use IntrinsicArithOpOp as Op;
+            macro_rules! mk_arith {
+                ($e: expr) => {
+                    Some(IntrinsicOperation::ArithBinop($e))
+                };
+            }
+            macro_rules! mk_bitwise {
+                ($e: expr) => {
+                    Some(IntrinsicOperation::BitwiseBinop($e))
+                };
+            }
+            let t = self.types.get(ability_impl_type_id);
+            let is_integer = t.as_integer().is_some();
+            match (base_ability_id, fn_name_str) {
                 // Leaving this example of how to do intrinsic ability fns
                 // Even though we have bitwise below
-                (EQUALS_ABILITY_ID, t) => {
-                    if fn_name_str == "equals" {
-                        match t {
-                            Type::Unit
-                            | Type::Char
-                            | Type::Bool
-                            | Type::Pointer
-                            | Type::Integer(_) => Some(IntrinsicOperation::ArithBinop(
-                                IntrinsicArithOpKind::int(IntrinsicArithOpOp::Equals),
-                            )),
-                            Type::Float(_) => Some(IntrinsicOperation::ArithBinop(
-                                IntrinsicArithOpKind::float(IntrinsicArithOpOp::Equals),
-                            )),
-                            _ => None,
-                        }
+                (EQUALS_ABILITY_ID, "equals") => match t {
+                    Type::Unit | Type::Char | Type::Bool | Type::Pointer => {
+                        mk_arith!(OpKind::uint(Op::Equals))
+                    }
+                    Type::Integer(i) => {
+                        let o = if i.is_signed() {
+                            OpKind::sint(Op::Equals)
+                        } else {
+                            OpKind::uint(Op::Equals)
+                        };
+                        mk_arith!(o)
+                    }
+                    Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
+                    _ => None,
+                },
+                (BITWISE_ABILITY_ID, "bitNot") if is_integer => Some(IntrinsicOperation::BitNot),
+                (BITWISE_ABILITY_ID, "bitAnd") if is_integer => {
+                    mk_bitwise!(IntrinsicBitwiseBinopKind::And)
+                }
+                (BITWISE_ABILITY_ID, "bitOr") if is_integer => {
+                    mk_bitwise!(IntrinsicBitwiseBinopKind::Or)
+                }
+                (BITWISE_ABILITY_ID, "xor") if is_integer => {
+                    mk_bitwise!(IntrinsicBitwiseBinopKind::Xor)
+                }
+                (BITWISE_ABILITY_ID, "shiftLeft") if is_integer => {
+                    mk_bitwise!(IntrinsicBitwiseBinopKind::ShiftLeft)
+                }
+                (BITWISE_ABILITY_ID, "shiftRight") if is_integer => {
+                    let int_type = t.expect_integer();
+                    if int_type.is_signed() {
+                        mk_bitwise!(IntrinsicBitwiseBinopKind::SignedShiftRight)
                     } else {
-                        None
+                        mk_bitwise!(IntrinsicBitwiseBinopKind::UnsignedShiftRight)
                     }
                 }
-                (BITWISE_ABILITY_ID, Type::Integer(_)) => match fn_name_str {
-                    "bitNot" => Some(IntrinsicOperation::BitNot),
-                    "bitAnd" => {
-                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::And))
-                    }
-                    "bitOr" => {
-                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::Or))
-                    }
-                    "xor" => Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::Xor)),
-                    "shiftLeft" => {
-                        Some(IntrinsicOperation::BitwiseBinop(IntrinsicBitwiseBinopKind::ShiftLeft))
-                    }
-                    "shiftRight" => Some(IntrinsicOperation::BitwiseBinop(
-                        IntrinsicBitwiseBinopKind::ShiftRight,
-                    )),
-                    _ => None,
-                },
-                (ADD_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => match fn_name_str {
-                    "add" => {
-                        let class = if let Type::Integer(_) = t {
-                            IntrinsicArithOpClass::Int
+                (ADD_ABILITY_ID, "add") => match t {
+                    Type::Integer(i) => {
+                        // Even though signedness is irrelevant here, we still set it properly
+                        // just in case it ever is, (for example if we want to make signed wrap UB
+                        // instead of wrapping)
+                        if i.is_signed() {
+                            mk_arith!(IntrinsicArithOpKind::sint(Op::Add))
                         } else {
-                            IntrinsicArithOpClass::Float
-                        };
-                        Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Add,
-                        }))
+                            mk_arith!(IntrinsicArithOpKind::uint(Op::Add))
+                        }
+                    }
+                    Type::Float(_) => {
+                        mk_arith!(IntrinsicArithOpKind::float(Op::Add))
                     }
                     _ => None,
                 },
-                (SUB_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => match fn_name_str {
-                    "sub" => {
-                        let class = if let Type::Integer(_) = t {
-                            IntrinsicArithOpClass::Int
-                        } else {
-                            IntrinsicArithOpClass::Float
-                        };
-                        Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Sub,
-                        }))
-                    }
-                    _ => None,
-                },
-                (MUL_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => match fn_name_str {
-                    "mul" => {
-                        let class = if let Type::Integer(_) = t {
-                            IntrinsicArithOpClass::Int
-                        } else {
-                            IntrinsicArithOpClass::Float
-                        };
-                        Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Mul,
-                        }))
-                    }
-                    _ => None,
-                },
-                (DIV_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => match fn_name_str {
-                    "div" => {
-                        let class = if let Type::Integer(_) = t {
-                            IntrinsicArithOpClass::Int
-                        } else {
-                            IntrinsicArithOpClass::Float
-                        };
-                        Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Div,
-                        }))
-                    }
-                    _ => None,
-                },
-                (REM_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => match fn_name_str {
-                    "rem" => {
-                        let class = if let Type::Integer(_) = t {
-                            IntrinsicArithOpClass::Int
-                        } else {
-                            IntrinsicArithOpClass::Float
-                        };
-                        Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Rem,
-                        }))
-                    }
-                    _ => None,
-                },
-                (SCALAR_CMP_ABILITY_ID, t @ Type::Integer(_) | t @ Type::Float(_)) => {
-                    let class = if let Type::Integer(_) = t {
-                        IntrinsicArithOpClass::Int
+                (SUB_ABILITY_ID, "sub") => {
+                    let class = if let Type::Integer(i) = t {
+                        IntrinsicArithOpClass::from_int_type(*i)
+                    } else {
+                        IntrinsicArithOpClass::Float
+                    };
+                    mk_arith!(OpKind { class, op: Op::Sub })
+                }
+                (MUL_ABILITY_ID, "mul") => {
+                    let class = if let Type::Integer(i) = t {
+                        Class::from_int_type(*i)
+                    } else {
+                        Class::Float
+                    };
+                    mk_arith!(OpKind { class, op: Op::Mul })
+                }
+                (DIV_ABILITY_ID, "div") => {
+                    let class = if let Type::Integer(i) = t {
+                        IntrinsicArithOpClass::from_int_type(*i)
+                    } else {
+                        IntrinsicArithOpClass::Float
+                    };
+                    mk_arith!(OpKind { class, op: Op::Div })
+                }
+                (REM_ABILITY_ID, "rem") => {
+                    let class = if let Type::Integer(i) = t {
+                        IntrinsicArithOpClass::from_int_type(*i)
+                    } else {
+                        IntrinsicArithOpClass::Float
+                    };
+                    mk_arith!(OpKind { class, op: Op::Rem })
+                }
+                (SCALAR_CMP_ABILITY_ID, _) => {
+                    let class = if let Type::Integer(i) = t {
+                        IntrinsicArithOpClass::from_int_type(*i)
                     } else {
                         IntrinsicArithOpClass::Float
                     };
                     match fn_name_str {
-                        "lt" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Lt,
-                        })),
-                        "le" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Le,
-                        })),
-                        "gt" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Gt,
-                        })),
-                        "ge" => Some(IntrinsicOperation::ArithBinop(IntrinsicArithOpKind {
-                            class,
-                            op: IntrinsicArithOpOp::Ge,
-                        })),
+                        "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
+                        "le" => mk_arith!(OpKind { class, op: Op::Le }),
+                        "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
+                        "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
                         _ => None,
                     }
                 }
@@ -14438,6 +14440,7 @@ impl TypedProgram {
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
         // eprintln!("{}", self.dump_types_to_string());
+        self.tmp.print_usage("tmp");
 
         for type_id in self.types.iter_ids().collect_vec() {
             if let Type::Unresolved(ast_id) = self.types.get(type_id) {
@@ -14460,6 +14463,8 @@ impl TypedProgram {
                 self.errors.len()
             )
         }
+
+        self.tmp.print_usage("tmp");
 
         debug_assert!(self.abilities.get(EQUALS_ABILITY_ID).name == get_ident!(self, "Equals"));
         debug_assert!(self.abilities.get(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
@@ -14497,6 +14502,8 @@ impl TypedProgram {
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
         }
+
+        self.tmp.print_usage("tmp end");
 
         Ok(())
     }

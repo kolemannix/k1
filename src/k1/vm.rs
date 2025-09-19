@@ -19,7 +19,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{
     compiler::WordSize,
-    errf, failf, int_binop,
+    errf, failf, int_shift,
     lex::SpanId,
     parse::{Ident, StringId},
     pool::SliceHandle,
@@ -1601,8 +1601,17 @@ fn execute_intrinsic(
                 IntrinsicBitwiseBinopKind::And => inta.bit_and(&intb),
                 IntrinsicBitwiseBinopKind::Or => inta.bit_or(&intb),
                 IntrinsicBitwiseBinopKind::Xor => inta.bit_xor(&intb),
-                IntrinsicBitwiseBinopKind::ShiftLeft => int_binop!(inta, &intb, shl),
-                IntrinsicBitwiseBinopKind::ShiftRight => int_binop!(inta, &intb, shr),
+                IntrinsicBitwiseBinopKind::ShiftLeft => {
+                    int_shift!(inta, intb.to_u64_unconditional(), shl)
+                }
+                // Doesn't matter which, since Rust always does logical shifts on signed values,
+                // and we're using Rust integers in TypedIntValue
+                IntrinsicBitwiseBinopKind::SignedShiftRight => {
+                    int_shift!(inta, intb.to_u64_unconditional(), shr)
+                }
+                IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                    int_shift!(inta, intb.to_u64_unconditional(), shr)
+                }
             };
             Ok(Value::Int(int_value).into())
         }

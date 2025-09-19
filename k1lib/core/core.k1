@@ -153,12 +153,7 @@ ns sys {
     };
 
     let length = bytesRead as uword - 1;
-
-    // Remove trailing newline if present
-    if buffer.last().contains('\n' as u8) {
-      buffer.set(length, 0);
-      buffer.len* <- length;
-    };
+    buffer.len* <- length;
 
     let result = string/wrapByteBuffer(buffer);
     .Ok(result)

@@ -49,6 +49,26 @@ macro_rules! int_binop {
     };
 }
 
+#[macro_export]
+macro_rules! int_shift {
+    ($self:expr, $count:expr, $method:ident) => {
+        match $self {
+            TypedIntValue::U8(a) => TypedIntValue::U8(a.$method($count)),
+            TypedIntValue::U16(a) => TypedIntValue::U16(a.$method($count)),
+            TypedIntValue::U32(a) => TypedIntValue::U32(a.$method($count)),
+            TypedIntValue::U64(a) => TypedIntValue::U64(a.$method($count)),
+            TypedIntValue::UWord32(a) => TypedIntValue::UWord32(a.$method($count)),
+            TypedIntValue::UWord64(a) => TypedIntValue::UWord64(a.$method($count)),
+            TypedIntValue::I8(a) => TypedIntValue::I8(a.$method($count)),
+            TypedIntValue::I16(a) => TypedIntValue::I16(a.$method($count)),
+            TypedIntValue::I32(a) => TypedIntValue::I32(a.$method($count)),
+            TypedIntValue::I64(a) => TypedIntValue::I64(a.$method($count)),
+            TypedIntValue::IWord32(a) => TypedIntValue::IWord32(a.$method($count)),
+            TypedIntValue::IWord64(a) => TypedIntValue::IWord64(a.$method($count)),
+        }
+    };
+}
+
 impl TypedIntValue {
     pub fn kind_name(&self) -> &'static str {
         match self {

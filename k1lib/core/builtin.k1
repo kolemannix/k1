@@ -182,8 +182,9 @@ ability Bitwise {
   fn bitAnd(self: Self, other: Self): Self
   fn bitOr(self: Self, other: Self): Self
   fn xor(self: Self, other: Self): Self
-  fn shiftLeft(self: Self, other: Self): Self
-  fn shiftRight(self: Self, other: Self): Self
+
+  fn shiftLeft(self: Self, count: uword): Self
+  fn shiftRight(self: Self, count: uword): Self
 }
 
 ability Add { fn add(self: Self, rhs: Self): Self }

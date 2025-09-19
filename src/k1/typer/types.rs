@@ -747,6 +747,13 @@ impl Type {
         }
     }
 
+    pub fn as_integer(&self) -> Option<&IntegerType> {
+        match self {
+            Type::Integer(int) => Some(int),
+            _ => None,
+        }
+    }
+
     #[track_caller]
     pub fn expect_integer(&self) -> &IntegerType {
         match self {

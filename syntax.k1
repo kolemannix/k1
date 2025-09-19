@@ -1,13 +1,6 @@
 fn main(): i32 {
   // nocommit: commit this test of short-circuiting or and and
-  if true or { println("RHS 1"); false } {
-    println("t")
-  } else { println("f")};
-
-  if false or { println("RHS 2"); true } {
-    println("t")
-  } else { println("f")};
-
+  
   let a = 1 + 2;
 
   0

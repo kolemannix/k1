@@ -5,7 +5,7 @@ fn letRhs(): unit { let x = crash("letRhs") }
 fn assgnRhs(): never { let x = 123; x := crash("assgn rhs") }
 // should fail to compile anyway
 // fn binopLhs(): never { crash("") + 4 }
-fn binopRhs(): never { 4 + crash("") }
+fn binopRhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn whileCond(): never { while crash("asdf") { () } }
 fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
