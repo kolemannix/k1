@@ -48,10 +48,16 @@ impl Spans {
         *self.span_pool.get(id)
     }
 
+    pub fn get_end(&self, id: SpanId) -> u32 {
+        let s = self.span_pool.get(id);
+        s.end()
+    }
+
+    #[inline]
     pub fn extend(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
-        let span1 = self.get(span1);
-        let span2 = self.get(span2);
-        self.add(span1.extended(span2))
+        let mut span1 = self.get(span1);
+        span1.extend_to(self.get_end(span2));
+        self.add(span1)
     }
 }
 
@@ -509,21 +515,15 @@ impl Span {
     }
 
     #[track_caller]
-    pub fn extended(&self, other: Span) -> Span {
+    #[inline]
+    pub fn extend_to(&mut self, new_end: u32) {
         if cfg!(debug_assertions) {
-            // Fuck off clippy: nothing wrong with this:
-            // "If the other end is not past our end"
-            #[allow(clippy::nonminimal_bool)]
-            if !(other.end() >= self.end()) {
-                panic!("Attempt to extend span from {} to {}", self.end(), other.end())
+            if new_end < self.end() {
+                panic!("Attempt to extend span from {} to {}", self.end(), new_end)
             }
         }
-        debug_assert!(other.end() >= self.end());
-        let mut copied = *self;
-        let new_end = other.end();
-        let new_len = new_end - copied.start;
-        copied.len = new_len;
-        copied
+        let new_len = new_end - self.start;
+        self.len = new_len;
     }
 }
 

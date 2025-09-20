@@ -43,6 +43,7 @@ impl<T> Clone for MHandle<T> {
     }
 }
 
+/// A handle to a slice of Ts inside a `Mem` pool
 pub struct MSlice<T> {
     offset: NonZeroU32,
     count: u32,
@@ -223,6 +224,10 @@ impl Mem {
             let src: &[T] = std::slice::from_raw_parts(ptr, handle.count as usize);
             src
         }
+    }
+
+    pub fn get_nth<T>(&self, handle: MSlice<T>, n: usize) -> &'static T {
+        &self.get_slice(handle)[n]
     }
 
     pub fn bytes_used(&self) -> usize {

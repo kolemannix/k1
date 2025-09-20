@@ -246,6 +246,13 @@ macro_rules! static_assert_size {
     };
 }
 
+#[macro_export]
+macro_rules! static_assert_niched {
+    ($ty:ty) => {
+        static_assert_size!(Option<$ty>, ::std::mem::size_of::<$ty>());
+    };
+}
+
 pub enum CompileModuleError {
     ParseFailure(Box<ParsedProgram>),
     TyperFailure(Box<TypedProgram>),
@@ -300,7 +307,7 @@ pub fn compile_module(
     let profiler_guard = if args.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
-                .frequency(2000)
+                .frequency(50000)
                 .blocklist(&["libc", "libgcc", "pthread", "vdso"])
                 .build()
                 .unwrap(),
@@ -363,18 +370,25 @@ pub fn compile_module(
 
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {
+            let mut options = pprof::flamegraph::Options::default();
+            options.min_width = 0.02;
+            options.image_width = Some(3200);
+            options.text_truncate_direction = pprof::flamegraph::TextTruncateDirection::Left;
+            options.frame_height = 20;
+            options.font_size = 10;
+
             let fname = format!("{}.svg", module_name);
             eprintln!("Outputting profile flamegraph to {fname}");
             let file = File::create(fname).unwrap();
-            let mut options = pprof::flamegraph::Options::default();
-            options.min_width = 0.02;
-            options.reverse_stack_order = true;
-            options.image_width = Some(3200);
-            options.text_truncate_direction = pprof::flamegraph::TextTruncateDirection::Left;
+            options.reverse_stack_order = false;
             options.direction = pprof::flamegraph::Direction::Inverted;
-            options.frame_height = 20;
-            options.font_size = 10;
             report.flamegraph_with_options(file, &mut options).unwrap();
+
+            let fname_rev = format!("{}_reverse.svg", module_name);
+            let file_rev = File::create(fname_rev).unwrap();
+            options.reverse_stack_order = true;
+            options.direction = pprof::flamegraph::Direction::Straight;
+            report.flamegraph_with_options(file_rev, &mut options).unwrap();
         }
     }
 

@@ -1,7 +1,0 @@
-fn main(): i32 {
-  // nocommit: commit this test of short-circuiting or and and
-  
-  let a = 1 + 2;
-
-  0
-}

@@ -152,7 +152,6 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
                 s.fields.len().hash(state);
                 for &field_id in &s.fields {
                     field_id.hash(state);
-                    // d.get(field_id).dep_hash(d, state);
                 }
             }
             StaticValue::Enum(e) => {
@@ -175,7 +174,7 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
 }
 
 impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
-    fn dep_eq(&self, other: &Self, pool: &VPool<StaticValue, StaticValueId>) -> bool {
+    fn dep_eq(&self, other: &Self, _pool: &VPool<StaticValue, StaticValueId>) -> bool {
         match (self, other) {
             (StaticValue::Unit, StaticValue::Unit) => true,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
@@ -193,9 +192,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
                     && a.typed_as_enum == b.typed_as_enum
                     && match (a.payload, b.payload) {
                         (None, None) => true,
-                        (Some(a_payload), Some(b_payload)) => {
-                            pool.get(a_payload).dep_eq(pool.get(b_payload), pool)
-                        }
+                        (Some(a_payload), Some(b_payload)) => a_payload == b_payload,
                         _ => false,
                     }
             }
@@ -205,7 +202,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
                     && a.elements
                         .iter()
                         .zip(b.elements.iter())
-                        .all(|(&a_elem, &b_elem)| pool.get(a_elem).dep_eq(pool.get(b_elem), pool))
+                        .all(|(&a_elem, &b_elem)| a_elem == b_elem)
             }
             _ => false,
         }

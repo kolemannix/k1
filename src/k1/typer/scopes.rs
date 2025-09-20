@@ -3,7 +3,7 @@
 
 use ahash::HashMapExt;
 use fxhash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
 
@@ -13,6 +13,7 @@ use crate::{
     nz_u32_id,
     parse::{IdentPool, IdentSlice, ParsedAbilityId, ParsedExprId, QIdent},
     pool::VPool,
+    static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
         TyperResult, VariableId,
@@ -20,6 +21,7 @@ use crate::{
 };
 
 nz_u32_id!(ScopeId);
+static_assert_niched!(ScopeId);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -86,6 +88,18 @@ impl Display for ScopeType {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ScopeEnclosingFunctions {
+    pub lambda: Option<ScopeId>,
+    pub function: Option<FunctionId>,
+}
+
+impl ScopeEnclosingFunctions {
+    pub fn empty() -> Self {
+        ScopeEnclosingFunctions { lambda: None, function: None }
+    }
+}
+
 pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
@@ -101,9 +115,14 @@ pub struct ScopeDefers {
 }
 
 pub struct Scopes {
-    scopes: VPool<Scope, ScopeId>,
-    lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
-    loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
+    /// SCOPES SoA POOLS BEGIN
+    pub scopes: VPool<Scope, ScopeId>,
+    pub children: VPool<SV4<ScopeId>, ScopeId>,
+    /// The actual function that a scope appears within is a very important thing to know
+    pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
+    /// SCOPES SoA POOLS END
+    pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
+    pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
     pub core_scope_id: ScopeId,
     pub k1_scope_id: ScopeId,
@@ -113,10 +132,12 @@ pub struct Scopes {
 
 impl Scopes {
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
-    pub fn make(root_ident: Ident) -> Self {
-        let root_scope = Scope::make(ScopeType::Namespace, None, Some(root_ident), 0);
+    pub fn make(root_ident: Ident, count_hint: usize) -> Self {
+        let root_scope = Scope::make(ScopeType::Namespace, None, Some(root_ident));
         let mut scopes = Scopes {
-            scopes: VPool::make_with_hint("scopes", 8192),
+            scopes: VPool::make_with_hint("scopes", count_hint),
+            children: VPool::make_with_hint("scope_children", count_hint),
+            enclosing_functions: VPool::make_with_hint("scope_enclosing_functions", count_hint),
             lambda_info: FxHashMap::new(),
             loop_info: FxHashMap::new(),
             block_defers: FxHashMap::new(),
@@ -125,9 +146,27 @@ impl Scopes {
             types_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
         };
-        let id = scopes.scopes.add(root_scope);
+        let id = scopes.add(
+            root_scope,
+            smallvec![],
+            ScopeEnclosingFunctions { lambda: None, function: None },
+        );
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
         scopes
+    }
+
+    fn add(
+        &mut self,
+        scope: Scope,
+        children: SV4<ScopeId>,
+        enclosing: ScopeEnclosingFunctions,
+    ) -> ScopeId {
+        let id = self.scopes.add(scope);
+        let id2 = self.children.add(children);
+        let id3 = self.enclosing_functions.add(enclosing);
+        debug_assert_eq!(id, id2);
+        debug_assert_eq!(id2, id3);
+        id
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
@@ -158,14 +197,17 @@ impl Scopes {
         name: Option<Ident>,
     ) -> ScopeId {
         let id = self.scopes.next_id();
-        let parent_scope = self.get_scope_mut(parent_scope_id);
-        parent_scope.children.push(id);
-        let depth = parent_scope.depth + 1;
-        let scope = Scope {
-            parent: Some(parent_scope_id),
-            ..Scope::make(scope_type, scope_owner_id, name, depth)
-        };
-        self.scopes.add(scope);
+        self.children.get_mut(parent_scope_id).push(id);
+        let mut scope = Scope::make(scope_type, scope_owner_id, name);
+        scope.parent = Some(parent_scope_id);
+
+        let id = self.add(scope, smallvec![], ScopeEnclosingFunctions::empty());
+
+        let enclosing_lambda = self.nearest_parent_lambda(id);
+        let enclosing_function = self.nearest_parent_function(id);
+        *self.enclosing_functions.get_mut(id) =
+            ScopeEnclosingFunctions { lambda: enclosing_lambda, function: enclosing_function };
+
         id
     }
 
@@ -406,10 +448,15 @@ impl Scopes {
         }
     }
 
-    pub fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
+    // TODO(scopes perf): We could actually now use the pre-computed `enclosing_functions` of our parents to find these
+    // much more quickly instead
+    fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
         let scope = self.get_scope(scope_id);
         match scope.scope_type {
             ScopeType::LambdaScope => Some(scope_id),
+            // We can stop searching once we find a function scope; a lambda won't ever appear
+            // outside of a function!
+            ScopeType::FunctionScope => None,
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_lambda(parent),
                 None => None,
@@ -428,21 +475,32 @@ impl Scopes {
         }
     }
 
-    pub fn make_scope_name(&self, scope: &Scope, identifiers: &IdentPool) -> String {
-        let mut name = match scope.name {
-            Some(_) if scope.parent.is_none() => "",
-            Some(name) => identifiers.get_name(name),
-            None => scope.scope_type.short_name(),
-        }
-        .to_string();
+    pub fn scope_name_to_string(&self, scope: &Scope, identifiers: &IdentPool) -> String {
+        let mut name = String::new();
+        self.display_scope_name(&mut name, scope, identifiers).unwrap();
+        name
+    }
+
+    pub fn display_scope_name(
+        &self,
+        name_buf: &mut impl std::fmt::Write,
+        scope: &Scope,
+        identifiers: &IdentPool,
+    ) -> std::fmt::Result {
         if let Some(p) = scope.parent {
             let parent_scope = self.get_scope(p);
-            let parent_name = self.make_scope_name(parent_scope, identifiers);
-            if !parent_name.is_empty() {
-                name = format!("{}.{}", parent_name, name);
-            }
+            self.display_scope_name(name_buf, parent_scope, identifiers)?;
+            name_buf.write_char('.')?;
         }
-        name
+        match scope.name {
+            Some(_) if scope.parent.is_none() => {}
+            Some(name) => {
+                name_buf.write_str(identifiers.get_name(name))?;
+            }
+            None => name_buf.write_str(scope.scope_type.short_name())?,
+        };
+
+        Ok(())
     }
 
     pub fn traverse_namespace_chain(
@@ -464,7 +522,7 @@ impl Scopes {
                 span,
                 "Namespace not found: {} from scope: {:?}",
                 idents.get_name(*first),
-                self.make_scope_name(self.get_scope(cur_scope_id), idents)
+                self.scope_name_to_string(self.get_scope(cur_scope_id), idents)
             ));
         };
         cur_scope_id = namespaces.get(first_ns).scope_id;
@@ -659,9 +717,13 @@ impl VariableInScope {
     }
 }
 
-// Every scope is 288 bytes!!
+// Every scope is 248 bytes!!
 // Time for a less naive more computer-friendly representation
+#[repr(C)]
 pub struct Scope {
+    pub parent: Option<ScopeId>,
+    pub scope_type: ScopeType,
+    pub owner_id: Option<ScopeOwnerId>,
     pub variables: FxHashMap<Ident, VariableInScope>,
     pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
     pub functions: FxHashMap<Ident, FunctionId>,
@@ -669,13 +731,8 @@ pub struct Scope {
     pub types: FxHashMap<Ident, TypeId>,
     pub abilities: FxHashMap<Ident, AbilityId>,
     pub pending_ability_defns: FxHashMap<Ident, ParsedAbilityId>,
-    pub parent: Option<ScopeId>,
-    pub children: SmallVec<[ScopeId; 4]>,
-    pub scope_type: ScopeType,
-    pub owner_id: Option<ScopeOwnerId>,
     /// Name is just used for pretty-printing and debugging; scopes don't really have names
     pub name: Option<Ident>,
-    pub depth: usize,
 }
 
 impl Scope {
@@ -683,7 +740,6 @@ impl Scope {
         scope_type: ScopeType,
         owner_id: Option<ScopeOwnerId>,
         name: Option<Ident>,
-        depth: usize,
     ) -> Scope {
         Scope {
             variables: FxHashMap::new(),
@@ -694,11 +750,9 @@ impl Scope {
             abilities: FxHashMap::new(),
             pending_ability_defns: FxHashMap::new(),
             parent: None,
-            children: SmallVec::new(),
             scope_type,
             owner_id,
             name,
-            depth,
         }
     }
 

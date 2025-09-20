@@ -56,17 +56,8 @@ impl TypedProgram {
     }
 
     pub fn display_scope(&self, scope: &Scope, writ: &mut impl Write) -> std::fmt::Result {
-        let scope_name = self.scopes.make_scope_name(scope, &self.ast.idents);
-        let parent = scope
-            .parent
-            .map(|p| self.scopes.make_scope_name(self.scopes.get_scope(p), &self.ast.idents));
-        writeln!(
-            writ,
-            "{} {} (parent: {})",
-            scope_name,
-            scope.scope_type.short_name(),
-            parent.unwrap_or("_ROOT_".to_string())
-        )?;
+        self.scopes.display_scope_name(writ, scope, &self.ast.idents)?;
+        writeln!(writ, " {}", scope.scope_type.short_name())?;
 
         if !scope.variables.is_empty() {
             writ.write_str("\tVARS\n")?;
@@ -215,12 +206,13 @@ impl TypedProgram {
             }
             Type::TypeParameter(tv) => {
                 if expand {
-                    let scope_name = self
-                        .scopes
-                        .make_scope_name(self.scopes.get_scope(tv.scope_id), &self.ast.idents);
-                    w.write_str(&scope_name)?;
+                    self.scopes.display_scope_name(
+                        w,
+                        self.scopes.get_scope(tv.scope_id),
+                        &self.ast.idents,
+                    )?;
                     w.write_str(".")?;
-                    w.write_str("'")?;
+                    w.write_str("$")?;
                     w.write_str(self.ident_str(tv.name))?;
                 } else {
                     w.write_str(self.ident_str(tv.name))?;
@@ -1099,7 +1091,7 @@ impl TypedProgram {
         self.display_type_id(i.self_type_id, false, w)?;
         if display_functions {
             w.write_str(" {\n")?;
-            for ability_impl_fn in &i.functions {
+            for ability_impl_fn in self.a.get_slice(i.functions) {
                 w.write_str("\t\t")?;
                 match *ability_impl_fn {
                     AbilityImplFunction::FunctionId(ability_impl_fn) => {
