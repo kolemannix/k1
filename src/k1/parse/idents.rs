@@ -208,7 +208,7 @@ pub struct BuiltinFunctions {
 // We use the default StringInterner, which uses a contiguous string as its backend
 // and u32 symbols
 pub struct IdentPool {
-    intern_pool: string_interner::StringInterner<StringBackend>,
+    intern_pool: string_interner::StringInterner<StringBackend, fxhash::FxBuildHasher>,
     pub slices: VPool<Ident, IdentSliceId>,
     /// b for builtins
     pub b: BuiltinIdents,
@@ -227,10 +227,17 @@ impl IdentPool {
         self.intern_pool.resolve(id.0).expect("failed to resolve identifier")
     }
 
+    pub fn len(&self) -> usize {
+        self.intern_pool.len()
+    }
+
     #[allow(non_snake_case)]
     pub fn make() -> Self {
         let mut slices: VPool<Ident, IdentSliceId> = VPool::make_with_hint("ident_slices", 8192);
-        let mut pool = string_interner::StringInterner::with_capacity(65536);
+        let mut pool = string_interner::StringInterner::with_capacity_and_hasher(
+            65536,
+            fxhash::FxBuildHasher::default(),
+        );
 
         macro_rules! intern {
             ($name: expr) => {

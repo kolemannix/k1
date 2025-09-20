@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 
 pub mod codegen_llvm;
 pub mod compiler;
+mod fixmap;
 mod kmem;
 pub mod lex;
 pub mod parse;

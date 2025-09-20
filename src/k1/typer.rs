@@ -144,7 +144,7 @@ pub struct InferenceInputPair {
 pub struct InferenceContext {
     pub origin_stack: Vec<SpanId>,
     pub params: Vec<TypeId>,
-    pub solutions_so_far: EcoVec<TypeSubstitutionPair>,
+    pub solutions_so_far: Vec<TypeSubstitutionPair>,
     pub inference_vars: Vec<TypeId>,
     pub constraints: Vec<TypeSubstitutionPair>,
     pub substitutions: FxHashMap<TypeId, TypeId>,
@@ -157,7 +157,7 @@ impl InferenceContext {
         InferenceContext {
             origin_stack: Vec::with_capacity(64),
             params: Vec::with_capacity(128),
-            solutions_so_far: EcoVec::with_capacity(32),
+            solutions_so_far: Vec::with_capacity(64),
             inference_vars: Vec::with_capacity(32),
             constraints: Vec::with_capacity(256),
             substitutions: FxHashMap::with_capacity(256),
@@ -1027,10 +1027,10 @@ impl Callee {
         Callee::StaticFunction(function_id)
     }
 
-    pub fn from_ability_impl_fn(ability_impl_fn: AbilityImplFunction) -> Callee {
+    pub fn from_ability_impl_fn(ability_impl_fn: &AbilityImplFunction) -> Callee {
         match ability_impl_fn {
-            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
-            AbilityImplFunction::Abstract(sig) => Callee::Abstract { function_sig: sig },
+            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(*function_id),
+            AbilityImplFunction::Abstract(sig) => Callee::Abstract { function_sig: *sig },
         }
     }
 
@@ -2095,7 +2095,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: EcoVec<AbilityImplFunction>,
+    pub functions: MSlice<AbilityImplFunction>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2104,8 +2104,8 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(&self, index: u32) -> AbilityImplFunction {
-        self.functions[index as usize]
+    pub fn function_at_index(&self, mem: &kmem::Mem, index: u32) -> &AbilityImplFunction {
+        mem.get_nth(self.functions, index as usize)
     }
 
     pub fn signature(&self) -> TypedAbilitySignature {
@@ -2402,7 +2402,7 @@ impl TypedProgram {
 
         let ast = ParsedProgram::make(program_name, config);
         let root_ident = ast.idents.b.root_module_name;
-        let mut scopes = Scopes::make(root_ident);
+        let mut scopes = Scopes::make(root_ident, 8192);
         let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
         let root_namespace = Namespace {
             name: root_ident,
@@ -2636,6 +2636,7 @@ impl TypedProgram {
         eprintln!("\t{} expressions", self.exprs.len());
         eprintln!("\t{} functions", self.functions.len());
         eprintln!("\t{} types", self.types.type_count());
+        eprintln!("\t{} idents", self.ast.idents.len());
         self.print_timing_info(&mut stderr()).unwrap();
 
         Ok(module_id)
@@ -5261,46 +5262,38 @@ impl TypedProgram {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
         }
-        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
         let impl_kind = AbilityImplKind::TypeParamConstraint;
-        let functions = functions
-            .iter()
-            .map(|f| {
-                let generic_fn = self.get_function(f.function_id);
-                let generic_sig = generic_fn.signature();
-                let generic_fn_type_id = generic_fn.type_id;
-                let specialized_function_type =
-                    self.substitute_in_type(generic_fn_type_id, &subst_pairs);
+        let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
+        let mut impl_functions = self.a.new_vec(functions.len());
+        for f in functions.iter() {
+            let generic_fn = self.get_function(f.function_id);
+            let generic_sig = generic_fn.signature();
+            let generic_fn_type_id = generic_fn.type_id;
+            let specialized_function_type =
+                self.substitute_in_type(generic_fn_type_id, &subst_pairs);
 
-                // We have to directly remove 'Self' from the type parameters of the signature
-                // since it's the only one of the ability params that gets 'encoded' as a type
-                // parameter to the function
-                let type_params_minus_self = {
-                    let mut type_params_minus_self =
-                        self.named_types.copy_slice_sv::<4>(generic_sig.type_params);
-                    type_params_minus_self.retain(|tp| tp.type_id != ability_self_type);
-                    self.named_types.add_slice_copy(&type_params_minus_self)
-                };
-                debug_assert_eq!(type_params_minus_self.len() + 1, generic_sig.type_params.len());
-                let specialized_signature = FunctionSignature {
-                    function_type: specialized_function_type,
-                    type_params: type_params_minus_self,
-                    ..generic_sig
-                };
-                debug!(
-                    "specialized constraint ability function signature {}: {}",
-                    self.function_signature_to_string(generic_sig),
-                    self.function_signature_to_string(specialized_signature),
-                );
-                Ok(AbilityImplFunction::Abstract(specialized_signature))
-            })
-            .collect::<TyperResult<EcoVec<_>>>();
-        let functions = functions.unwrap_or_else(|err| {
-            self.ice(
-                "Failed while specializing an impl function for a type variable ability constraint",
-                Some(&err),
-            )
-        });
+            // We have to directly remove 'Self' from the type parameters of the signature
+            // since it's the only one of the ability params that gets 'encoded' as a type
+            // parameter to the function
+            let type_params_minus_self = {
+                let mut type_params_minus_self =
+                    self.named_types.copy_slice_sv::<4>(generic_sig.type_params);
+                type_params_minus_self.retain(|tp| tp.type_id != ability_self_type);
+                self.named_types.add_slice_copy(&type_params_minus_self)
+            };
+            debug_assert_eq!(type_params_minus_self.len() + 1, generic_sig.type_params.len());
+            let specialized_signature = FunctionSignature {
+                function_type: specialized_function_type,
+                type_params: type_params_minus_self,
+                ..generic_sig
+            };
+            debug!(
+                "specialized constraint ability function signature {}: {}",
+                self.function_signature_to_string(generic_sig),
+                self.function_signature_to_string(specialized_signature),
+            );
+            impl_functions.push(AbilityImplFunction::Abstract(specialized_signature))
+        }
         self.add_ability_impl(TypedAbilityImpl {
             kind: impl_kind,
             blanket_type_params: SliceHandle::empty(),
@@ -5308,7 +5301,7 @@ impl TypedProgram {
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
-            functions,
+            functions: self.a.vec_to_mslice(&impl_functions),
             scope_id,
             span,
             compile_errors: vec![],
@@ -5798,13 +5791,13 @@ impl TypedProgram {
 
         let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
 
-        let mut specialized_functions = EcoVec::with_capacity(blanket_impl.functions.len());
+        let mut specialized_functions = self.a.new_vec(blanket_impl.functions.len() as usize);
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         debug!(
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_impl_function in &blanket_impl.functions {
+        for blanket_impl_function in self.a.get_slice(blanket_impl.functions) {
             // If the functions are abstract, just the type ids
             // If concrete do the declaration thing
             //
@@ -5845,7 +5838,7 @@ impl TypedProgram {
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
             impl_arguments: substituted_impl_arguments_handle,
-            functions: specialized_functions,
+            functions: self.a.vec_to_mslice(&specialized_functions),
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: vec![],
@@ -6055,18 +6048,17 @@ impl TypedProgram {
                 )
             }
             Some((variable_id, variable_scope_id)) => {
-                let parent_lambda_scope_id = self.scopes.nearest_parent_lambda(scope_id);
-                let is_capture = if let Some(nearest_parent_lambda_scope) = parent_lambda_scope_id {
-                    let variable_is_above_lambda = self
-                        .scopes
-                        .scope_has_ancestor(nearest_parent_lambda_scope, variable_scope_id);
+                let parent_lambda = self.scopes.enclosing_functions.get(scope_id).lambda;
+                let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
+                    let variable_is_above_lambda =
+                        self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
                     let variable_is_global = self.variables.get(variable_id).global_id.is_some();
 
                     let is_capture = variable_is_above_lambda && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.ident_str(variable.name.name));
-                    is_capture
+                    (is_capture, Some(lambda_scope_id))
                 } else {
-                    false
+                    (false, None)
                 };
 
                 let v = self.variables.get(variable_id);
@@ -6084,11 +6076,7 @@ impl TypedProgram {
                             resolved_expr: None,
                             span: variable_name_span,
                         }));
-                    self.scopes.add_capture(
-                        parent_lambda_scope_id.unwrap(),
-                        variable_id,
-                        fixup_expr_id,
-                    );
+                    self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
                     Ok((variable_id, fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
@@ -6481,11 +6469,6 @@ impl TypedProgram {
             result_block_ctx,
             false,
         )?;
-        // FIXME: Consider alternatives for locating the block's makeError function
-        //        in a less brittle way
-        let block_make_error_fn =
-            self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(0);
-
         let get_error_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Try_getError.with_span(span),
             &[],
@@ -6493,6 +6476,10 @@ impl TypedProgram {
             result_block_ctx,
             false,
         )?;
+        // FIXME: Consider alternatives for locating the block's makeError function
+        //        in a less brittle way
+        let block_make_error_fn =
+            self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.a, 0);
         let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: smallvec![get_error_call],
@@ -6900,7 +6887,7 @@ impl TypedProgram {
                     );
                 };
                 let impl_ = self.ability_impls.get(impl_handle.full_impl_id);
-                let impl_function = impl_.function_at_index(tafr.index);
+                let impl_function = impl_.function_at_index(&self.a, tafr.index);
                 self.eval_function_call(
                     &call_ast_expr,
                     None,
@@ -7843,18 +7830,18 @@ impl TypedProgram {
             _ => body.expr_type,
         };
 
-        let encl_fn_name = self
-            .get_function(
-                self.scopes
-                    .nearest_parent_function(ctx.scope_id)
-                    .expect("lambda to be inside a function"),
-            )
-            .name;
-        let name = self.ast.idents.intern(format!(
-            "{}_{{lambda}}_{}",
-            self.ident_str(encl_fn_name),
-            lambda_scope_id,
-        ));
+        let encl_fn_id = self
+            .scopes
+            .enclosing_functions
+            .get(ctx.scope_id)
+            .function
+            .expect("lambda to be inside a function");
+        let encl_fn_name = self.get_function(encl_fn_id).name;
+        let name = self.build_ident_with(|k1, s| {
+            s.push_str(k1.ident_str(encl_fn_name));
+            s.push_str("_{lambda}_");
+            write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
+        });
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
         let name = self.ast.idents.intern(name_string);
 
@@ -7862,7 +7849,7 @@ impl TypedProgram {
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
 
-        // NO CAPTURES! Optimize to a regular function
+        // NO CAPTURES! Optimize this lambda down into a regular function
         if lambda_info.captured_variables.is_empty() {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
                 physical_params: EcoVec::from_iter(typed_params),
@@ -8018,6 +8005,7 @@ impl TypedProgram {
             body_function_id,
             expr_id.into(),
         );
+        self.scopes.set_scope_owner_id(lambda_scope_id, ScopeOwnerId::Lambda(lambda_type_id));
         Ok(self.exprs.add(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
     }
 
@@ -9555,7 +9543,7 @@ impl TypedProgram {
                             known_args,
                             ctx,
                         )?;
-                        Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_function)))
+                        Ok(Either::Right(Callee::from_ability_impl_fn(&ability_impl_function)))
                     } else {
                         Ok(Either::Right(Callee::make_static(function_id)))
                     }
@@ -9632,22 +9620,23 @@ impl TypedProgram {
     }
 
     fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
-        if let Some(enclosing_lambda) = self.scopes.nearest_parent_lambda(scope_id) {
-            let Some(expected_return_type) =
-                self.scopes.get_lambda_info(enclosing_lambda).expected_return_type
-            else {
-                return failf!(
-                    span,
-                    "Closure must have explicit return type, or known return type from context, to use early returns."
-                );
-            };
-            Ok(expected_return_type)
-        } else {
-            let Some(enclosing_function) = self.scopes.nearest_parent_function(scope_id) else {
-                return failf!(span, "No parent function; cannot return");
-            };
-            let expected_return_type = self.get_function_type(enclosing_function).return_type;
-            Ok(expected_return_type)
+        match self.scopes.enclosing_functions.get(scope_id) {
+            ScopeEnclosingFunctions { lambda: Some(lambda_scope), .. } => {
+                let Some(expected_return_type) =
+                    self.scopes.get_lambda_info(*lambda_scope).expected_return_type
+                else {
+                    return failf!(
+                        span,
+                        "Closure must have explicit return type, or known return type from context, to use early returns."
+                    );
+                };
+                Ok(expected_return_type)
+            }
+            ScopeEnclosingFunctions { function: Some(function_id), .. } => {
+                let expected_return_type = self.get_function_type(*function_id).return_type;
+                Ok(expected_return_type)
+            }
+            _ => failf!(span, "No parent function; cannot return"),
         }
     }
 
@@ -10114,7 +10103,7 @@ impl TypedProgram {
                     self.abilities.get(*ability_id).find_function_by_name(fn_name).unwrap();
                 match self.solve_ability_call(ability_function_ref, call, known_args, ctx) {
                     Ok(ability_impl_fn) => {
-                        return Ok(Either::Right(Callee::from_ability_impl_fn(ability_impl_fn)));
+                        return Ok(Either::Right(Callee::from_ability_impl_fn(&ability_impl_fn)));
                     }
                     Err(e) => {
                         errors.push(e);
@@ -10229,9 +10218,8 @@ impl TypedProgram {
         let call_span = fn_call.span;
         let function_type_id = self.get_function(ability_function_ref.function_id).type_id;
         let base_ability_id = ability_function_ref.ability_id;
-        let ability_fn_type = self.types.get(function_type_id).as_function().unwrap();
+        let ability_fn_type = self.types.get(function_type_id).as_function().unwrap().clone();
         let ability_fn_return_type = ability_fn_type.return_type;
-        let ability_fn_params: Vec<FnParamType> = ability_fn_type.logical_params().to_vec();
         let ability_params = self.abilities.get(base_ability_id).parameters.clone();
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
@@ -10288,7 +10276,7 @@ impl TypedProgram {
                 &mut args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value))
             }
         };
-        let mut args_and_params = Vec::with_capacity(passed_len);
+        let mut args_and_params = self.tmp.new_vec(passed_len + 1);
         if let Some(expected_type) = ctx.expected_type_id {
             args_and_params.push(InferenceInputPair {
                 arg: TypeOrParsedExpr::Type(expected_type),
@@ -10296,7 +10284,7 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        for (arg, param) in passed_args.zip(ability_fn_params.iter()) {
+        for (arg, param) in passed_args.zip(ability_fn_type.logical_params().iter()) {
             let arg_and_param = match arg {
                 MaybeTypedExpr::Typed(expr) => {
                     let type_id = self.exprs.get(expr).get_type();
@@ -10331,7 +10319,8 @@ impl TypedProgram {
             fn_call.span,
             ctx.scope_id,
         )?;
-        let mut parameter_constraints: SV8<Option<TypeId>> = smallvec![];
+        let mut parameter_constraints: MVec<Option<TypeId>> =
+            self.tmp.new_vec(ability_params.len());
         for ab_param in &ability_params {
             if ab_param.is_impl_param {
                 continue;
@@ -10371,8 +10360,8 @@ impl TypedProgram {
         let impl_function = self
             .ability_impls
             .get(impl_handle.full_impl_id)
-            .function_at_index(ability_function_ref.index);
-        Ok(impl_function)
+            .function_at_index(&self.a, ability_function_ref.index);
+        Ok(*impl_function)
     }
 
     fn handle_enum_get_tag(
@@ -13610,7 +13599,7 @@ impl TypedProgram {
             };
         }
 
-        let mut typed_functions = EcoVec::with_capacity(ability.functions.len());
+        let mut typed_functions = self.a.new_vec(ability.functions.len());
         for ability_function_ref in &ability.functions {
             let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
                 let the_fn = self.ast.get_function(fn_id);
@@ -13697,7 +13686,7 @@ impl TypedProgram {
             ability_id,
             base_ability_id,
             impl_arguments: impl_arguments_handle,
-            functions: typed_functions,
+            functions: self.a.vec_to_mslice(&typed_functions),
             scope_id: impl_scope_id,
             span,
             compile_errors: vec![],
@@ -13727,7 +13716,7 @@ impl TypedProgram {
         };
         let ability_impl = self.ability_impls.get(ability_impl_id);
 
-        for impl_fn in ability_impl.functions.clone().iter() {
+        for impl_fn in self.a.get_slice(ability_impl.functions).iter() {
             let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
@@ -13873,7 +13862,7 @@ impl TypedProgram {
 
         debug!(
             "Searching scope for useable symbol: {}, Functions:\n{:?}",
-            self.scopes.make_scope_name(scope_to_search, &self.ast.idents),
+            self.scopes.scope_name_to_string(scope_to_search, &self.ast.idents),
             scope_to_search.functions.iter().collect::<Vec<_>>()
         );
 
@@ -14439,9 +14428,6 @@ impl TypedProgram {
         debug_assert_eq!(self.types.types.len(), self.types.layouts.len());
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
-        // eprintln!("{}", self.dump_types_to_string());
-        self.tmp.print_usage("tmp");
-
         for type_id in self.types.iter_ids().collect_vec() {
             if let Type::Unresolved(ast_id) = self.types.get(type_id) {
                 let span = self.ast.get_span_for_id(ParsedId::TypeDefn(*ast_id));
@@ -14463,8 +14449,6 @@ impl TypedProgram {
                 self.errors.len()
             )
         }
-
-        self.tmp.print_usage("tmp");
 
         debug_assert!(self.abilities.get(EQUALS_ABILITY_ID).name == get_ident!(self, "Equals"));
         debug_assert!(self.abilities.get(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
@@ -14504,6 +14488,7 @@ impl TypedProgram {
         }
 
         self.tmp.print_usage("tmp end");
+        self.a.print_usage("mem end");
 
         Ok(())
     }

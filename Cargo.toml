@@ -96,6 +96,7 @@ too_many_arguments = "allow"
 collapsible_else_if = "allow"
 collapsible_if = "allow"
 manual_map = "allow"
+len_without_is_empty = "allow"
 # This rule overfits for the current-state; single matches
 # are more easily evolved to select more cases than if lets
 single_match = "allow"

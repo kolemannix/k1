@@ -4167,13 +4167,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn interpret_module(&self) -> anyhow::Result<u64> {
         let engine = self.llvm_module.create_jit_execution_engine(OptimizationLevel::None).unwrap();
-        let base_lib_module = self
-            .ctx
-            .create_module_from_ir(
-                MemoryBuffer::create_from_file(Path::new("k1lib/k1lib.ll")).unwrap(),
-            )
-            .unwrap();
-        self.llvm_module.link_in_module(base_lib_module).unwrap();
+        // let base_lib_module = self
+        //     .ctx
+        //     .create_module_from_ir(
+        //         MemoryBuffer::create_from_file(Path::new("k1lib/k1lib.ll")).unwrap(),
+        //     )
+        //     .unwrap();
+        // self.llvm_module.link_in_module(base_lib_module).unwrap();
         let Some(main_fn_id) = self.k1.get_main_function_id() else { bail!("No main function") };
         let llvm_function = self.llvm_functions.get(&main_fn_id).unwrap();
         eprintln!("Interpreting {}", self.k1.program_name());
