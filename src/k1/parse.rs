@@ -241,6 +241,12 @@ impl ParsedLiteral {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct StringId(string_interner::symbol::SymbolU32);
 
+impl StringId {
+    pub fn as_usize(&self) -> usize {
+        self.0.to_usize()
+    }
+}
+
 impl Display for StringId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.to_usize())

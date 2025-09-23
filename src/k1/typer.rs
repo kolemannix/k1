@@ -11,6 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
+use crate::bc;
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -1346,7 +1347,7 @@ pub struct MatchingCondition {
 
 #[derive(Debug, Clone)]
 pub enum MatchingConditionInstr {
-    Binding { let_stmt: TypedStmtId, variable_id: VariableId },
+    Binding { let_stmt: TypedStmtId },
     Cond { value: TypedExprId },
 }
 impl_copy_if_small!(8, MatchingConditionInstr);
@@ -2283,7 +2284,9 @@ pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
+
     functions: VPool<TypedFunction, FunctionId>,
+
     pub variables: VPool<Variable, VariableId>,
     pub types: TypePool,
     pub globals: VPool<TypedGlobal, TypedGlobalId>,
@@ -2345,6 +2348,9 @@ pub struct TypedProgram {
     pub a: kmem::Mem,
     /// tmp arena space
     pub tmp: kmem::Mem,
+
+    /// Option for the take trick
+    pub bytecode: Option<bc::ProgramBytecode>,
 
     pub timing: Timing,
 }
@@ -2495,6 +2501,11 @@ impl TypedProgram {
 
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
+
+            bytecode: Some(bc::ProgramBytecode {
+                mem: kmem::Mem::make(),
+                functions: VPool::make_with_hint("bytecode_functions", 8192),
+            }),
 
             timing: Timing { clock, total_infers: 0, total_infer_nanos: 0, total_vm_nanos: 0 },
         }
@@ -5197,6 +5208,7 @@ impl TypedProgram {
         }
         function.is_concrete = is_concrete;
         self.functions.add(function);
+        self.bytecode.as_mut().unwrap().functions.add(None);
         id
     }
 
@@ -8336,7 +8348,6 @@ impl TypedProgram {
                         self.synth_variable_defn_simple(var_name, get_struct_field, ctx.scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
                         let_stmt: struct_field_variable.defn_stmt,
-                        variable_id: struct_field_variable.variable_id,
                     });
                     self.compile_pattern_into_values(
                         pattern_field.pattern,
@@ -8403,7 +8414,6 @@ impl TypedProgram {
                         self.synth_variable_defn_simple(var_name, get_payload_expr, ctx.scope_id);
                     instrs.push(MatchingConditionInstr::Binding {
                         let_stmt: payload_variable.defn_stmt,
-                        variable_id: payload_variable.variable_id,
                     });
                     self.compile_pattern_into_values(
                         payload_pattern,
@@ -8419,10 +8429,8 @@ impl TypedProgram {
                 let variable_ident = variable_pattern.name;
                 let binding_variable =
                     self.synth_variable_defn_visible(variable_ident, target_expr, ctx.scope_id);
-                instrs.push(MatchingConditionInstr::Binding {
-                    let_stmt: binding_variable.defn_stmt,
-                    variable_id: binding_variable.variable_id,
-                });
+                instrs
+                    .push(MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt });
                 Ok(())
             }
             TypedPattern::Wildcard(_span) => Ok(()),
@@ -9184,10 +9192,7 @@ impl TypedProgram {
                 );
                 let pattern =
                     self.eval_pattern(pattern, target_type, ctx.scope_id, *allow_bindings)?;
-                instrs.push(MatchingConditionInstr::Binding {
-                    let_stmt: target_var.defn_stmt,
-                    variable_id: target_var.variable_id,
-                });
+                instrs.push(MatchingConditionInstr::Binding { let_stmt: target_var.defn_stmt });
                 self.compile_pattern_into_values(
                     pattern,
                     target_var.variable_expr,
@@ -11455,7 +11460,7 @@ impl TypedProgram {
             let spec_num = generic_function.child_specializations.len() + 1;
             write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
             for nt in m.named_types.get_slice(type_arguments) {
-                m.display_type_id(nt.type_id, false, s).unwrap()
+                m.display_type_id(s, nt.type_id, false).unwrap()
             }
             write!(s, "_{spec_num}").unwrap();
         });
@@ -11803,9 +11808,7 @@ impl TypedProgram {
 
                 // Make the binding variables unavailable in the else scope
                 for instr in &condition.instrs {
-                    if let MatchingConditionInstr::Binding { let_stmt, variable_id: _variable_id } =
-                        instr
-                    {
+                    if let MatchingConditionInstr::Binding { let_stmt } = instr {
                         let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
                         let variable = self.variables.get(stmt.variable_id);
 

@@ -91,7 +91,7 @@ impl TypedProgram {
             writ.write_str("\t")?;
             self.write_ident(writ, *ident)?;
             writ.write_str(" -> ")?;
-            self.display_type_id(*type_id, true, writ)?;
+            self.display_type_id(writ, *type_id, true)?;
             writ.write_str("\n")?;
         }
         if !scope.namespaces.is_empty() {
@@ -110,18 +110,18 @@ impl TypedProgram {
         writ.write_str("(")?;
         writ.write_str(self.ident_str(var.name))?;
         writ.write_str(": ")?;
-        self.display_type_id(var.type_id, false, writ)?;
+        self.display_type_id(writ, var.type_id, false)?;
         writ.write_str(")")?;
         Ok(())
     }
 
     pub fn display_type_id(
         &self,
+        writ: &mut impl Write,
         ty: TypeId,
         expand: bool,
-        writ: &mut impl Write,
     ) -> std::fmt::Result {
-        self.display_type_ext(ty, expand, writ)
+        self.display_type_ext(writ, ty, expand)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -146,33 +146,33 @@ impl TypedProgram {
 
     pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
         let mut s = String::with_capacity(1028);
-        self.display_type_ext(type_id, expand, &mut s).unwrap();
+        self.display_type_ext(&mut s, type_id, expand).unwrap();
         s
     }
 
     fn display_instance_info(
         &self,
-        writ: &mut impl Write,
+        w: &mut impl Write,
         spec_info: &GenericInstanceInfo,
         expand: bool,
     ) -> std::fmt::Result {
-        writ.write_str("[")?;
+        w.write_str("[")?;
         for (index, t) in self.types.type_slices.get_slice(spec_info.type_args).iter().enumerate() {
-            self.display_type_id(*t, expand, writ)?;
+            self.display_type_id(w, *t, expand)?;
             let last = index == spec_info.type_args.len() - 1;
             if !last {
-                writ.write_str(", ")?;
+                w.write_str(", ")?;
             }
         }
-        writ.write_str("]")?;
+        w.write_str("]")?;
         Ok(())
     }
 
     fn display_type_ext(
         &self,
+        w: &mut impl Write,
         type_id: TypeId,
         expand: bool,
-        w: &mut impl Write,
     ) -> std::fmt::Result {
         let defn_info = self.types.get_defn_info(type_id);
         match self.types.get_no_follow(type_id) {
@@ -221,7 +221,7 @@ impl TypedProgram {
             }
             Type::FunctionTypeParameter(ftp) => {
                 w.write_str("some ")?;
-                self.display_type_id(ftp.function_type, expand, w)?;
+                self.display_type_id(w, ftp.function_type, expand)?;
                 Ok(())
             }
             Type::InferenceHole(hole) => {
@@ -234,7 +234,7 @@ impl TypedProgram {
                 if r.mutable {
                     w.write_str("mut ")?;
                 }
-                self.display_type_id(r.inner_type, expand, w)?;
+                self.display_type_id(w, r.inner_type, expand)?;
                 Ok(())
             }
             Type::Enum(e) => {
@@ -254,7 +254,7 @@ impl TypedProgram {
                         w.write_str(self.ast.idents.get_name(v.name))?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
-                            self.display_type_id(*payload, expand, w)?;
+                            self.display_type_id(w, *payload, expand)?;
                             w.write_str(")")?;
                         }
                         let last = idx == e.variants.len() - 1;
@@ -279,7 +279,7 @@ impl TypedProgram {
                 self.write_ident(w, ev.name)?;
                 if let Some(payload) = &ev.payload {
                     w.write_str("(")?;
-                    self.display_type_id(*payload, expand, w)?;
+                    self.display_type_id(w, *payload, expand)?;
                     w.write_str(")")?;
                 }
                 Ok(())
@@ -299,7 +299,7 @@ impl TypedProgram {
                 w.write_str("]")?;
                 if expand {
                     w.write_str("(")?;
-                    self.display_type_id(generic.inner, expand, w)?;
+                    self.display_type_id(w, generic.inner, expand)?;
                     w.write_str(")")?;
                 }
                 Ok(())
@@ -311,35 +311,35 @@ impl TypedProgram {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
                     }
-                    self.display_type_id(param.type_id, expand, w)?;
+                    self.display_type_id(w, param.type_id, expand)?;
                     let last = idx == fun.physical_params.len() - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
                 }
                 w.write_str(") -> ")?;
-                self.display_type_id(fun.return_type, expand, w)
+                self.display_type_id(w, fun.return_type, expand)
             }
             Type::FunctionPointer(fp) => {
                 w.write_str("*")?;
-                self.display_type_id(fp.function_type_id, expand, w)?;
+                self.display_type_id(w, fp.function_type_id, expand)?;
                 Ok(())
             }
             Type::Lambda(lam) => {
                 write!(w, "lambda#{}(", lam.parsed_id)?;
-                self.display_type_id(lam.function_type, expand, w)?;
+                self.display_type_id(w, lam.function_type, expand)?;
                 w.write_str(")")?;
                 Ok(())
             }
             Type::LambdaObject(lambda_object) => {
                 w.write_str("lambda_object(")?;
-                self.display_type_id(lambda_object.struct_representation, expand, w)?;
+                self.display_type_id(w, lambda_object.struct_representation, expand)?;
                 w.write_str(")")?;
                 Ok(())
             }
             Type::Static(stat) => {
                 w.write_str("static[")?;
-                self.display_type_id(stat.inner_type_id, expand, w)?;
+                self.display_type_id(w, stat.inner_type_id, expand)?;
                 if let Some(value_id) = stat.value_id {
                     w.write_str(", ")?;
                     self.display_static_value(w, value_id)?;
@@ -373,10 +373,10 @@ impl TypedProgram {
                 if let Some(size) = array_type.concrete_count {
                     write!(w, "{}", size)?;
                 } else {
-                    self.display_type_id(array_type.size_type, expand, w)?;
+                    self.display_type_id(w, array_type.size_type, expand)?;
                 }
                 w.write_str(" x ")?;
-                self.display_type_ext(array_type.element_type, expand, w)?;
+                self.display_type_ext(w, array_type.element_type, expand)?;
                 w.write_str("]")
             }
         }
@@ -395,7 +395,7 @@ impl TypedProgram {
             }
             writ.write_str(self.ast.idents.get_name(field.name))?;
             writ.write_str(": ")?;
-            self.display_type_id(field.type_id, expand, writ)?;
+            self.display_type_id(writ, field.type_id, expand)?;
         }
         writ.write_str(" }")
     }
@@ -459,7 +459,7 @@ impl TypedProgram {
         }
         writ.write_str(&"  ".repeat(indentation))?;
         writ.write_str("}: ")?;
-        self.display_type_id(block.expr_type, false, writ)
+        self.display_type_id(writ, block.expr_type, false)
     }
 
     pub fn stmt_to_string(&self, stmt: TypedStmtId) -> String {
@@ -525,7 +525,7 @@ impl TypedProgram {
         let mut s = String::new();
         self.display_expr_id(expr, &mut s, 0).unwrap();
         s.push_str(": ");
-        self.display_type_id(self.exprs.get(expr).get_type(), false, &mut s).unwrap();
+        self.display_type_id(&mut s, self.exprs.get(expr).get_type(), false).unwrap();
         s
     }
 
@@ -693,7 +693,7 @@ impl TypedProgram {
             TypedExpr::Cast(cast) => {
                 self.display_expr_id(cast.base_expr, w, indentation)?;
                 write!(w, " as({}) ", cast.cast_type)?;
-                self.display_type_id(cast.target_type_id, false, w)
+                self.display_type_id(w, cast.target_type_id, false)
             }
             TypedExpr::EnumGetTag(get_tag) => {
                 self.display_expr_id(get_tag.enum_expr, w, indentation)?;
@@ -732,12 +732,12 @@ impl TypedProgram {
                 let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 w.write_str("env=[")?;
-                self.display_type_id(lambda_type.env_type, false, w).unwrap();
+                self.display_type_id(w, lambda_type.env_type, false).unwrap();
                 w.write_str("]")?;
                 for arg in fn_type.logical_params() {
                     w.write_str(self.ident_str(arg.name))?;
                     w.write_str(": ")?;
-                    self.display_type_id(arg.type_id, false, w)?;
+                    self.display_type_id(w, arg.type_id, false)?;
                 }
                 w.write_str(" -> ")?;
                 let lambda_body =
@@ -792,7 +792,7 @@ impl TypedProgram {
             }
             StaticValue::Zero(type_id) => {
                 write!(w, "zeroed[")?;
-                self.display_type_id(*type_id, false, w)?;
+                self.display_type_id(w, *type_id, false)?;
                 write!(w, "]()")?;
                 Ok(())
             }
@@ -1088,7 +1088,7 @@ impl TypedProgram {
             self.named_types.get_slice(i.impl_arguments),
         )?;
         write!(w, " for ")?;
-        self.display_type_id(i.self_type_id, false, w)?;
+        self.display_type_id(w, i.self_type_id, false)?;
         if display_functions {
             w.write_str(" {\n")?;
             for ability_impl_fn in self.a.get_slice(i.functions) {
@@ -1099,7 +1099,7 @@ impl TypedProgram {
                     }
                     AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
-                        self.display_type_id(sig.function_type, false, w)?;
+                        self.display_type_id(w, sig.function_type, false)?;
                     }
                 };
                 writeln!(w)?;
@@ -1220,7 +1220,7 @@ impl TypedProgram {
             {
                 self.write_ident(w, ftp.name)?;
                 w.write_str(": ")?;
-                self.display_type_id(ftp.type_id, false, w)?;
+                self.display_type_id(w, ftp.type_id, false)?;
                 w.write_str(", ")?;
             }
             w.write_char(']')?;
@@ -1233,11 +1233,11 @@ impl TypedProgram {
             }
             w.write_str(self.ident_str(param.name))?;
             w.write_str(": ")?;
-            self.display_type_id(param.type_id, false, w)?;
+            self.display_type_id(w, param.type_id, false)?;
         }
         w.write_str(")")?;
         w.write_str(": ")?;
-        self.display_type_id(function_type.return_type, false, w)?;
+        self.display_type_id(w, function_type.return_type, false)?;
         Ok(())
     }
 
@@ -1259,7 +1259,7 @@ impl TypedProgram {
             tvar_info.type_parameter_count, tvar_info.inference_variable_count
         )?;
         writeln!(w)?;
-        self.display_type_ext(id, true, w)?;
+        self.display_type_ext(w, id, true)?;
         Ok(())
     }
 

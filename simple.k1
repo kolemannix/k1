@@ -1,0 +1,71 @@
+fn main(): i32 {
+  'c';
+  let p = { x: 1, y: 2 };
+  p;
+  switch true {
+    true -> (),
+    false -> ()
+  };
+  0
+}
+
+/////////////
+// B0
+//   v0 = imm char 'c'
+//   v1 = alloca { x: iword, y: iword }
+//   v2 = struct_offset { x: iword, y: iword }.0, v1
+//   v3 = imm int 1iword
+//   v4 = store to v2, iword v3
+//   v5 = struct_offset { x: iword, y: iword }.1, v1
+//   v6 = imm int 2iword
+//   v7 = store to v5, iword v6
+//   v8 = load from { x: iword, y: iword } v1
+//   v9 = alloca bool
+//   v10 = imm bool true
+//   v11 = store to v9, bool v10
+//   v12 = jmp b1
+// END
+// B1
+//   v15 = load from bool v9
+//   v16 = imm bool true
+//   v17 = call bool Equals_bool_1_equals(v15, v16)
+//   v18 = jmpif v17, b2, b3
+// END
+// B2
+//   v19 = imm unit
+//   v20 = jmp b8
+// END
+// B3
+//   v21 = load from bool v9
+//   v22 = imm bool false
+//   v23 = call bool Equals_bool_1_equals(v21, v22)
+//   v24 = jmpif v23, b4, b5
+// END
+// B4
+//   v25 = imm unit
+//   v26 = jmp b8
+// END
+// B5
+//   v27 = jmp b6
+// END
+// B6
+//   v28 = alloca SourceLocation
+//   v29 = struct_offset SourceLocation.0, v28
+//   v30 = imm string 117
+//   v31 = store to v29, string v30
+//   v32 = struct_offset SourceLocation.1, v28
+//   v33 = imm int 5u64
+//   v34 = store to v32, u64 v33
+//   v35 = load from SourceLocation v28
+//   v36 = imm string 99
+//   v37 = call never crash(v35, v36)
+// END
+// B7
+//   v13 = unreachable
+// END
+// B8
+//   v14 = comefrom [(b2: v19), (b4: v25)]
+//   v38 = imm int 0i32
+//   v39 = ret v38
+// END
+

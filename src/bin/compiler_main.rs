@@ -45,7 +45,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let out_dir: PathBuf = ".k1-out".into();
     std::fs::create_dir_all(&out_dir)?;
 
-    let Ok(program) = compiler::compile_module(&args, &out_dir) else {
+    let Ok(program) = compiler::compile_program(&args, &out_dir) else {
         return Ok(ExitCode::FAILURE);
     };
     let program_name = program.program_name();

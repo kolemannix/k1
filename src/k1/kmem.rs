@@ -166,37 +166,50 @@ impl Mem {
         self.pack_handle(t_ptr)
     }
 
-    pub fn new_vec<T>(&mut self, len: usize) -> MVec<T> {
-        unsafe {
-            let start_cursor = self.cursor_mut();
-            let dst_aligned = start_cursor.byte_add(start_cursor.align_offset(align_of::<T>()));
-            let layout = core::alloc::Layout::array::<T>(len).unwrap();
-
-            let new_cursor = dst_aligned.byte_add(layout.size());
-            self.set_cursor_checked(new_cursor);
-
-            let raw_slice: *mut [T] =
-                core::ptr::slice_from_raw_parts_mut(dst_aligned as *mut T, len);
-            MVec { buf: raw_slice, len: 0 }
-        }
-    }
-
-    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T> {
+    fn push_slice_uninit<T>(&mut self, len: usize) -> *mut T {
         unsafe {
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
 
-            let new_cursor = dst.byte_add(size_of_val(ts));
+            let array_layout = core::alloc::Layout::array::<T>(len).unwrap();
+            let new_cursor = dst.byte_add(array_layout.size());
             self.set_cursor_checked(new_cursor);
 
-            let dst: &mut [T] = std::slice::from_raw_parts_mut(dst as *mut T, ts.len());
-            dst.copy_from_slice(ts);
-            MSlice {
-                offset: self.ptr_to_offset(dst.as_ptr()),
-                count: ts.len() as u32,
-                _marker: std::marker::PhantomData,
-            }
+            dst as *mut T
         }
+    }
+
+    fn push_slice_raw<T: Copy>(&mut self, ts: &[T]) -> &mut [T] {
+        unsafe {
+            let dst = self.push_slice_uninit::<T>(ts.len());
+
+            let dst: &mut [T] = std::slice::from_raw_parts_mut(dst, ts.len());
+            dst.copy_from_slice(ts);
+            dst
+        }
+    }
+
+    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T> {
+        let slice = self.push_slice_raw(ts);
+        let ptr = slice.as_ptr();
+        MSlice {
+            offset: self.ptr_to_offset(ptr),
+            count: ts.len() as u32,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn new_vec<T>(&mut self, len: usize) -> MVec<T> {
+        let dst = self.push_slice_uninit(len);
+
+        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len);
+        MVec { buf: raw_slice, len: 0 }
+    }
+
+    pub fn push_str(&mut self, s: impl AsRef<str>) -> &'static str {
+        let bytes = self.push_slice_raw(s.as_ref().as_bytes());
+        let s = unsafe { str::from_utf8_unchecked(bytes) };
+        unsafe { std::mem::transmute(s) }
     }
 
     pub fn get<T>(&self, handle: MHandle<T>) -> &T {
@@ -254,6 +267,7 @@ impl<T> MVec<T> {
     pub fn len(&self) -> usize {
         self.len
     }
+
     pub fn push(&mut self, val: T) {
         if self.len == self.buf.len() {
             panic!("AVec is full {}", self.buf.len());
@@ -297,6 +311,12 @@ impl<T> std::ops::Index<usize> for MVec<T> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         &self.as_slice()[index]
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for MVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.as_slice_mut()[index]
     }
 }
 
