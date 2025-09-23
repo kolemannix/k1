@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
-use k1::compiler::{self, Command, CompileModuleError};
+use k1::compiler::{self, Command, CompileProgramError};
 use std::os::unix::prelude::ExitStatusExt;
 
 #[derive(Parser, Debug, Clone)]
@@ -114,10 +114,10 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         command: Command::Build { file: path.as_ref().to_owned() },
         clang_options: vec![],
     };
-    let compile_result = compiler::compile_module(&args, &out_dir);
+    let compile_result = compiler::compile_program(&args, &out_dir);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
-        Err(CompileModuleError::TyperFailure(module)) => {
+        Err(CompileProgramError::TyperFailure(module)) => {
             let Some(err) = module.errors.first() else {
                 if let Some(parse_error) = module.ast.errors.first() {
                     bail!("{filename}: Failed parsing: {}", parse_error)
@@ -153,7 +153,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 }
             }
         }
-        Err(CompileModuleError::ParseFailure(_parsed_module)) => {
+        Err(CompileProgramError::ParseFailure(_parsed_module)) => {
             bail!("{} Failed during parsing", filename)
         }
         Ok(typed_program) => {

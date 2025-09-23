@@ -7,6 +7,7 @@ use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
+use crate::bc;
 use crate::parse::{self};
 use crate::parse::{NumericWidth, write_source_location};
 use crate::typer::{ErrorLevel, TypedProgram};
@@ -253,7 +254,7 @@ macro_rules! static_assert_niched {
     };
 }
 
-pub enum CompileModuleError {
+pub enum CompileProgramError {
     ParseFailure(Box<ParsedProgram>),
     TyperFailure(Box<TypedProgram>),
 }
@@ -295,15 +296,15 @@ fn write_program_dump(p: &TypedProgram) {
 
 /// If `args.file` points to a directory,
 /// - compile all files in the directory.
-/// - module name is the name of the directory.
+/// - program name is the name of the directory.
 ///
 /// If `args.file` points to a file,
 /// - compile that file only.
-/// - module name is the name of the file.
-pub fn compile_module(
+/// - program name is the name of the file.
+pub fn compile_program(
     args: &Args,
     out_dir: &Path,
-) -> std::result::Result<TypedProgram, CompileModuleError> {
+) -> std::result::Result<TypedProgram, CompileProgramError> {
     let profiler_guard = if args.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
@@ -351,21 +352,21 @@ pub fn compile_module(
     if let Err(e) = p.add_module(&corelib_dir, false) {
         write_program_dump(&p);
         eprintln!("{}", e);
-        return Err(CompileModuleError::TyperFailure(Box::new(p)));
+        return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
 
     if use_std {
         if let Err(e) = p.add_module(&stdlib_dir, false) {
             write_program_dump(&p);
             eprintln!("{}", e);
-            return Err(CompileModuleError::TyperFailure(Box::new(p)));
+            return Err(CompileProgramError::TyperFailure(Box::new(p)));
         }
     }
 
     if let Err(e) = p.add_module(src_path, true) {
         write_program_dump(&p);
         eprintln!("{}", e);
-        return Err(CompileModuleError::TyperFailure(Box::new(p)));
+        return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
 
     if let Some(profiler_guard) = profiler_guard {
@@ -395,6 +396,15 @@ pub fn compile_module(
     if args.dump_module {
         write_program_dump(&p);
     }
+
+    if let Some(main_id) = p.get_main_function_id() {
+        crate::bc::compile_function(&mut p, main_id);
+        let mut s = String::new();
+        let bc = p.bytecode.as_ref().unwrap();
+        crate::bc::display_function(&mut s, &p, bc, main_id);
+        eprintln!("{s}");
+    };
+
     Ok(p)
 }
 

@@ -1593,7 +1593,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
-        let mut arm_blocks = vec![];
+        let mut arm_blocks: SV8<_> = smallvec![];
         for (index, _arm) in match_expr.arms.iter().enumerate() {
             let arm_block = self.ctx.append_basic_block(current_fn, &format!("arm_{index}"));
             let arm_consequent_block =

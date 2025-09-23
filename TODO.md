@@ -80,10 +80,46 @@ New tagline? "C with typeclasses and tagged unions"
   - [ ] Dependencies: git url
   - [ ] Linker options
   - [ ] Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)
-  - [ ] serialize typedprogram (for incremental compilation)
+  - [ ] serialize typedprogram (for 'incremental', really just cached, compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker
+
+## Project: Arena-based core, builtins, stdlib 
+- [x] Thread-local globals
+- [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
+- [ ] transmute function (for struct ABI workarounds right now)
+
+## Project: Static Improvements
+- [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+- [ ] VM "PermSpace" for caching converted static values in their VM representation
+- [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
+- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
+- [ ] 'Type predicate' functions as type bounds
+
+## Project: aarch64 struct passing ABI
+## Project: x86-64 struct passing ABI
+
+## Introduce Warnings
+- [ ] Unused var
+- [ ] Unused type bound
+- [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
+    - `if self.slots.get(probe_index) is None {`
+
+## Project: Zero-Sized Types
+- [ ] Treat Unit and empty Struct as ZSTs
+- [ ] Treat statics as ZSTs
+- [ ] Make Result[T, never] == T ?
+
+## Project: system interface, 'Write' ability and intrinsic fix.
+
+## Project: More LSP features
+- [ ] Hover
+- [ ] Go-to
+
+## Project: Instruction-level IR ('bytecode')
+Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
+- [ ] Try to compile a function to bytecode
 
 ## Project: VM for `static` execution
 - [x] vm: static execution
@@ -114,9 +150,6 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Add mutable/const bool to ReferenceType
 - [x] Update stdlib
 
-## Project: Kill let* and add address-of operator
-- [ ] Kill let* and add address-of operator
-
 ## Project: Metaprogramming system built on 'static': both string #insert and parsed code #insert, like Jai
 - [x] #meta First working version
 - [x] Multiline string literals,
@@ -142,40 +175,12 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] TypeSchema for all types
 - [x] Test 'Any' type
 
-## Project: Arena-based core, builtins, stdlib 
-- [x] Thread-local globals
-- [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
-- [ ] transmute function (for struct ABI workarounds right now)
-
-## Project: Static Improvements
-- [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
-- [ ] VM "PermSpace" for caching converted static values in their VM representation
-- [ ] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
-- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
-- [ ] (static only?) 'Type predicate' functions as type bounds
-
-## Project: Zero-Sized Types
-- [ ] Treat Unit and empty Struct as ZSTs
-- [ ] Treat statics as ZSTs
-- [ ] Make Result[T, never] == T ?
-
-## Project: 'Write' ability and intrinsic fix
-
 ## Project: Operator overloading
 - [x] Operator 'overloading' story. I think the story is just abilities.
         This will actually fix the really poor inference that binary ops currently have
 - [x] Start with Equals
 - [x] Do add
 - [x] Move all the binary operations to intrinsic calls; and remove BinaryOp from the Typed AST
-
-## Project: aarch64 struct passing ABI
-## Project: x86-64 struct passing ABI
-
-## Introduce Warnings
-- [ ] Unused var
-- [ ] Unused type bound
-- [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
-    - `if self.slots.get(probe_index) is None {`
 
 # General (late 2024)
 - [x] Matching push

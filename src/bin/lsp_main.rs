@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use k1::compiler::CompileModuleError;
+use k1::compiler::CompileProgramError;
 use k1::lex::SpanId;
 use k1::parse::ParsedProgram;
 use k1::typer::*;
@@ -139,11 +139,11 @@ impl Backend {
             },
             clang_options: vec![],
         };
-        let compile_result = k1::compiler::compile_module(&args, &out_dir);
+        let compile_result = k1::compiler::compile_program(&args, &out_dir);
         let compiled_module = match compile_result {
             Ok(module) => CompiledProgram::Typed(Box::new(module)),
-            Err(CompileModuleError::TyperFailure(module)) => CompiledProgram::Typed(module),
-            Err(CompileModuleError::ParseFailure(parsed_module)) => {
+            Err(CompileProgramError::TyperFailure(module)) => CompiledProgram::Typed(module),
+            Err(CompileProgramError::ParseFailure(parsed_module)) => {
                 CompiledProgram::Parsed(parsed_module)
             }
         };
