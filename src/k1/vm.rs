@@ -19,7 +19,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{
     compiler::WordSize,
-    errf, failf, int_shift,
+    errf, failf, ice_span, int_shift,
     lex::SpanId,
     parse::{Ident, StringId},
     pool::SliceHandle,
@@ -39,6 +39,16 @@ use crate::{
         },
     },
 };
+
+#[macro_export]
+macro_rules! vm_ice {
+    ($k1:expr, $vm:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            vm_crash($k1, $vm, &s)
+        }
+    };
+}
 
 #[cfg(test)]
 mod vm_test;
@@ -608,23 +618,16 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             Ok(VmResult::Value(output_value))
         }
         TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, m, *variable_expr),
-        TypedExpr::UnaryOp(unary_op) => {
-            let span = unary_op.span;
-            let target_type = unary_op.type_id;
-            match unary_op.kind {
-                typer::UnaryOpKind::Dereference => {
-                    let ref_expr = unary_op.expr;
-                    let reference_value = execute_expr_return_exit!(vm, m, ref_expr)?;
-                    let Value::Reference { ptr, .. } = reference_value else {
-                        m.ice_with_span(
-                            format!("malformed dereference: {:?}", reference_value),
-                            span,
-                        )
-                    };
-                    let v = load_value(vm, m, target_type, ptr, true)?;
-                    Ok(v.into())
-                }
-            }
+        TypedExpr::Deref(deref) => {
+            let span = deref.span;
+            let target_type = deref.type_id;
+            let ref_expr = deref.target;
+            let reference_value = execute_expr_return_exit!(vm, m, ref_expr)?;
+            let Value::Reference { ptr, .. } = reference_value else {
+                ice_span!(m, span, "malformed dereference: {:?}", reference_value)
+            };
+            let v = load_value(vm, m, target_type, ptr, true)?;
+            Ok(v.into())
         }
         TypedExpr::Block(_) => execute_block(vm, m, expr),
         TypedExpr::Call { .. } => execute_call(vm, m, expr),
@@ -636,7 +639,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::WhileLoop(while_expr) => {
             let while_expr = while_expr.clone();
             let result = loop {
-                let cond_result = execute_matching_condition(vm, m, &while_expr.condition_block)?;
+                let cond_result = execute_matching_condition(vm, m, &while_expr.condition)?;
                 let cond = return_exit!(cond_result).expect_bool();
                 if !cond {
                     break VmResult::UNIT;
@@ -1531,10 +1534,7 @@ fn execute_intrinsic(
             };
             let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_value as u32).unwrap());
             let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
-                k1.ice_with_span(
-                    format!("Missing type schema: {}", k1.type_id_to_string(type_id)),
-                    vm.eval_span,
-                )
+                vm_ice!(k1, vm, "Missing type schema: {}", k1.type_id_to_string(type_id))
             };
             let value = static_value_to_vm_value(
                 vm,
@@ -2485,10 +2485,7 @@ pub fn vm_value_to_static_value(
                 for index in 0..view.len {
                     let elem_vm = get_view_element(vm, m, view.data, element_type, index)
                         .unwrap_or_else(|e| {
-                            m.ice_with_span(
-                                format!("Failed to load view element {index}: {}", e),
-                                span,
-                            )
+                            vm_ice!(m, vm, "Failed to load view element {index}: {}", e)
                         });
                     let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                     elements.push(elem_static);
@@ -2568,10 +2565,7 @@ pub fn vm_value_to_static_value(
                         for index in 0..count {
                             let elem_result = get_view_element(vm, m, ptr, element_type, index);
                             let elem_vm = elem_result.unwrap_or_else(|e| {
-                                m.ice_with_span(
-                                    format!("Failed to load view element {index}: {}", e),
-                                    span,
-                                )
+                                vm_ice!(m, vm, "Failed to load view element {index}: {}", e)
                             });
                             let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
                             elements.push(elem_static);
@@ -2770,10 +2764,7 @@ unsafe fn slice_from_raw_parts_checked<'a, T>(
     let null_ok = data.is_null() && len == 0;
     if cfg!(debug_assertions) {
         if !data.is_aligned() {
-            k1.ice_with_span(
-                format!("slice_from_raw_parts: ptr is unaligned: {:?}", data),
-                vm.eval_span,
-            );
+            vm_ice!(k1, vm, "slice_from_raw_parts: ptr is unaligned: {:?}", data)
         }
         let is_null = data.is_null();
         let is_zst = std::mem::size_of::<T>() == 0;
@@ -2781,13 +2772,12 @@ unsafe fn slice_from_raw_parts_checked<'a, T>(
             if !is_zst && is_null {
                 let frame_names = make_stack_trace(k1, &vm.stack);
                 eprintln!("STACK TRACE\n{}", frame_names);
-                k1.ice_with_span(
-                    format!(
-                        "slice_from_raw_parts: data={:?} len={len} size={}",
-                        data,
-                        std::mem::size_of::<T>()
-                    ),
-                    vm.eval_span,
+                vm_ice!(
+                    k1,
+                    vm,
+                    "slice_from_raw_parts: data={:?} len={len} size={}",
+                    data,
+                    std::mem::size_of::<T>()
                 );
             }
         }

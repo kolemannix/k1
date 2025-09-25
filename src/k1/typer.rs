@@ -17,6 +17,7 @@ use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
 use static_value::{StaticContainerKind, StaticValuePool};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
@@ -974,24 +975,10 @@ pub struct VariableExpr {
 }
 impl_copy_if_small!(12, VariableExpr);
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum UnaryOpKind {
-    Dereference,
-}
-
-impl Display for UnaryOpKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UnaryOpKind::Dereference => f.write_char('*'),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UnaryOp {
-    pub kind: UnaryOpKind,
+#[derive(Debug, Clone, Copy)]
+pub struct DerefExpr {
+    pub target: TypedExprId,
     pub type_id: TypeId,
-    pub expr: TypedExprId,
     pub span: SpanId,
 }
 
@@ -1354,7 +1341,7 @@ impl_copy_if_small!(8, MatchingConditionInstr);
 
 #[derive(Clone)]
 pub struct WhileLoop {
-    pub condition_block: MatchingCondition,
+    pub condition: MatchingCondition,
     pub body: TypedExprId,
     pub type_id: TypeId,
     pub span: SpanId,
@@ -1392,7 +1379,7 @@ pub enum TypedExpr {
     StructFieldAccess(FieldAccess),
     ArrayGetElement(ArrayGetElement),
     Variable(VariableExpr),
-    UnaryOp(UnaryOp),
+    Deref(DerefExpr),
     Block(TypedBlock),
     Call {
         call_id: CallId,
@@ -1458,7 +1445,7 @@ impl TypedExpr {
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
             TypedExpr::ArrayGetElement(_) => "array_get_element",
             TypedExpr::Variable(_) => "variable",
-            TypedExpr::UnaryOp(_) => "unary_op",
+            TypedExpr::Deref(_) => "deref",
             TypedExpr::Block(_) => "block",
             TypedExpr::Call { .. } => "call",
             TypedExpr::Match(_) => "match",
@@ -1491,7 +1478,7 @@ impl TypedExpr {
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
             TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::UnaryOp(unary_op) => unary_op.type_id,
+            TypedExpr::Deref(deref) => deref.type_id,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::Call { return_type, .. } => *return_type,
             TypedExpr::Match(match_) => match_.result_type,
@@ -1524,7 +1511,7 @@ impl TypedExpr {
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::ArrayGetElement(ag) => ag.span,
             TypedExpr::Variable(var) => var.span,
-            TypedExpr::UnaryOp(unary_op) => unary_op.span,
+            TypedExpr::Deref(deref) => deref.span,
             TypedExpr::Block(b) => b.span,
             TypedExpr::Call { span, .. } => *span,
             TypedExpr::Match(match_) => match_.span,
@@ -1989,6 +1976,16 @@ macro_rules! errf {
 }
 
 #[macro_export]
+macro_rules! ice_span {
+    ($k1:expr, $span:expr, $($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            $k1.ice_with_span(&s, $span)
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! failf {
     ($span:expr, $($format_args:expr),* $(,)?) => {
         {
@@ -2350,7 +2347,7 @@ pub struct TypedProgram {
     pub tmp: kmem::Mem,
 
     /// Option for the take trick
-    pub bytecode: Option<bc::ProgramBytecode>,
+    pub bytecode: RefCell<bc::ProgramBytecode>,
 
     pub timing: Timing,
 }
@@ -2502,10 +2499,7 @@ impl TypedProgram {
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: Some(bc::ProgramBytecode {
-                mem: kmem::Mem::make(),
-                functions: VPool::make_with_hint("bytecode_functions", 8192),
-            }),
+            bytecode: RefCell::new(bc::ProgramBytecode::make(16384)),
 
             timing: Timing { clock, total_infers: 0, total_infer_nanos: 0, total_vm_nanos: 0 },
         }
@@ -5208,7 +5202,7 @@ impl TypedProgram {
         }
         function.is_concrete = is_concrete;
         self.functions.add(function);
-        self.bytecode.as_mut().unwrap().functions.add(None);
+        self.bytecode.get_mut().functions.add(None);
         id
     }
 
@@ -6564,10 +6558,9 @@ impl TypedProgram {
                 self.type_id_to_string(base_expr_type)
             )
         })?;
-        Ok(self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
-            kind: UnaryOpKind::Dereference,
+        Ok(self.exprs.add(TypedExpr::Deref(DerefExpr {
             type_id: reference_type.inner_type,
-            expr: base_expr,
+            target: base_expr,
             span,
         })))
     }
@@ -7580,7 +7573,7 @@ impl TypedProgram {
 
         let body_block = self.exprs.add(TypedExpr::Block(body_block));
         Ok(self.exprs.add(TypedExpr::WhileLoop(WhileLoop {
-            condition_block: condition,
+            condition,
             body: body_block,
             type_id: loop_type,
             span: while_expr.span,
@@ -15246,7 +15239,7 @@ impl TypedProgram {
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
             | Type::Unresolved(_) => {
-                self.ice_with_span(format!("TypeSchema on {}", typ.kind_name()), span)
+                ice_span!(self, span, "TypeSchema on {}", typ.kind_name())
             }
             Type::RecursiveReference(_) | Type::Static(_) => self.ice_with_span(
                 format!(

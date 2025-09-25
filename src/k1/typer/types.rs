@@ -1637,6 +1637,7 @@ impl TypePool {
             Type::Lambda(_) => true,
             Type::LambdaObject(_) => true,
             Type::Static(stat) => self.is_aggregate_repr(stat.inner_type_id),
+            Type::Array(_) => true,
             Type::Unit => false,
             Type::Char => false,
             Type::Integer(_) => false,
@@ -1653,7 +1654,6 @@ impl TypePool {
             Type::InferenceHole(_) => false,
             Type::Unresolved(_) => false,
             Type::RecursiveReference(_) => false,
-            Type::Array(_) => true,
         }
     }
 

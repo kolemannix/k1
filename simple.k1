@@ -1,11 +1,21 @@
 fn main(): i32 {
-  'c';
-  let p = { x: 1, y: 2 };
-  p;
-  switch true {
-    true -> (),
-    false -> ()
+  // let* means give me a pointer and initialize it with a value
+  let* p = { x: 10, y: 20 };
+  let* y = { x: 30, y: 40 };
+  p := y;
+  
+  let x = loop {
+    break(42)
   };
+  // p := { x: 1, y: 2 };
+  // switch true {
+  //   true -> (),
+  //   false -> ()
+  // };
+
+  // let* x = 10;
+  // x.*;
+
   0
 }
 
