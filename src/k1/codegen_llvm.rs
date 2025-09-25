@@ -55,7 +55,7 @@ use crate::typer::{
     Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
     StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
     TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
-    TypedStmtId, UnaryOpKind, VariableId, WhileLoop,
+    TypedStmtId, VariableId, WhileLoop,
 };
 
 #[derive(Debug)]
@@ -2337,28 +2337,24 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
-            TypedExpr::UnaryOp(unary_op) => {
-                let value = self.codegen_expr_basic_value(unary_op.expr)?;
-                match unary_op.kind {
-                    UnaryOpKind::Dereference => {
-                        let value_ptr = value.into_pointer_value();
-                        let pointee_ty = self.codegen_type(unary_op.type_id)?;
-                        debug!(
-                            "Dereference: type {} w/ llvm value {} as llvm type {}",
-                            self.k1.expr_to_string_with_type(unary_op.expr),
-                            value_ptr,
-                            pointee_ty.canonical_repr_type().print_to_string()
-                        );
-                        let value = if pointee_ty.is_aggregate() {
-                            value_ptr.as_basic_value_enum()
-                        } else {
-                            self.builder
-                                .build_load(pointee_ty.canonical_repr_type(), value_ptr, "deref")
-                                .unwrap()
-                        };
-                        Ok(value.into())
-                    }
-                }
+            TypedExpr::Deref(deref) => {
+                let value = self.codegen_expr_basic_value(deref.target)?;
+                let value_ptr = value.into_pointer_value();
+                let pointee_ty = self.codegen_type(deref.type_id)?;
+                debug!(
+                    "Dereference: type {} w/ llvm value {} as llvm type {}",
+                    self.k1.expr_to_string_with_type(deref.target),
+                    value_ptr,
+                    pointee_ty.canonical_repr_type().print_to_string()
+                );
+                let value = if pointee_ty.is_aggregate() {
+                    value_ptr.as_basic_value_enum()
+                } else {
+                    self.builder
+                        .build_load(pointee_ty.canonical_repr_type(), value_ptr, "deref")
+                        .unwrap()
+                };
+                Ok(value.into())
             }
             TypedExpr::Block(block) => {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
@@ -3582,11 +3578,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_unconditional_branch(loop_entry_block).unwrap();
 
         self.builder.position_at_end(loop_entry_block);
-        self.codegen_matching_condition(
-            &while_loop.condition_block,
-            loop_body_block,
-            loop_end_block,
-        )?;
+        self.codegen_matching_condition(&while_loop.condition, loop_body_block, loop_end_block)?;
 
         self.builder.position_at_end(loop_body_block);
         let body_value = self.codegen_block(body_block)?;

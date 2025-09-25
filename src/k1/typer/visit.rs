@@ -111,8 +111,8 @@ impl TypedProgram {
                 recurse!(array_get.index);
             }
             TypedExpr::Variable(_) => (),
-            TypedExpr::UnaryOp(unary_op) => {
-                recurse!(unary_op.expr);
+            TypedExpr::Deref(deref) => {
+                recurse!(deref.target);
             }
             TypedExpr::Block(block) => {
                 for stmt in block.statements.iter() {
@@ -144,8 +144,7 @@ impl TypedProgram {
                 }
             }
             TypedExpr::WhileLoop(while_loop) => {
-                if let Some(r) =
-                    self.visit_matching_condition(&while_loop.condition_block, state, action)
+                if let Some(r) = self.visit_matching_condition(&while_loop.condition, state, action)
                 {
                     return Some(r);
                 };

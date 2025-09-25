@@ -154,12 +154,7 @@ impl TypedProgram {
         let base_expr = self.exprs.get(base);
         let span = base_expr.get_span();
         let type_id = self.types.get(base_expr.get_type()).expect_reference().inner_type;
-        self.exprs.add(TypedExpr::UnaryOp(UnaryOp {
-            kind: UnaryOpKind::Dereference,
-            type_id,
-            span,
-            expr: base,
-        }))
+        self.exprs.add(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
     }
 
     pub(super) fn synth_block(&mut self, parent_scope: ScopeId, span: SpanId) -> TypedBlock {

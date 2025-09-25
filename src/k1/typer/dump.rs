@@ -652,7 +652,7 @@ impl TypedProgram {
             }
             TypedExpr::WhileLoop(while_loop) => {
                 w.write_str("while ")?;
-                self.display_matching_condition(w, &while_loop.condition_block, indentation)?;
+                self.display_matching_condition(w, &while_loop.condition, indentation)?;
                 w.write_str(" ")?;
                 self.display_expr_id(while_loop.body, w, indentation)
             }
@@ -663,12 +663,10 @@ impl TypedProgram {
                 };
                 self.display_block(body_block, w, indentation)
             }
-            TypedExpr::UnaryOp(unary_op) => match unary_op.kind {
-                UnaryOpKind::Dereference => {
-                    self.display_expr_id(unary_op.expr, w, indentation)?;
-                    w.write_str(".*")
-                }
-            },
+            TypedExpr::Deref(deref) => {
+                self.display_expr_id(deref.target, w, indentation)?;
+                w.write_str(".*")
+            }
             TypedExpr::EnumConstructor(enum_constr) => {
                 w.write_str(".")?;
                 let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();

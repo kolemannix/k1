@@ -61,13 +61,49 @@ impl<T> Clone for MSlice<T> {
 }
 
 impl<T> MSlice<T> {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         const BOGUS_OFFSET: NonZeroU32 = NonZeroU32::new(8).unwrap();
         // `offset` should never be touched when count is 0
         Self { offset: BOGUS_OFFSET, count: 0, _marker: std::marker::PhantomData }
     }
     pub fn len(&self) -> u32 {
         self.count
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct MStr(MSlice<u8>);
+impl MStr {
+    pub const E: Self = Self(MSlice::empty());
+
+    pub fn len(&self) -> u32 {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+struct MemWriter<'a> {
+    mem: &'a mut Mem,
+}
+impl<'a> std::fmt::Write for MemWriter<'a> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        #[cfg(debug_assertions)]
+        let start = self.mem.cursor;
+
+        let bytes = self.mem.push_slice_raw(s.as_bytes());
+        #[cfg(debug_assertions)]
+        {
+            let bytes_start = bytes.as_ptr();
+            if start != bytes_start {
+                // If we pushed any padding, fail. We
+                // shouldn't be pushing any padding for a u8 slice
+                panic!("Inserted padding in kmem::Mem fmt::Write::write_str")
+            }
+        };
+        Ok(())
     }
 }
 
@@ -206,10 +242,39 @@ impl Mem {
         MVec { buf: raw_slice, len: 0 }
     }
 
-    pub fn push_str(&mut self, s: impl AsRef<str>) -> &'static str {
+    pub fn get_str(&self, s: MStr) -> &str {
+        let bytes = self.get_slice(s.0);
+        unsafe { str::from_utf8_unchecked(bytes) }
+    }
+
+    pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr {
         let bytes = self.push_slice_raw(s.as_ref().as_bytes());
-        let s = unsafe { str::from_utf8_unchecked(bytes) };
-        unsafe { std::mem::transmute(s) }
+        let bytes_ptr = bytes.as_ptr();
+        MStr(MSlice {
+            count: bytes.len() as u32,
+            offset: self.ptr_to_offset(bytes_ptr),
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    // Zero-allocation formatted strings.
+    // Formats a string directly into our backing buffer, to avoid any extra allocations, then
+    // bumps cursor based on final length
+    pub fn format_str(&mut self, args: std::fmt::Arguments) -> MStr {
+        use std::fmt::Write;
+
+        let base: *const u8 = self.cursor;
+        let mut writer = MemWriter { mem: self };
+        writer.write_fmt(args).unwrap();
+        let len = unsafe { self.cursor.offset_from(base) };
+        if len < 0 {
+            panic!("Cursor moved backwards in kmem::Mem::format_str");
+        }
+        MStr(MSlice {
+            count: len as u32,
+            offset: self.ptr_to_offset(base),
+            _marker: std::marker::PhantomData,
+        })
     }
 
     pub fn get<T>(&self, handle: MHandle<T>) -> &T {
@@ -246,6 +311,13 @@ impl Mem {
     pub fn bytes_used(&self) -> usize {
         self.cursor.addr() - self.base_ptr().addr()
     }
+}
+
+#[macro_export]
+macro_rules! mformat {
+    ($mem:expr, $($arg:tt)*) => {
+        $mem.format_str(format_args!($($arg)*))
+    };
 }
 
 impl Mem {
