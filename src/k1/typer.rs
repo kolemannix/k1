@@ -1330,6 +1330,7 @@ pub struct MatchingCondition {
     #[allow(unused)]
     pub binding_eligible: bool,
     pub diverges: bool,
+    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -8051,9 +8052,10 @@ impl TypedProgram {
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
+                span: match_expr_span,
             },
             consequent_expr: self.synth_crash_call(
-                "Match Error",
+                "No cases matched",
                 match_expr_span,
                 ctx.with_no_expected_type(),
             )?,
@@ -8188,38 +8190,30 @@ impl TypedProgram {
 
                 // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
                 // since the bindings are now available
-                let consequent_expr = self.eval_expr(
+                let consequent_expr = self.eval_expr_with_coercion(
                     parsed_case.expression,
                     ctx.with_scope(arm_scope_id).with_expected_type(expected_arm_type_id),
+                    true,
                 )?;
                 let consequent_expr_type = self.exprs.get(consequent_expr).get_type();
 
-                // TODO: principled unify of never
-                if let Some(expected_arm_type_id) = expected_arm_type_id.as_ref() {
-                    // Never is divergent so need not contribute to the overall type of the pattern
-                    if consequent_expr_type != NEVER_TYPE_ID {
-                        if let Err(msg) = self.check_types(
-                            *expected_arm_type_id,
-                            consequent_expr_type,
-                            match_scope_id,
-                        ) {
-                            return failf!(arm_expr_span, "Match arm has wrong type. {}", msg);
-                        }
-                    }
-                }
-
-                if consequent_expr_type != NEVER_TYPE_ID {
+                if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
                     expected_arm_type_id = Some(consequent_expr_type);
                 }
 
                 let condition_diverges = self.matching_condition_diverges(&instrs);
 
+                let condition_span = match parsed_case.guard_condition_expr {
+                    Some(guard_expr) => self.ast.get_expr_span(guard_expr),
+                    None => self.a.get(pattern).span_id(),
+                };
                 typed_arms.push(TypedMatchArm {
                     condition: MatchingCondition {
                         patterns: self.patterns.add_pattern_slice(&[pattern]),
                         instrs,
                         binding_eligible: true,
                         diverges: condition_diverges,
+                        span: condition_span,
                     },
                     consequent_expr,
                 });
@@ -9063,6 +9057,7 @@ impl TypedProgram {
             alternate
         };
 
+        let condition_span = condition.span;
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
@@ -9070,6 +9065,7 @@ impl TypedProgram {
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
+                span: condition_span,
             },
             consequent_expr: alternate,
         };
@@ -9127,11 +9123,13 @@ impl TypedProgram {
 
         let diverges = self.matching_condition_diverges(&instrs);
 
+        let span = self.ast.get_expr_span(condition);
         Ok(MatchingCondition {
             patterns: self.patterns.add_pattern_slice(&all_patterns),
             instrs,
             binding_eligible: allow_bindings,
             diverges,
+            span,
         })
     }
 
@@ -9242,6 +9240,7 @@ impl TypedProgram {
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
         let matching_condition = self.eval_matching_condition(expr_id, condition_ctx)?;
+        let condition_span = matching_condition.span;
         let span = self.ast.exprs.get(expr_id).get_span();
         let true_arm = TypedMatchArm {
             condition: matching_condition,
@@ -9250,11 +9249,10 @@ impl TypedProgram {
         let false_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns: MSlice::empty(),
-                instrs: eco_vec![MatchingConditionInstr::Cond {
-                    value: self.synth_bool(true, span)
-                }],
+                instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
+                span: condition_span,
             },
             consequent_expr: self.synth_bool(false, span),
         };

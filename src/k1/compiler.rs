@@ -7,7 +7,6 @@ use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
-use crate::bc;
 use crate::parse::{self};
 use crate::parse::{NumericWidth, write_source_location};
 use crate::typer::{ErrorLevel, TypedProgram};
@@ -397,18 +396,19 @@ pub fn compile_program(
         write_program_dump(&p);
     }
 
-    if let Some(main_id) = p.get_main_function_id() {
-        crate::bc::compile_function(&mut p, main_id).unwrap();
-        let bc = p.bytecode.borrow();
-        let mut errors = Vec::new();
-        crate::bc::validate_function(&p, main_id, &mut errors);
-        if !errors.is_empty() {
-            eprintln!("ERROR: {}", errors[0]);
-        }
-        let mut s = String::new();
-        crate::bc::display_function(&mut s, &p, &bc, main_id).unwrap();
-        eprintln!("{s}");
-    };
+    // bytecode testing
+    // if let Some(main_id) = p.get_main_function_id() {
+    //     crate::bc::compile_function(&mut p, main_id).unwrap();
+    //     let bc = p.bytecode.borrow();
+    //     let mut errors = Vec::new();
+    //     crate::bc::validate_function(&p, main_id, &mut errors);
+    //     if !errors.is_empty() {
+    //         eprintln!("ERROR: {}", errors[0]);
+    //     }
+    //     let mut s = String::new();
+    //     crate::bc::display_function(&mut s, &p, &bc, main_id, false).unwrap();
+    //     eprintln!("{s}");
+    // };
 
     Ok(p)
 }

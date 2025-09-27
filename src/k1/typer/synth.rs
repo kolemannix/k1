@@ -61,13 +61,16 @@ impl TypedProgram {
         alternate: TypedExprId,
         span: SpanId,
     ) -> TypedExprId {
-        let condition_diverges = self.exprs.get(condition).get_type() == NEVER_TYPE_ID;
+        let condition_expr = self.exprs.get(condition);
+        let condition_diverges = condition_expr.get_type() == NEVER_TYPE_ID;
+        let condition_span = self.exprs.get(condition).get_span();
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns,
                 instrs: eco_vec![MatchingConditionInstr::Cond { value: condition }],
                 binding_eligible: true,
                 diverges: condition_diverges,
+                span: condition_span,
             },
             consequent_expr: consequent,
         };
@@ -77,6 +80,7 @@ impl TypedProgram {
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
+                span: condition_span,
             },
             consequent_expr: alternate,
         };
