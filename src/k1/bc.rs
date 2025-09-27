@@ -66,7 +66,7 @@ pub enum Imm {
     Unit,
     Bool(bool),
     Char(u8),
-    Integer(TypedIntValue),
+    Int(TypedIntValue),
     Float(TypedFloatValue),
     String(StringId),
 }
@@ -88,7 +88,6 @@ pub struct ComeFromCase {
     value: InstId,
 }
 
-//task(bc): Think about source location on bc::Inst
 //task(bc): Rename to lofi
 //task(bc): Superinstructions
 pub enum Inst {
@@ -99,9 +98,9 @@ pub enum Inst {
     Store { dst: InstId, value: InstId },
     Load { t: PhysicalType, src: InstId },
     Copy { dst: InstId, src: InstId, size: u32 },
-    StructOffset { struct_t: TypeId, base: InstId, field_index: u32 },
+    StructOffset { struct_t: PhysicalType, base: InstId, field_index: u32 },
 
-    Call(TypeId, BcCallee, MSlice<InstId>),
+    Call(InstKind, BcCallee, MSlice<InstId>),
 
     // Control Flow
     Jump(BlockId),
@@ -138,6 +137,16 @@ pub enum InstKind {
     Value(PhysicalType),
     Void,
     Terminator,
+}
+
+impl std::fmt::Display for InstKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstKind::Value(t) => write!(f, "{}", t),
+            InstKind::Void => write!(f, "void"),
+            InstKind::Terminator => write!(f, "term"),
+        }
+    }
 }
 
 impl InstKind {
@@ -182,7 +191,7 @@ impl InstKind {
     }
 }
 
-fn inst_kind_from_type(types: &TypePool, type_id: TypeId) -> Result<InstKind, String> {
+fn compile_type(types: &TypePool, type_id: TypeId) -> Result<InstKind, String> {
     match types.get(type_id) {
         //task(bc): Eventually, Unit should correspond to Void, not a byte. But only once we can
         //successfully lower it to a zero-sized type everywhere; for example a struct member of
@@ -232,7 +241,7 @@ impl Inst {
                 Imm::Unit => InstKind::U8,
                 Imm::Bool(_) => InstKind::U8,
                 Imm::Char(_) => InstKind::U8,
-                Imm::Integer(i) => InstKind::Value(PhysicalType::I(i.get_integer_type())),
+                Imm::Int(i) => InstKind::Value(PhysicalType::I(i.get_integer_type())),
                 Imm::Float(f) => InstKind::Value(PhysicalType::F32),
                 Imm::String(_) => {
                     InstKind::Value(PhysicalType::Aggregate(types.get_layout(STRING_TYPE_ID)))
@@ -243,7 +252,7 @@ impl Inst {
             Inst::Load { t, .. } => InstKind::Value(*t),
             Inst::Copy { .. } => InstKind::Void,
             Inst::StructOffset { .. } => InstKind::PTR,
-            Inst::Call(t, ..) => inst_kind_from_type(types, *t).unwrap(),
+            Inst::Call(t, ..) => *t,
             Inst::Jump(_) => InstKind::Terminator,
             Inst::JumpIf { .. } => InstKind::Terminator,
             Inst::Unreachable => InstKind::Terminator,
@@ -320,15 +329,15 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.bc.instrs.get(inst_id).get_kind(&self.k1.types)
     }
 
-    fn inst_kind_from_type(&self, type_id: TypeId) -> InstKind {
-        match inst_kind_from_type(&self.k1.types, type_id) {
+    fn compile_type(&self, type_id: TypeId) -> InstKind {
+        match compile_type(&self.k1.types, type_id) {
             Err(msg) => ice_span!(&self.k1, self.cur_span, "{msg}"),
             Ok(k) => k,
         }
     }
 
     fn alloca_type(&mut self, type_id: TypeId) -> InstId {
-        let t = self.inst_kind_from_type(type_id).expect_value();
+        let t = self.compile_type(type_id).expect_value();
         self.push_inst_to(self.cur_block, Inst::Alloca { t })
     }
 
@@ -350,7 +359,7 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
     }
 
     fn push_load(&mut self, type_id: TypeId, src: InstId) -> InstId {
-        let t = self.inst_kind_from_type(type_id).expect_value();
+        let t = self.compile_type(type_id).expect_value();
         self.push_inst(Inst::Load { t, src })
     }
 
@@ -510,7 +519,7 @@ fn compile_expr(
             Ok(store)
         }
         TypedExpr::Integer(int) => {
-            let imm = b.push_inst(Inst::Imm(Imm::Integer(int.value)));
+            let imm = b.push_inst(Inst::Imm(Imm::Int(int.value)));
             let store = store_if_dst(b, dst, e.get_type(), imm);
             Ok(store)
         }
@@ -532,29 +541,39 @@ fn compile_expr(
             };
             for (field_index, field) in struct_literal.fields.iter().enumerate() {
                 debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
+                let struct_type = compile_type(&b.k1.types, struct_literal.type_id)?.expect_value();
                 let struct_offset = b.push_inst(Inst::StructOffset {
-                    struct_t: struct_literal.type_id,
+                    struct_t: struct_type,
                     base: struct_base,
                     field_index: field_index as u32,
                 });
                 compile_expr(b, Some(struct_offset), field.expr)?;
             }
-            match dst {
-                None => Ok(b.push_load(struct_literal.type_id, struct_base)),
-                Some(dst) => Ok(dst),
-            }
+            Ok(struct_base)
         }
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_base = compile_expr(b, None, field_access.base)?;
+            let struct_type = compile_type(&b.k1.types, field_access.struct_type)?.expect_value();
             let field_ptr = b.push_inst(Inst::StructOffset {
-                struct_t: field_access.struct_type,
+                struct_t: struct_type,
                 base: struct_base,
                 field_index: field_access.field_index,
             });
             if field_access.is_referencing {
                 Ok(field_ptr)
             } else {
-                let loaded = b.push_load(field_access.result_type, field_ptr);
+                // nocommit Revisit this. In the oldbackend i wrote:
+                // We copy the field whether or not the base struct is a reference, because it
+                // could be inside a reference, we can't assume this isn't mutable memory just
+                // because our immediate base struct isn't a reference
+
+                // But I'm not sure if that's true. Once you have a non-reference
+                // struct value, I think its safe to assume it can't change
+                // In the scenario above, you'd have to have de-referenced that struct
+                // out of the container struct pointer, which would have made a copy
+                // So you already have a local copy that's just a value
+                let make_copy = false;
+                let loaded = load_value(b, field_access.result_type, field_ptr, make_copy);
                 Ok(loaded)
             }
         }
@@ -604,12 +623,13 @@ fn compile_expr(
                     return Err("bc abstract call".into());
                 }
             };
+            let return_type = b.compile_type(*return_type);
             let call_inst = {
                 let mut args = b.bc.mem.new_vec(call.args.len());
                 for arg in &call.args {
                     args.push(compile_expr(b, None, *arg)?);
                 }
-                Inst::Call(*return_type, callee, b.bc.mem.vec_to_mslice(&args))
+                Inst::Call(return_type, callee, b.bc.mem.vec_to_mslice(&args))
             };
             let call_inst_id = b.push_inst(call_inst);
             Ok(call_inst_id)
@@ -639,7 +659,7 @@ fn compile_expr(
             let end_name = mformat!(b.bc.mem, "match_end__{}", expr.as_u32());
             let match_end_block = b.push_block(end_name);
             b.goto_block(match_end_block);
-            let result_type = b.inst_kind_from_type(match_expr.result_type);
+            let result_type = b.compile_type(match_expr.result_type);
             let result_come_from = match result_type {
                 InstKind::Value(physical_type) => Some(
                     b.push_inst(Inst::ComeFrom { t: physical_type, incomings: MSlice::empty() }),
@@ -666,7 +686,7 @@ fn compile_expr(
 
                 b.goto_block(*arm_cons_block);
                 let result = compile_expr(b, None, arm.consequent_expr)?;
-                if b.k1.get_expr_type_id(arm.consequent_expr) != NEVER_TYPE_ID {
+                if !b.get_inst_kind(result).is_terminator() {
                     let current_block = b.cur_block;
                     incomings.push(ComeFromCase { from: current_block, value: result });
                     b.push_jump(match_end_block);
@@ -763,12 +783,37 @@ fn compile_expr(
             }
         }
 
-        TypedExpr::EnumConstructor(_) => todo!(),
+        TypedExpr::EnumConstructor(enumc) => {
+            let enum_base = match dst {
+                Some(dst) => dst,
+                None => b.alloca_type(enumc.variant_type_id),
+            };
+
+            let tag_base = enum_base;
+            let enum_variant = b.k1.types.get(enumc.variant_type_id).expect_enum_variant();
+            let tag_int_value = enum_variant.tag_value;
+            let int_imm = b.push_inst(Inst::Imm(Imm::Int(tag_int_value)));
+            b.push_store(tag_base, int_imm);
+
+            if let Some(payload) = &enumc.payload {
+                let variant_struct = enum_variant.my_type_id;
+                todo!("bc enum payload")
+                //let payload_offset = b.push_inst(Inst::StructOffset {
+                //    struct_t: variant_struct,
+                //    base: enum_base,
+                //    field_index: 1,
+                //});
+                //let value = compile_expr(b, payload_offset, expr)?;
+            }
+
+            Ok(enum_base)
+        }
         TypedExpr::EnumIsVariant(_) => todo!(),
         TypedExpr::EnumGetTag(_) => todo!(),
         TypedExpr::EnumGetPayload(_) => todo!(),
         TypedExpr::Cast(_) => todo!(),
         TypedExpr::Return(typed_return) => {
+            //task(bc): Track an optional 'ret ptr' for the function; compile straight into it
             let inst = compile_expr(b, None, typed_return.value)?;
             let ret = b.push_inst(Inst::Ret(inst));
             Ok(ret)
@@ -788,7 +833,7 @@ fn compile_expr(
 /// such as treating this as a no-op for values that are already represented
 /// by their location, aka IndirectValues
 fn load_value(b: &mut Builder, type_id: TypeId, src: InstId, make_copy: bool) -> InstId {
-    let kind = inst_kind_from_type(&b.k1.types, type_id).unwrap();
+    let kind = b.compile_type(type_id);
     match kind.is_aggregate() {
         true => {
             if make_copy {
@@ -804,7 +849,7 @@ fn load_value(b: &mut Builder, type_id: TypeId, src: InstId, make_copy: bool) ->
 }
 
 fn store_value(b: &mut Builder, type_id: TypeId, dst: InstId, src: InstId) -> InstId {
-    let kind = inst_kind_from_type(&b.k1.types, type_id).unwrap();
+    let kind = b.compile_type(type_id);
     match kind.is_aggregate() {
         true => {
             let layout = b.k1.types.get_layout(type_id);
@@ -820,6 +865,7 @@ fn compile_matching_condition(
     cons_block: BlockId,
     condition_fail_block: BlockId,
 ) -> BcResult<()> {
+    b.cur_span = mc.span;
     if mc.instrs.is_empty() {
         // Always true
         b.push_jump(cons_block);
@@ -928,11 +974,12 @@ pub fn display_function(
     k1: &TypedProgram,
     bc: &ProgramBytecode,
     function: FunctionId,
+    show_source: bool,
 ) -> std::fmt::Result {
     let Some(function) = bc.functions.get(function) else { return Ok(()) };
     for (index, _block) in function.blocks.iter().enumerate() {
         let id = index as BlockId;
-        display_block(w, k1, bc, function, id)?;
+        display_block(w, k1, bc, function, id, show_source)?;
     }
     Ok(())
 }
@@ -943,6 +990,7 @@ pub fn display_block(
     bc: &ProgramBytecode,
     function: &Function,
     block_id: BlockId,
+    show_source: bool,
 ) -> std::fmt::Result {
     let block = function.get_block(block_id);
     write!(w, "b{} ", block_id)?;
@@ -952,7 +1000,7 @@ pub fn display_block(
     writeln!(w)?;
     for inst_id in block.instrs.iter() {
         write!(w, "  v{} = ", *inst_id)?;
-        display_inst(w, k1, bc, *inst_id)?;
+        display_inst(w, k1, bc, *inst_id, show_source)?;
         writeln!(w)?;
     }
     writeln!(w, "END")?;
@@ -964,42 +1012,33 @@ pub fn display_inst(
     k1: &TypedProgram,
     bc: &ProgramBytecode,
     inst_id: InstId,
+    show_source: bool,
 ) -> std::fmt::Result {
     match bc.instrs.get(inst_id) {
         Inst::Imm(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
-            Ok(())
         }
         Inst::Alloca { t } => {
             write!(w, "alloca {}", *t)?;
-            Ok(())
         }
         Inst::Store { dst, value } => {
-            write!(w, "store to v{}, ", *dst)?;
             let inst_kind = bc.instrs.get(*value).get_kind(&k1.types);
-            display_inst_kind(w, inst_kind)?;
-            write!(w, " v{}", *value)?;
-            Ok(())
+            write!(w, "store to v{}, {} v{}", *dst, inst_kind, *value)?;
         }
         Inst::Load { t, src } => {
             write!(w, "load {}", *t)?;
             write!(w, " from v{}", *src)?;
-            Ok(())
         }
         Inst::Copy { dst, src, size } => {
             write!(w, "copy {} v{}, src v{}", *size, *dst, *src)?;
-            Ok(())
         }
         Inst::StructOffset { struct_t, base, field_index } => {
-            write!(w, "struct_offset ")?;
-            k1.display_type_id(w, *struct_t, false)?;
+            write!(w, "struct_offset {}", *struct_t)?;
             write!(w, ".{}, v{}", *field_index, *base)?;
-            Ok(())
         }
         Inst::Call(t, callee, args) => {
-            write!(w, "call ")?;
-            k1.display_type_id(w, *t, false)?;
+            write!(w, "call {} ", *t)?;
             match callee {
                 BcCallee::Builtin(intrinsic_operation) => {
                     write!(w, " builtin {:?}", intrinsic_operation)?;
@@ -1021,20 +1060,16 @@ pub fn display_inst(
                 }
             }
             w.write_str(")")?;
-            Ok(())
         }
 
         Inst::Jump(block_id) => {
             write!(w, "jmp b{}", *block_id)?;
-            Ok(())
         }
         Inst::JumpIf { cond, cons, alt } => {
             write!(w, "jmpif v{}, b{}, b{}", *cond, *cons, *alt)?;
-            Ok(())
         }
         Inst::Unreachable => {
             write!(w, "unreachable")?;
-            Ok(())
         }
         Inst::ComeFrom { t, incomings } => {
             write!(w, "comefrom {} [", *t)?;
@@ -1045,21 +1080,18 @@ pub fn display_inst(
                 write!(w, "(b{}: v{})", incoming.from, incoming.value)?;
             }
             write!(w, "]")?;
-            Ok(())
         }
         Inst::Ret(value) => {
             write!(w, "ret v{}", *value)?;
-            Ok(())
         }
+    };
+    if show_source {
+        let span_id = bc.sources.get(inst_id);
+        let lines = k1.ast.get_span_content(*span_id);
+        let first_line = lines.lines().next().unwrap_or("");
+        write!(w, " ;\t\t\t {}", first_line)?;
     }
-}
-
-pub fn display_inst_kind(w: &mut impl Write, kind: InstKind) -> std::fmt::Result {
-    match kind {
-        InstKind::Value(physical_type) => write!(w, "{}", physical_type),
-        InstKind::Void => w.write_str("void"),
-        InstKind::Terminator => w.write_str("never"),
-    }
+    Ok(())
 }
 
 pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
@@ -1067,7 +1099,7 @@ pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
         Imm::Unit => write!(w, "unit"),
         Imm::Bool(b) => write!(w, "bool {}", b),
         Imm::Char(c) => write!(w, "char '{}'", *c as char),
-        Imm::Integer(int) => write!(w, "int {}", int),
+        Imm::Int(int) => write!(w, "int {}", int),
         Imm::Float(float) => write!(w, "float {}", float),
         Imm::String(string_id) => write!(w, "string {}", string_id),
     }

@@ -8,13 +8,13 @@ fn main(): i32 {
     break(42)
   };
   // p := { x: 1, y: 2 };
-  // switch true {
-  //   true -> (),
-  //   false -> ()
-  // };
+  switch true {
+    true -> (),
+    false -> ()
+  };
 
-  // let* x = 10;
-  // x.*;
+  let* x = 10;
+  x.*;
 
   0
 }
