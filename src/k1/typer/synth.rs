@@ -54,7 +54,7 @@ impl TypedProgram {
 
     pub(super) fn synth_if_else(
         &mut self,
-        patterns: MSlice<TypedPatternId>,
+        patterns: TypedPatternSlice,
         result_type: TypeId,
         condition: TypedExprId,
         consequent: TypedExprId,
@@ -330,10 +330,11 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let struct_type = self.types.get(struct_type_id).expect_struct();
-        debug_assert_eq!(struct_type.fields.len(), field_exprs.len());
-        let mut fields: EcoVec<StructField> = EcoVec::with_capacity(struct_type.fields.len());
+        debug_assert_eq!(struct_type.fields.len() as usize, field_exprs.len());
+        let mut fields: EcoVec<StructLiteralField> =
+            EcoVec::with_capacity(struct_type.fields.len() as usize);
         for (index, field_expr) in field_exprs.into_iter().enumerate() {
-            let field = &struct_type.fields[index];
+            let field = self.types.mem.get_nth(struct_type.fields, index);
             #[cfg(debug_assertions)]
             {
                 let field_expr_type = self.exprs.get(field_expr).get_type();
@@ -341,7 +342,7 @@ impl TypedProgram {
                     panic!("synthed struct fields failed typechecking: {}", msg)
                 }
             }
-            fields.push(StructField { name: field.name, expr: field_expr });
+            fields.push(StructLiteralField { name: field.name, expr: field_expr });
         }
         self.exprs.add(TypedExpr::Struct(StructLiteral { fields, type_id: struct_type_id, span }))
     }
@@ -364,11 +365,11 @@ impl TypedProgram {
 
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: eco_vec![
-                StructField {
+                StructLiteralField {
                     name: self.ast.idents.b.filename,
                     expr: self.exprs.add(TypedExpr::String(filename_string_id, span)),
                 },
-                StructField {
+                StructLiteralField {
                     name: self.ast.idents.b.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
                         value: TypedIntValue::U64(line_number as u64),

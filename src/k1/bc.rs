@@ -24,10 +24,10 @@ use smallvec::smallvec;
 use std::{borrow::Cow, fmt::Write};
 
 pub struct ProgramBytecode {
-    pub mem: kmem::Mem,
+    pub mem: kmem::Mem<ProgramBytecode>,
     pub instrs: VPool<Inst, InstId>,
     pub sources: VPool<SpanId, InstId>,
-    pub comments: VPool<MStr, InstId>,
+    pub comments: VPool<MStr<ProgramBytecode>, InstId>,
     pub functions: VPool<Option<Function>, FunctionId>,
 }
 
@@ -45,7 +45,7 @@ impl ProgramBytecode {
 }
 
 pub struct Block {
-    pub name: MStr,
+    pub name: MStr<ProgramBytecode>,
     pub instrs: Vec<InstId>,
 }
 
@@ -100,14 +100,14 @@ pub enum Inst {
     Copy { dst: InstId, src: InstId, size: u32 },
     StructOffset { struct_t: PhysicalType, base: InstId, field_index: u32 },
 
-    Call(InstKind, BcCallee, MSlice<InstId>),
+    Call(InstKind, BcCallee, MSlice<InstId, ProgramBytecode>),
 
     // Control Flow
     Jump(BlockId),
     JumpIf { cond: InstId, cons: BlockId, alt: BlockId },
     Unreachable,
     // goto considered harmful, but come-from is friend (phi node)
-    ComeFrom { t: PhysicalType, incomings: MSlice<ComeFromCase> },
+    ComeFrom { t: PhysicalType, incomings: MSlice<ComeFromCase, ProgramBytecode> },
     Ret(InstId),
 }
 
@@ -318,7 +318,7 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
     fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
         let id = self.bc.instrs.add(inst);
         let ids = self.bc.sources.add(self.cur_span);
-        let idc = self.bc.comments.add(MStr::E);
+        let idc = self.bc.comments.add(MStr::empty());
         debug_assert!(id == ids && id == idc);
 
         self.blocks[block as usize].instrs.push(id);
@@ -367,7 +367,7 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.push_inst(Inst::Store { dst, value })
     }
 
-    fn push_block(&mut self, name: MStr) -> BlockId {
+    fn push_block(&mut self, name: MStr<ProgramBytecode>) -> BlockId {
         let id = self.blocks.len();
         self.blocks.push(Block { name, instrs: vec![] });
         id as BlockId
@@ -625,7 +625,7 @@ fn compile_expr(
             };
             let return_type = b.compile_type(*return_type);
             let call_inst = {
-                let mut args = b.bc.mem.new_vec(call.args.len());
+                let mut args = b.bc.mem.new_vec(call.args.len() as u32);
                 for arg in &call.args {
                     args.push(compile_expr(b, None, *arg)?);
                 }
@@ -639,7 +639,7 @@ fn compile_expr(
                 compile_stmt(b, None, *stmt)?;
             }
 
-            let mut arm_blocks = b.bc.mem.new_vec(match_expr.arms.len());
+            let mut arm_blocks = b.bc.mem.new_vec(match_expr.arms.len() as u32);
             for (arm_index, _arm) in match_expr.arms.iter().enumerate() {
                 let name = mformat!(b.bc.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
                 let name_cons = mformat!(b.bc.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
@@ -882,7 +882,7 @@ fn compile_matching_condition(
                     return Ok(());
                 }
                 let is_last = index == mc.instrs.len() - 1;
-                let continue_block = if is_last { cons_block } else { b.push_block(MStr::E) };
+                let continue_block = if is_last { cons_block } else { b.push_block(MStr::empty()) };
                 b.push_inst(Inst::JumpIf {
                     cond: cond_value,
                     cons: continue_block,

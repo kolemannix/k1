@@ -6,13 +6,15 @@ use std::collections::hash_map::Entry;
 use crate::nz_u32_id;
 use crate::typer::*;
 
-#[derive(Debug, Clone)]
+pub type StaticValueSlice = MSlice<StaticValueId, StaticValuePool>;
+
+#[derive(Clone, Copy)]
 pub struct StaticStruct {
     pub type_id: TypeId,
-    pub fields: EcoVec<StaticValueId>,
+    pub fields: StaticValueSlice,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticEnum {
     pub variant_type_id: TypeId,
     pub variant_index: u32,
@@ -22,15 +24,15 @@ pub struct StaticEnum {
     pub payload: Option<StaticValueId>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum StaticContainerKind {
     View,
     Array,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticContainer {
-    pub elements: EcoVec<StaticValueId>,
+    pub elements: StaticValueSlice,
     pub kind: StaticContainerKind,
     pub type_id: TypeId,
 }
@@ -41,7 +43,7 @@ impl StaticContainer {
     }
 
     pub fn len(&self) -> usize {
-        self.elements.len()
+        self.elements.len() as usize
     }
 
     pub fn is_array(&self) -> bool {
@@ -51,8 +53,8 @@ impl StaticContainer {
 
 nz_u32_id!(StaticValueId);
 
-static_assert_size!(StaticValue, 32);
-#[derive(Debug, Clone)]
+static_assert_size!(StaticValue, 24);
+#[derive(Clone)]
 pub enum StaticValue {
     Unit,
     Bool(bool),
@@ -129,8 +131,8 @@ impl StaticValue {
     }
 }
 
-impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
-    fn dep_hash<H: std::hash::Hasher>(&self, d: &VPool<StaticValue, StaticValueId>, state: &mut H) {
+impl DepHash<StaticValuePool> for StaticValue {
+    fn dep_hash<H: std::hash::Hasher>(&self, d: &StaticValuePool, state: &mut H) {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
@@ -150,7 +152,7 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
             StaticValue::Struct(s) => {
                 s.type_id.hash(state);
                 s.fields.len().hash(state);
-                for &field_id in &s.fields {
+                for &field_id in d.mem.get_slice(s.fields).iter() {
                     field_id.hash(state);
                 }
             }
@@ -165,7 +167,7 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
             StaticValue::LinearContainer(v) => {
                 v.type_id.hash(state);
                 v.elements.len().hash(state);
-                for &element_id in &v.elements {
+                for &element_id in d.mem.get_slice(v.elements).iter() {
                     element_id.hash(state);
                 }
             }
@@ -173,8 +175,8 @@ impl DepHash<VPool<StaticValue, StaticValueId>> for StaticValue {
     }
 }
 
-impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
-    fn dep_eq(&self, other: &Self, _pool: &VPool<StaticValue, StaticValueId>) -> bool {
+impl DepEq<StaticValuePool> for StaticValue {
+    fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
             (StaticValue::Unit, StaticValue::Unit) => true,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
@@ -184,7 +186,9 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
             (StaticValue::String(a), StaticValue::String(b)) => a == b,
             (StaticValue::Zero(t1), StaticValue::Zero(t2)) => *t1 == *t2,
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
-                a.type_id == b.type_id && a.fields.len() == b.fields.len() && a.fields == b.fields
+                a.type_id == b.type_id
+                    && a.fields.len() == b.fields.len()
+                    && pool.mem.get_slice(a.fields) == pool.mem.get_slice(b.fields)
             }
             (StaticValue::Enum(a), StaticValue::Enum(b)) => {
                 a.variant_type_id == b.variant_type_id
@@ -199,10 +203,7 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
             (StaticValue::LinearContainer(a), StaticValue::LinearContainer(b)) => {
                 a.type_id == b.type_id
                     && a.elements.len() == b.elements.len()
-                    && a.elements
-                        .iter()
-                        .zip(b.elements.iter())
-                        .all(|(&a_elem, &b_elem)| a_elem == b_elem)
+                    && pool.mem.get_slice(a.elements) == pool.mem.get_slice(b.elements)
             }
             _ => false,
         }
@@ -210,15 +211,17 @@ impl DepEq<VPool<StaticValue, StaticValueId>> for StaticValue {
 }
 
 pub struct StaticValuePool {
+    pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,
     pub hashes: FxHashMap<u64, StaticValueId>,
 }
 
 impl StaticValuePool {
-    pub fn with_capacity(capacity: usize) -> StaticValuePool {
+    pub fn make_with_hint(size_hint: usize) -> StaticValuePool {
         StaticValuePool {
-            pool: VPool::make_with_hint("static_values", capacity),
-            hashes: FxHashMap::with_capacity(capacity),
+            mem: kmem::Mem::make(),
+            pool: VPool::make_with_hint("static_values", size_hint),
+            hashes: FxHashMap::with_capacity(size_hint),
         }
     }
 
@@ -239,7 +242,7 @@ impl StaticValuePool {
         use std::hash::Hasher;
 
         let mut hasher = FxHasher::default();
-        value.dep_hash(&self.pool, &mut hasher);
+        value.dep_hash(self, &mut hasher);
         let hash = hasher.finish();
         hash
     }
@@ -252,19 +255,24 @@ impl StaticValuePool {
         self.add(StaticValue::String(string_id))
     }
 
-    pub fn add_struct(&mut self, type_id: TypeId, fields: EcoVec<StaticValueId>) -> StaticValueId {
+    pub fn add_struct(&mut self, type_id: TypeId, fields: StaticValueSlice) -> StaticValueId {
         self.add(StaticValue::Struct(StaticStruct { type_id, fields }))
+    }
+
+    pub fn add_struct_from_slice(
+        &mut self,
+        type_id: TypeId,
+        fields: &[StaticValueId],
+    ) -> StaticValueId {
+        let slice = self.mem.push_slice(fields);
+        self.add(StaticValue::Struct(StaticStruct { type_id, fields: slice }))
     }
 
     pub fn add_int(&mut self, value: TypedIntValue) -> StaticValueId {
         self.add(StaticValue::Int(value))
     }
 
-    pub fn add_view(
-        &mut self,
-        view_type_id: TypeId,
-        elements: EcoVec<StaticValueId>,
-    ) -> StaticValueId {
+    pub fn add_view(&mut self, view_type_id: TypeId, elements: StaticValueSlice) -> StaticValueId {
         self.add(StaticValue::LinearContainer(StaticContainer {
             type_id: view_type_id,
             kind: StaticContainerKind::View,
@@ -277,7 +285,7 @@ impl StaticValuePool {
         if let Entry::Occupied(entry) = self.hashes.entry(hash) {
             let existing_id = *entry.get();
             let existing = self.pool.get(existing_id);
-            if value.dep_eq(existing, &self.pool) {
+            if value.dep_eq(existing, self) {
                 return existing_id;
             }
         }
@@ -292,6 +300,10 @@ impl StaticValuePool {
 
     pub fn get_opt(&self, id: StaticValueId) -> Option<&StaticValue> {
         self.pool.get_opt(id)
+    }
+
+    pub fn get_slice(&self, slice_handle: StaticValueSlice) -> &[StaticValueId] {
+        self.mem.get_slice(slice_handle)
     }
 
     pub fn iter_with_ids(&self) -> impl Iterator<Item = (StaticValueId, &StaticValue)> {

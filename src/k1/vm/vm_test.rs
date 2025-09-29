@@ -154,12 +154,11 @@ mod stack_tests {
     fn test_push_struct() {
         let mut types = TypePool::with_builtin_types();
         let mut stack = test_stack();
-        let struct_type = types.add_anon(Type::Struct(StructType {
-            fields: eco_vec![
-                StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID },
-                StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID }
-            ],
-        }));
+        let struct_fields = types.mem.push_slice(&[
+            StructTypeField { name: Ident::forged(), type_id: U8_TYPE_ID },
+            StructTypeField { name: Ident::forged(), type_id: U32_TYPE_ID },
+        ]);
+        let struct_type = types.add_anon(Type::Struct(StructType { fields: struct_fields }));
         stack.advance_cursor(1);
         let struct_ptr = stack
             .push_struct_values(

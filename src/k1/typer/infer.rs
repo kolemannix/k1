@@ -615,7 +615,7 @@ impl TypedProgram {
                 .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
                 .collect();
             for function_type_param in self
-                .existential_type_params
+                .function_type_params
                 .copy_slice_sv::<4>(original_function_sig.function_type_params)
                 .iter()
             {
@@ -719,20 +719,17 @@ impl TypedProgram {
         Ok(function_type_args_handle)
     }
 
-    fn add_substitution(
-        &mut self,
-        set: &mut Vec<TypeSubstitutionPair>,
-        pair: TypeSubstitutionPair,
-    ) {
+    fn add_substitution(&mut self, pair: TypeSubstitutionPair) {
         debug!(
             "Applying substitution {} -> {} to set {}",
             self.type_id_to_string(pair.from),
             self.type_id_to_string(pair.to),
-            self.pretty_print_type_substitutions(set, ", ")
+            self.pretty_print_type_substitutions(&self.ictx().constraints, ", ")
         );
         if pair.from == pair.to {
             return;
         }
+        let mut set = std::mem::take(&mut self.ictx_mut().constraints);
         set.iter_mut().for_each(|existing| {
             if existing.from == pair.from {
                 existing.from = pair.to
@@ -746,7 +743,9 @@ impl TypedProgram {
         set.retain(|pair| pair.from != pair.to);
         set.push(pair);
 
-        debug!("Got set {}", self.pretty_print_type_substitutions(set, ", "));
+        debug!("Got set {}", self.pretty_print_type_substitutions(&set, ", "));
+
+        self.ictx_mut().constraints = set;
     }
 
     /// Returns: Any newly, fully solved params after applying constraints
@@ -885,20 +884,12 @@ impl TypedProgram {
         slot_type: TypeId,
     ) -> TypeUnificationResult {
         // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
-        let mut inference_substitutions = std::mem::take(&mut self.ictx_mut().constraints);
-        let result = self.unify_and_find_substitutions_rec(
-            &mut inference_substitutions,
-            passed_type,
-            slot_type,
-            false,
-        );
-        self.ictx_mut().constraints = inference_substitutions;
+        let result = self.unify_and_find_substitutions_rec(passed_type, slot_type, false);
         result
     }
 
     pub(crate) fn unify_and_find_substitutions_rec(
         &mut self,
-        substitutions: &mut Vec<TypeSubstitutionPair>,
         passed_type: TypeId,
         slot_type: TypeId,
         // `type_param_enabled`: Whether or not we should look for TypeParameters. By default,
@@ -953,7 +944,6 @@ impl TypedProgram {
                     .zip(self.types.type_slices.copy_slice_sv4(arg_info.type_args).iter())
                 {
                     self.unify_and_find_substitutions_rec(
-                        substitutions,
                         *passed_type,
                         *arg_slot,
                         type_param_enabled,
@@ -990,20 +980,14 @@ impl TypedProgram {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
-                self.add_substitution(
-                    substitutions,
-                    TypeSubstitutionPair { from: passed_type, to: slot_type },
-                );
+                self.add_substitution(TypeSubstitutionPair { from: passed_type, to: slot_type });
                 TypeUnificationResult::Matching
             }
             (_passed_type, Type::InferenceHole(_slot_hole)) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
-                self.add_substitution(
-                    substitutions,
-                    TypeSubstitutionPair { from: slot_type, to: passed_type },
-                );
+                self.add_substitution(TypeSubstitutionPair { from: slot_type, to: passed_type });
                 TypeUnificationResult::Matching
             }
             (Type::Reference(passed_refer), Type::Reference(refer)) => self
@@ -1011,7 +995,6 @@ impl TypedProgram {
                 // write and read pointers, since they'll still fail typecheck in the end
                 // but we'd like to infer successfully to get a good message
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_refer.inner_type,
                     refer.inner_type,
                     type_param_enabled,
@@ -1025,18 +1008,17 @@ impl TypedProgram {
                 // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
                 //
                 // Structs must have all same field names in same order
-                let passed_fields = passed_struct.fields.clone();
-                let fields = struc.fields.clone();
+                let passed_fields = passed_struct.fields;
+                let fields = struc.fields;
                 if passed_fields.len() != fields.len() {
                     return TypeUnificationResult::NonMatching("field count");
                 }
-                for (idx, field) in fields.iter().enumerate() {
-                    let passed_field = &passed_fields[idx];
+                for (idx, field) in self.types.mem.get_slice(fields).iter().enumerate() {
+                    let passed_field = self.types.mem.get_nth(passed_fields, idx);
                     if field.name != passed_field.name {
                         return TypeUnificationResult::NonMatching("field names");
                     }
                     self.unify_and_find_substitutions_rec(
-                        substitutions,
                         passed_field.type_id,
                         field.type_id,
                         type_param_enabled,
@@ -1067,7 +1049,6 @@ impl TypedProgram {
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
                             self.unify_and_find_substitutions_rec(
-                                substitutions,
                                 passed_payload,
                                 param_payload,
                                 type_param_enabled,
@@ -1082,7 +1063,6 @@ impl TypedProgram {
             }
             (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_enum_variant.enum_type_id,
                     slot_type,
                     type_param_enabled,
@@ -1091,13 +1071,11 @@ impl TypedProgram {
                 let passed_array_element_type = passed_array.element_type;
                 let slot_array_element_type = slot_array.element_type;
                 self.unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_array.size_type,
                     slot_array.size_type,
                     type_param_enabled,
                 );
                 self.unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_array_element_type,
                     slot_array_element_type,
                     type_param_enabled,
@@ -1112,14 +1090,12 @@ impl TypedProgram {
                         passed_fn.logical_params().iter().zip(slot_fn.logical_params().iter())
                     {
                         self.unify_and_find_substitutions_rec(
-                            substitutions,
                             passed_param.type_id,
                             slot_param.type_id,
                             type_param_enabled,
                         );
                     }
                     self.unify_and_find_substitutions_rec(
-                        substitutions,
                         passed_fn.return_type,
                         slot_fn.return_type,
                         type_param_enabled,
@@ -1132,7 +1108,6 @@ impl TypedProgram {
             }
             (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => self
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     fp1.function_type_id,
                     fp2.function_type_id,
                     type_param_enabled,
@@ -1142,7 +1117,6 @@ impl TypedProgram {
                     self.extract_function_type_from_functionlike(passed)
                 {
                     self.unify_and_find_substitutions_rec(
-                        substitutions,
                         passed_function_type,
                         slot_function_type_param.function_type,
                         type_param_enabled,
@@ -1155,34 +1129,29 @@ impl TypedProgram {
             }
             (Type::Lambda(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_lambda.function_type,
                     param_lambda.function_type,
                     type_param_enabled,
                 ),
             (Type::LambdaObject(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_lambda.function_type,
                     param_lambda.function_type,
                     type_param_enabled,
                 ),
             (Type::Static(passed_static), Type::Static(param_static)) => self
                 .unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_static.inner_type_id,
                     param_static.inner_type_id,
                     type_param_enabled,
                 ),
             (Type::Static(passed_static), _non_static) => self.unify_and_find_substitutions_rec(
-                substitutions,
                 passed_static.inner_type_id,
                 slot_type,
                 type_param_enabled,
             ),
             (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
                 self.unify_and_find_substitutions_rec(
-                    substitutions,
                     passed_type,
                     static_slot.inner_type_id,
                     type_param_enabled,
@@ -1192,20 +1161,14 @@ impl TypedProgram {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
-                self.add_substitution(
-                    substitutions,
-                    TypeSubstitutionPair { from: passed_type, to: slot_type },
-                );
+                self.add_substitution(TypeSubstitutionPair { from: passed_type, to: slot_type });
                 TypeUnificationResult::Matching
             }
             (_actual_type, Type::TypeParameter(_expected_param)) if type_param_enabled => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
-                self.add_substitution(
-                    substitutions,
-                    TypeSubstitutionPair { from: slot_type, to: passed_type },
-                );
+                self.add_substitution(TypeSubstitutionPair { from: slot_type, to: passed_type });
                 TypeUnificationResult::Matching
             }
             _ if passed_type == slot_type => TypeUnificationResult::Matching,
