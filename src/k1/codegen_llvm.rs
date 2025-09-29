@@ -1033,11 +1033,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let buffer_element_type = self.k1.types.get_as_buffer_instance(type_id);
                 trace!("generating llvm type for struct type {type_id}");
                 let field_count = struc.fields.len();
-                let mut field_types = Vec::with_capacity(field_count);
-                let mut field_basic_types = Vec::with_capacity(field_count);
-                let mut field_di_types: Vec<StructDebugMember> = Vec::with_capacity(field_count);
+                let mut field_types = Vec::with_capacity(field_count as usize);
+                let mut field_basic_types = Vec::with_capacity(field_count as usize);
+                let mut field_di_types: Vec<StructDebugMember> =
+                    Vec::with_capacity(field_count as usize);
                 let name = self.codegen_type_name(type_id, self.k1.types.get_defn_info(type_id));
-                for field in &struc.fields {
+                for field in self.k1.types.mem.get_slice(struc.fields) {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_element_type.is_some()
                         && field.name == self.k1.ast.idents.b.data
@@ -1805,13 +1806,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 zero.as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
-                let mut type_fields = Vec::with_capacity(s.fields.len());
-                let mut fields_basic_values = Vec::with_capacity(s.fields.len());
+                let mut type_fields = Vec::with_capacity(s.fields.len() as usize);
+                let mut fields_basic_values = Vec::with_capacity(s.fields.len() as usize);
                 // We actually have to specialize the LLVM struct type here because it won't allow
                 // an Opt[i64] type with a Some[i64] value
                 // This is also why we can't represent non-empty Buffers as llvm-const values
                 // We have no way to change the types, or to reference other buffers
-                for field in s.fields.iter() {
+                for field in self.k1.static_values.get_slice(s.fields).iter() {
                     let value = self.codegen_static_value_as_const(*field)?;
                     type_fields.push(value.get_type());
                     fields_basic_values.push(value);
@@ -1856,8 +1857,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::LinearContainer(view) => {
                 let (element_type, _) =
                     self.k1.types.get_as_container_instance(view.type_id).unwrap();
-                let array_value =
-                    self.codegen_static_elements_array(element_type, &view.elements)?;
+                let array_value = self.codegen_static_elements_array(
+                    element_type,
+                    self.k1.static_values.get_slice(view.elements),
+                )?;
 
                 match view.kind {
                     StaticContainerKind::View => {
@@ -1972,7 +1975,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
 
                 let llvm_type = llvm_type.expect_struct();
-                for (field_index, field) in s.fields.iter().enumerate() {
+                for (field_index, field) in
+                    self.k1.static_values.get_slice(s.fields).iter().enumerate()
+                {
                     let value = self.codegen_static_value_as_code(*field)?;
                     let field_llvm_type = &llvm_type.fields[field_index];
                     let dest_offset = self
@@ -2026,7 +2031,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 data_global.set_initializer(&array_type.const_zero());
 
                 let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
-                for (index, elem) in view.elements.iter().enumerate() {
+                for (index, elem) in
+                    self.k1.static_values.get_slice(view.elements).iter().enumerate()
+                {
                     let elem_basic_value = self.codegen_static_value_as_code(*elem)?;
                     let array_offset_ptr = unsafe {
                         self.builder
@@ -4199,15 +4206,17 @@ fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueI
         StaticValue::Float(_) => true,
         StaticValue::String(_) => true,
         StaticValue::Zero(_) => true,
-        StaticValue::Struct(s) => {
-            s.fields.iter().all(|field_id| is_llvm_const_representable(static_values, *field_id))
-        }
+        StaticValue::Struct(s) => static_values
+            .get_slice(s.fields)
+            .iter()
+            .all(|field_id| is_llvm_const_representable(static_values, *field_id)),
         StaticValue::Enum(e) => match e.payload {
             None => true,
             Some(payload_id) => is_llvm_const_representable(static_values, payload_id),
         },
-        StaticValue::LinearContainer(cont) => {
-            cont.elements.iter().all(|elem_id| is_llvm_const_representable(static_values, *elem_id))
-        }
+        StaticValue::LinearContainer(cont) => static_values
+            .get_slice(cont.elements)
+            .iter()
+            .all(|elem_id| is_llvm_const_representable(static_values, *elem_id)),
     }
 }

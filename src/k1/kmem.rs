@@ -16,8 +16,8 @@ use crate::static_assert_size;
 /// Vecs and EcoVecs that never need to be mutated here and avoid
 /// all their issues; we should be able to go from 192 bytes to 64 per collection
 /// if our slice handle is 64 bytes, which it should be, if I'm willing to
-/// address less than 4GB in here and can use a 32-bit base. Actually I can use
-/// 48 bits for the base and 16 for the length
+/// address less than 4GB in here and can use a 32-bit offset. Actually I can use
+/// 48 bits for the offset and 16 for the length
 macro_rules! fuckit {
     ($($t:tt)*) => {
         unsafe { $($t)* }
@@ -25,56 +25,74 @@ macro_rules! fuckit {
 }
 
 use core::mem::{align_of, size_of};
-use std::{num::NonZeroU32, ops::Deref};
-pub struct Mem {
+use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
+/// Use 'Tag' to meaningfully identify the arena to help
+/// prevent mixups
+pub struct Mem<Tag = ()> {
     mmap: memmap2::MmapMut,
     cursor: *const u8,
+    _marker: PhantomData<Tag>,
 }
+pub type MemNoTag = Mem<()>;
 
 // We use NonZeroU32 so that the handles are niched, allowing for use
 // for no size cost in types like Option and Result
-pub struct MHandle<T>(NonZeroU32, std::marker::PhantomData<T>);
-static_assert_size!(MHandle<u128>, 4);
+pub struct MHandle<T, Tag>(NonZeroU32, PhantomData<T>, PhantomData<Tag>);
+static_assert_size!(MHandle<u128, ()>, 4);
 
-impl<T> Copy for MHandle<T> {}
-impl<T> Clone for MHandle<T> {
+impl<T, Tag> Copy for MHandle<T, Tag> {}
+impl<T, Tag> Clone for MHandle<T, Tag> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-/// A handle to a slice of Ts inside a `Mem` pool
-pub struct MSlice<T> {
+/// A handle to a slice of Ts inside a `Mem` pool with tag type `Tag`
+/// me'slice <tips fedora>
+pub struct MSlice<T, Tag = ()> {
     offset: NonZeroU32,
     count: u32,
-    _marker: std::marker::PhantomData<T>,
+    _data: std::marker::PhantomData<T>,
+    _tag: std::marker::PhantomData<Tag>,
     // TODO: Add fingerprints to handles in dbg mode
     // #[cfg(feature = "dbg")]
     // fingerprint: u64,
 }
-static_assert_size!(MSlice<u128>, 8);
-impl<T> Copy for MSlice<T> {}
-impl<T> Clone for MSlice<T> {
+static_assert_size!(MSlice<u128, ()>, 8);
+impl<T, Tag> Copy for MSlice<T, Tag> {}
+impl<T, Tag> Clone for MSlice<T, Tag> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> MSlice<T> {
+impl<T, Tag> MSlice<T, Tag> {
     pub const fn empty() -> Self {
         const BOGUS_OFFSET: NonZeroU32 = NonZeroU32::new(8).unwrap();
         // `offset` should never be touched when count is 0
-        Self { offset: BOGUS_OFFSET, count: 0, _marker: std::marker::PhantomData }
+        Self::make(BOGUS_OFFSET, 0)
     }
     pub fn len(&self) -> u32 {
         self.count
     }
+
+    const fn make(offset: NonZeroU32, count: u32) -> Self {
+        Self { offset, count, _data: PhantomData, _tag: PhantomData }
+    }
 }
 
-#[derive(Clone, Copy)]
-pub struct MStr(MSlice<u8>);
-impl MStr {
-    pub const E: Self = Self(MSlice::empty());
+pub struct MStr<Tag>(pub MSlice<u8, Tag>);
+impl<Tag> Copy for MStr<Tag> {}
+impl<Tag> Clone for MStr<Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Tag> MStr<Tag> {
+    pub fn empty() -> Self {
+        Self(MSlice::empty())
+    }
 
     pub fn len(&self) -> u32 {
         self.0.len()
@@ -85,10 +103,10 @@ impl MStr {
     }
 }
 
-struct MemWriter<'a> {
-    mem: &'a mut Mem,
+struct MemWriter<'a, Tag> {
+    mem: &'a mut Mem<Tag>,
 }
-impl<'a> std::fmt::Write for MemWriter<'a> {
+impl<'a, Tag> std::fmt::Write for MemWriter<'a, Tag> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         #[cfg(debug_assertions)]
         let start = self.mem.cursor;
@@ -108,6 +126,12 @@ impl<'a> std::fmt::Write for MemWriter<'a> {
 }
 
 impl Mem {
+    fn make_untagged() -> Mem<()> {
+        Mem::make()
+    }
+}
+
+impl<Tag> Mem<Tag> {
     pub fn make() -> Self {
         // Note(knix) If we never allow larger than a 4gb allocation, then we are safe to hand out 32-bit
         //            offsets instead of pointers, which could be big for some codebases
@@ -119,7 +143,7 @@ impl Mem {
         // arena than convert on every single access
         let cursor = unsafe { mmap.as_ptr().byte_add(8) };
 
-        Self { cursor, mmap }
+        Self { cursor, mmap, _marker: PhantomData }
     }
     fn cursor_mut(&self) -> *mut u8 {
         self.cursor.cast_mut()
@@ -141,18 +165,18 @@ impl Mem {
         unsafe { self.base_ptr().add(offset.get() as usize) as *const T }
     }
 
-    fn pack_handle<T>(&self, ptr: *const T) -> MHandle<T> {
+    fn pack_handle<T>(&self, ptr: *const T) -> MHandle<T, Tag> {
         let offset = self.ptr_to_offset(ptr);
-        MHandle(offset, std::marker::PhantomData)
+        MHandle(offset, PhantomData, PhantomData)
     }
 
-    fn unpack_handle<T>(&self, handle: MHandle<T>) -> *const T {
+    fn unpack_handle<T>(&self, handle: MHandle<T, Tag>) -> *const T {
         self.offset_to_ptr::<T>(handle.0)
     }
 
-    pub fn vec_to_mslice<T>(&self, m_vec: &MVec<T>) -> MSlice<T> {
-        let offset = self.ptr_to_offset(m_vec.buf.cast_const());
-        MSlice { offset, count: m_vec.len() as u32, _marker: std::marker::PhantomData }
+    pub fn vec_to_mslice<T>(&self, fix_vec: &FixVec<T, Tag>) -> MSlice<T, Tag> {
+        let offset = self.ptr_to_offset(fix_vec.buf.cast_const());
+        MSlice::make(offset, fix_vec.len() as u32)
     }
 
     #[track_caller]
@@ -181,7 +205,7 @@ impl Mem {
         self.cursor = proposed_cursor;
     }
 
-    pub fn push<T: Copy>(&mut self, t: T) -> &mut T {
+    pub fn push<T>(&mut self, t: T) -> &mut T {
         unsafe {
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
@@ -197,7 +221,7 @@ impl Mem {
         }
     }
 
-    pub fn push_h<T: Copy>(&mut self, t: T) -> MHandle<T> {
+    pub fn push_h<T>(&mut self, t: T) -> MHandle<T, Tag> {
         let t_ptr = self.push(t) as *const T;
         self.pack_handle(t_ptr)
     }
@@ -225,42 +249,59 @@ impl Mem {
         }
     }
 
-    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T> {
-        let slice = self.push_slice_raw(ts);
-        let ptr = slice.as_ptr();
-        MSlice {
-            offset: self.ptr_to_offset(ptr),
-            count: ts.len() as u32,
-            _marker: std::marker::PhantomData,
+    pub fn push_slice_iter<T: Clone>(&mut self, iter: impl Iterator<Item = T>) -> MSlice<T, Tag> {
+        let mut count = 0;
+        let mut first = None;
+        for t in iter {
+            let p = self.push(t);
+            if count == 0 {
+                first = Some(p as *const T);
+            }
+            count += 1;
+        }
+        if count == 0 {
+            MSlice::empty()
+        } else {
+            MSlice::make(self.ptr_to_offset(first.unwrap()), count)
         }
     }
 
-    pub fn new_vec<T>(&mut self, len: usize) -> MVec<T> {
-        let dst = self.push_slice_uninit(len);
-
-        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len);
-        MVec { buf: raw_slice, len: 0 }
+    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T, Tag> {
+        let slice = self.push_slice_raw(ts);
+        let ptr = slice.as_ptr();
+        MSlice::make(self.ptr_to_offset(ptr), ts.len() as u32)
     }
 
-    pub fn get_str(&self, s: MStr) -> &str {
+    pub fn dup_slice<T: Copy>(&mut self, h: MSlice<T, Tag>) -> MSlice<T, Tag> {
+        let (ptr, count) = self.get_slice_raw(h);
+        let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
+        self.push_slice(slice)
+    }
+
+    /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
+    pub fn new_vec<T>(&mut self, len: u32) -> FixVec<T, Tag> {
+        let dst = self.push_slice_uninit(len as usize);
+
+        let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
+        FixVec { buf: raw_slice, len: 0, _tag: PhantomData }
+    }
+
+    pub fn get_str(&self, s: MStr<Tag>) -> &str {
         let bytes = self.get_slice(s.0);
         unsafe { str::from_utf8_unchecked(bytes) }
     }
 
-    pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr {
+    pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr<Tag> {
         let bytes = self.push_slice_raw(s.as_ref().as_bytes());
         let bytes_ptr = bytes.as_ptr();
-        MStr(MSlice {
-            count: bytes.len() as u32,
-            offset: self.ptr_to_offset(bytes_ptr),
-            _marker: std::marker::PhantomData,
-        })
+        let len = bytes.len() as u32;
+        MStr(MSlice::make(self.ptr_to_offset(bytes_ptr), len))
     }
 
     // Zero-allocation formatted strings.
     // Formats a string directly into our backing buffer, to avoid any extra allocations, then
     // bumps cursor based on final length
-    pub fn format_str(&mut self, args: std::fmt::Arguments) -> MStr {
+    pub fn format_str(&mut self, args: std::fmt::Arguments) -> MStr<Tag> {
         use std::fmt::Write;
 
         let base: *const u8 = self.cursor;
@@ -270,14 +311,10 @@ impl Mem {
         if len < 0 {
             panic!("Cursor moved backwards in kmem::Mem::format_str");
         }
-        MStr(MSlice {
-            count: len as u32,
-            offset: self.ptr_to_offset(base),
-            _marker: std::marker::PhantomData,
-        })
+        MStr(MSlice::make(self.ptr_to_offset(base), len as u32))
     }
 
-    pub fn get<T>(&self, handle: MHandle<T>) -> &T {
+    pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())
@@ -285,7 +322,7 @@ impl Mem {
         unsafe { &*ptr }
     }
 
-    pub fn get_copy<T: Copy>(&self, handle: MHandle<T>) -> T {
+    pub fn get_copy<T: Copy>(&self, handle: MHandle<T, Tag>) -> T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             self.check_mine(ptr.addr())
@@ -293,18 +330,31 @@ impl Mem {
         unsafe { *ptr }
     }
 
-    pub fn get_slice<T>(&self, handle: MSlice<T>) -> &'static [T] {
+    pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
+        let ptr: *const T = self.offset_to_ptr(handle.offset);
+        if cfg!(debug_assertions) {
+            self.check_mine(ptr.addr())
+        }
+        (ptr, handle.count as usize)
+    }
+
+    pub fn get_slice<T>(&self, handle: MSlice<T, Tag>) -> &'static [T] {
+        let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
-            let ptr: *const T = self.offset_to_ptr(handle.offset);
-            if cfg!(debug_assertions) {
-                self.check_mine(ptr.addr())
-            }
-            let src: &[T] = std::slice::from_raw_parts(ptr, handle.count as usize);
+            let src: &[T] = std::slice::from_raw_parts(ptr, count);
             src
         }
     }
 
-    pub fn get_nth<T>(&self, handle: MSlice<T>, n: usize) -> &'static T {
+    pub fn get_slice_mut<T>(&self, handle: MSlice<T, Tag>) -> &'static mut [T] {
+        let (ptr, count) = self.get_slice_raw(handle);
+        fuckit! {
+            let src: &mut [T] = std::slice::from_raw_parts_mut(ptr.cast_mut(), count);
+            src
+        }
+    }
+
+    pub fn get_nth<T>(&self, handle: MSlice<T, Tag>, n: usize) -> &'static T {
         &self.get_slice(handle)[n]
     }
 
@@ -320,7 +370,7 @@ macro_rules! mformat {
     };
 }
 
-impl Mem {
+impl<Tag> Mem<Tag> {
     pub fn print_usage(&self, name: &str) {
         let used_kb = self.bytes_used() / crate::KILOBYTE;
         let total = self.mmap.len() / crate::KILOBYTE;
@@ -330,19 +380,20 @@ impl Mem {
 }
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
-pub struct MVec<T> {
+pub struct FixVec<T, Tag = ()> {
     buf: *mut [T],
     len: usize,
+    _tag: PhantomData<Tag>,
 }
 
-impl<T> MVec<T> {
+impl<T, Tag> FixVec<T, Tag> {
     pub fn len(&self) -> usize {
         self.len
     }
 
     pub fn push(&mut self, val: T) {
         if self.len == self.buf.len() {
-            panic!("AVec is full {}", self.buf.len());
+            panic!("FixVec is full {}", self.buf.len());
         }
         unsafe {
             (*self.buf)[self.len] = val;
@@ -362,6 +413,20 @@ impl<T> MVec<T> {
         }
     }
 
+    pub fn extend(&mut self, vals: &[T])
+    where
+        T: Copy,
+    {
+        if self.len + vals.len() > self.buf.len() {
+            panic!("FixVec is full {} + {} > {}", self.len, vals.len(), self.buf.len());
+        }
+        unsafe {
+            let dst = &mut (*self.buf)[self.len..self.len + vals.len()];
+            dst.copy_from_slice(vals);
+        }
+        self.len += vals.len();
+    }
+
     pub fn as_slice(&self) -> &[T] {
         unsafe { &(*self.buf)[..self.len] }
     }
@@ -379,20 +444,20 @@ impl<T> MVec<T> {
     }
 }
 
-impl<T> std::ops::Index<usize> for MVec<T> {
+impl<T, Tag> std::ops::Index<usize> for FixVec<T, Tag> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T> std::ops::IndexMut<usize> for MVec<T> {
+impl<T, Tag> std::ops::IndexMut<usize> for FixVec<T, Tag> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.as_slice_mut()[index]
     }
 }
 
-impl<T> Deref for MVec<T> {
+impl<T, Tag> Deref for FixVec<T, Tag> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.as_slice()
@@ -405,7 +470,7 @@ mod test {
 
     #[test]
     fn test() {
-        let mut arena = Mem::make();
+        let mut arena = Mem::make_untagged();
         let handle = arena.push_h(42u32);
         let value = arena.get(handle);
         assert_eq!(*value, 42);
@@ -420,8 +485,20 @@ mod test {
     }
 
     #[test]
+    fn push_slice_iter() {
+        let mut arena = Mem::make_untagged();
+        let h = arena.push_slice_iter((0..10).map(|x| x * 10));
+        assert_eq!(h.len(), 10);
+        assert_eq!(arena.get_slice(h), &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+
+        let empty_h = arena.push_slice_iter(std::iter::empty::<u32>());
+        assert_eq!(empty_h.len(), 0);
+        assert_eq!(arena.get_slice(empty_h), &[]);
+    }
+
+    #[test]
     fn vec() {
-        let mut arena = Mem::make();
+        let mut arena = Mem::make_untagged();
         let mut v = arena.new_vec(16);
         for i in 0..16 {
             v.push(i * 10);
@@ -435,12 +512,41 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "AVec is full")]
+    fn vec_extend() {
+        let mut arena = Mem::make_untagged();
+        let mut v = arena.new_vec(16);
+        v.extend(&[1, 2, 3, 4, 5]);
+        assert_eq!(v.len(), 5);
+        for i in 0..5 {
+            assert_eq!(v.as_slice()[i], i + 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "FixVec is full")]
+    fn vec_extend_oob() {
+        let mut arena = Mem::make_untagged();
+        let mut v = arena.new_vec(3);
+        v.extend(&[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "FixVec is full")]
     fn vec_oob() {
-        let mut arena = Mem::make();
+        let mut arena = Mem::make_untagged();
         let mut v = arena.new_vec(4);
         for i in 0..5 {
             v.push(i * 10);
         }
+    }
+
+    #[test]
+    fn dup_slice() {
+        let mut arena = Mem::make_untagged();
+        let h = arena.push_slice(&[1, 2, 3, 4, 5]);
+        let h2 = arena.dup_slice(h);
+        assert_eq!(h.len(), h2.len());
+        assert_eq!(arena.get_slice(h), arena.get_slice(h2));
+        assert_ne!(h.offset, h2.offset);
     }
 }

@@ -532,10 +532,10 @@ macro_rules! execute_expr_return_exit {
     }};
 }
 
-fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperResult<VmResult> {
+fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperResult<VmResult> {
     vm.eval_depth.fetch_add(1, Ordering::Relaxed);
     let prev = vm.eval_span;
-    vm.eval_span = m.exprs.get(expr).get_span();
+    vm.eval_span = k1.exprs.get(expr).get_span();
     let mut vm = scopeguard::guard(vm, |vm| {
         vm.eval_depth.fetch_sub(1, Ordering::Relaxed);
         vm.eval_span = prev;
@@ -546,14 +546,14 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
     //let mut s = String::new();
     //std::io::stdin().read_line(&mut s).unwrap();
 
-    let result: TyperResult<VmResult> = match m.exprs.get(expr) {
+    let result: TyperResult<VmResult> = match k1.exprs.get(expr) {
         TypedExpr::Unit(_) => Ok(Value::Unit.into()),
         TypedExpr::Char(byte, _) => Ok(Value::Char(*byte).into()),
         TypedExpr::Bool(b, _) => Ok(Value::Bool(*b).into()),
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::String(s, _) => {
-            let string_value = string_id_to_value(vm, StackSelection::CallStackCurrent, m, *s);
+            let string_value = string_id_to_value(vm, StackSelection::CallStackCurrent, k1, *s);
             Ok(string_value.into())
         }
         TypedExpr::Struct(s) => {
@@ -561,16 +561,16 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let fields = s.fields.clone();
             let s_type_id = s.type_id;
             for field in &fields {
-                let value = execute_expr_return_exit!(vm, m, field.expr)?;
+                let value = execute_expr_return_exit!(vm, k1, field.expr)?;
                 values.push(value);
             }
 
-            let struct_value = vm.stack.push_struct_values(&m.types, s_type_id, &values);
+            let struct_value = vm.stack.push_struct_values(&k1.types, s_type_id, &values);
             Ok(struct_value.into())
         }
         TypedExpr::StructFieldAccess(field_access) => {
             let field_access = *field_access;
-            let struct_value = execute_expr_return_exit!(vm, m, field_access.base)?;
+            let struct_value = execute_expr_return_exit!(vm, k1, field_access.base)?;
             let struct_ptr = match struct_value {
                 Value::Agg { ptr: struct_ptr, .. } => struct_ptr,
                 Value::Reference { ptr, .. } => ptr,
@@ -578,7 +578,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             };
             if field_access.is_referencing {
                 let field_ptr = gep_struct_field(
-                    &m.types,
+                    &k1.types,
                     field_access.struct_type,
                     struct_ptr,
                     field_access.field_index as usize,
@@ -587,7 +587,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             } else {
                 let field_value = load_struct_field(
                     vm,
-                    m,
+                    k1,
                     field_access.struct_type,
                     struct_ptr,
                     field_access.field_index as usize,
@@ -598,54 +598,54 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         }
         TypedExpr::ArrayGetElement(array_get) => {
             let array_get = *array_get;
-            let base = execute_expr_return_exit!(vm, m, array_get.base)?;
+            let base = execute_expr_return_exit!(vm, k1, array_get.base)?;
             let index =
-                execute_expr_return_exit!(vm, m, array_get.index)?.expect_int().expect_uword();
+                execute_expr_return_exit!(vm, k1, array_get.index)?.expect_int().expect_uword();
             let base_ptr = match base {
                 Value::Agg { ptr: array_ptr, .. } => array_ptr,
                 Value::Reference { ptr, .. } => ptr,
                 _ => unreachable!("malformed array access: not an Array or Array*"),
             };
-            let array_type = m.types.get(array_get.array_type).as_array().unwrap();
-            let offset = offset_at_index(&m.types, array_type.element_type, index);
+            let array_type = k1.types.get(array_get.array_type).as_array().unwrap();
+            let offset = offset_at_index(&k1.types, array_type.element_type, index);
             let element_ptr = unsafe { base_ptr.byte_add(offset) };
             let output_value = if array_get.is_referencing {
                 Value::Reference { type_id: array_get.result_type, ptr: element_ptr }
             } else {
-                let loaded = load_value(vm, m, array_type.element_type, element_ptr, true)?;
+                let loaded = load_value(vm, k1, array_type.element_type, element_ptr, true)?;
                 loaded
             };
             Ok(VmResult::Value(output_value))
         }
-        TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, m, *variable_expr),
+        TypedExpr::Variable(variable_expr) => execute_variable_expr(vm, k1, *variable_expr),
         TypedExpr::Deref(deref) => {
             let span = deref.span;
             let target_type = deref.type_id;
             let ref_expr = deref.target;
-            let reference_value = execute_expr_return_exit!(vm, m, ref_expr)?;
+            let reference_value = execute_expr_return_exit!(vm, k1, ref_expr)?;
             let Value::Reference { ptr, .. } = reference_value else {
-                ice_span!(m, span, "malformed dereference: {:?}", reference_value)
+                ice_span!(k1, span, "malformed dereference: {:?}", reference_value)
             };
-            let v = load_value(vm, m, target_type, ptr, true)?;
+            let v = load_value(vm, k1, target_type, ptr, true)?;
             Ok(v.into())
         }
-        TypedExpr::Block(_) => execute_block(vm, m, expr),
-        TypedExpr::Call { .. } => execute_call(vm, m, expr),
+        TypedExpr::Block(_) => execute_block(vm, k1, expr),
+        TypedExpr::Call { .. } => execute_call(vm, k1, expr),
         TypedExpr::Match(match_expr) => {
             let match_expr = match_expr.clone();
             //eprintln!("execute_match: {}", m.expr_to_string(expr));
-            execute_match(vm, m, &match_expr)
+            execute_match(vm, k1, &match_expr)
         }
         TypedExpr::WhileLoop(while_expr) => {
             let while_expr = while_expr.clone();
             let result = loop {
-                let cond_result = execute_matching_condition(vm, m, &while_expr.condition)?;
+                let cond_result = execute_matching_condition(vm, k1, &while_expr.condition)?;
                 let cond = return_exit!(cond_result).expect_bool();
                 if !cond {
                     break VmResult::UNIT;
                 }
 
-                let body_result = execute_expr(vm, m, while_expr.body)?;
+                let body_result = execute_expr(vm, k1, while_expr.body)?;
                 match body_result {
                     VmResult::Value(_) => continue,
                     VmResult::Break(_) => break VmResult::UNIT,
@@ -657,7 +657,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         TypedExpr::LoopExpr(loop_expr) => {
             let body_block = loop_expr.body_block;
             let result = loop {
-                let block_result = execute_block(vm, m, body_block)?;
+                let block_result = execute_block(vm, k1, body_block)?;
                 //eprintln!("loop iter {} {:?}", m.expr_to_string(body_block).blue(), block_result);
                 match block_result {
                     VmResult::Value(_) => continue,
@@ -667,7 +667,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             };
             Ok(result)
         }
-        TypedExpr::Break(b) => match execute_expr(vm, m, b.value)? {
+        TypedExpr::Break(b) => match execute_expr(vm, k1, b.value)? {
             VmResult::Value(value) => Ok(VmResult::Break(value)),
             VmResult::Break(_) => unreachable!("cant break inside a break"),
             VmResult::Return(_) => unreachable!("cant return inside a break"),
@@ -677,21 +677,21 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let e = *e;
             let payload_value = match e.payload {
                 None => None,
-                Some(payload_expr) => Some(execute_expr_return_exit!(vm, m, payload_expr)?),
+                Some(payload_expr) => Some(execute_expr_return_exit!(vm, k1, payload_expr)?),
             };
-            let enum_ptr = vm.stack.push_enum(&m.types, e.variant_type_id, payload_value);
+            let enum_ptr = vm.stack.push_enum(&k1.types, e.variant_type_id, payload_value);
             Ok(Value::Agg { type_id: e.variant_type_id, ptr: enum_ptr }.into())
         }
         // EnumIsVariant could actually go away in favor of just an == on the getTag + a type-level
         // get tag expr on rhs
         TypedExpr::EnumIsVariant(is_variant) => {
             let is_variant = *is_variant;
-            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, m, is_variant.enum_expr)?
+            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, k1, is_variant.enum_expr)?
             else {
-                m.ice_with_span("malformed enum get_tag", is_variant.span)
+                k1.ice_with_span("malformed enum get_tag", is_variant.span)
             };
-            let enum_type = m.get_expr_type(is_variant.enum_expr).expect_enum();
-            let Value::Int(tag_value) = load_value(vm, m, enum_type.tag_type, ptr, true)? else {
+            let enum_type = k1.get_expr_type(is_variant.enum_expr).expect_enum();
+            let Value::Int(tag_value) = load_value(vm, k1, enum_type.tag_type, ptr, true)? else {
                 unreachable!()
             };
             let variant = &enum_type.variants[is_variant.variant_index as usize];
@@ -699,37 +699,37 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         }
         TypedExpr::EnumGetTag(get_tag) => {
             let get_tag = *get_tag;
-            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, m, get_tag.enum_expr)?
+            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, k1, get_tag.enum_expr)?
             else {
-                m.ice_with_span("malformed enum get_tag", get_tag.span)
+                k1.ice_with_span("malformed enum get_tag", get_tag.span)
             };
             // Do not load the entire enum to the stack, simply
             // interpret the base ptr as a ptr to the tag type
-            let enum_type = m.get_expr_type(get_tag.enum_expr).expect_enum();
-            let tag_value = load_value(vm, m, enum_type.tag_type, ptr, true)?;
+            let enum_type = k1.get_expr_type(get_tag.enum_expr).expect_enum();
+            let tag_value = load_value(vm, k1, enum_type.tag_type, ptr, true)?;
             Ok(tag_value.into())
         }
         TypedExpr::EnumGetPayload(get_variant_payload) => {
             let get_payload = *get_variant_payload;
-            let base_value = execute_expr_return_exit!(vm, m, get_payload.enum_variant_expr)?;
+            let base_value = execute_expr_return_exit!(vm, k1, get_payload.enum_variant_expr)?;
             let enum_ptr = match base_value {
                 Value::Agg { ptr: variant_ptr, .. } => variant_ptr,
                 Value::Reference { ptr, .. } => ptr,
                 _ => unreachable!("malformed get variant payload: not a agg or agg*"),
             };
-            let variant_type = match m.get_expr_type(get_payload.enum_variant_expr) {
+            let variant_type = match k1.get_expr_type(get_payload.enum_variant_expr) {
                 Type::EnumVariant(ev) => ev,
-                Type::Reference(r) => m.types.get(r.inner_type).expect_enum_variant(),
+                Type::Reference(r) => k1.types.get(r.inner_type).expect_enum_variant(),
                 _ => unreachable!("malformed get variant payload"),
             };
-            let payload_ptr = gep_enum_payload(&m.types, variant_type, enum_ptr);
+            let payload_ptr = gep_enum_payload(&k1.types, variant_type, enum_ptr);
             if get_payload.is_referencing {
                 let payload_reference =
                     Value::Reference { type_id: get_payload.result_type_id, ptr: payload_ptr };
                 Ok(payload_reference.into())
             } else {
                 let payload_value =
-                    load_value(vm, m, variant_type.payload.unwrap(), payload_ptr, true)?;
+                    load_value(vm, k1, variant_type.payload.unwrap(), payload_ptr, true)?;
                 Ok(payload_value.into())
             }
         }
@@ -737,17 +737,17 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let cast = typed_cast.clone();
             let span = cast.span;
             let target_type = typed_cast.target_type_id;
-            let mut base_value = execute_expr_return_exit!(vm, m, cast.base_expr)?;
+            let mut base_value = execute_expr_return_exit!(vm, k1, cast.base_expr)?;
             match cast.cast_type {
                 CastType::IntegerCast(_direction) => {
                     let int_to_cast = base_value.expect_int();
-                    let value = integer_cast(&m.types, int_to_cast, cast.target_type_id);
+                    let value = integer_cast(&k1.types, int_to_cast, cast.target_type_id);
                     Ok(Value::Int(value).into())
                 }
                 CastType::IntegerExtendFromChar => {
                     let Value::Char(c) = base_value else { unreachable!() };
                     let int_to_cast = TypedIntValue::U8(c);
-                    let value = integer_cast(&m.types, int_to_cast, cast.target_type_id);
+                    let value = integer_cast(&k1.types, int_to_cast, cast.target_type_id);
                     Ok(Value::Int(value).into())
                 }
                 CastType::Integer8ToChar => {
@@ -786,8 +786,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 CastType::EnumToVariant | CastType::VariantToEnum => {
                     let new_value = match base_value {
                         Value::Agg { ptr, .. } => Value::Agg { ptr, type_id: cast.target_type_id },
-                        _ => m.ice_with_span(
-                            format!("Malformed EnumToVariant cast: {}", m.expr_to_string(expr)),
+                        _ => k1.ice_with_span(
+                            format!("Malformed EnumToVariant cast: {}", k1.expr_to_string(expr)),
                             vm.eval_span,
                         ),
                     };
@@ -795,14 +795,14 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 }
                 CastType::PointerToReference => {
                     let Value::Pointer(value) = base_value else {
-                        m.ice_with_span("malformed pointer-to-reference cast", span)
+                        k1.ice_with_span("malformed pointer-to-reference cast", span)
                     };
                     Ok(Value::Reference { type_id: cast.target_type_id, ptr: value as *const u8 }
                         .into())
                 }
                 CastType::ReferenceToPointer => {
                     let Value::Reference { ptr, .. } = base_value else {
-                        m.ice_with_span("malformed reference-to-pointer cast", span)
+                        k1.ice_with_span("malformed reference-to-pointer cast", span)
                     };
                     Ok(Value::Pointer(ptr.addr()).into())
                 }
@@ -810,7 +810,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                 | CastType::ReferenceToMut
                 | CastType::ReferenceUnMut => {
                     let Value::Reference { ptr, .. } = base_value else {
-                        m.ice_with_span("malformed reference-to-reference cast", span)
+                        k1.ice_with_span("malformed reference-to-reference cast", span)
                     };
                     Ok(Value::Reference { type_id: cast.target_type_id, ptr }.into())
                 }
@@ -819,7 +819,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     let int_value = match cast.target_type_id {
                         UWORD_TYPE_ID => TypedIntValue::UWord64(ptr_usize as u64),
                         IWORD_TYPE_ID => TypedIntValue::IWord64(ptr_usize as i64),
-                        _ => m.ice_with_span("malformed PointerToWord", span),
+                        _ => k1.ice_with_span("malformed PointerToWord", span),
                     };
                     Ok(Value::Int(int_value).into())
                 }
@@ -829,7 +829,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                         (TypedFloatValue::F32(f32), F64_TYPE_ID) => {
                             TypedFloatValue::F64(f32 as f64)
                         }
-                        _ => m.ice_with_span("malformed float extend", vm.eval_span),
+                        _ => k1.ice_with_span("malformed float extend", vm.eval_span),
                     };
                     Ok(Value::Float(extended).into())
                 }
@@ -839,7 +839,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                         (TypedFloatValue::F64(f64), F32_TYPE_ID) => {
                             TypedFloatValue::F32(f64 as f32)
                         }
-                        _ => m.ice_with_span("malformed float truncate", vm.eval_span),
+                        _ => k1.ice_with_span("malformed float truncate", vm.eval_span),
                     };
                     Ok(Value::Float(truncated).into())
                 }
@@ -850,7 +850,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                         (TypedFloatValue::F32(f32), I32_TYPE_ID) => TypedIntValue::I32(f32 as i32),
                         (TypedFloatValue::F64(f64), U64_TYPE_ID) => TypedIntValue::U64(f64 as u64),
                         (TypedFloatValue::F64(f64), I64_TYPE_ID) => TypedIntValue::I64(f64 as i64),
-                        _ => m.ice_with_span("malformed float to integer cast", vm.eval_span),
+                        _ => k1.ice_with_span("malformed float to integer cast", vm.eval_span),
                     };
                     Ok(Value::Int(int_value).into())
                 }
@@ -859,20 +859,30 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                     // So we need a pointer to the struct, ideally on _our own_ stack, then
                     // a pointer to the function, which is an encoded function id
                     let lambda_object_type = cast.target_type_id;
-                    let lambda_type = m.get_expr_type(cast.base_expr).as_lambda().unwrap();
-                    let obj_type = m.types.get(lambda_object_type).as_lambda_object().unwrap();
+                    let lambda_type = k1.get_expr_type(cast.base_expr).as_lambda().unwrap();
+                    let obj_type = k1.types.get(lambda_object_type).as_lambda_object().unwrap();
                     if cfg!(debug_assertions) {
-                        let struct_layout = m.types.get_layout(obj_type.struct_representation);
+                        let struct_layout = k1.types.get_layout(obj_type.struct_representation);
                         debug_assert_eq!(struct_layout.size, 16);
                     }
 
                     let lambda_obj_struct_type =
-                        m.types.get(obj_type.struct_representation).expect_struct();
-                    let function_pointer_type = lambda_obj_struct_type.fields
-                        [crate::typer::types::TypePool::LAMBDA_OBJECT_FN_PTR_INDEX]
+                        k1.types.get(obj_type.struct_representation).expect_struct();
+                    let function_pointer_type = k1
+                        .types
+                        .mem
+                        .get_nth(
+                            lambda_obj_struct_type.fields,
+                            TypePool::LAMBDA_OBJECT_FN_PTR_INDEX,
+                        )
                         .type_id;
-                    let environment_ref_type = lambda_obj_struct_type.fields
-                        [crate::typer::types::TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX]
+                    let environment_ref_type = k1
+                        .types
+                        .mem
+                        .get_nth(
+                            lambda_obj_struct_type.fields,
+                            TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX,
+                        )
                         .type_id;
                     let environment_struct = base_value.expect_agg();
 
@@ -885,7 +895,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
                         function_pointer_type,
                     );
                     let mut lambda_object = vm.stack.push_struct_values(
-                        &m.types,
+                        &k1.types,
                         obj_type.struct_representation,
                         &[function_ref_value, env_reference],
                     );
@@ -900,7 +910,7 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
         }
         TypedExpr::Return(typed_return) => {
             let span = typed_return.span;
-            match execute_expr(vm, m, typed_return.value)? {
+            match execute_expr(vm, k1, typed_return.value)? {
                 VmResult::Value(value) => Ok(VmResult::Return(value)),
                 // Return inside return happens when the user
                 // has an early return in a terminating block
@@ -915,8 +925,8 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             // Lambdas are physically represented as simply their environment structs
             // Since we know the function id from the type still
             let lambda_type_id = l.lambda_type;
-            let lambda_type = m.types.get(lambda_type_id).as_lambda().unwrap();
-            let mut env_struct = execute_expr_return_exit!(vm, m, lambda_type.environment_struct)?;
+            let lambda_type = k1.types.get(lambda_type_id).as_lambda().unwrap();
+            let mut env_struct = execute_expr_return_exit!(vm, k1, lambda_type.environment_struct)?;
             env_struct.set_type_id(lambda_type_id);
             Ok(VmResult::Value(env_struct))
         }
@@ -926,16 +936,18 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             Ok(VmResult::Value(function_ref_value))
         }
         TypedExpr::FunctionToLambdaObject(f_to_lam) => {
-            let obj_type = m.types.get(f_to_lam.lambda_object_type_id).as_lambda_object().unwrap();
+            let obj_type = k1.types.get(f_to_lam.lambda_object_type_id).as_lambda_object().unwrap();
             if cfg!(debug_assertions) {
-                let struct_layout = m.types.get_layout(obj_type.struct_representation);
+                let struct_layout = k1.types.get_layout(obj_type.struct_representation);
                 debug_assert_eq!(struct_layout.size, 16);
             }
 
             let lambda_obj_struct_type =
-                m.types.get(obj_type.struct_representation).expect_struct();
-            let function_pointer_type = lambda_obj_struct_type.fields
-                [crate::typer::types::TypePool::LAMBDA_OBJECT_FN_PTR_INDEX]
+                k1.types.get(obj_type.struct_representation).expect_struct();
+            let function_pointer_type = k1
+                .types
+                .mem
+                .get_nth(lambda_obj_struct_type.fields, TypePool::LAMBDA_OBJECT_FN_PTR_INDEX)
                 .type_id;
 
             // This is a pointer to a zero-sized environment struct since this is a function
@@ -944,41 +956,41 @@ fn execute_expr(vm: &mut Vm, m: &mut TypedProgram, expr: TypedExprId) -> TyperRe
             let function_ref_value =
                 function_id_to_ref_value(f_to_lam.function_id, function_pointer_type);
             let mut lambda_object = vm.stack.push_struct_values(
-                &m.types,
+                &k1.types,
                 obj_type.struct_representation,
                 &[function_ref_value, env_ptr],
             );
             lambda_object.set_type_id(f_to_lam.lambda_object_type_id);
             Ok(lambda_object.into())
         }
-        TypedExpr::PendingCapture(_) => m.ice_with_span("pending capture in vm", vm.eval_span),
+        TypedExpr::PendingCapture(_) => k1.ice_with_span("pending capture in vm", vm.eval_span),
         TypedExpr::StaticValue(value_id, _, _) => {
             let vm_value =
-                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, m, *value_id)?;
+                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, k1, *value_id)?;
             Ok(vm_value.into())
         }
     };
     if cfg!(debug_assertions) {
         if let Ok(VmResult::Value(v)) = result {
-            let expected_type = m.exprs.get(expr).get_type();
+            let expected_type = k1.exprs.get(expr).get_type();
             let is_metaprogram_special_case =
                 expected_type == NEVER_TYPE_ID && v.get_type() == UNIT_TYPE_ID;
             let is_static_expected =
-                matches!(m.types.get_no_follow_static(expected_type), Type::Static(_));
+                matches!(k1.types.get_no_follow_static(expected_type), Type::Static(_));
             if !is_metaprogram_special_case && !is_static_expected {
-                if let Err(msg) = m.check_types(
-                    m.exprs.get(expr).get_type(),
+                if let Err(msg) = k1.check_types(
+                    k1.exprs.get(expr).get_type(),
                     v.get_type(),
                     // We use root scope because we don't expected to need to resolve any type
                     // variables in VM code; it should all be concrete, and that's all the
                     // scope is used for in check_types
-                    m.scopes.get_root_scope_id(),
+                    k1.scopes.get_root_scope_id(),
                 ) {
                     //eprintln!("{}", vm.dump_current_frame(m));
                     return failf!(
                         vm.eval_span,
                         "vm eval type mismatch after executing '{}'\n{}",
-                        m.expr_to_string_with_type(expr),
+                        k1.expr_to_string_with_type(expr),
                         msg,
                     );
                 }
@@ -1077,7 +1089,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
-            for f in static_struct.fields.iter() {
+            for f in k1.static_values.mem.get_slice(static_struct.fields).iter() {
                 let value = static_value_to_vm_value(vm, dst_stack, k1, *f)?;
                 values.push(value);
             }
@@ -1109,7 +1121,6 @@ pub fn static_value_to_vm_value(
             Ok(Value::Agg { type_id, ptr: enum_ptr })
         }
         StaticValue::LinearContainer(cont) => {
-            let elements = cont.elements.clone();
             let (element_type, _) = k1.types.get_as_container_instance(cont.type_id).unwrap();
 
             let layout = k1.types.get_layout(element_type);
@@ -1122,15 +1133,19 @@ pub fn static_value_to_vm_value(
             );
             let data_base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
 
-            for (index, elem_value_id) in elements.iter().enumerate() {
+            for (index, elem_value_id) in
+                k1.static_values.get_slice(cont.elements).iter().enumerate()
+            {
                 let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
                 let elem_dst_ptr = unsafe { data_base_mem.byte_add(index * layout.size as usize) };
                 store_value(&k1.types, elem_dst_ptr, elem_value);
             }
             match cont.kind {
                 StaticContainerKind::View => {
-                    let rust_view =
-                        K1ViewLike { len: elements.len(), data: data_base_mem.cast_const() };
+                    let rust_view = K1ViewLike {
+                        len: cont.elements.len() as usize,
+                        data: data_base_mem.cast_const(),
+                    };
                     let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
 
                     Ok(Value::Agg { type_id: cont.type_id, ptr: view_struct_ptr })
@@ -2075,7 +2090,7 @@ pub fn load_struct_field(
     copy: bool,
 ) -> TyperResult<Value> {
     let field_ptr = gep_struct_field(&k1.types, struct_type, struct_ptr, field_index);
-    let field = &k1.types.get(struct_type).expect_struct().fields[field_index];
+    let field = k1.types.get_struct_field(struct_type, field_index);
     let value = load_value(vm, k1, field.type_id, field_ptr, copy)?;
     // load_struct_field x (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
     // load_struct_field y (offset=0) of type GenericPoint[i32] is Int(I32(4)). Full struct: [4, 0, 0, 0, 0, 0, 0, 0]
@@ -2417,7 +2432,7 @@ pub fn string_id_to_value(
     k1: &TypedProgram,
     string_id: StringId,
 ) -> Value {
-    let char_view_type_id = k1.types.get(STRING_TYPE_ID).expect_struct().fields[0].type_id;
+    let char_view_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
     let string_layout = k1.types.get_layout(STRING_TYPE_ID);
     debug_assert_eq!(string_layout, k1.types.get_layout(char_view_type_id));
 
@@ -2441,7 +2456,7 @@ pub fn string_id_to_value(
 /// For complex types (not a char array) like a big slice of structs, I think we may just have to use
 /// some sort of 'embed binary data' feature of the backend
 pub fn vm_value_to_static_value(
-    m: &mut TypedProgram,
+    k1: &mut TypedProgram,
     vm: &mut Vm,
     vm_value: Value,
     span: SpanId,
@@ -2475,57 +2490,63 @@ pub fn vm_value_to_static_value(
         }
         Value::Agg { type_id, ptr } => {
             if type_id == STRING_TYPE_ID {
-                let box_str = value_to_string_id(m, vm_value).map_err(|msg| {
+                let box_str = value_to_string_id(k1, vm_value).map_err(|msg| {
                     errf!(span, "Could not convert string to static value: {msg}")
                 })?;
                 StaticValue::String(box_str)
-            } else if m.types.get_as_view_instance(type_id).is_some() {
-                let (view, element_type) = value_as_view(m, vm_value);
-                let mut elements = EcoVec::with_capacity(view.len);
+            } else if k1.types.get_as_view_instance(type_id).is_some() {
+                let (view, element_type) = value_as_view(k1, vm_value);
+                let mut elements = k1.static_values.mem.new_vec(view.len as u32);
                 for index in 0..view.len {
-                    let elem_vm = get_view_element(vm, m, view.data, element_type, index)
+                    let elem_vm = get_view_element(vm, k1, view.data, element_type, index)
                         .unwrap_or_else(|e| {
-                            vm_ice!(m, vm, "Failed to load view element {index}: {}", e)
+                            vm_ice!(k1, vm, "Failed to load view element {index}: {}", e)
                         });
-                    let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
+                    let elem_static = vm_value_to_static_value(k1, vm, elem_vm, span)?;
                     elements.push(elem_static);
                 }
+                let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
                 StaticValue::LinearContainer(StaticContainer {
-                    elements,
+                    elements: elements_slice,
                     kind: StaticContainerKind::View,
                     type_id,
                 })
-            } else if m.types.get_as_list_instance(type_id).is_some() {
+            } else if k1.types.get_as_list_instance(type_id).is_some() {
                 #[allow(clippy::if_same_then_else)]
                 return failf!(
                     span,
                     "{} cannot be converted to static value; convert to a View first",
-                    m.type_id_to_string(type_id)
+                    k1.type_id_to_string(type_id)
                 );
-            } else if m.types.get_as_buffer_instance(type_id).is_some() {
+            } else if k1.types.get_as_buffer_instance(type_id).is_some() {
                 return failf!(
                     span,
                     "{} cannot be converted to static value; convert to a View first",
-                    m.type_id_to_string(type_id)
+                    k1.type_id_to_string(type_id)
                 );
             } else {
-                let typ = m.types.get(type_id);
+                let typ = k1.types.get(type_id);
                 match typ {
                     Type::Struct(struct_type) => {
-                        let mut field_value_ids = EcoVec::with_capacity(struct_type.fields.len());
-                        let struct_fields = struct_type.fields.clone();
-                        for (index, _) in struct_fields.iter().enumerate() {
+                        let mut field_value_ids =
+                            k1.static_values.mem.new_vec(struct_type.fields.len());
+                        for index in 0..struct_type.fields.len() {
                             let field_value =
-                                load_struct_field(vm, m, type_id, ptr, index, false).unwrap();
+                                load_struct_field(vm, k1, type_id, ptr, index as usize, false)
+                                    .unwrap();
                             let field_static_value_id =
-                                vm_value_to_static_value(m, vm, field_value, span)?;
+                                vm_value_to_static_value(k1, vm, field_value, span)?;
                             field_value_ids.push(field_static_value_id)
                         }
-                        StaticValue::Struct(StaticStruct { type_id, fields: field_value_ids })
+                        StaticValue::Struct(StaticStruct {
+                            type_id,
+                            fields: k1.static_values.mem.vec_to_mslice(&field_value_ids),
+                        })
                     }
                     Type::Enum(enum_type) => {
-                        let tag =
-                            load_value(vm, m, enum_type.tag_type, ptr, false).unwrap().expect_int();
+                        let tag = load_value(vm, k1, enum_type.tag_type, ptr, false)
+                            .unwrap()
+                            .expect_int();
                         let variant =
                             enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
                         let variant_type_id = variant.my_type_id;
@@ -2534,11 +2555,11 @@ pub fn vm_value_to_static_value(
                         let payload = match variant.payload {
                             None => None,
                             Some(payload_type) => {
-                                let payload_ptr = gep_enum_payload(&m.types, variant, ptr);
+                                let payload_ptr = gep_enum_payload(&k1.types, variant, ptr);
                                 let payload_value =
-                                    load_value(vm, m, payload_type, payload_ptr, false).unwrap();
+                                    load_value(vm, k1, payload_type, payload_ptr, false).unwrap();
                                 let static_value_id =
-                                    vm_value_to_static_value(m, vm, payload_value, span)?;
+                                    vm_value_to_static_value(k1, vm, payload_value, span)?;
                                 Some(static_value_id)
                             }
                         };
@@ -2561,27 +2582,28 @@ pub fn vm_value_to_static_value(
                             );
                         };
                         let count = count as usize;
-                        let mut elements = EcoVec::with_capacity(count);
+                        let mut elements = k1.static_values.mem.new_vec(count as u32);
                         for index in 0..count {
-                            let elem_result = get_view_element(vm, m, ptr, element_type, index);
+                            let elem_result = get_view_element(vm, k1, ptr, element_type, index);
                             let elem_vm = elem_result.unwrap_or_else(|e| {
-                                vm_ice!(m, vm, "Failed to load view element {index}: {}", e)
+                                vm_ice!(k1, vm, "Failed to load view element {index}: {}", e)
                             });
-                            let elem_static = vm_value_to_static_value(m, vm, elem_vm, span)?;
+                            let elem_static = vm_value_to_static_value(k1, vm, elem_vm, span)?;
                             elements.push(elem_static);
                         }
+                        let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
                         StaticValue::LinearContainer(StaticContainer {
-                            elements,
+                            elements: elements_slice,
                             kind: StaticContainerKind::Array,
                             type_id,
                         })
                     }
-                    _ => vm_crash(m, vm, "aggregate should be struct or enum or array"),
+                    _ => vm_crash(k1, vm, "aggregate should be struct or enum or array"),
                 }
             }
         }
     };
-    let id = m.static_values.add(v);
+    let id = k1.static_values.add(v);
     Ok(id)
 }
 
@@ -2695,13 +2717,15 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, k1: &TypedProgr
                         }
                     } else {
                         w.write_str("{ ").unwrap();
-                        for (field_index, f) in struct_type.fields.iter().enumerate() {
+                        for (field_index, f) in
+                            k1.types.mem.get_slice(struct_type.fields).iter().enumerate()
+                        {
                             write!(w, "{}: ", k1.ident_str(f.name)).unwrap();
                             match load_struct_field(vm, k1, type_id, ptr, field_index, true) {
                                 Err(e) => write!(w, "<ERROR {}>", e.message).unwrap(),
                                 Ok(loaded) => render_debug_value(w, vm, k1, loaded),
                             };
-                            if field_index != struct_type.fields.len() - 1 {
+                            if field_index != struct_type.fields.len() as usize - 1 {
                                 write!(w, ", ").unwrap();
                             }
                         }

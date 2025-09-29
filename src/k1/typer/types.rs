@@ -20,7 +20,7 @@ pub struct StructTypeField {
     pub name: Ident,
     pub type_id: TypeId,
 }
-impl_copy_if_small!(12, StructTypeField);
+impl_copy_if_small!(8, StructTypeField);
 
 #[derive(Debug, Clone)]
 pub struct StructLayout {
@@ -58,14 +58,18 @@ impl std::hash::Hash for TypeDefnInfo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StructType {
-    pub fields: EcoVec<StructTypeField>,
+    pub fields: MSlice<StructTypeField>,
 }
 
 impl StructType {
-    pub fn find_field(&self, field_name: Ident) -> Option<(usize, &StructTypeField)> {
-        self.fields.iter().enumerate().find(|(_, field)| field.name == field_name)
+    pub fn find_field(
+        &self,
+        m: &kmem::Mem,
+        field_name: Ident,
+    ) -> Option<(usize, &StructTypeField)> {
+        m.get_slice(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
 
@@ -370,7 +374,7 @@ pub struct FunctionPointerType {
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
 static_assert_size!(Type, 48);
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Type {
     Unit,
     Char,
@@ -438,8 +442,9 @@ impl TypePool {
                 if s1.fields.len() != s2.fields.len() {
                     return false;
                 }
-                for (index, f1) in s1.fields.iter().enumerate() {
-                    let f2 = &s2.fields[index];
+                for (f1, f2) in
+                    self.mem.get_slice(s1.fields).iter().zip(self.mem.get_slice(s2.fields))
+                {
                     let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
                     if mismatch {
                         return false;
@@ -535,7 +540,7 @@ impl TypePool {
             Type::Struct(s) => {
                 defn.hash(state);
                 s.fields.len().hash(state);
-                for f in &s.fields {
+                for f in self.mem.get_slice(s.fields) {
                     f.name.hash(state);
                     f.type_id.hash(state);
                 }
@@ -667,7 +672,7 @@ impl Type {
     pub fn expect_reference(&self) -> ReferenceType {
         match self {
             Type::Reference(r) => *r,
-            _ => panic!("expect_reference called on: {:?}", self),
+            _ => panic!("expect_reference called on: {}", self.kind_name()),
         }
     }
 
@@ -720,7 +725,7 @@ impl Type {
     pub fn expect_enum(&self) -> &TypedEnum {
         match self {
             Type::Enum(e) => e,
-            _ => panic!("expected enum on {:?}", self),
+            _ => panic!("expected enum on {}", self.kind_name()),
         }
     }
 
@@ -735,7 +740,7 @@ impl Type {
     pub fn expect_struct(&self) -> &StructType {
         match self {
             Type::Struct(struc) => struc,
-            _ => panic!("expect_struct called on: {:?}", self),
+            _ => panic!("expect_struct called on: {}", self.kind_name()),
         }
     }
 
@@ -743,7 +748,7 @@ impl Type {
     pub fn expect_generic(&self) -> &GenericType {
         match self {
             Type::Generic(g) => g,
-            _ => panic!("expect_generic called on: {:?}", self),
+            _ => panic!("expect_generic called on: {}", self.kind_name()),
         }
     }
 
@@ -758,7 +763,7 @@ impl Type {
     pub fn expect_integer(&self) -> &IntegerType {
         match self {
             Type::Integer(int) => int,
-            _ => panic!("expect_integer called on: {:?}", self),
+            _ => panic!("expect_integer called on: {}", self.kind_name()),
         }
     }
 
@@ -822,7 +827,7 @@ impl Type {
     pub fn expect_function(&self) -> &FunctionType {
         match self {
             Type::Function(f) => f,
-            _ => panic!("expect_function called on: {:?}", self),
+            _ => panic!("expect_function called on: {}", self.kind_name()),
         }
     }
 
@@ -908,6 +913,8 @@ pub struct TypePool {
 
     pub type_slices: VPool<TypeId, TypeSliceId>,
 
+    pub mem: kmem::Mem,
+
     pub config: TypesConfig,
 }
 
@@ -934,6 +941,8 @@ impl TypePool {
             builtins: BuiltinTypes::default(),
 
             type_slices: VPool::make_with_hint("type_slices", EXPECTED_TYPE_COUNT),
+
+            mem: kmem::Mem::make(),
 
             config: TypesConfig { ptr_size_bits: 64 },
         }
@@ -1137,7 +1146,7 @@ impl TypePool {
                 let hash = self.hash_type(&type_value, defn_info);
                 let typ = self.get_mut(unresolved_type_id);
                 if typ.as_unresolved().is_none() {
-                    panic!("Tried to resolve a type that was not unresolved: {:?}", typ);
+                    panic!("Tried to resolve a type that was not unresolved: {}", typ.kind_name());
                 }
                 *typ = type_value;
                 self.hashes.insert(hash, unresolved_type_id);
@@ -1235,6 +1244,18 @@ impl TypePool {
         }
     }
 
+    pub fn get_struct_field(&self, type_id: TypeId, field_index: usize) -> &StructTypeField {
+        self.mem.get_nth(self.get(type_id).expect_struct().fields, field_index)
+    }
+
+    pub fn get_struct_field_by_name(
+        &self,
+        type_id: TypeId,
+        name: Ident,
+    ) -> Option<(usize, &StructTypeField)> {
+        self.get(type_id).expect_struct().find_field(&self.mem, name)
+    }
+
     pub fn get_chased_id(&self, type_id: TypeId) -> TypeId {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => rr.root_type_id,
@@ -1317,7 +1338,7 @@ impl TypePool {
     }
 
     pub fn add_empty_struct(&mut self) -> TypeId {
-        self.add_anon(Type::Struct(StructType { fields: eco_vec![] }))
+        self.add_anon(Type::Struct(StructType { fields: MSlice::empty() }))
     }
 
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
@@ -1330,10 +1351,10 @@ impl TypePool {
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
-        let fields = eco_vec![
+        let fields = self.mem.push_slice(&[
             StructTypeField { name: identifiers.b.fn_ptr, type_id: fn_ptr_type },
             StructTypeField { name: identifiers.b.env_ptr, type_id: POINTER_TYPE_ID },
-        ];
+        ]);
         let struct_representation = self.add_anon(Type::Struct(StructType { fields }));
         self.add_anon(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
@@ -1432,7 +1453,7 @@ impl TypePool {
             Type::Pointer => EMPTY,
             Type::Struct(struc) => {
                 let mut result = EMPTY;
-                for field in struc.fields.iter() {
+                for field in self.mem.get_slice(struc.fields).iter() {
                     result = result.add(self.count_type_variables(field.type_id))
                 }
                 result
@@ -1514,7 +1535,7 @@ impl TypePool {
         let struct_type = self.get(struct_type_id).expect_struct();
         let mut layout = Layout::ZERO;
         let mut field_offsets: SV8<u32> = smallvec![];
-        for field in &struct_type.fields {
+        for field in self.mem.get_slice(struct_type.fields) {
             let field_layout = self.get_layout(field.type_id);
             let field_offset = layout.append_to_aggregate(field_layout);
             field_offsets.push(field_offset)
@@ -1535,7 +1556,7 @@ impl TypePool {
             }
             Type::Struct(struct_type) => {
                 let mut layout = Layout::ZERO;
-                for field in &struct_type.fields {
+                for field in self.mem.get_slice(struct_type.fields) {
                     let field_layout = self.compute_type_layout(field.type_id);
                     layout.append_to_aggregate(field_layout);
                 }

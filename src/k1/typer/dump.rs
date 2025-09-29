@@ -389,7 +389,7 @@ impl TypedProgram {
         expand: bool,
     ) -> std::fmt::Result {
         writ.write_str("{ ")?;
-        for (index, field) in struc.fields.iter().enumerate() {
+        for (index, field) in self.types.mem.get_slice(struc.fields).iter().enumerate() {
             if index > 0 {
                 writ.write_str(", ")?;
             }
@@ -796,9 +796,13 @@ impl TypedProgram {
             }
             StaticValue::Struct(static_struct) => {
                 w.write_str("{ ")?;
-                let fields = self.types.get(static_struct.type_id).expect_struct().fields.clone();
-                for (idx, (field_value_id, field_type)) in
-                    static_struct.fields.iter().zip(fields.iter()).enumerate()
+                let fields = self.types.get(static_struct.type_id).expect_struct().fields;
+                for (idx, (field_value_id, field_type)) in self
+                    .static_values
+                    .get_slice(static_struct.fields)
+                    .iter()
+                    .zip(self.types.mem.get_slice(fields).iter())
+                    .enumerate()
                 {
                     if idx > 0 {
                         w.write_str(", ")?;
@@ -836,7 +840,7 @@ impl TypedProgram {
                     StaticContainerKind::View => write!(w, "View")?,
                     StaticContainerKind::Array => write!(w, "Array")?,
                 }
-                self.display_static_items(w, &cont.elements)?;
+                self.display_static_items(w, self.static_values.get_slice(cont.elements))?;
                 Ok(())
             }
         }
@@ -1214,8 +1218,7 @@ impl TypedProgram {
                 }
                 self.write_ident(w, tp.name)?;
             }
-            for ftp in self.existential_type_params.get_slice(signature.function_type_params).iter()
-            {
+            for ftp in self.function_type_params.get_slice(signature.function_type_params).iter() {
                 self.write_ident(w, ftp.name)?;
                 w.write_str(": ")?;
                 self.display_type_id(w, ftp.type_id, false)?;
