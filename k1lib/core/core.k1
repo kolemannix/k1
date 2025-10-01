@@ -404,7 +404,7 @@ ns k1rt {
 
 ns f64 {
   fn format[W: Writer](f: f64, w: W, places: u32): unit {
-    let* stackBuf: *mut Array[32 x u8] = mem/zeroed();
+    let* stackBuf: *mut Array[u8, 32] = mem/zeroed();
     let writtenLen = k1rt/snprintf_f64(stackBuf.getBase() as Pointer, 32, f, places);
     if writtenLen <= 0  crash("snprintf_f32 returned {writtenLen}");
     w.writeBytes(stackBuf.asView().slice(0, writtenLen as uword))

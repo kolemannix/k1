@@ -370,13 +370,13 @@ impl TypedProgram {
             }
             Type::Array(array_type) => {
                 w.write_str("Array[")?;
+                self.display_type_ext(w, array_type.element_type, expand)?;
+                w.write_str(", ")?;
                 if let Some(size) = array_type.concrete_count {
                     write!(w, "{}", size)?;
                 } else {
                     self.display_type_id(w, array_type.size_type, expand)?;
                 }
-                w.write_str(" x ")?;
-                self.display_type_ext(w, array_type.element_type, expand)?;
                 w.write_str("]")
             }
         }
@@ -678,23 +678,13 @@ impl TypedProgram {
                 }
                 Ok(())
             }
-            TypedExpr::EnumIsVariant(is_variant_expr) => {
-                self.display_expr_id(is_variant_expr.enum_expr, w, indentation)?;
-                w.write_str(".is[.")?;
-                let variant = self
-                    .get_expr_type(is_variant_expr.enum_expr)
-                    .expect_enum()
-                    .variant_by_index(is_variant_expr.variant_index);
-                self.write_ident(w, variant.name)?;
-                w.write_str("]()")
-            }
             TypedExpr::Cast(cast) => {
                 self.display_expr_id(cast.base_expr, w, indentation)?;
                 write!(w, " as({}) ", cast.cast_type)?;
                 self.display_type_id(w, cast.target_type_id, false)
             }
             TypedExpr::EnumGetTag(get_tag) => {
-                self.display_expr_id(get_tag.enum_expr, w, indentation)?;
+                self.display_expr_id(get_tag.enum_expr_or_reference, w, indentation)?;
                 w.write_str(".tag")?;
                 Ok(())
             }

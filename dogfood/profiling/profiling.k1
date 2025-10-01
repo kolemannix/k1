@@ -35,7 +35,7 @@ deftype ProfileBlock = {
 }
 
 // Global profiler state
-let* global_profiler_anchors: *mut Array[4096 x ProfileAnchor] = zeroed();
+let* global_profiler_anchors: *mut Array[ProfileAnchor, 4096] = zeroed();
 let* global_profiler_parent: *mut u32 = 0;
 let* global_profile_start_tsc: *mut u64 = 0;
 let* global_profile_end_tsc: *mut u64 = 0;

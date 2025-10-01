@@ -682,30 +682,20 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             let enum_ptr = vm.stack.push_enum(&k1.types, e.variant_type_id, payload_value);
             Ok(Value::Agg { type_id: e.variant_type_id, ptr: enum_ptr }.into())
         }
-        // EnumIsVariant could actually go away in favor of just an == on the getTag + a type-level
-        // get tag expr on rhs
-        TypedExpr::EnumIsVariant(is_variant) => {
-            let is_variant = *is_variant;
-            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, k1, is_variant.enum_expr)?
-            else {
-                k1.ice_with_span("malformed enum get_tag", is_variant.span)
-            };
-            let enum_type = k1.get_expr_type(is_variant.enum_expr).expect_enum();
-            let Value::Int(tag_value) = load_value(vm, k1, enum_type.tag_type, ptr, true)? else {
-                unreachable!()
-            };
-            let variant = &enum_type.variants[is_variant.variant_index as usize];
-            Ok(Value::Bool(tag_value == variant.tag_value).into())
-        }
         TypedExpr::EnumGetTag(get_tag) => {
             let get_tag = *get_tag;
-            let Value::Agg { ptr, .. } = execute_expr_return_exit!(vm, k1, get_tag.enum_expr)?
-            else {
-                k1.ice_with_span("malformed enum get_tag", get_tag.span)
+            let base_value = execute_expr_return_exit!(vm, k1, get_tag.enum_expr_or_reference)?;
+            let ptr = match base_value {
+                Value::Agg { ptr, .. } => ptr,
+                Value::Reference { ptr, .. } => ptr,
+                _ => k1.ice_with_span("malformed enum get_tag", get_tag.span),
             };
             // Do not load the entire enum to the stack, simply
             // interpret the base ptr as a ptr to the tag type
-            let enum_type = k1.get_expr_type(get_tag.enum_expr).expect_enum();
+            let enum_type = k1
+                .types
+                .get_type_dereferenced(k1.exprs.get(get_tag.enum_expr_or_reference).get_type())
+                .expect_enum();
             let tag_value = load_value(vm, k1, enum_type.tag_type, ptr, true)?;
             Ok(tag_value.into())
         }

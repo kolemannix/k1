@@ -35,17 +35,17 @@ ns Buffer {
     { len: len, data }
   }
 
-  fn wrapArray[N: static uword, T](array: *mut Array[N x T]): Buffer[T] {
+  fn wrapArray[T, N: static uword](array: *mut Array[T, N]): Buffer[T] {
     let base = array.getBase();
     let l = array.len();
     let wrapped = fromRawBaseAndCount(l, array.getBase());
     wrapped
   }
 
-  fn copyFromArray[N: static uword, T](array: *Array[N x T]): Buffer[T] {
+  fn copyFromArray[T, N: static uword](array: *Array[T, N]): Buffer[T] {
     let base = array.getBaseRead();
     let l = array.len();
-    let wrapped = wrapArray[N, T](array.toMut);
+    let wrapped = wrapArray[T, N](array.toMut);
     wrapped.cloned();
   }
 

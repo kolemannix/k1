@@ -1,8 +1,13 @@
 fn main(): i32 {
   // let* means give me a pointer and initialize it with a value
+  #if false {
   let* p = { x: 10, y: 20 };
   let* y = { x: 30, y: 40 };
   p := y;
+
+  let nest = { f1: { b: true, c: 3.14 }, f2: { x: 1, y: 2, z: 3 } };
+
+  let a: Array[u8, 8] = [1,2,3,4,5,6,7,8];
   
   let x = loop {
     break(42)
@@ -15,6 +20,18 @@ fn main(): i32 {
 
   let* x = 10;
   x.*;
+
+  let l = \(x: u8) x + 1;
+  l(5);
+  let myfnd: dyn[\u8 -> u8] = \(x: u8) x + 1;
+  myfnd(5);
+  };
+
+  let x: ?int = .Some(42);
+  if x is .Some(42) {
+    (1000)
+  };
+  x.asSome().!.value;
 
   0
 }

@@ -26,8 +26,8 @@ ns View {
     self.buffer.dataPointer()
   }
 
-  fn copyFromArray[N: static uword, T](array: *Array[N x T]): View[T] {
-    let buffer = Buffer/copyFromArray[N, T](array);
+  fn copyFromArray[T, N: static uword](array: *Array[T, N]): View[T] {
+    let buffer = Buffer/copyFromArray[T, N](array);
     { buffer }
   }
 

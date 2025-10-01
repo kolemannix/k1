@@ -65,11 +65,11 @@ ns List {
     self.asBuffer().cloned()
   }
 
-  fn copyToArray[N: static uword, T](self: List[T], count: N): *mut Array[N x T] {
+  fn copyToArray[T, N: static uword](self: List[T], count: N): *mut Array[T, N] {
     let countVal = count.fromStatic();
     assertEquals(self.len, countVal);
     let base: Pointer = self.asBuffer().cloned().dataPointer();
-    base as *mut Array[N x T]
+    base as *mut Array[T, N]
   }
 
   // The possibly-uninitialized backing buffer of this List

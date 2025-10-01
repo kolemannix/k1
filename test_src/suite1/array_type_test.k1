@@ -14,20 +14,20 @@ deftype Point = { x: i32, y: i32 }
 fn getArrayInfo[T](): { elementName: string, fiveSize: uword, tenSize: uword } {
   {
     elementName: typeName(typeId[T]()),
-    fiveSize: sizeOf[Array[5 x T]](),
-    tenSize: sizeOf[Array[10 x T]]()
+    fiveSize: sizeOf[Array[T, 5]](),
+    tenSize: sizeOf[Array[T, 10]]()
   }
 }
 
 // Generic function with Array parameter type to test substitution
 fn describeArray[T](): string {
   let elementTypeName = typeName(typeId[T]());
-  let schema = typeSchema(typeId[Array[3 x T]]());
+  let schema = typeSchema(typeId[Array[T, 3]]());
   require schema is .Array({ elementTypeId, size }) else {
     return("Failed to get Array schema")
   };
   let actualElementName = typeName(elementTypeId);
-  "Array[{size.!} x {actualElementName}]"
+  "Array[{actualElementName}, {size.!}]"
 }
 
 fn test(): unit {
@@ -35,23 +35,23 @@ fn test(): unit {
 
   // Test 1: Basic Array type names
   print("> type names");
-  assertEquals(typeName(typeId[Array[10 x i32]]()), "Array[10 x i32]");
-  assertEquals(typeName(typeId[Array[5 x u64]]()), "Array[5 x u64]");
-  assertEquals(typeName(typeId[Array[3 x bool]]()), "Array[3 x bool]");
+  assertEquals(typeName(typeId[Array[i32, 10]]()), "Array[i32, 10]");
+  assertEquals(typeName(typeId[Array[u64, 5]]()), "Array[u64, 5]");
+  assertEquals(typeName(typeId[Array[bool, 3]]()), "Array[bool, 3]");
   println("   PASS");
 
   // Test 2: Array type schemas
   print("> type schemas");
-  let i32ArraySchema = typeSchema(typeId[Array[10 x i32]]());
+  let i32ArraySchema = typeSchema(typeId[Array[i32, 10]]());
   require i32ArraySchema is .Array({ elementTypeId, size }) else {
-    crash("Expected Array schema for Array[10 x i32]")
+    crash("Expected Array schema for Array[i32, 10]")
   };
   assertEquals(typeName(elementTypeId), "i32");
   assertEquals(size, .Some(10));
 
-  let stringArraySchema = typeSchema(typeId[Array[7 x string]]());
+  let stringArraySchema = typeSchema(typeId[Array[string, 7]]());
   require stringArraySchema is .Array({ elementTypeId, size }) else {
-    crash("Expected Array schema for Array[7 x string]")
+    crash("Expected Array schema for Array[string, 7]")
   };
   assertEquals(typeName(elementTypeId), "string");
   assertEquals(size, .Some(7));
@@ -60,37 +60,37 @@ fn test(): unit {
   // Test 3: Layout and size information
   print("> layout information");
   // u8 arrays: 1 byte per element, 1-byte aligned
-  assertEquals(sizeOf[Array[4 x u8]](), 4);
-  assertEquals(alignOf[Array[4 x u8]](), 1);
+  assertEquals(sizeOf[Array[u8, 4]](), 4);
+  assertEquals(alignOf[Array[u8, 4]](), 1);
 
   // u32 arrays: 4 bytes per element, 4-byte aligned
-  assertEquals(sizeOf[Array[3 x u32]](), 12);
-  assertEquals(alignOf[Array[3 x u32]](), 4);
+  assertEquals(sizeOf[Array[u32, 3]](), 12);
+  assertEquals(alignOf[Array[u32, 3]](), 4);
 
   // u64 arrays: 8 bytes per element, 8-byte aligned
-  assertEquals(sizeOf[Array[2 x u64]](), 16);
-  assertEquals(alignOf[Array[2 x u64]](), 8);
+  assertEquals(sizeOf[Array[u64, 2]](), 16);
+  assertEquals(alignOf[Array[u64, 2]](), 8);
 
   // Point arrays: Point is 8 bytes (2 * i32), 4-byte aligned
   assertEquals(alignOf[Point](), 4);
   assertEquals(sizeOf[Point](), 8);
   assertEquals(sizeOfStride[Point](), 8);
 
-  assertEquals(sizeOf[Array[2 x Point]](), 16);
-  assertEquals(alignOf[Array[2 x Point]](), 4);
+  assertEquals(sizeOf[Array[Point, 2]](), 16);
+  assertEquals(alignOf[Array[Point, 2]](), 4);
   println("   PASS");
 
   // Test 4: Generic functions with Arrays (tests type substitution)
   print("> array operations");
   let u8Info = getArrayInfo[u8]();
   assertEquals(u8Info.elementName, "u8");
-  assertEquals(u8Info.fiveSize, 5);    // Array[5 x u8] = 5 bytes
-  assertEquals(u8Info.tenSize, 10);   // Array[10 x u8] = 10 bytes
+  assertEquals(u8Info.fiveSize, 5);    // Array[u8, 5] = 5 bytes
+  assertEquals(u8Info.tenSize, 10);   // Array[u8, 10] = 10 bytes
 
   let i64Info = getArrayInfo[i64]();
   assertEquals(i64Info.elementName, "i64");
-  assertEquals(i64Info.fiveSize, 40);  // Array[5 x i64] = 5 * 8 = 40 bytes
-  assertEquals(i64Info.tenSize, 80);  // Array[10 x i64] = 10 * 8 = 80 bytes
+  assertEquals(i64Info.fiveSize, 40);  // Array[i64, 5] = 5 * 8 = 40 bytes
+  assertEquals(i64Info.tenSize, 80);  // Array[i64, 10] = 10 * 8 = 80 bytes
 
   let pointInfo = getArrayInfo[Point]();
   assertEquals(pointInfo.elementName, "Point");
@@ -99,16 +99,16 @@ fn test(): unit {
   println("   PASS");
 
   print("> array descriptions");
-  assertEquals(describeArray[i32](), "Array[3 x i32]");
-  assertEquals(describeArray[string](), "Array[3 x string]");
-  assertEquals(describeArray[Point](), "Array[3 x Point]");
+  assertEquals(describeArray[i32](), "Array[i32, 3]");
+  assertEquals(describeArray[string](), "Array[string, 3]");
+  assertEquals(describeArray[Point](), "Array[Point, 3]");
   println("   PASS");
 
   print("> type identity");
-  let array1TypeId = typeId[Array[5 x i32]]();
-  let array2TypeId = typeId[Array[5 x i32]]();
-  let array3TypeId = typeId[Array[6 x i32]]();
-  let array4TypeId = typeId[Array[5 x i64]]();
+  let array1TypeId = typeId[Array[i32, 5]]();
+  let array2TypeId = typeId[Array[i32, 5]]();
+  let array3TypeId = typeId[Array[i32, 6]]();
+  let array4TypeId = typeId[Array[i64, 5]]();
 
   assertEquals(array1TypeId, array2TypeId);  // Same size, same element type
   assert(array1TypeId != array3TypeId);     // Different size - keeping assert for != checks
@@ -116,15 +116,15 @@ fn test(): unit {
   println("   PASS");
 
   print("> edge cases");
-  assertEquals(sizeOf[Array[0 x i32]](), 0);
-  assertEquals(alignOf[Array[0 x i32]](), 1);  // Zero-length arrays should have alignment 1
+  assertEquals(sizeOf[Array[i32, 0]](), 0);
+  assertEquals(alignOf[Array[i32, 0]](), 1);  // Zero-length arrays should have alignment 1
 
-  assertEquals(sizeOf[Array[1 x u8]](), 1);
-  assertEquals(alignOf[Array[1 x u8]](), 1);
+  assertEquals(sizeOf[Array[u8, 1]](), 1);
+  assertEquals(alignOf[Array[u8, 1]](), 1);
   println("   PASS");
 
   print("> type-level member access");
-  let t1 = typeId[Array[0 x string].element]();
+  let t1 = typeId[Array[string, 0].element]();
   let t2 = typeId[string]();
   assertEquals(t1, t2);
   println("   PASS");
