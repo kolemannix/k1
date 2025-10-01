@@ -158,11 +158,8 @@ impl TypedProgram {
                     recurse!(payload)
                 }
             }
-            TypedExpr::EnumIsVariant(enum_is_variant) => {
-                recurse!(enum_is_variant.enum_expr)
-            }
             TypedExpr::EnumGetTag(get_enum_tag) => {
-                recurse!(get_enum_tag.enum_expr);
+                recurse!(get_enum_tag.enum_expr_or_reference);
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 recurse!(enum_get_payload.enum_variant_expr);

@@ -561,24 +561,24 @@ impl Equals for char { intern fn equals(self: char, other: char): bool }
 fn discard[T](t: T): unit { () }
 
 ns Array {
-  fn getBaseRead[N: static uword, T](array: *Array[N x T]): *T {
+  fn getBaseRead[T, N: static uword](array: *Array[T, N]): *T {
     array.getRef(0)
   }
-  fn getBase[N: static uword, T](array: *mut Array[N x T]): *mut T {
+  fn getBase[T, N: static uword](array: *mut Array[T, N]): *mut T {
     array.getRef(0)
   }
 
-  fn allocate[N: static uword, T](context alloc: mem/AllocMode)(): *mut Array[N x T] {
-    let ptr = mem/allocIn(alloc, size = types/sizeOf[Array[N x T]](), align = types/alignOf[Array[N x T]]());
-    ptr as *mut Array[N x T]
+  fn allocate[T, N: static uword](context alloc: mem/AllocMode)(): *mut Array[T, N] {
+    let ptr = mem/allocIn(alloc, size = types/sizeOf[Array[T, N]](), align = types/alignOf[Array[T, N]]());
+    ptr as *mut Array[T, N]
   }
 
-  fn set[N: static uword, T](array: *mut Array[N x T], index: uword, value: T): unit {
+  fn set[T, N: static uword](array: *mut Array[T, N], index: uword, value: T): unit {
     array.getRef(index) <- value
   }
 
-  fn filledIn[N: static uword, T](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[N x T] {
-    let arrayUninit = allocate[N, T]();
+  fn filledIn[T, N: static uword](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[T, N] {
+    let arrayUninit = allocate[T, N]();
     let i = 0uword;
     while i < n.fromStatic() {
       arrayUninit.getRef(i) <- t;
@@ -587,12 +587,12 @@ ns Array {
     arrayUninit
   }
 
-  fn asBuffer[N: static uword, T](array: *mut Array[N x T]): Buffer[T] {
+  fn asBuffer[T, N: static uword](array: *mut Array[T, N]): Buffer[T] {
     let len: uword = array.len();
     { len, data: array.getBase() }
   }
 
-  fn asView[N: static uword, T](array: *Array[N x T]): View[T] {
+  fn asView[T, N: static uword](array: *Array[T, N]): View[T] {
     let tempBuffer = array.toMut.asBuffer();
     View/wrapBuffer(tempBuffer)
   }

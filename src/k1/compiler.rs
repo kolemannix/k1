@@ -406,7 +406,7 @@ pub fn compile_program(
     //         eprintln!("ERROR: {}", errors[0]);
     //     }
     //     let mut s = String::new();
-    //     crate::bc::display_function(&mut s, &p, &bc, main_id, false).unwrap();
+    //     crate::bc::display_function(&mut s, &p, &bc, main_id, true).unwrap();
     //     eprintln!("{s}");
     // };
 

@@ -414,6 +414,31 @@ impl TypedProgram {
             false,
         )
     }
+
+    pub(super) fn synth_enum_is_variant(
+        &mut self,
+        enum_expr_or_reference: TypedExprId,
+        variant_index: u32,
+        ctx: EvalExprContext,
+        span: Option<SpanId>,
+    ) -> TyperResult<TypedExprId> {
+        let enum_type = self
+            .types
+            .get_type_dereferenced(self.get_expr_type_id(enum_expr_or_reference))
+            .expect_enum();
+        let tag_type = enum_type.tag_type;
+        let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
+        let span = span.unwrap_or(self.exprs.get(enum_expr_or_reference).get_span());
+        let get_tag = self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
+            enum_expr_or_reference,
+            result_type_id: tag_type,
+            span,
+        }));
+        let variant_tag_expr =
+            self.exprs.add(TypedExpr::Integer(TypedIntegerExpr { value: variant_tag, span }));
+        let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
+        Ok(tag_equals)
+    }
 }
 
 pub(super) fn synth_static_option(

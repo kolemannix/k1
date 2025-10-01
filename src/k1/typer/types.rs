@@ -880,6 +880,7 @@ impl TypeVariableInfo {
 pub struct BuiltinTypes {
     pub string: Option<TypeId>,
     pub buffer: Option<TypeId>,
+    pub dyn_lambda_obj: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
@@ -1623,6 +1624,21 @@ impl TypePool {
                     Some(size) => Layout::array_me(&element_layout, size as usize),
                 }
             }
+        }
+    }
+
+    pub fn enum_variant_payload_fields(
+        &self,
+        idents: &IdentPool,
+        ev: &TypedEnumVariant,
+    ) -> (StructTypeField, Option<StructTypeField>) {
+        let tag_field = StructTypeField { name: idents.b.tag, type_id: ev.tag_value.get_type() };
+
+        if let Some(payload) = ev.payload {
+            let payload_field = StructTypeField { name: idents.b.payload, type_id: payload };
+            (tag_field, Some(payload_field))
+        } else {
+            (tag_field, None)
         }
     }
 

@@ -1110,9 +1110,12 @@ pub struct GetEnumVariantPayload {
 }
 impl_copy_if_small!(20, GetEnumVariantPayload);
 
+/// enum_expr can be an enum value, or a Type::Reference to an enum
+/// This saves us having to generate a dereference of the entire value
+/// Since we know we are just interested in the tag
 #[derive(Debug, Clone)]
 pub struct GetEnumTag {
-    pub enum_expr: TypedExprId,
+    pub enum_expr_or_reference: TypedExprId,
     pub result_type_id: TypeId,
     pub span: SpanId,
 }
@@ -1376,7 +1379,6 @@ pub enum TypedExpr {
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
-    EnumIsVariant(TypedEnumIsVariantExpr),
     EnumGetTag(GetEnumTag),
     EnumGetPayload(GetEnumVariantPayload),
     Cast(TypedCast),
@@ -1436,7 +1438,6 @@ impl TypedExpr {
             TypedExpr::WhileLoop(_) => "while_loop",
             TypedExpr::LoopExpr(_) => "loop",
             TypedExpr::EnumConstructor(_) => "enum_constructor",
-            TypedExpr::EnumIsVariant(_) => "enum_is_variant",
             TypedExpr::EnumGetTag(_) => "enum_get_tag",
             TypedExpr::EnumGetPayload(_) => "enum_get_payload",
             TypedExpr::Cast(_) => "cast",
@@ -1469,9 +1470,8 @@ impl TypedExpr {
             TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.variant_type_id,
-            TypedExpr::EnumIsVariant(_is_variant) => BOOL_TYPE_ID,
-            TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
             TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
+            TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
             TypedExpr::Cast(c) => c.target_type_id,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
@@ -1502,9 +1502,8 @@ impl TypedExpr {
             TypedExpr::WhileLoop(while_loop) => while_loop.span,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
             TypedExpr::EnumConstructor(e) => e.span,
-            TypedExpr::EnumIsVariant(is_variant) => is_variant.span,
-            TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
             TypedExpr::EnumGetTag(get_tag) => get_tag.span,
+            TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
             TypedExpr::Cast(c) => c.span,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
@@ -2378,6 +2377,7 @@ impl TypedProgram {
             builtins: BuiltinTypes {
                 string: None,
                 buffer: None,
+                dyn_lambda_obj: None,
                 types_layout: None,
                 types_type_schema: None,
                 types_int_kind: None,
@@ -7059,11 +7059,11 @@ impl TypedProgram {
                     false,
                 )?,
                 ContainerKind::Array(array_type_id) => {
-                    // fn set[N: static uword, T](array: Array[N x T]*, index: uword, value: T): unit
+                    // fn set[T, N: static uword](array: Array[T, N]*, index: uword, value: T): unit
                     let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
                     self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
-                        &[size_type, element_type],
+                        &[element_type, size_type],
                         &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
                         list_lit_ctx,
                         false,
@@ -8360,14 +8360,12 @@ impl TypedProgram {
             TypedPattern::Enum(enum_pattern) => {
                 let enum_pattern = *enum_pattern;
                 let is_referencing = is_immediately_inside_reference_pattern;
-                let is_variant_target =
-                    if is_referencing { self.synth_dereference(target_expr) } else { target_expr };
-                let is_variant_condition =
-                    self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                        enum_expr: is_variant_target,
-                        variant_index: enum_pattern.variant_index,
-                        span: enum_pattern.span,
-                    }));
+                let is_variant_condition = self.synth_enum_is_variant(
+                    target_expr,
+                    enum_pattern.variant_index,
+                    ctx,
+                    Some(enum_pattern.span),
+                )?;
                 instrs.push(MatchingConditionInstr::Cond { value: is_variant_condition });
 
                 if let Some(payload_pattern) = enum_pattern.payload {
@@ -9847,7 +9845,7 @@ impl TypedProgram {
             n if n == self.ast.idents.b.len => {
                 let array_length = match array_type.concrete_count {
                     None => {
-                        // We have some generic Array type like arr: Array[N, T] where N is a type
+                        // We have some generic Array type like arr: Array[T, N] where N is a type
                         // parameter
                         // And someone called arr.len. The value does not matter as it will never
                         // be seen at runtime, or even compile-time since we don't execute during
@@ -10063,7 +10061,9 @@ impl TypedProgram {
         };
 
         // Handle the special case of the synthesized enum 'as{Variant}' methods
-        if let Some(enum_as_result) = self.handle_enum_as(base_expr, call)? {
+        if let Some(enum_as_result) =
+            self.handle_enum_as(base_expr, call, ctx.with_no_expected_type())?
+        {
             return Ok(Either::Left(enum_as_result));
         }
 
@@ -10393,7 +10393,7 @@ impl TypedProgram {
         let base_expr =
             if is_reference { self.synth_dereference(base_expr_id) } else { base_expr_id };
         Ok(Some(self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
-            enum_expr: base_expr,
+            enum_expr_or_reference: base_expr,
             result_type_id: tag_type,
             span,
         }))))
@@ -10403,6 +10403,7 @@ impl TypedProgram {
         &mut self,
         base_expr: TypedExprId,
         fn_call: &ParsedCall,
+        ctx: EvalExprContext,
     ) -> TyperResult<Option<TypedExprId>> {
         let (e, is_reference) = match self.get_expr_type(base_expr) {
             Type::Reference(r) => {
@@ -10449,13 +10450,8 @@ impl TypedProgram {
             } else {
                 variant_type_id
             };
-            let base_expr_dereferenced =
-                if is_reference { self.synth_dereference(base_expr) } else { base_expr };
-            let condition = self.exprs.add(TypedExpr::EnumIsVariant(TypedEnumIsVariantExpr {
-                enum_expr: base_expr_dereferenced,
-                variant_index,
-                span,
-            }));
+            let condition =
+                self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
             let cast_type =
                 if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
             let (consequent, consequent_type_id) =
@@ -13941,13 +13937,21 @@ impl TypedProgram {
                     }
 
                     // Detect builtin types and store their IDs for fast lookups
-                    if namespace_scope_id == self.scopes.types_scope_id {
+                    if namespace_scope_id == self.scopes.core_scope_id {
+                        if name == self.ast.idents.b.string {
+                            self.types.builtins.string = Some(type_id);
+                        } else if name == self.ast.idents.b.Buffer {
+                            self.types.builtins.buffer = Some(type_id);
+                        }
+                    } else if namespace_scope_id == self.scopes.types_scope_id {
                         if name == self.ast.idents.b.TypeSchema {
                             self.types.builtins.types_type_schema = Some(type_id);
                         } else if name == self.ast.idents.b.IntKind {
                             self.types.builtins.types_int_kind = Some(type_id);
                         } else if name == self.ast.idents.b.IntValue {
                             self.types.builtins.types_int_value = Some(type_id)
+                        } else if name == self.ast.idents.b.Layout {
+                            self.types.builtins.types_layout = Some(type_id)
                         }
                     }
                 }
@@ -14421,6 +14425,12 @@ impl TypedProgram {
         }
 
         if module_id == MODULE_ID_CORE {
+            let fields = self.types.mem.push_slice(&[
+                StructTypeField { name: self.ast.idents.b.env, type_id: POINTER_TYPE_ID },
+                StructTypeField { name: self.ast.idents.b.fn_ptr, type_id: POINTER_TYPE_ID },
+            ]);
+            let t = self.types.add_anon(Type::Struct(StructType { fields }));
+            self.types.builtins.dyn_lambda_obj = Some(t);
             self.assert_builtin_types_correct();
         }
 
@@ -14479,6 +14489,13 @@ impl TypedProgram {
     }
 
     fn assert_builtin_types_correct(&self) {
+        debug_assert!(self.types.builtins.string.is_some());
+        debug_assert!(self.types.builtins.buffer.is_some());
+        debug_assert!(self.types.builtins.dyn_lambda_obj.is_some());
+        debug_assert!(self.types.builtins.types_layout.is_some());
+        debug_assert!(self.types.builtins.types_type_schema.is_some());
+        debug_assert!(self.types.builtins.types_int_kind.is_some());
+        debug_assert!(self.types.builtins.types_int_value.is_some());
         //
         // This just ensures our BUFFER_TYPE_ID constant is correct
         // Eventually we need a better way of doing this

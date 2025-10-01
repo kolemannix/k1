@@ -70,8 +70,8 @@ ns type_schema {
       and v.name == "Yes"
       else crash("");
 
-    assert(getTypeSchema[Array[10 x i32]]() is .Array(_));
-    require getTypeSchema[Array[5 x string]]()
+    assert(getTypeSchema[Array[i32, 10]]() is .Array(_));
+    require getTypeSchema[Array[string, 5]]()
       is .Array({ elementTypeId, size })
       and elementTypeId == typeId[string]()
       and size == .Some(5)

@@ -2409,23 +2409,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 Ok(enum_ptr.as_basic_value_enum().into())
             }
-            TypedExpr::EnumIsVariant(enum_is_variant) => {
-                let enum_value =
-                    self.codegen_expr_basic_value(enum_is_variant.enum_expr)?.into_pointer_value();
-                let enum_type_id = self.k1.exprs.get(enum_is_variant.enum_expr).get_type();
-                let enum_llvm = self.codegen_type(enum_type_id)?.expect_enum();
-                let variant = &enum_llvm.variants[enum_is_variant.variant_index as usize];
-                let is_variant_bool = self.codegen_enum_is_variant(
-                    enum_value,
-                    variant.tag_value,
-                    self.k1.ident_str(variant.name),
-                );
-                Ok(is_variant_bool.as_basic_value_enum().into())
-            }
             TypedExpr::EnumGetTag(enum_get_tag) => {
-                let enum_value =
-                    self.codegen_expr_basic_value(enum_get_tag.enum_expr)?.into_pointer_value();
-                let enum_type_id = self.k1.exprs.get(enum_get_tag.enum_expr).get_type();
+                let enum_value = self
+                    .codegen_expr_basic_value(enum_get_tag.enum_expr_or_reference)?
+                    .into_pointer_value();
+                let enum_type_id = self.k1.types.get_type_id_dereferenced(
+                    self.k1.exprs.get(enum_get_tag.enum_expr_or_reference).get_type(),
+                );
                 let enum_llvm_type = self.codegen_type(enum_type_id)?.expect_enum();
                 let enum_tag_value = self.get_enum_tag(enum_llvm_type.tag_type, enum_value);
                 Ok(enum_tag_value.as_basic_value_enum().into())

@@ -2790,25 +2790,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 let base_name = self.expect_namespaced_ident()?;
 
-                // Special case for Array[N x T] syntax
+                // Special case for Array[T, N] syntax
+                // nocommit: This no longer needs to be special syntax since its not an X anymore.
+                //           I do think we should do a special syntax for slices and arrays and
+                //           lists, just not sure what yet
                 if base_name.path.is_empty() {
                     if self.ast.idents.get_name(base_name.name) == "Array" {
-                        // Array must always have bracket syntax
                         self.expect_eat_token(K::OpenBracket)?;
-                        let size_expr = self.expect_type_expression()?;
-
-                        // Expect 'x' keyword
-                        let x_token = self.peek();
-                        if x_token.kind == K::Ident && self.get_token_chars(x_token) == "x" {
-                            self.advance();
-                        } else {
-                            return Err(error(
-                                "Expected 'x' in Array type, example Array[4 x u8]",
-                                x_token,
-                            ));
-                        }
 
                         let element_type = self.expect_type_expression()?;
+
+                        self.expect_eat_token(K::Comma)?;
+
+                        let size_expr = self.expect_type_expression()?;
                         let end_bracket = self.expect_eat_token(K::CloseBracket)?;
                         let span = self.extend_token_span(first, end_bracket);
 
@@ -4716,9 +4710,9 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Array(array_type) => {
                 w.write_str("Array[")?;
-                self.display_type_expr_id(array_type.size_expr, w)?;
-                w.write_str(" x ")?;
                 self.display_type_expr_id(array_type.element_type, w)?;
+                w.write_str(", ")?;
+                self.display_type_expr_id(array_type.size_expr, w)?;
                 w.write_str("]")
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
