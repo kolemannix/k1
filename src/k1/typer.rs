@@ -1079,19 +1079,44 @@ pub struct ArrayGetElement {
 }
 impl_copy_if_small!(24, ArrayGetElement);
 
-#[derive(Debug, Clone)]
+/// Also used for EnumGetPayload.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FieldAccessKind {
+    ValueToValue,
+    Dereference,
+    ReferenceThrough,
+}
+
+/// `base` can be a reference to a struct, or a struct.
+/// `is_referencing` talks about the _result_ type. If the base
+/// is a reference, you can take the field either as a value or a reference itself
+/// is_referencing = true means you're getting a pointer to the field
+/// is_referencing = false means you're getting a loaded value.
+///
+/// If the base is a reference, but is-referencing is false, then that's a
+/// "dereferencing" field access, which requires a copy of the value.
+/// So maybe is_referencing should be instead some flags or style that also
+/// encode whether the base is a reference
+#[derive(Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub target_field: Ident,
     pub field_index: u32,
     pub result_type: TypeId,
     pub struct_type: TypeId,
-    pub is_referencing: bool,
+    pub access_kind: FieldAccessKind,
     pub span: SpanId,
 }
+// nocommit(3) 28 is too big for Copy imo; that's over 3 registers
 impl_copy_if_small!(28, FieldAccess);
 
-#[derive(Debug, Clone)]
+impl FieldAccess {
+    pub fn is_reference_through(&self) -> bool {
+        matches!(self.access_kind, FieldAccessKind::ReferenceThrough)
+    }
+}
+
+#[derive(Clone)]
 pub struct TypedEnumConstructor {
     pub variant_type_id: TypeId,
     pub variant_index: u32,
@@ -1100,12 +1125,12 @@ pub struct TypedEnumConstructor {
 }
 impl_copy_if_small!(16, TypedEnumConstructor);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GetEnumVariantPayload {
     pub enum_variant_expr: TypedExprId,
     pub result_type_id: TypeId,
     pub variant_index: u32,
-    pub is_referencing: bool,
+    pub access_kind: FieldAccessKind,
     pub span: SpanId,
 }
 impl_copy_if_small!(20, GetEnumVariantPayload);
@@ -3005,7 +3030,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
-                let mut fields: FixVec<StructTypeField> =
+                let mut fields: FixVec<StructTypeField, TypePool> =
                     self.types.mem.new_vec(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
@@ -3904,7 +3929,7 @@ impl TypedProgram {
             | Type::Never => type_id,
             Type::Struct(struc) => {
                 let new_fields_handle = self.types.mem.dup_slice(struc.fields);
-                let mut new_fields = self.types.mem.get_slice_mut(new_fields_handle);
+                let new_fields = self.types.mem.get_slice_mut(new_fields_handle);
                 let mut any_change = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
@@ -4681,6 +4706,9 @@ impl TypedProgram {
     //              Passing in a buffer for the errors to go is 1 thing
     //              But often check_types calls 'type_id_to_string', which is an entire
     //              other can of worms to optimize!
+    //
+    //              Got type_id_to_string pretty well optimized; we also have a format!'ed print to
+    //              arena now
     pub fn check_types(
         &self,
         expected: TypeId,
@@ -5804,7 +5832,7 @@ impl TypedProgram {
 
         let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
 
-        let mut specialized_functions = self.a.new_vec(blanket_impl.functions.len() as u32);
+        let mut specialized_functions = self.a.new_vec(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         debug!(
             "blanket impl instance scope before function specialization: {}",
@@ -6250,10 +6278,19 @@ impl TypedProgram {
                 (base_expr_type, None)
             }
         };
-        let is_reference = base_reference_type.is_some();
+        let base_is_reference = base_reference_type.is_some();
+        let access_kind = if base_is_reference {
+            if field_access.is_referencing {
+                FieldAccessKind::ReferenceThrough
+            } else {
+                FieldAccessKind::Dereference
+            }
+        } else {
+            FieldAccessKind::ValueToValue
+        };
         match self.types.get(struct_type_id) {
             Type::Struct(struct_type) => {
-                if is_assignment_lhs && !is_reference {
+                if is_assignment_lhs && !base_is_reference {
                     return failf!(span, "Struct must be a reference to be assignable");
                 }
                 let (field_index, target_field) = struct_type
@@ -6277,7 +6314,7 @@ impl TypedProgram {
                     target_field: field_access.field_name,
                     field_index: field_index as u32,
                     result_type,
-                    is_referencing: field_access.is_referencing,
+                    access_kind,
                     struct_type: struct_type_id,
                     span,
                 })))
@@ -6297,7 +6334,7 @@ impl TypedProgram {
                         self.ast.idents.get_name(ev.name)
                     );
                 };
-                if is_assignment_lhs && !is_reference {
+                if is_assignment_lhs && !base_is_reference {
                     return failf!(span, "Enum must be a reference to be assignable");
                 }
                 let variant_index = ev.index;
@@ -6307,11 +6344,12 @@ impl TypedProgram {
                 } else {
                     payload_type_id
                 };
+
                 Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
                     enum_variant_expr: base_expr,
                     result_type_id,
                     variant_index,
-                    is_referencing: field_access.is_referencing,
+                    access_kind,
                     span,
                 })))
             }
@@ -6380,7 +6418,7 @@ impl TypedProgram {
                             target_field: field_name,
                             field_index: field_index as u32,
                             span,
-                            is_referencing: false,
+                            access_kind: FieldAccessKind::ValueToValue,
                             result_type: field_type,
                             struct_type: opt_inner_type,
                         }));
@@ -7448,7 +7486,8 @@ impl TypedProgram {
 
         let mut field_values: EcoVec<StructLiteralField> =
             EcoVec::with_capacity(field_count as usize);
-        let mut field_types: FixVec<StructTypeField> = self.types.mem.new_vec(field_count);
+        let mut field_types: FixVec<StructTypeField, TypePool> =
+            self.types.mem.new_vec(field_count);
         for ((passed_expr, passed_field, _), expected_field) in passed_fields_aligned
             .iter()
             .zip(self.types.mem.get_slice(expected_struct.fields).iter())
@@ -7489,47 +7528,41 @@ impl TypedProgram {
                         )
                     );
                     // We're effectively reverse-engineering what params were used to get to this type
-                    // So we start with: { a: int, b: true } and definition Pair[A, B] = { a: A, b: B }
+                    // So we start with: { a: int, b: bool } and definition Pair[A, B] = { a: A, b: B }
                     // And we need to solve for A and B as int and bool.
                     let generic_type = self.types.get(gi.generic_parent).expect_generic();
                     let generic_params = generic_type.params;
                     let generic_struct_id = generic_type.inner;
-                    let generic_fields =
-                        self.types.get(generic_struct_id).expect_struct().fields.clone();
-                    const TYPE_PARAM_MODE: bool = true;
-                    let constraints_saved = std::mem::take(&mut self.ictx_mut().constraints);
+                    let generic_fields = self.types.get(generic_struct_id).expect_struct().fields;
+
+                    // Run this inference on a fresh state; will be popped by infer()
+                    self.ictx_push();
+                    let mut subst_pairs = self.tmp.new_vec(generic_fields.len());
                     for (value, generic_field) in
                         field_types.iter().zip(self.types.mem.get_slice(generic_fields).iter())
                     {
-                        // nocommit: Probably just call infer on a fresh stack; we have machinery
-                        // for this now
-                        let res = self.unify_and_find_substitutions_rec(
-                            value.type_id,
-                            generic_field.type_id,
-                            TYPE_PARAM_MODE,
-                        );
-                        debug_assert!(!matches!(res, TypeUnificationResult::NonMatching(_)))
+                        subst_pairs.push(InferenceInputPair {
+                            param_type: generic_field.type_id,
+                            arg: TypeOrParsedExpr::Type(value.type_id),
+                            allow_mismatch: true,
+                        });
                     }
-                    let substs =
-                        std::mem::replace(&mut self.ictx_mut().constraints, constraints_saved);
-                    let mut type_args_to_use: FixVec<TypeId> =
-                        self.tmp.new_vec(generic_params.len() as u32);
-                    for gp in self.named_types.get_slice(generic_params) {
-                        let Some(matching) = substs.iter().find_map(|pair| {
-                            if pair.from == gp.type_id { Some(pair.to) } else { None }
-                        }) else {
-                            self.ice_with_span(
-                                "couldnt reverse engineer generic type params for struct literal",
-                                struct_span,
-                            );
-                        };
-                        type_args_to_use.push(matching)
-                    }
+                    let generic_params_owned: SV8<NameAndType> =
+                        self.named_types.copy_slice_sv8(generic_params);
+                    let (solutions, _all_solutions) = self.infer_types(
+                        &generic_params_owned,
+                        generic_params,
+                        &subst_pairs,
+                        struct_span,
+                        ctx.scope_id,
+                    )?;
                     debug!(
                         "I reverse-engineered these: {}",
-                        self.pretty_print_types(&type_args_to_use, ", ")
+                        self.pretty_print_named_type_slice(solutions, ", ")
                     );
-                    gi.type_args = self.types.type_slices.add_slice_copy(&type_args_to_use);
+                    gi.type_args = self.types.type_slices.add_slice_from_iter(
+                        self.named_types.get_slice(solutions).iter().map(|s| s.type_id),
+                    );
                     Some(gi)
                 } else {
                     Some(gi)
@@ -7733,7 +7766,7 @@ impl TypedProgram {
                 field_index: field_index as u32,
                 result_type: variable_type,
                 struct_type: env_struct_type,
-                is_referencing: false,
+                access_kind: FieldAccessKind::ValueToValue,
                 span,
             });
             env_field_access
@@ -7904,34 +7937,29 @@ impl TypedProgram {
             return Ok(expr_id);
         }
 
-        let mut env_fields = self.types.mem.new_vec(lambda_info.captured_variables.len() as u32);
+        let mut env_field_types =
+            self.types.mem.new_vec(lambda_info.captured_variables.len() as u32);
+        let mut env_exprs = EcoVec::with_capacity(lambda_info.captured_variables.len());
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
-            env_fields.push(StructTypeField { type_id: v.type_id, name: v.name })
+            env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
+            let var_expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
+                type_id: v.type_id,
+                variable_id: *captured_variable_id,
+                span,
+            }));
+            env_exprs.push(StructLiteralField { name: v.name, expr: var_expr });
         }
-        let env_fields_handle = self.types.mem.vec_to_mslice(&env_fields);
-
-        // nocommit: Vec
-        let env_field_exprs = lambda_info
-            .captured_variables
-            .iter()
-            .map(|captured_variable_id| {
-                let v = self.variables.get(*captured_variable_id);
-                self.exprs.add(TypedExpr::Variable(VariableExpr {
-                    type_id: v.type_id,
-                    variable_id: *captured_variable_id,
-                    span,
-                }))
-            })
-            .collect_vec();
+        let env_fields_handle = self.types.mem.vec_to_mslice(&env_field_types);
         let environment_struct_type =
             self.types.add_anon(Type::Struct(StructType { fields: env_fields_handle }));
-        let environment_struct = self.synth_struct_expr(
-            environment_struct_type,
-            env_field_exprs,
-            ctx.scope_id,
-            body_span,
-        );
+
+        let environment_struct = self.exprs.add(TypedExpr::Struct(StructLiteral {
+            fields: env_exprs,
+            type_id: environment_struct_type,
+            span: body_span,
+        }));
+
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type, false);
         let environment_param = FnParamType {
@@ -8336,7 +8364,11 @@ impl TypedProgram {
                             field_index: pattern_field.field_index,
                             result_type,
                             struct_type,
-                            is_referencing,
+                            access_kind: if is_referencing {
+                                FieldAccessKind::ReferenceThrough
+                            } else {
+                                FieldAccessKind::ValueToValue
+                            },
                             span: struct_pattern_span,
                         }));
                     let var_name = self.build_ident_with(|k1, s| {
@@ -8401,7 +8433,11 @@ impl TypedProgram {
                             enum_variant_expr: enum_as_variant,
                             result_type_id,
                             variant_index,
-                            is_referencing,
+                            access_kind: if is_referencing {
+                                FieldAccessKind::ReferenceThrough
+                            } else {
+                                FieldAccessKind::ValueToValue
+                            },
                             span: enum_pattern.span,
                         }));
                     let var_name =
@@ -8811,7 +8847,7 @@ impl TypedProgram {
                 target_field: get_ident!(self, "atLeast"),
                 field_index: 0,
                 result_type: UWORD_TYPE_ID,
-                is_referencing: false,
+                access_kind: FieldAccessKind::ValueToValue,
                 span: iterable_span,
             }));
             let synth_function_call = self.synth_typed_call_typed_args(

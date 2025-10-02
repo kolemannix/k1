@@ -2790,8 +2790,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 let base_name = self.expect_namespaced_ident()?;
 
-                // Special case for Array[T, N] syntax
-                // nocommit: This no longer needs to be special syntax since its not an X anymore.
+                // Note: This no longer needs to be special syntax since its not an X anymore.
                 //           I do think we should do a special syntax for slices and arrays and
                 //           lists, just not sure what yet
                 if base_name.path.is_empty() {

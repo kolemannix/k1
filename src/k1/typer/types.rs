@@ -60,13 +60,13 @@ impl std::hash::Hash for TypeDefnInfo {
 
 #[derive(Clone)]
 pub struct StructType {
-    pub fields: MSlice<StructTypeField>,
+    pub fields: MSlice<StructTypeField, TypePool>,
 }
 
 impl StructType {
     pub fn find_field(
         &self,
-        m: &kmem::Mem,
+        m: &kmem::Mem<TypePool>,
         field_name: Ident,
     ) -> Option<(usize, &StructTypeField)> {
         m.get_slice(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
@@ -914,7 +914,7 @@ pub struct TypePool {
 
     pub type_slices: VPool<TypeId, TypeSliceId>,
 
-    pub mem: kmem::Mem,
+    pub mem: kmem::Mem<TypePool>,
 
     pub config: TypesConfig,
 }

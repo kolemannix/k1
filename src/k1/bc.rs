@@ -572,7 +572,7 @@ fn compile_expr(
             let store = store_if_dst(b, dst, e.get_type(), imm);
             Ok(store)
         }
-        TypedExpr::String(string_id, _) => {
+        TypedExpr::String(_string_id, _) => {
             //task(bc): Careful now; string is a struct
             todo!("bc string literal")
         }
@@ -601,20 +601,18 @@ fn compile_expr(
                 base: struct_base,
                 field_index: field_access.field_index,
             });
-            if field_access.is_referencing {
+            if field_access.is_reference_through() {
                 Ok(field_ptr)
             } else {
-                // nocommit Revisit this. In the oldbackend i wrote:
-                // We copy the field whether or not the base struct is a reference, because it
-                // could be inside a reference, we can't assume this isn't mutable memory just
-                // because our immediate base struct isn't a reference
-
-                // But I'm not sure if that's true. Once you have a non-reference
-                // struct value, I think its safe to assume it can't change
-                // In the scenario above, you'd have to have de-referenced that struct
-                // out of the container struct pointer, which would have made a copy
-                // So you already have a local copy that's just a value
-                let make_copy = false;
+                // We're loading a field. The variant itself may or may not be a reference.
+                // If it's a reference, we need to do a copying load to avoid incorrect aliasing
+                // If it's not, we don't need to make a copy since the source is just a value
+                // (albeit represented as an address)
+                let make_copy = match field_access.access_kind {
+                    FieldAccessKind::ValueToValue => false,
+                    FieldAccessKind::Dereference => true,
+                    FieldAccessKind::ReferenceThrough => unreachable!(),
+                };
                 let loaded = load_value(b, field_access.result_type, field_ptr, make_copy);
                 Ok(loaded)
             }
@@ -891,15 +889,15 @@ fn compile_expr(
         }
         TypedExpr::EnumGetPayload(e_get_payload) => {
             let enum_variant_base = compile_expr(b, None, e_get_payload.enum_variant_expr)?;
-            let base_is_reference =
-                b.k1.get_expr_type(e_get_payload.enum_variant_expr).as_reference().is_some();
             let variant_type =
                 b.k1.types
                     .get_type_dereferenced(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
                     .expect_enum_variant();
             let variant_struct_type = compile_type(b, variant_type.my_type_id)?.expect_value();
             let payload_offset = b.push_struct_offset(variant_struct_type, enum_variant_base, 1);
-            if e_get_payload.is_referencing {
+            if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
+                let base_is_reference =
+                    b.k1.get_expr_type(e_get_payload.enum_variant_expr).as_reference().is_some();
                 debug_assert!(base_is_reference);
                 // We're generating a pointer to the payload. The variant itself is a reference
                 // and the value we produce here is just a pointer to the payload
@@ -913,7 +911,11 @@ fn compile_expr(
                 // If it's a reference, we need to do a copying load to avoid incorrect aliasing
                 // If it's not, we don't need to make a copy since the source is just a value
                 // (albeit represented as an address)
-                let make_copy = base_is_reference;
+                let make_copy = match e_get_payload.access_kind {
+                    FieldAccessKind::ValueToValue => false,
+                    FieldAccessKind::Dereference => true,
+                    FieldAccessKind::ReferenceThrough => unreachable!(),
+                };
                 let payload_type_id = variant_type.payload.unwrap();
                 let copied = load_or_copy(b, payload_type_id, dst, payload_offset, make_copy);
                 Ok(copied)

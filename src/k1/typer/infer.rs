@@ -24,7 +24,7 @@ impl TypedProgram {
     /// We get a better error message if we wait to report the mismatch until the end
     pub(crate) fn infer_types(
         &mut self,
-        all_type_params: &SV8<NameAndType>,
+        all_type_params: &[NameAndType],
         // Sometimes, we don't need to solve everything. An example is when resolving
         // an ability call, we don't need to solve for the impl-side params, as they will come
         // once we look up the impl.
@@ -884,7 +884,7 @@ impl TypedProgram {
         slot_type: TypeId,
     ) -> TypeUnificationResult {
         // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
-        let result = self.unify_and_find_substitutions_rec(passed_type, slot_type, false);
+        let result = self.unify_and_find_substitutions_rec(passed_type, slot_type);
         result
     }
 
@@ -892,10 +892,6 @@ impl TypedProgram {
         &mut self,
         passed_type: TypeId,
         slot_type: TypeId,
-        // `type_param_enabled`: Whether or not we should look for TypeParameters. By default,
-        // we just look for InferenceHoles. But there are some scenarios
-        // where its useful to apply this algorithm over type parameters
-        type_param_enabled: bool,
     ) -> TypeUnificationResult {
         // passed_type           slot_type          -> result
         //
@@ -915,11 +911,7 @@ impl TypedProgram {
             self.type_id_to_string(slot_type).blue()
         );
         let counts = self.types.type_variable_counts.get(slot_type);
-        if type_param_enabled {
-            if counts.type_parameter_count == 0 {
-                return TypeUnificationResult::NoHoles;
-            }
-        } else if counts.inference_variable_count == 0 {
+        if counts.inference_variable_count == 0 {
             debug!("no type holes: {}", self.type_id_to_string(slot_type));
             return TypeUnificationResult::NoHoles;
         }
@@ -943,11 +935,7 @@ impl TypedProgram {
                     .iter()
                     .zip(self.types.type_slices.copy_slice_sv4(arg_info.type_args).iter())
                 {
-                    self.unify_and_find_substitutions_rec(
-                        *passed_type,
-                        *arg_slot,
-                        type_param_enabled,
-                    );
+                    self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }
             } else {
                 debug!("compared generic instances but they didn't match parent types");
@@ -994,11 +982,7 @@ impl TypedProgram {
                 // For the purposes of inference, we ignore the difference between
                 // write and read pointers, since they'll still fail typecheck in the end
                 // but we'd like to infer successfully to get a good message
-                .unify_and_find_substitutions_rec(
-                    passed_refer.inner_type,
-                    refer.inner_type,
-                    type_param_enabled,
-                ),
+                .unify_and_find_substitutions_rec(passed_refer.inner_type, refer.inner_type),
             (Type::Struct(passed_struct), Type::Struct(struc)) => {
                 // Struct example:
                 // type Pair<T, U> = { a: T, b: U }
@@ -1018,11 +1002,7 @@ impl TypedProgram {
                     if field.name != passed_field.name {
                         return TypeUnificationResult::NonMatching("field names");
                     }
-                    self.unify_and_find_substitutions_rec(
-                        passed_field.type_id,
-                        field.type_id,
-                        type_param_enabled,
-                    );
+                    self.unify_and_find_substitutions_rec(passed_field.type_id, field.type_id);
                 }
                 TypeUnificationResult::Matching
             }
@@ -1048,11 +1028,7 @@ impl TypedProgram {
                     }
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
-                            self.unify_and_find_substitutions_rec(
-                                passed_payload,
-                                param_payload,
-                                type_param_enabled,
-                            );
+                            self.unify_and_find_substitutions_rec(passed_payload, param_payload);
                         } else {
                             return TypeUnificationResult::NonMatching("payloads");
                         }
@@ -1061,24 +1037,16 @@ impl TypedProgram {
 
                 TypeUnificationResult::Matching
             }
-            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => self
-                .unify_and_find_substitutions_rec(
-                    passed_enum_variant.enum_type_id,
-                    slot_type,
-                    type_param_enabled,
-                ),
+            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => {
+                self.unify_and_find_substitutions_rec(passed_enum_variant.enum_type_id, slot_type)
+            }
             (Type::Array(passed_array), Type::Array(slot_array)) => {
                 let passed_array_element_type = passed_array.element_type;
                 let slot_array_element_type = slot_array.element_type;
-                self.unify_and_find_substitutions_rec(
-                    passed_array.size_type,
-                    slot_array.size_type,
-                    type_param_enabled,
-                );
+                self.unify_and_find_substitutions_rec(passed_array.size_type, slot_array.size_type);
                 self.unify_and_find_substitutions_rec(
                     passed_array_element_type,
                     slot_array_element_type,
-                    type_param_enabled,
                 );
                 TypeUnificationResult::Matching
             }
@@ -1092,13 +1060,11 @@ impl TypedProgram {
                         self.unify_and_find_substitutions_rec(
                             passed_param.type_id,
                             slot_param.type_id,
-                            type_param_enabled,
                         );
                     }
                     self.unify_and_find_substitutions_rec(
                         passed_fn.return_type,
                         slot_fn.return_type,
-                        type_param_enabled,
                     )
                 } else {
                     TypeUnificationResult::NonMatching(
@@ -1106,12 +1072,9 @@ impl TypedProgram {
                     )
                 }
             }
-            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => self
-                .unify_and_find_substitutions_rec(
-                    fp1.function_type_id,
-                    fp2.function_type_id,
-                    type_param_enabled,
-                ),
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
+                self.unify_and_find_substitutions_rec(fp1.function_type_id, fp2.function_type_id)
+            }
             (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
                 if let Some(passed_function_type) =
                     self.extract_function_type_from_functionlike(passed)
@@ -1119,7 +1082,6 @@ impl TypedProgram {
                     self.unify_and_find_substitutions_rec(
                         passed_function_type,
                         slot_function_type_param.function_type,
-                        type_param_enabled,
                     )
                 } else {
                     TypeUnificationResult::NonMatching(
@@ -1131,45 +1093,22 @@ impl TypedProgram {
                 .unify_and_find_substitutions_rec(
                     passed_lambda.function_type,
                     param_lambda.function_type,
-                    type_param_enabled,
                 ),
             (Type::LambdaObject(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
                     passed_lambda.function_type,
                     param_lambda.function_type,
-                    type_param_enabled,
                 ),
             (Type::Static(passed_static), Type::Static(param_static)) => self
                 .unify_and_find_substitutions_rec(
                     passed_static.inner_type_id,
                     param_static.inner_type_id,
-                    type_param_enabled,
                 ),
-            (Type::Static(passed_static), _non_static) => self.unify_and_find_substitutions_rec(
-                passed_static.inner_type_id,
-                slot_type,
-                type_param_enabled,
-            ),
+            (Type::Static(passed_static), _non_static) => {
+                self.unify_and_find_substitutions_rec(passed_static.inner_type_id, slot_type)
+            }
             (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
-                self.unify_and_find_substitutions_rec(
-                    passed_type,
-                    static_slot.inner_type_id,
-                    type_param_enabled,
-                )
-            }
-            (Type::TypeParameter(_actual_param), _expected_type) if type_param_enabled => {
-                // Note: We may eventually need an 'occurs' check to prevent recursive
-                // substitutions; for now they don't seem to be occurring though, and it'll
-                // be obvious if they ever do
-                self.add_substitution(TypeSubstitutionPair { from: passed_type, to: slot_type });
-                TypeUnificationResult::Matching
-            }
-            (_actual_type, Type::TypeParameter(_expected_param)) if type_param_enabled => {
-                // Note: We may eventually need an 'occurs' check to prevent recursive
-                // substitutions; for now they don't seem to be occurring though, and it'll
-                // be obvious if they ever do
-                self.add_substitution(TypeSubstitutionPair { from: slot_type, to: passed_type });
-                TypeUnificationResult::Matching
+                self.unify_and_find_substitutions_rec(passed_type, static_slot.inner_type_id)
             }
             _ if passed_type == slot_type => TypeUnificationResult::Matching,
             _ => {

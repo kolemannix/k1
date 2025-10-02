@@ -1,3 +1,5 @@
+use smallvec::SmallVec;
+
 // Copyright (c) 2025 knix
 // All rights reserved.
 use crate::static_assert_size;
@@ -344,6 +346,29 @@ impl<Tag> Mem<Tag> {
             let src: &[T] = std::slice::from_raw_parts(ptr, count);
             src
         }
+    }
+
+    pub fn get_slice_sv<T: Copy, const N: usize>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; N]>
+    where
+        [T; N]: smallvec::Array<Item = T>,
+    {
+        let (ptr, count) = self.get_slice_raw(handle);
+        let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
+        SmallVec::from_slice(slice)
+    }
+
+    pub fn get_slice_sv4<T: Copy, const N: usize>(
+        &self,
+        handle: MSlice<T, Tag>,
+    ) -> SmallVec<[T; 4]> {
+        self.get_slice_sv(handle)
+    }
+
+    pub fn get_slice_sv8<T: Copy, const N: usize>(
+        &self,
+        handle: MSlice<T, Tag>,
+    ) -> SmallVec<[T; 8]> {
+        self.get_slice_sv(handle)
     }
 
     pub fn get_slice_mut<T>(&self, handle: MSlice<T, Tag>) -> &'static mut [T] {
