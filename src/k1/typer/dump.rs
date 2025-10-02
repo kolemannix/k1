@@ -573,7 +573,7 @@ impl TypedProgram {
                 self.display_expr_id(field_access.base, w, indentation)?;
                 w.write_str(".")?;
                 self.write_ident(w, field_access.target_field)?;
-                if field_access.is_referencing {
+                if field_access.is_reference_through() {
                     w.write_char('*')?;
                 }
                 Ok(())
@@ -691,7 +691,7 @@ impl TypedProgram {
             TypedExpr::EnumGetPayload(get_payload_expr) => {
                 self.display_expr_id(get_payload_expr.enum_variant_expr, w, indentation)?;
                 w.write_str(".payload")?;
-                if get_payload_expr.is_referencing {
+                if get_payload_expr.access_kind == FieldAccessKind::ReferenceThrough {
                     w.write_char('*')?;
                 }
                 w.write_char('[')?;

@@ -50,12 +50,12 @@ use crate::typer::types::{
     TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
 };
 use crate::typer::{
-    AssignmentKind, Call, CallId, Callee, CastType, FunctionId, IntegerCastDirection,
-    IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind, IntrinsicOperation,
-    Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition, MatchingConditionInstr,
-    StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue,
-    TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt,
-    TypedStmtId, VariableId, WhileLoop,
+    AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
+    IntegerCastDirection, IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind,
+    IntrinsicOperation, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition,
+    MatchingConditionInstr, StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr,
+    TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr,
+    TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
 };
 
 #[derive(Debug)]
@@ -2289,14 +2289,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .build_struct_gep(struct_physical_type, struct_pointer, field_index, name)
                     .unwrap();
                 // Don't even attempt to load the value for referencing access
-                if field_access.is_referencing {
+                if field_access.is_reference_through() {
                     Ok(field_pointer.as_basic_value_enum().into())
                 } else {
                     let field_type = &struct_llvm_type.fields[field_index as usize];
                     // We copy the field whether or not the base struct is a reference, because it
                     // could be inside a reference, we can't assume this isn't mutable memory just
                     // because our immediate base struct isn't a reference
-                    let field_value = self.load_k1_value(field_type, field_pointer, name, true);
+                    let make_copy = field_access.access_kind == FieldAccessKind::Dereference;
+                    let field_value =
+                        self.load_k1_value(field_type, field_pointer, name, make_copy);
                     Ok(field_value.into())
                 }
             }
@@ -2429,7 +2431,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_expr_basic_value(enum_get_payload.enum_variant_expr)?;
                 let variant_type = &enum_type.variants[enum_get_payload.variant_index as usize];
 
-                if enum_get_payload.is_referencing {
+                if enum_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                     let enum_value = enum_value.into_pointer_value();
                     let payload_pointer = self
                         .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
@@ -2438,11 +2440,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     let enum_value = enum_value.into_pointer_value();
                     let payload_pointer = self
                         .get_enum_payload_reference(variant_type.variant_struct_type, enum_value);
+                    let make_copy = enum_get_payload.access_kind == FieldAccessKind::Dereference;
                     let payload_copied = self.load_k1_value(
                         variant_type.payload_type.as_ref().unwrap(),
                         payload_pointer,
                         "payload_by_value",
-                        false,
+                        make_copy,
                     );
                     Ok(payload_copied.into())
                 }

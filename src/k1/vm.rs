@@ -24,7 +24,7 @@ use crate::{
     parse::{Ident, StringId},
     pool::SliceHandle,
     typer::{
-        self, CastType, FunctionId, IntrinsicArithOpKind, IntrinsicArithOpOp,
+        self, CastType, FieldAccessKind, FunctionId, IntrinsicArithOpKind, IntrinsicArithOpOp,
         IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, MatchingCondition,
         MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
         StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
@@ -576,7 +576,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                 Value::Reference { ptr, .. } => ptr,
                 _ => unreachable!("malformed field access: not a struct or struct*"),
             };
-            if field_access.is_referencing {
+            if field_access.is_reference_through() {
                 let field_ptr = gep_struct_field(
                     &k1.types,
                     field_access.struct_type,
@@ -585,13 +585,14 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                 );
                 Ok(Value::Reference { type_id: field_access.result_type, ptr: field_ptr }.into())
             } else {
+                let make_copy = field_access.access_kind == FieldAccessKind::Dereference;
                 let field_value = load_struct_field(
                     vm,
                     k1,
                     field_access.struct_type,
                     struct_ptr,
                     field_access.field_index as usize,
-                    true,
+                    make_copy,
                 )?;
                 Ok(field_value.into())
             }
@@ -713,13 +714,15 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                 _ => unreachable!("malformed get variant payload"),
             };
             let payload_ptr = gep_enum_payload(&k1.types, variant_type, enum_ptr);
-            if get_payload.is_referencing {
+
+            if get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                 let payload_reference =
                     Value::Reference { type_id: get_payload.result_type_id, ptr: payload_ptr };
                 Ok(payload_reference.into())
             } else {
+                let make_copy = get_payload.access_kind == FieldAccessKind::Dereference;
                 let payload_value =
-                    load_value(vm, k1, variant_type.payload.unwrap(), payload_ptr, true)?;
+                    load_value(vm, k1, variant_type.payload.unwrap(), payload_ptr, make_copy)?;
                 Ok(payload_value.into())
             }
         }
