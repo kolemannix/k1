@@ -2332,14 +2332,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         .unwrap()
                 };
 
-                if array_get.is_referencing {
+                if array_get.access_kind == FieldAccessKind::ReferenceThrough {
                     Ok(elem_ptr.as_basic_value_enum().into())
                 } else {
                     let element_type = &array_type.element_type;
-                    // We copy the element whether or not the base array is a reference, because it
-                    // could be inside a reference, we can't assume this isn't mutable memory just
-                    // because our immediate base array isn't a reference
-                    let element_value = self.load_k1_value(element_type, elem_ptr, "", true);
+                    let make_copy = match array_get.access_kind {
+                        FieldAccessKind::ValueToValue => false,
+                        FieldAccessKind::Dereference => true,
+                        FieldAccessKind::ReferenceThrough => unreachable!(),
+                    };
+                    let element_value = self.load_k1_value(element_type, elem_ptr, "", make_copy);
                     Ok(element_value.into())
                 }
             }
@@ -2611,12 +2613,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.builder.build_float_trunc(from_value, float_dst_type, "ftrunc").unwrap();
                 Ok(extended_value.as_basic_value_enum().into())
             }
-            CastType::FloatToInteger => {
+            CastType::FloatToUnsignedInteger | CastType::FloatToSignedInteger => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let int_dst_type = self.codegen_type(cast.target_type_id)?;
                 let int_dst_type_llvm = int_dst_type.rich_repr_type().into_int_type();
-                let int_dest_k1_type = self.k1.types.get(cast.target_type_id).expect_integer();
-                let casted_int_value = if int_dest_k1_type.is_signed() {
+                let casted_int_value = if matches!(cast.cast_type, CastType::FloatToSignedInteger) {
                     self.builder
                         .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
                         .unwrap()
@@ -2627,13 +2628,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(casted_int_value.as_basic_value_enum().into())
             }
-            CastType::IntegerToFloat => {
+            CastType::IntegerUnsignedToFloat | CastType::IntegerSignedToFloat => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
-                let base_expr_type = self.k1.exprs.get(cast.base_expr).get_type();
-                let from_int_k1_type = self.k1.types.get(base_expr_type).expect_integer();
                 let float_dst_type = self.codegen_type(cast.target_type_id)?;
                 let float_dst_type_llvm = float_dst_type.rich_repr_type().into_float_type();
-                let casted_float_value = if from_int_k1_type.is_signed() {
+                let casted_float_value = if matches!(cast.cast_type, CastType::IntegerSignedToFloat)
+                {
                     self.builder
                         .build_signed_int_to_float(from_value, float_dst_type_llvm, "")
                         .unwrap()
@@ -2666,7 +2666,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .unwrap();
                 Ok(as_int.as_basic_value_enum().into())
             }
-            CastType::IntegerToPointer => {
+            CastType::WordToPointer => {
                 let int = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
                 let as_ptr = self
                     .builder

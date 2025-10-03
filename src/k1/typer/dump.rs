@@ -581,7 +581,7 @@ impl TypedProgram {
             TypedExpr::ArrayGetElement(array_get) => {
                 // array.get(index) / array.getRef(index)
                 self.display_expr_id(array_get.base, w, indentation)?;
-                if array_get.is_referencing {
+                if array_get.access_kind == FieldAccessKind::ReferenceThrough {
                     w.write_str(".getRef(")?;
                 } else {
                     w.write_str(".get(")?;

@@ -1,14 +1,9 @@
-# k1 Programming Language
-
-`k1` is like C with typeclasses, ADTs\*, capturing lambdas, pattern matching, and a powerful generic typesystem.
-
-`k1` is what resulted from me wanting to write similar code to what I write in Scala but have it compile and run 1000x faster.
-
+`k1` is like C with typeclasses, full compile-time execution, ADTs\*, capturing lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
 
 Core ideas
 - The compiler should be uncompromisingly fast
-- The generated code should be as optimal as possible
-- Compile-time reflection should enable powerful metaprogramming
+- The generated code should be as optimal as possible (No always-on costs like GC, dynamic dispatch, or any sort of runtime)
+- Compile-time execution and reflection enables powerful metaprogramming that is just regular programming.
 
 Check out the [TODO](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
 
@@ -22,7 +17,6 @@ except to explore the problem space of compiler development, and maybe to be abl
 
 Inspiration
 
-https://justforfunnoreally.dev/
 
 > The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself.
 - Brooks
@@ -32,6 +26,13 @@ https://justforfunnoreally.dev/
 
 > You can just do things
 - Popular memes archive, 2024
+
+https://justforfunnoreally.dev/
+
+Heroes
+- Andreas Kling
+- Jonathan Blow
+- 
 
 ## Example
 
@@ -62,6 +63,7 @@ fn main(): i32 {
     green: 13,
     blue: 14
   };
+  println("Type of supply: {types/getTypeName[typeOf(supply)]()}");
   let mut goodGamesSum: u64 = 0;
 
   // TODO: use `List.filter`
@@ -110,43 +112,43 @@ fn main(): i32 {
 
 
 ### Type System
-- **Strong Static Typing** with limited, fast, and predictable type inference
-- **Algebraic Data Types** via `either` for tagged unions and structs for product types
-- **Generics** with support for type constraints through abilities (traits)
-- **Deeply expression-oriented** 
+- Strong Static Typing with limited, fast, and predictable type inference
+- Algebraic Data Types via `either` for tagged unions and structs for product types
+- Generics with support for type constraints through abilities (traits)
+- Deeply expression-oriented 
   - `loop` with `break(<expr>)`, 
   - `if` expressions that support a single pattern
   - A `never` type that allows simplifying types while handling cases
-- **First-class Optional Types** with ergonomic `?` and `?.` operators and pattern matching
-- **Reference Types** with distinct pointer and reference semantics
-- **Anonymous structs and enums** allow for lightweight, low-boilerplate, zero-cost data modeling
-- **Zero-cost Abstraction** through opaque type aliases, and zero-overhead structs
+- First-class Optional Types with ergonomic `?` and `?.` operators and pattern matching
+- Reference Types with distinct pointer and reference semantics
+- Anonymous structs and enums allow for lightweight, low-boilerplate, zero-cost data modeling
+- Zero-cost Abstraction through opaque type aliases, and zero-overhead structs
 
 ### Modern Features
-- **Pattern Matching** with exhaustiveness checking and useless pattern detection
-- **Closures** with automatic capture analysis and environment generation
-- **Type-safe String Interpolation** using `\{...}` syntax
-- **Iterator Protocol** with `for` expressions supporting `yield` and `do` blocks
-- **Method Syntax** with namespaced scoping
-- **Pipeline Operator** (`|`) for functional composition
-- **Abilities** (traits/interfaces) for type-class like abstraction
+- Pattern Matching with exhaustiveness checking and useless pattern detection
+- Closures with automatic capture analysis and environment generation
+- Type-safe String Interpolation using `\{...}` syntax
+- Iterator Protocol with `for` expressions supporting `yield` and `do` blocks
+- Method Syntax with namespaced scoping
+- Pipeline Operator (`|`) for functional composition
+- Abilities (traits/interfaces) for type-class like abstraction
 
 ### Systems Programming facilities
-- **Direct Memory Management** with `Pointer` operations and introspectable type layouts
-- **Foreign Function Interface** through external function declarations
-- **Bit Manipulation** operations
-- **Fixed-Size Integer Types** (u8/i8 through u64/i64)
-- **Platform Integration** through libc bindings
+- Direct Memory Management with `Pointer` operations and introspectable type layouts
+- Foreign Function Interface through external function declarations
+- Bit Manipulation operations
+- Fixed-Size Integer Types (u8/i8 through u64/i64)
+- Platform Integration through libc bindings
 
 ### Limited WIP Standard Library
-- **Generic Collections** including Array and HashMap implementations
-- **String Utilities** with builders, interpolation, and efficient operations
-- **Option Type** with ergonomic methods and pattern matching
-- **Numeric Tower** supporting integers, floats with standard operations
-- **Runtime Error Handling** with basic crash reporting
+- Generic Collections including Array and HashMap implementations
+- String Utilities with builders, interpolation, and efficient operations
+- Option Type with ergonomic methods and pattern matching
+- Numeric Tower supporting integers, floats with standard operations
+- Runtime Error Handling with basic crash reporting
 
 ### LLVM Backend
-- **Efficient Machine Code** through LLVM's optimization pipeline
-- **Zero-Cost Abstractions** with aggressive inlining and dead code elimination
-- **Flat Memory Layout** for structs and tagged unions
-- **Debug Information** generation using DWARF format
+- Efficient Machine Code through LLVM's optimization pipeline
+- Zero-Cost Abstractions with aggressive inlining and dead code elimination
+- Flat Memory Layout for structs and tagged unions
+- Debug Information generation using DWARF format
