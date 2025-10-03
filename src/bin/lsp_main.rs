@@ -52,6 +52,7 @@ fn error_to_diagnostic(ast: &ParsedProgram, span_id: SpanId, message: String) ->
 }
 
 fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
+    eprintln!("source_to_uri on {:?} {:?}", directory.as_ref(), file.as_ref());
     Url::from_directory_path(directory.as_ref()).unwrap().join(file.as_ref()).unwrap()
 }
 
@@ -123,6 +124,7 @@ impl Backend {
 
     fn compile(&self) -> u32 {
         let out_dir: PathBuf = ".k1-out/lsp".into();
+        std::fs::create_dir_all(&out_dir).unwrap();
         info!("compiling version {}", self.compile_iteration.load(Ordering::Relaxed));
         let root_uri = self.workspace_uri.read().unwrap();
         let args = k1::compiler::Args {

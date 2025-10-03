@@ -9,7 +9,6 @@ use std::{
 
 use ahash::HashMapExt;
 use colored::Colorize;
-use ecow::EcoVec;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use k1_types::{CompilerMessageLevel, K1SourceLocation, K1ViewLike};
@@ -610,10 +609,15 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             let array_type = k1.types.get(array_get.array_type).as_array().unwrap();
             let offset = offset_at_index(&k1.types, array_type.element_type, index);
             let element_ptr = unsafe { base_ptr.byte_add(offset) };
-            let output_value = if array_get.is_referencing {
+            let output_value = if array_get.access_kind == FieldAccessKind::ReferenceThrough {
                 Value::Reference { type_id: array_get.result_type, ptr: element_ptr }
             } else {
-                let loaded = load_value(vm, k1, array_type.element_type, element_ptr, true)?;
+                let make_copy = match array_get.access_kind {
+                    FieldAccessKind::ValueToValue => false,
+                    FieldAccessKind::Dereference => true,
+                    FieldAccessKind::ReferenceThrough => unreachable!(),
+                };
+                let loaded = load_value(vm, k1, array_type.element_type, element_ptr, make_copy)?;
                 loaded
             };
             Ok(VmResult::Value(output_value))
@@ -772,7 +776,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                     };
                     Ok(Value::Float(float_value).into())
                 }
-                CastType::IntegerToPointer => {
+                CastType::WordToPointer => {
                     let u = base_value.expect_int().expect_uword();
                     Ok(Value::Pointer(u as usize).into())
                 }
@@ -836,7 +840,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                     };
                     Ok(Value::Float(truncated).into())
                 }
-                CastType::FloatToInteger => {
+                CastType::FloatToUnsignedInteger | CastType::FloatToSignedInteger => {
                     let float_value = base_value.expect_float();
                     let int_value = match (float_value, cast.target_type_id) {
                         (TypedFloatValue::F32(f32), U32_TYPE_ID) => TypedIntValue::U32(f32 as u32),

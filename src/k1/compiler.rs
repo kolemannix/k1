@@ -316,6 +316,8 @@ pub fn compile_program(
         None
     };
 
+    let out_dir = out_dir.canonicalize().unwrap();
+
     let src_path = &args
         .file()
         .canonicalize()
@@ -332,7 +334,7 @@ pub fn compile_program(
         no_std: args.no_std,
         target,
         debug: args.debug,
-        out_dir: out_dir.to_owned(),
+        out_dir,
     };
 
     let module_name = if src_path.is_dir() {
@@ -397,18 +399,18 @@ pub fn compile_program(
     }
 
     // bytecode testing
-    // if let Some(main_id) = p.get_main_function_id() {
-    //     crate::bc::compile_function(&mut p, main_id).unwrap();
-    //     let bc = p.bytecode.borrow();
-    //     let mut errors = Vec::new();
-    //     crate::bc::validate_function(&p, main_id, &mut errors);
-    //     if !errors.is_empty() {
-    //         eprintln!("ERROR: {}", errors[0]);
-    //     }
-    //     let mut s = String::new();
-    //     crate::bc::display_function(&mut s, &p, &bc, main_id, true).unwrap();
-    //     eprintln!("{s}");
-    // };
+    if let Some(main_id) = p.get_main_function_id() {
+        crate::bc::compile_function(&mut p, main_id).unwrap();
+        let bc = p.bytecode.borrow();
+        let mut errors = Vec::new();
+        crate::bc::validate_function(&p, main_id, &mut errors);
+        if !errors.is_empty() {
+            eprintln!("ERROR: {}", errors[0]);
+        }
+        let mut s = String::new();
+        crate::bc::display_function(&mut s, &p, &bc, main_id, true).unwrap();
+        eprintln!("{s}");
+    };
 
     Ok(p)
 }

@@ -5,4 +5,4 @@ set -x
 set -e
 export RUST_BACKTRACE=1
 
-cargo build --features lsp --bin lsp
+cargo build --release --features lsp --bin lsp

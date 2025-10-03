@@ -1068,13 +1068,14 @@ impl ArrayLiteral {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ArrayGetElement {
     pub base: TypedExprId,
     pub index: TypedExprId,
     pub result_type: TypeId,
     pub array_type: TypeId,
-    pub is_referencing: bool,
+    // This is really just a field access by number instead of name
+    pub access_kind: FieldAccessKind,
     pub span: SpanId,
 }
 impl_copy_if_small!(24, ArrayGetElement);
@@ -1243,11 +1244,13 @@ pub enum CastType {
     ReferenceToPointer,
     /// Destination type can only be uword and iword
     PointerToWord,
-    IntegerToPointer,
+    WordToPointer,
     FloatExtend,
     FloatTruncate,
-    FloatToInteger,
-    IntegerToFloat,
+    FloatToUnsignedInteger,
+    FloatToSignedInteger,
+    IntegerUnsignedToFloat,
+    IntegerSignedToFloat,
     LambdaToLambdaObject,
     Transmute,
     StaticErase,
@@ -1267,11 +1270,13 @@ impl Display for CastType {
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
             CastType::PointerToWord => write!(f, "ptrtoword"),
-            CastType::IntegerToPointer => write!(f, "inttoptr"),
+            CastType::WordToPointer => write!(f, "wordtoptr"),
             CastType::FloatExtend => write!(f, "fext"),
             CastType::FloatTruncate => write!(f, "ftrunc"),
-            CastType::FloatToInteger => write!(f, "ftoint"),
-            CastType::IntegerToFloat => write!(f, "inttof"),
+            CastType::FloatToUnsignedInteger => write!(f, "ftouint"),
+            CastType::FloatToSignedInteger => write!(f, "ftosint"),
+            CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
+            CastType::IntegerSignedToFloat => write!(f, "sinttof"),
             CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
             CastType::Transmute => write!(f, "never"),
             CastType::StaticErase => write!(f, "staticerase"),
@@ -7291,7 +7296,14 @@ impl TypedProgram {
                     let source_for_emission =
                         self.ast.sources.add_source(crate::parse::Source::make(
                             0,
-                            self.ast.config.out_dir.to_str().unwrap().to_owned(),
+                            self.ast
+                                .config
+                                .out_dir
+                                .canonicalize()
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_owned(),
                             generated_filename,
                             content.clone(),
                         ));
@@ -8591,21 +8603,29 @@ impl TypedProgram {
                         )
                     }
                 }
-                Type::Pointer => {
-                    if matches!(from_integer_type, IntegerType::UWord(_)) {
-                        Ok(CastType::IntegerToPointer)
-                    } else {
-                        failf!(
-                            cast.span,
-                            "Cannot cast integer '{}' to Pointer (must be uword)",
-                            from_integer_type
-                        )
-                    }
-                }
+                Type::Pointer => match from_integer_type {
+                    IntegerType::UWord(_) | IntegerType::IWord(_) => Ok(CastType::WordToPointer),
+                    _ => failf!(
+                        cast.span,
+                        "Cannot cast integer '{}' to Pointer (must be uword)",
+                        from_integer_type
+                    ),
+                },
                 Type::Float(_to_float_type) => {
                     // We're just going to allow these casts and make it UB if it doesn't fit, the LLVM
                     // default. If I find a saturating version in LLVM I'll use that instead
-                    Ok(CastType::IntegerToFloat)
+                    match from_integer_type {
+                        IntegerType::U8
+                        | IntegerType::U16
+                        | IntegerType::U32
+                        | IntegerType::U64 => Ok(CastType::IntegerUnsignedToFloat),
+                        IntegerType::UWord(_) => Ok(CastType::IntegerUnsignedToFloat),
+                        IntegerType::I8 => Ok(CastType::IntegerSignedToFloat),
+                        IntegerType::I16 => Ok(CastType::IntegerSignedToFloat),
+                        IntegerType::I32 => Ok(CastType::IntegerSignedToFloat),
+                        IntegerType::I64 => Ok(CastType::IntegerSignedToFloat),
+                        IntegerType::IWord(_) => Ok(CastType::IntegerSignedToFloat),
+                    }
                 }
                 _ => failf!(
                     cast.span,
@@ -8623,10 +8643,10 @@ impl TypedProgram {
                     }
                 }
                 Type::Integer(to_int_type) => match to_int_type {
-                    IntegerType::U32 => Ok(CastType::FloatToInteger),
-                    IntegerType::U64 => Ok(CastType::FloatToInteger),
-                    IntegerType::I32 => Ok(CastType::FloatToInteger),
-                    IntegerType::I64 => Ok(CastType::FloatToInteger),
+                    IntegerType::U32 => Ok(CastType::FloatToUnsignedInteger),
+                    IntegerType::U64 => Ok(CastType::FloatToUnsignedInteger),
+                    IntegerType::I32 => Ok(CastType::FloatToSignedInteger),
+                    IntegerType::I64 => Ok(CastType::FloatToSignedInteger),
                     _ => failf!(
                         cast.span,
                         "Cannot cast float to integer '{}'",
@@ -9914,6 +9934,15 @@ impl TypedProgram {
                         self.type_id_to_string(self.exprs.get(base).get_type())
                     );
                 }
+                let access_kind = if array_reference_type.is_some() {
+                    if is_referencing {
+                        FieldAccessKind::ReferenceThrough
+                    } else {
+                        FieldAccessKind::Dereference
+                    }
+                } else {
+                    FieldAccessKind::ValueToValue
+                };
                 let result_type = if is_referencing {
                     let mutable = array_reference_type.unwrap().mutable;
                     self.types.add_reference_type(array_type.element_type, mutable)
@@ -9944,7 +9973,7 @@ impl TypedProgram {
                         index: index_expr,
                         result_type,
                         array_type: array_type_id,
-                        is_referencing,
+                        access_kind,
                         span,
                     }));
                 let array_length_expr = self.synth_typed_call_typed_args(
