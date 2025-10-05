@@ -1879,7 +1879,6 @@ pub enum IntrinsicOperation {
     Exit,
     // Static-only
     CompilerMessage,
-    EmitString,
     BakeStaticValue,
     GetStaticValue,
     StaticTypeToValue,
@@ -1915,7 +1914,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::Exit => false,
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
-            IntrinsicOperation::EmitString => false,
             IntrinsicOperation::BakeStaticValue => false,
         }
     }
@@ -1951,7 +1949,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeName => false,
             IntrinsicOperation::TypeSchema => false,
             // Metaprogramming
-            IntrinsicOperation::EmitString => true,
             IntrinsicOperation::GetStaticValue => true,
             IntrinsicOperation::BakeStaticValue => true,
             IntrinsicOperation::StaticTypeToValue => true,
@@ -2459,6 +2456,8 @@ impl TypedProgram {
         let clock = quanta::Clock::new();
         eprintln!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
+        let word_size = ast.config.target.word_size();
+
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
             program_settings: ProgramSettings { multithreaded: false, executable: false },
@@ -2514,7 +2513,7 @@ impl TypedProgram {
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: RefCell::new(bc::ProgramBytecode::make(16384)),
+            bytecode: RefCell::new(bc::ProgramBytecode::make(16384, word_size)),
 
             timing: Timing { clock, total_infers: 0, total_infer_nanos: 0, total_vm_nanos: 0 },
         }
@@ -9632,7 +9631,7 @@ impl TypedProgram {
                         );
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
-                                function_id: lambda_type.body_function_id,
+                                function_id: lambda_type.function_id,
                                 lambda_value_expr: self.exprs.add(TypedExpr::Variable(
                                     VariableExpr {
                                         variable_id,
@@ -12302,7 +12301,6 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
-                    "emit" => Some(IntrinsicOperation::EmitString),
                     "bakeStaticValue" => Some(IntrinsicOperation::BakeStaticValue),
                     "getStaticValue" => Some(IntrinsicOperation::GetStaticValue),
                     "staticTypeToValue" => Some(IntrinsicOperation::StaticTypeToValue),

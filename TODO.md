@@ -90,6 +90,8 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
 - [ ] transmute function (for struct ABI workarounds right now)
 
+## Project: Ability objects; dyn[<ability expr>]
+
 ## Project: Static Improvements
 - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [ ] VM "PermSpace" for caching converted static values in their VM representation

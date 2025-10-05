@@ -1,3 +1,4 @@
+use crate::compiler::WordSize;
 use crate::kmem::MHandle;
 use crate::parse::{NumericWidth, StringId};
 // Copyright (c) 2025 knix
@@ -30,10 +31,15 @@ pub struct ProgramBytecode {
     pub sources: VPool<SpanId, InstId>,
     pub comments: VPool<MStr<ProgramBytecode>, InstId>,
     pub functions: VPool<Option<Function>, FunctionId>,
+    pub module_config: BcModuleConfig,
+}
+
+pub struct BcModuleConfig {
+    pub word_size: WordSize,
 }
 
 impl ProgramBytecode {
-    pub fn make(instr_count_hint: usize) -> Self {
+    pub fn make(instr_count_hint: usize, word_size: WordSize) -> Self {
         let function_count_hint = instr_count_hint / 128;
         ProgramBytecode {
             mem: kmem::Mem::make(),
@@ -41,6 +47,14 @@ impl ProgramBytecode {
             sources: VPool::make_with_hint("bytecode_soa_sources", instr_count_hint),
             comments: VPool::make_with_hint("bytecode_soa_comments", instr_count_hint),
             functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
+            module_config: BcModuleConfig { word_size },
+        }
+    }
+
+    fn word_sized_int(&self) -> BcType {
+        match self.module_config.word_size {
+            WordSize::W32 => BcType::Scalar(ScalarType::I(NumericWidth::B32)),
+            WordSize::W64 => BcType::Scalar(ScalarType::I(NumericWidth::B64)),
         }
     }
 }
@@ -66,19 +80,65 @@ type BcResult<T> = Result<T, Cow<'static, str>>;
 pub enum Imm {
     Unit,
     Bool(bool),
-    Char(u8),
-    //task(bc): Stop using TypedIntValue here since its signed
-    Int(TypedIntValue),
+    I8(u8),
+    I16(u16),
+    I32(u32),
+    I64(u64),
     Float(TypedFloatValue),
+    PtrZero,
+}
+
+fn imm_from_int_value(int_value: &TypedIntValue) -> Imm {
+    match int_value {
+        TypedIntValue::U8(i) => Imm::I8(*i),
+        TypedIntValue::U16(i) => Imm::I16(*i),
+        TypedIntValue::U32(i) => Imm::I32(*i),
+        TypedIntValue::U64(i) => Imm::I64(*i),
+        TypedIntValue::UWord32(i) => Imm::I32(*i),
+        TypedIntValue::UWord64(i) => Imm::I64(*i),
+        TypedIntValue::I8(i) => Imm::I8(*i as u8),
+        TypedIntValue::I16(i) => Imm::I16(*i as u16),
+        TypedIntValue::I32(i) => Imm::I32(*i as u32),
+        TypedIntValue::I64(i) => Imm::I64(*i as u64),
+        TypedIntValue::IWord32(i) => Imm::I32(*i as u32),
+        TypedIntValue::IWord64(i) => Imm::I64(*i as u64),
+    }
 }
 
 nz_u32_id!(InstId);
 pub type BlockId = u32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BcBuiltin {
+    Zeroed,
+
+    BoolNegate,
+    BitNot,
+    ArithBinop(IntrinsicArithOpKind),
+    BitwiseBinop(IntrinsicBitwiseBinopKind),
+    LogicalAnd,
+    LogicalOr,
+    PointerIndex,
+
+    // nocommit(2) functions with runtime switches
+    //             Codegen this in BC IR
+    TypeSchema,
+    TypeName,
+    // Platform-provided
+    Allocate,
+    AllocateZeroed,
+    Reallocate,
+    Free,
+    MemCopy,
+    MemSet,
+    MemEquals,
+    Exit,
+}
+
 // Lambdas have been compiled down to just calls and args by now
 #[derive(Clone, Copy)]
 pub enum BcCallee {
-    Builtin(IntrinsicOperation),
+    Builtin(BcBuiltin),
     Direct(FunctionId),
     Indirect(InstId),
 }
@@ -117,6 +177,8 @@ pub enum Inst {
     Ret(InstId),
 
     // Operations
+    BoolNegate { inst: InstId },
+    BitNot { inst: InstId },
     IntTrunc { inst: InstId, to: BcType },
     IntExtU { inst: InstId, to: BcType },
     IntExtS { inst: InstId, to: BcType },
@@ -124,8 +186,61 @@ pub enum Inst {
     FloatExt { inst: InstId, to: BcType },
     FloatToIntUnsigned { inst: InstId, to: BcType },
     FloatToIntSigned { inst: InstId, to: BcType },
+    IntToFloatUnsigned { inst: InstId, to: BcType },
+    IntToFloatSigned { inst: InstId, to: BcType },
     PtrToWord { inst: InstId },
     WordToPtr { inst: InstId },
+    //task(bc): Break these out into their own instructions
+    ArithBin { op: IntrinsicArithOpKind, lhs: InstId, rhs: InstId },
+    BitwiseBin { op: IntrinsicBitwiseBinopKind, lhs: InstId, rhs: InstId },
+
+    // Platform ops
+    Memset { t: BcType, dst: InstId, value: InstId },
+}
+
+fn get_inst_kind(bc: &ProgramBytecode, inst_id: InstId) -> InstKind {
+    match bc.instrs.get(inst_id) {
+        Inst::Imm(imm) => match imm {
+            Imm::Unit => InstKind::U8,
+            Imm::Bool(_) => InstKind::U8,
+            Imm::I8(_) => InstKind::U8,
+            Imm::I16(_) => InstKind::U16,
+            Imm::I32(_) => InstKind::U32,
+            Imm::I64(_) => InstKind::U64,
+            Imm::Float(TypedFloatValue::F32(_)) => InstKind::Value(BcType::Scalar(ScalarType::F32)),
+            Imm::Float(TypedFloatValue::F64(_)) => InstKind::Value(BcType::Scalar(ScalarType::F64)),
+            Imm::PtrZero => InstKind::PTR,
+        },
+        Inst::FunctionAddr(_) => InstKind::PTR,
+        Inst::StaticValue { t, .. } => InstKind::Value(*t),
+        Inst::String { .. } => InstKind::PTR,
+        Inst::Alloca { .. } => InstKind::PTR,
+        Inst::Store { .. } => InstKind::Void,
+        Inst::Load { t, .. } => InstKind::Value(*t),
+        Inst::Copy { .. } => InstKind::Void,
+        Inst::StructOffset { .. } => InstKind::PTR,
+        Inst::ArrayOffset { .. } => InstKind::PTR,
+        Inst::Call(t, ..) => *t,
+        Inst::Jump(_) => InstKind::Terminator,
+        Inst::JumpIf { .. } => InstKind::Terminator,
+        Inst::Unreachable => InstKind::Terminator,
+        Inst::ComeFrom { t, .. } => InstKind::Value(*t),
+        Inst::Ret(_) => InstKind::Terminator,
+        Inst::BoolNegate { .. } => InstKind::U8,
+        Inst::BitNot { inst } => get_inst_kind(bc, *inst),
+        Inst::IntTrunc { to, .. } => InstKind::Value(*to),
+        Inst::IntExtU { to, .. } => InstKind::Value(*to),
+        Inst::IntExtS { to, .. } => InstKind::Value(*to),
+        Inst::FloatTrunc { to, .. } => InstKind::Value(*to),
+        Inst::FloatExt { to, .. } => InstKind::Value(*to),
+        Inst::FloatToIntSigned { to, .. } => InstKind::Value(*to),
+        Inst::FloatToIntUnsigned { to, .. } => InstKind::Value(*to),
+        Inst::IntToFloatUnsigned { to, .. } => InstKind::Value(*to),
+        Inst::IntToFloatSigned { to, .. } => InstKind::Value(*to),
+        Inst::PtrToWord { .. } => InstKind::Value(bc.word_sized_int()),
+        Inst::WordToPtr { .. } => InstKind::PTR,
+        Inst::Memset { .. } => InstKind::Void,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,19 +250,55 @@ pub enum BcAgg {
     Array { element_t: MHandle<BcType, ProgramBytecode>, len: u32 },
 }
 
-#[derive(Clone, Copy)]
-pub enum BcType {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScalarType {
     I(NumericWidth),
-    Word,
     F32,
     F64,
     Pointer,
+}
+
+impl ScalarType {
+    fn zero(&self) -> Imm {
+        match self {
+            ScalarType::I(w) => match w {
+                NumericWidth::B8 => Imm::I8(0),
+                NumericWidth::B16 => Imm::I16(0),
+                NumericWidth::B32 => Imm::I32(0),
+                NumericWidth::B64 => Imm::I64(0),
+            },
+            ScalarType::F32 => Imm::Float(TypedFloatValue::F32(0.0)),
+            ScalarType::F64 => Imm::Float(TypedFloatValue::F64(0.0)),
+            ScalarType::Pointer => Imm::PtrZero,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum BcType {
+    Scalar(ScalarType),
     Agg(BcAgg),
 }
 
 impl BcType {
     pub fn is_agg(&self) -> bool {
         matches!(self, BcType::Agg(_))
+    }
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, BcType::Scalar(_))
+    }
+    #[track_caller]
+    pub fn expect_scalar(&self) -> ScalarType {
+        match self {
+            BcType::Scalar(s) => *s,
+            _ => panic!("Expected scalar"),
+        }
+    }
+    pub fn as_scalar(&self) -> Option<ScalarType> {
+        match self {
+            BcType::Scalar(s) => Some(*s),
+            _ => None,
+        }
     }
 }
 
@@ -159,11 +310,19 @@ pub enum InstKind {
 }
 
 impl InstKind {
-    pub const PTR: InstKind = InstKind::Value(BcType::Pointer);
-    pub const WORD: InstKind = InstKind::Value(BcType::Word);
-    pub const U8: InstKind = InstKind::Value(BcType::I(NumericWidth::B8));
+    pub const PTR: InstKind = InstKind::Value(BcType::Scalar(ScalarType::Pointer));
+    pub const U8: InstKind = InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B8)));
+    pub const U16: InstKind = InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B16)));
+    pub const U32: InstKind = InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B32)));
+    pub const U64: InstKind = InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B64)));
     fn is_ptr(&self) -> bool {
-        matches!(self, InstKind::Value(BcType::Pointer))
+        matches!(self, InstKind::Value(BcType::Scalar(ScalarType::Pointer)))
+    }
+    fn is_int(&self) -> bool {
+        matches!(self, InstKind::Value(BcType::Scalar(ScalarType::I(_))))
+    }
+    fn is_byte(&self) -> bool {
+        matches!(self, InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B8))))
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(BcType::Agg(_)))
@@ -181,6 +340,12 @@ impl InstKind {
             _ => panic!("Expected value, got {}", self.kind_str()),
         }
     }
+    fn as_value(&self) -> Option<BcType> {
+        match self {
+            InstKind::Value(t) => Some(*t),
+            _ => None,
+        }
+    }
     fn is_terminator(&self) -> bool {
         matches!(self, InstKind::Terminator)
     }
@@ -190,11 +355,13 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            InstKind::Value(BcType::I(_)) => "int",
-            InstKind::Value(BcType::Word) => "word",
-            InstKind::Value(BcType::F32) => "f32",
-            InstKind::Value(BcType::F64) => "f64",
-            InstKind::Value(BcType::Pointer) => "ptr",
+            InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B8))) => "i8",
+            InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B16))) => "i16",
+            InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B32))) => "i32",
+            InstKind::Value(BcType::Scalar(ScalarType::I(NumericWidth::B64))) => "i64",
+            InstKind::Value(BcType::Scalar(ScalarType::F32)) => "f32",
+            InstKind::Value(BcType::Scalar(ScalarType::F64)) => "f64",
+            InstKind::Value(BcType::Scalar(ScalarType::Pointer)) => "ptr",
             InstKind::Value(BcType::Agg(_)) => "agg",
             InstKind::Void => "void",
             InstKind::Terminator => "term",
@@ -206,6 +373,9 @@ fn compile_type(b: &mut Builder, type_id: TypeId) -> Result<InstKind, String> {
     fn ok_value(value: BcType) -> Result<InstKind, String> {
         Ok(InstKind::Value(value))
     }
+    fn ok_scalar(scalar: ScalarType) -> Result<InstKind, String> {
+        Ok(InstKind::Value(BcType::Scalar(scalar)))
+    }
     match b.k1.types.get(type_id) {
         //task(bc): Eventually, Unit should correspond to Void, not a byte. But only once we can
         //successfully lower it to a zero-sized type everywhere; for example a struct member of
@@ -213,12 +383,14 @@ fn compile_type(b: &mut Builder, type_id: TypeId) -> Result<InstKind, String> {
         Type::Unit | Type::Char | Type::Bool => Ok(InstKind::U8),
 
         // Drops signedness since its now encoded in ops
-        Type::Integer(i) => ok_value(BcType::I(i.width())),
+        Type::Integer(i) => ok_scalar(ScalarType::I(i.width())),
 
-        Type::Float(FloatType::F32) => ok_value(BcType::F32),
-        Type::Float(FloatType::F64) => ok_value(BcType::F64),
+        Type::Float(FloatType::F32) => ok_scalar(ScalarType::F32),
+        Type::Float(FloatType::F64) => ok_scalar(ScalarType::F64),
 
-        Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => ok_value(BcType::Pointer),
+        Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
+            ok_scalar(ScalarType::Pointer)
+        }
         Type::Array(array) => {
             let InstKind::Value(t) = compile_type(b, array.element_type)? else {
                 return Err("Array element is not a value type".into());
@@ -276,50 +448,7 @@ fn compile_type(b: &mut Builder, type_id: TypeId) -> Result<InstKind, String> {
     }
 }
 
-impl Inst {
-    pub fn get_kind(&self) -> InstKind {
-        match self {
-            Inst::Imm(imm) => match imm {
-                Imm::Unit => InstKind::U8,
-                Imm::Bool(_) => InstKind::U8,
-                Imm::Char(_) => InstKind::U8,
-                Imm::Int(i) => InstKind::Value(BcType::I(i.get_integer_type().width())),
-                Imm::Float(TypedFloatValue::F32(_)) => InstKind::Value(BcType::F32),
-                Imm::Float(TypedFloatValue::F64(_)) => InstKind::Value(BcType::F64),
-            },
-            Inst::FunctionAddr(_) => InstKind::PTR,
-            Inst::StaticValue { t, .. } => InstKind::Value(*t),
-            Inst::String { .. } => InstKind::PTR,
-            Inst::Alloca { .. } => InstKind::PTR,
-            Inst::Store { .. } => InstKind::Void,
-            Inst::Load { t, .. } => InstKind::Value(*t),
-            Inst::Copy { .. } => InstKind::Void,
-            Inst::StructOffset { .. } => InstKind::PTR,
-            Inst::ArrayOffset { .. } => InstKind::PTR,
-            Inst::Call(t, ..) => *t,
-            Inst::Jump(_) => InstKind::Terminator,
-            Inst::JumpIf { .. } => InstKind::Terminator,
-            Inst::Unreachable => InstKind::Terminator,
-            Inst::ComeFrom { t, .. } => InstKind::Value(*t),
-            Inst::Ret(_) => InstKind::Terminator,
-
-            // Operations
-            Inst::IntTrunc { to, .. } => InstKind::Value(*to),
-            Inst::IntExtU { to, .. } => InstKind::Value(*to),
-            Inst::IntExtS { to, .. } => InstKind::Value(*to),
-            Inst::FloatTrunc { to, .. } => InstKind::Value(*to),
-            Inst::FloatExt { to, .. } => InstKind::Value(*to),
-            Inst::FloatToIntSigned { to, .. } => InstKind::Value(*to),
-            Inst::FloatToIntUnsigned { to, .. } => InstKind::Value(*to),
-            Inst::PtrToWord { .. } => InstKind::WORD,
-            Inst::WordToPtr { .. } => InstKind::PTR,
-        }
-    }
-
-    pub fn is_terminator(&self) -> bool {
-        self.get_kind().is_terminator()
-    }
-}
+impl Inst {}
 
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> BcResult<()> {
     let mut bc = k1.bytecode.borrow_mut();
@@ -386,8 +515,12 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         id
     }
 
-    fn get_inst_kind(&self, inst_id: InstId) -> InstKind {
-        self.bc.instrs.get(inst_id).get_kind()
+    pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
+        get_inst_kind(&self.bc, inst)
+    }
+
+    pub fn inst_is_terminator(&self, inst: InstId) -> bool {
+        get_inst_kind(&self.bc, inst).is_terminator()
     }
 
     fn compile_type(&mut self, type_id: TypeId) -> InstKind {
@@ -423,17 +556,6 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.push_inst(Inst::Copy { dst, src, size: layout.size })
     }
 
-    fn push_builtin(
-        &mut self,
-        ret_kind: InstKind,
-        op: IntrinsicOperation,
-        args: &[InstId],
-    ) -> InstId {
-        let callee = BcCallee::Builtin(op);
-        let args = self.bc.mem.push_slice(args);
-        self.push_inst(Inst::Call(ret_kind, callee, args))
-    }
-
     fn push_load(&mut self, type_id: TypeId, src: InstId) -> InstId {
         let t = self.compile_type(type_id).expect_value();
         self.push_inst(Inst::Load { t, src })
@@ -455,6 +577,10 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
 
     fn get_inst_mut(&mut self, inst_id: InstId) -> &mut Inst {
         self.bc.instrs.get_mut(inst_id)
+    }
+
+    fn ptr_sized_int(&self) -> BcType {
+        self.bc.word_sized_int()
     }
 
     #[track_caller]
@@ -615,27 +741,28 @@ fn compile_expr(
     match e {
         TypedExpr::Unit(_) => {
             let imm = b.push_inst(Inst::Imm(Imm::Unit));
-            let store = store_rich_if_dst(b, dst, e.get_type(), imm);
+            let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Char(byte, _) => {
-            let imm = b.push_inst(Inst::Imm(Imm::Char(*byte)));
-            let store = store_rich_if_dst(b, dst, e.get_type(), imm);
+            let imm = b.push_inst(Inst::Imm(Imm::I8(*byte)));
+            let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Bool(bv, _) => {
             let imm = b.push_inst(Inst::Imm(Imm::Bool(*bv)));
-            let store = store_rich_if_dst(b, dst, e.get_type(), imm);
+            let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Integer(int) => {
-            let imm = b.push_inst(Inst::Imm(Imm::Int(int.value)));
-            let store = store_rich_if_dst(b, dst, e.get_type(), imm);
+            let imm = imm_from_int_value(&int.value);
+            let inst_id = b.push_inst(Inst::Imm(imm));
+            let store = store_simple_if_dst(b, dst, inst_id);
             Ok(store)
         }
         TypedExpr::Float(float) => {
             let imm = b.push_inst(Inst::Imm(Imm::Float(float.value)));
-            let store = store_rich_if_dst(b, dst, e.get_type(), imm);
+            let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::String(string_id, _) => {
@@ -731,40 +858,140 @@ fn compile_expr(
         TypedExpr::Call { call_id, return_type, .. } => {
             let call = b.k1.calls.get(*call_id);
             let mut args = b.bc.mem.new_vec(call.args.len() as u32 + 1);
-            let callee = match &call.callee {
-                Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
-                Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
-                    let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
-                    args.push(lambda_env);
-                    BcCallee::Direct(*function_id)
-                }
-                Callee::Abstract { .. } => return Err("bc abstract call".into()),
-                Callee::DynamicLambda(dl) => {
-                    let lambda_obj = compile_expr(b, None, *dl)?;
-                    let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
-                    let lam_obj_type = compile_type(b, lam_obj_type_id)?.expect_value();
-                    let fn_ptr_addr = b.push_inst(Inst::StructOffset {
-                        struct_t: lam_obj_type,
-                        base: lambda_obj,
-                        field_index: TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
-                    });
-                    let fn_ptr = load_value(b, POINTER_TYPE_ID, fn_ptr_addr, false);
-                    let env_addr = b.push_inst(Inst::StructOffset {
-                        struct_t: lam_obj_type,
-                        base: lambda_obj,
-                        field_index: TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
-                    });
-                    let env = load_value(b, POINTER_TYPE_ID, env_addr, false);
+            let builtin = if let Some(function_id) = call.callee.maybe_function_id() {
+                if let Some(intrinsic) = b.k1.get_function(function_id).intrinsic_type {
+                    match intrinsic {
+                        IntrinsicOperation::SizeOf => unreachable!(),
+                        IntrinsicOperation::SizeOfStride => unreachable!(),
+                        IntrinsicOperation::AlignOf => unreachable!(),
+                        IntrinsicOperation::CompilerSourceLocation => unreachable!(),
+                        IntrinsicOperation::CompilerMessage => unreachable!(),
+                        IntrinsicOperation::BakeStaticValue => unreachable!(),
+                        IntrinsicOperation::GetStaticValue => unreachable!(),
+                        IntrinsicOperation::StaticTypeToValue => unreachable!(),
+                        IntrinsicOperation::TypeId => unreachable!(),
 
-                    args.push(env);
-                    BcCallee::Indirect(fn_ptr)
+                        IntrinsicOperation::Zeroed => {
+                            // do this one, memset for aggregates
+                            // zero imm for basics
+                            return {
+                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let bc_type = b.compile_type(type_id).expect_value();
+                                let zero = if bc_type.is_agg() {
+                                    let dst = match dst {
+                                        None => b.alloca_type(type_id),
+                                        Some(dst) => dst,
+                                    };
+                                    let zero_u8 = b.push_inst(Inst::Imm(Imm::I8(0)));
+                                    b.push_inst(Inst::Memset { dst, t: bc_type, value: zero_u8 });
+                                    dst
+                                } else {
+                                    let imm = match bc_type {
+                                        BcType::Scalar(s) => s.zero(),
+                                        BcType::Agg(_) => unreachable!(),
+                                    };
+                                    let inst = b.push_inst(Inst::Imm(imm));
+                                    inst
+                                };
+                                Ok(zero)
+                            };
+                        }
+
+                        // do these
+                        IntrinsicOperation::TypeName => Some(BcBuiltin::TypeName),
+                        IntrinsicOperation::TypeSchema => Some(BcBuiltin::TypeSchema),
+
+                        IntrinsicOperation::BoolNegate => {
+                            return {
+                                let base = compile_expr(b, None, call.args[0])?;
+                                let neg = b.push_inst(Inst::BoolNegate { inst: base });
+                                let stored = store_simple_if_dst(b, dst, neg);
+                                Ok(stored)
+                            };
+                        }
+                        IntrinsicOperation::BitNot => {
+                            return {
+                                let base = compile_expr(b, None, call.args[0])?;
+                                let neg = b.push_inst(Inst::BitNot { inst: base });
+                                let stored = store_simple_if_dst(b, dst, neg);
+                                Ok(stored)
+                            };
+                        }
+                        IntrinsicOperation::ArithBinop(op) => {
+                            return {
+                                let lhs = compile_expr(b, None, call.args[0])?;
+                                let rhs = compile_expr(b, None, call.args[1])?;
+                                let res = b.push_inst(Inst::ArithBin { op, lhs, rhs });
+                                let stored = store_simple_if_dst(b, dst, res);
+                                Ok(stored)
+                            };
+                        }
+                        IntrinsicOperation::BitwiseBinop(op) => {
+                            return {
+                                let lhs = compile_expr(b, None, call.args[0])?;
+                                let rhs = compile_expr(b, None, call.args[1])?;
+                                let res = b.push_inst(Inst::BitwiseBin { op, lhs, rhs });
+                                let stored = store_simple_if_dst(b, dst, res);
+                                Ok(stored)
+                            };
+                        }
+                        IntrinsicOperation::LogicalAnd => todo!(),
+                        IntrinsicOperation::LogicalOr => todo!(),
+                        IntrinsicOperation::PointerIndex => todo!(),
+
+                        IntrinsicOperation::Allocate => Some(BcBuiltin::Allocate),
+                        IntrinsicOperation::AllocateZeroed => Some(BcBuiltin::AllocateZeroed),
+                        IntrinsicOperation::Reallocate => Some(BcBuiltin::Reallocate),
+                        IntrinsicOperation::Free => Some(BcBuiltin::Free),
+                        IntrinsicOperation::MemCopy => Some(BcBuiltin::MemCopy),
+                        IntrinsicOperation::MemSet => Some(BcBuiltin::MemSet),
+                        IntrinsicOperation::MemEquals => Some(BcBuiltin::MemEquals),
+                        IntrinsicOperation::Exit => Some(BcBuiltin::Exit),
+                    }
+                } else {
+                    None
                 }
-                Callee::DynamicFunction { function_pointer_expr } => {
-                    let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                    BcCallee::Indirect(callee_inst)
-                }
-                Callee::DynamicAbstract { .. } => {
-                    return Err("bc abstract call".into());
+            } else {
+                None
+            };
+            let callee = if let Some(builtin) = builtin {
+                BcCallee::Builtin(builtin)
+            } else {
+                match &call.callee {
+                    Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
+                    Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
+                        let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
+                        args.push(lambda_env);
+                        BcCallee::Direct(*function_id)
+                    }
+                    Callee::Abstract { .. } => return Err("bc abstract call".into()),
+                    Callee::DynamicLambda(dl) => {
+                        let lambda_obj = compile_expr(b, None, *dl)?;
+                        let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
+                        let lam_obj_type = compile_type(b, lam_obj_type_id)?.expect_value();
+                        let fn_ptr_addr = b.push_inst(Inst::StructOffset {
+                            struct_t: lam_obj_type,
+                            base: lambda_obj,
+                            field_index: TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
+                        });
+                        let fn_ptr = load_value(b, POINTER_TYPE_ID, fn_ptr_addr, false);
+                        let env_addr = b.push_inst(Inst::StructOffset {
+                            struct_t: lam_obj_type,
+                            base: lambda_obj,
+                            field_index: TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
+                        });
+                        let env = load_value(b, POINTER_TYPE_ID, env_addr, false);
+
+                        args.push(env);
+                        BcCallee::Indirect(fn_ptr)
+                    }
+                    Callee::DynamicFunction { function_pointer_expr } => {
+                        let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
+                        BcCallee::Indirect(callee_inst)
+                    }
+                    Callee::DynamicAbstract { .. } => {
+                        return Err("bc abstract call".into());
+                    }
                 }
             };
             let return_type_id = *return_type;
@@ -938,7 +1165,7 @@ fn compile_expr(
             let tag_base = enum_base;
             let enum_variant = b.k1.types.get(enumc.variant_type_id).expect_enum_variant();
             let tag_int_value = enum_variant.tag_value;
-            let int_imm = b.push_inst(Inst::Imm(Imm::Int(tag_int_value)));
+            let int_imm = b.push_inst(Inst::Imm(imm_from_int_value(&tag_int_value)));
             b.push_store(tag_base, int_imm);
 
             if let Some(payload_expr) = &enumc.payload {
@@ -1038,7 +1265,7 @@ fn compile_expr(
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
             );
             //task(bc): Cleaner ptr-sized-int OR a notion of null that isn't zero
-            let zero = b.push_inst(Inst::Imm(Imm::Int(TypedIntValue::UWord64(0))));
+            let zero = b.push_inst(Inst::Imm(Imm::I64(0)));
             b.push_store(lam_obj_env_ptr_addr, zero);
             Ok(lam_obj_ptr)
         }
@@ -1138,33 +1365,68 @@ fn compile_cast(
             let stored = store_simple_if_dst(b, dst, inst);
             Ok(stored)
         }
-        CastType::FloatExtend | CastType::FloatTruncate => {
+        CastType::FloatExtend
+        | CastType::FloatTruncate
+        | CastType::FloatToUnsignedInteger
+        | CastType::FloatToSignedInteger
+        | CastType::IntegerUnsignedToFloat
+        | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
             let to = b.compile_type(c.target_type_id).expect_value();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { inst: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { inst: base, to },
-                _ => unreachable!(),
-            };
-            let inst = b.push_inst(inst);
-            let stored = store_simple_if_dst(b, dst, inst);
-            Ok(stored)
-        }
-        CastType::FloatToUnsignedInteger | CastType::FloatToSignedInteger => {
-            let base = compile_expr(b, None, c.base_expr)?;
-            let to = b.compile_type(c.target_type_id).expect_value();
-            let inst = match c.cast_type {
                 CastType::FloatToUnsignedInteger => Inst::FloatToIntUnsigned { inst: base, to },
                 CastType::FloatToSignedInteger => Inst::FloatToIntSigned { inst: base, to },
+                CastType::IntegerUnsignedToFloat => Inst::IntToFloatUnsigned { inst: base, to },
+                CastType::IntegerSignedToFloat => Inst::IntToFloatSigned { inst: base, to },
                 _ => unreachable!(),
             };
             let inst = b.push_inst(inst);
             let stored = store_simple_if_dst(b, dst, inst);
             Ok(stored)
         }
-        CastType::IntegerUnsignedToFloat => todo!(),
-        CastType::IntegerSignedToFloat => todo!(),
-        CastType::LambdaToLambdaObject => todo!(),
+        CastType::LambdaToLambdaObject => {
+            // Produces just the lambda's environment as a value. We don't need the function
+            // pointer because we know it from the type still
+
+            let lambda_env_inst = compile_expr(b, None, c.base_expr)?;
+            let lambda_type = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+
+            // Now we need a pointer to the environment
+            let lambda_env_ptr = b.alloca_type(lambda_type.env_type);
+            //task(bc): nocommit(2) This conversion is kinda stinky because we could instead
+            //just say that lambdas are POINTERS to their env structs, rather than their
+            //env structs themselves. Its no less efficient to generate, because we currently
+            //do a struct literal, which requires an alloca anyway, but we'd simply treat
+            //it as a reference now while doing the same amount of actual work to build it
+            store_value(b, lambda_type.env_type, lambda_env_ptr, lambda_env_inst);
+
+            let lambda_function_id = lambda_type.function_id;
+            let fn_ptr = b.push_inst(Inst::FunctionAddr(lambda_function_id));
+
+            let lam_obj_ptr = match dst {
+                Some(dst) => dst,
+                None => b.alloca_type(b.k1.types.builtins.dyn_lambda_obj.unwrap()),
+            };
+            // Store fn ptr, then env ptr into the object
+            let obj_struct_type =
+                b.compile_type(b.k1.types.builtins.dyn_lambda_obj.unwrap()).expect_value();
+            let lam_obj_fn_ptr_addr = b.push_struct_offset(
+                obj_struct_type,
+                lam_obj_ptr,
+                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
+            );
+            b.push_store(lam_obj_fn_ptr_addr, fn_ptr);
+            let lam_obj_env_ptr_addr = b.push_struct_offset(
+                obj_struct_type,
+                lam_obj_ptr,
+                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
+            );
+            b.push_store(lam_obj_env_ptr_addr, lambda_env_ptr);
+
+            Ok(lam_obj_ptr)
+        }
     }
 }
 
@@ -1259,10 +1521,11 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
         for (index, inst_id) in block.instrs.iter().enumerate() {
             let is_last = index == block.instrs.len() - 1;
             let inst = bc.instrs.get(*inst_id);
-            if !is_last && inst.is_terminator() {
+            let inst_kind = get_inst_kind(&bc, *inst_id);
+            if !is_last && inst_kind.is_terminator() {
                 errors.push(format!("b{block_index}: stray terminator"))
             };
-            if is_last && !inst.is_terminator() {
+            if is_last && !inst_kind.is_terminator() {
                 errors.push(format!("b{block_index}: unterminated"))
             }
 
@@ -1273,13 +1536,13 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::String { .. } => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
-                    let dst_type = bc.instrs.get(*dst).get_kind();
+                    let dst_type = get_inst_kind(&bc, *dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("store dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::Load { t, src } => {
-                    let src_kind = bc.instrs.get(*src).get_kind();
+                    let src_kind = get_inst_kind(&bc, *src);
                     if !src_kind.is_storage() {
                         errors.push(format!("load src v{} is not storage", *src))
                     }
@@ -1289,30 +1552,33 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                     }
                 }
                 Inst::Copy { dst, src, .. } => {
-                    let src_type = bc.instrs.get(*src).get_kind();
+                    let src_type = get_inst_kind(&bc, *src);
                     if !src_type.is_storage() {
                         errors.push(format!("copy src v{} is not a ptr", *src))
                     }
-                    let dst_type = bc.instrs.get(*dst).get_kind();
+                    let dst_type = get_inst_kind(&bc, *dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("copy dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
-                    let base_type = bc.instrs.get(*base).get_kind();
+                    let base_type = get_inst_kind(&bc, *base);
                     if !base_type.is_storage() {
                         errors.push(format!("struct_offset base v{} is not a ptr", *base))
                     }
                 }
                 Inst::ArrayOffset { base, element_index, .. } => {
-                    let base_type = bc.instrs.get(*base).get_kind();
-                    let index_type = bc.instrs.get(*element_index).get_kind();
+                    let base_type = get_inst_kind(&bc, *base);
+                    let index_type = get_inst_kind(&bc, *element_index);
                     if !base_type.is_storage() {
                         errors.push(format!("array_offset base v{} is not a ptr", *base))
                     }
-                    if !matches!(index_type, InstKind::Value(BcType::Word)) {
+
+                    if index_type.as_value().and_then(|t| t.as_scalar())
+                        != bc.word_sized_int().as_scalar()
+                    {
                         errors.push(format!(
-                            "array_offset index type is not uword: v{}",
+                            "array_offset index type is not word-sized int: v{}",
                             *element_index
                         ))
                     }
@@ -1324,7 +1590,7 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                     }
                 }
                 Inst::JumpIf { cond, .. } => {
-                    let cond_type = bc.instrs.get(*cond).get_kind();
+                    let cond_type = get_inst_kind(&bc, *cond);
                     if !cond_type.is_value() {
                         errors.push(format!("jumpif cond v{} is not a value", *inst_id))
                     }
@@ -1332,32 +1598,68 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::Unreachable => (),
                 Inst::ComeFrom { .. } => (),
                 Inst::Ret(inst_id) => {
-                    let ret_val_type = bc.instrs.get(*inst_id).get_kind();
+                    let ret_val_type = get_inst_kind(&bc, *inst_id);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
                         errors.push(format!("ret value v{} is not a value", *inst_id))
                     }
                 }
-                Inst::IntTrunc { inst, to } => {
-                    if !matches!(to, BcType::I(_)) {
+                Inst::BoolNegate { inst } => {
+                    let inst_type = get_inst_kind(&bc, *inst);
+                    if !inst_type.is_byte() {
+                        errors.push(format!("bool_negate src v{} is not a bool", *inst))
+                    }
+                }
+                Inst::BitNot { inst } => {
+                    let inst_type = get_inst_kind(&bc, *inst);
+                    if !inst_type.is_int() {
+                        errors.push(format!("bit_not src v{} is not an int", *inst))
+                    }
+                }
+                Inst::IntTrunc { to, .. } => {
+                    if !matches!(to, BcType::Scalar(ScalarType::I(_))) {
                         errors.push(format!("int trunc to non-int type"))
                     }
                 }
-                Inst::IntExtU { inst, to } => (),
-                Inst::IntExtS { inst, to } => (),
-                Inst::FloatTrunc { inst, to } => (),
-                Inst::FloatExt { inst, to } => (),
-                Inst::FloatToIntSigned { inst, to } => (),
-                Inst::FloatToIntUnsigned { inst, to } => (),
+                Inst::IntExtU { .. } => (),
+                Inst::IntExtS { .. } => (),
+                Inst::FloatTrunc { .. } => (),
+                Inst::FloatExt { .. } => (),
+                Inst::FloatToIntSigned { .. } => (),
+                Inst::FloatToIntUnsigned { .. } => (),
+
+                Inst::IntToFloatUnsigned { .. } => (),
+                Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { inst } => {
-                    let inst_type = bc.instrs.get(*inst).get_kind();
+                    let inst_type = get_inst_kind(&bc, *inst);
                     if !inst_type.is_storage() {
                         errors.push(format!("ptr_to_word src v{} is not a ptr", *inst))
                     }
                 }
                 Inst::WordToPtr { inst } => {
-                    let inst_type = bc.instrs.get(*inst).get_kind();
-                    if !matches!(inst_type, InstKind::Value(BcType::Word)) {
-                        errors.push(format!("word_to_ptr src v{} is not a uword", *inst))
+                    let inst_type = get_inst_kind(&bc, *inst);
+                    if inst_type.as_value().and_then(|t| t.as_scalar())
+                        != bc.word_sized_int().as_scalar()
+                    {
+                        errors.push(format!("word_to_ptr src v{} is not a word-sized int", *inst))
+                    }
+                }
+                Inst::ArithBin { .. } => {
+                    //task(bc): Validate arith bins
+                }
+                Inst::BitwiseBin { .. } => {
+                    //task(bc): Validate bitwise bins
+                }
+                Inst::Memset { dst, t, value } => {
+                    let dst_type = get_inst_kind(&bc, *dst);
+                    if !dst_type.is_storage() {
+                        errors.push(format!("memset dst v{} is not a ptr", *dst))
+                    }
+                    if !t.is_agg() {
+                        errors.push(format!("memset type is not an aggregate"))
+                    }
+                    let value_type = get_inst_kind(&bc, *value);
+                    if !value_type.is_byte() {
+                        errors.push(format!("memset value v{} is not a byte", *value))
                     }
                 }
             }
@@ -1432,7 +1734,7 @@ pub fn display_inst(
             display_bc_type(w, bc, t)?;
         }
         Inst::Store { dst, value } => {
-            let inst_kind = bc.instrs.get(*value).get_kind();
+            let inst_kind = get_inst_kind(&bc, *value);
             write!(w, "store to v{}, ", *dst,)?;
             display_inst_kind(w, bc, &inst_kind)?;
             write!(w, " v{}", *value)?;
@@ -1504,6 +1806,12 @@ pub fn display_inst(
         Inst::Ret(value) => {
             write!(w, "ret v{}", *value)?;
         }
+        Inst::BoolNegate { inst } => {
+            write!(w, "bool not v{}", *inst)?;
+        }
+        Inst::BitNot { inst } => {
+            write!(w, "bitnot v{}", *inst)?;
+        }
         Inst::IntTrunc { inst, to } => {
             write!(w, "trunc ")?;
             display_bc_type(w, bc, to)?;
@@ -1539,11 +1847,26 @@ pub fn display_inst(
             display_bc_type(w, bc, to)?;
             write!(w, " v{}", *inst)?;
         }
+        Inst::IntToFloatUnsigned { inst, to } => {
+            write!(w, "inttofloat ")?;
+            display_bc_type(w, bc, to)?;
+            write!(w, " v{}", *inst)?;
+        }
+        Inst::IntToFloatSigned { inst, to } => {
+            write!(w, "inttofloat signed ")?;
+            display_bc_type(w, bc, to)?;
+            write!(w, " v{}", *inst)?;
+        }
         Inst::PtrToWord { inst } => {
             write!(w, "ptrtoint v{}", *inst)?;
         }
         Inst::WordToPtr { inst } => {
             write!(w, "inttoptr v{}", *inst)?;
+        }
+        Inst::Memset { t, dst, value } => {
+            write!(w, "memset ")?;
+            display_bc_type(w, bc, t)?;
+            write!(w, ", v{}, v{}", *dst, *value)?;
         }
     };
     if show_source {
@@ -1573,11 +1896,10 @@ fn display_bc_type(
     t: &BcType,
 ) -> std::fmt::Result {
     match t {
-        BcType::I(width) => write!(w, "i{}", width.bits()),
-        BcType::Word => write!(w, "word"),
-        BcType::F32 => write!(w, "f32"),
-        BcType::F64 => write!(w, "f64"),
-        BcType::Pointer => write!(w, "ptr"),
+        BcType::Scalar(ScalarType::I(width)) => write!(w, "i{}", width.bits()),
+        BcType::Scalar(ScalarType::F32) => write!(w, "f32"),
+        BcType::Scalar(ScalarType::F64) => write!(w, "f64"),
+        BcType::Scalar(ScalarType::Pointer) => write!(w, "ptr"),
         BcType::Agg(agg) => match agg {
             BcAgg::Struct { fields } => {
                 w.write_str("{ ")?;
@@ -1606,8 +1928,11 @@ pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
     match imm {
         Imm::Unit => write!(w, "unit"),
         Imm::Bool(b) => write!(w, "bool {}", b),
-        Imm::Char(c) => write!(w, "char '{}'", *c as char),
-        Imm::Int(int) => write!(w, "int {}", int),
+        Imm::I8(int) => write!(w, "i8 {}", int),
+        Imm::I16(int) => write!(w, "i16 {}", int),
+        Imm::I32(int) => write!(w, "i32 {}", int),
+        Imm::I64(int) => write!(w, "i64 {}", int),
         Imm::Float(float) => write!(w, "float {}", float),
+        Imm::PtrZero => write!(w, "ptr zero"),
     }
 }

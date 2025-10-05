@@ -128,7 +128,6 @@ ns types {
 }
 
 ns meta {
-  intern fn emit(code: string): unit
 
   /////// Static value ferrying across the runtime/comptime border:
   /////// Likely marked internal eventually
