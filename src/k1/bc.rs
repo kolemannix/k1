@@ -239,6 +239,8 @@ fn get_inst_kind(bc: &ProgramBytecode, inst_id: InstId) -> InstKind {
         Inst::IntToFloatSigned { to, .. } => InstKind::Value(*to),
         Inst::PtrToWord { .. } => InstKind::Value(bc.word_sized_int()),
         Inst::WordToPtr { .. } => InstKind::PTR,
+        Inst::ArithBin { .. } => todo!(),
+        Inst::BitwiseBin { .. } => todo!(),
         Inst::Memset { .. } => InstKind::Void,
     }
 }
@@ -1863,6 +1865,8 @@ pub fn display_inst(
         Inst::WordToPtr { inst } => {
             write!(w, "inttoptr v{}", *inst)?;
         }
+        Inst::ArithBin { .. } => todo!(),
+        Inst::BitwiseBin { .. } => todo!(),
         Inst::Memset { t, dst, value } => {
             write!(w, "memset ")?;
             display_bc_type(w, bc, t)?;
