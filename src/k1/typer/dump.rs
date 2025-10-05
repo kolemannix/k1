@@ -729,7 +729,7 @@ impl TypedProgram {
                 }
                 w.write_str(" -> ")?;
                 let lambda_body =
-                    self.get_function(lambda_type.body_function_id).body_block.as_ref().unwrap();
+                    self.get_function(lambda_type.function_id).body_block.as_ref().unwrap();
                 self.display_expr_id(*lambda_body, w, indentation)?;
                 Ok(())
             }

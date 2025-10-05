@@ -169,7 +169,7 @@ impl TypedProgram {
             TypedExpr::Break(brk) => recurse!(brk.value),
             TypedExpr::Lambda(lam) => {
                 let lambda_type = self.types.get(lam.lambda_type).as_lambda().unwrap();
-                let function = self.get_function(lambda_type.body_function_id);
+                let function = self.get_function(lambda_type.function_id);
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }
             TypedExpr::FunctionPointer(_) => {}

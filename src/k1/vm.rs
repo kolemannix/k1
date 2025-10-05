@@ -755,7 +755,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                     };
                     Ok(Value::Char(byte).into())
                 }
-                CastType::IntegerToFloat => {
+                CastType::IntegerUnsignedToFloat | CastType::IntegerSignedToFloat => {
                     let int_to_cast = base_value.expect_int();
                     let float_value = match cast.target_type_id {
                         F32_TYPE_ID => {
@@ -887,10 +887,8 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                     // since structs are represented as pointers.
                     let env_reference =
                         Value::Reference { type_id: environment_ref_type, ptr: environment_struct };
-                    let function_ref_value = function_id_to_ref_value(
-                        lambda_type.body_function_id,
-                        function_pointer_type,
-                    );
+                    let function_ref_value =
+                        function_id_to_ref_value(lambda_type.function_id, function_pointer_type);
                     let mut lambda_object = vm.stack.push_struct_values(
                         &k1.types,
                         obj_type.struct_representation,
@@ -1765,19 +1763,6 @@ fn execute_intrinsic(
                 level_str,
                 k1.get_string(message).color(color)
             );
-            Ok(VmResult::UNIT)
-        }
-        IntrinsicOperation::EmitString => {
-            // intern fn emit(code: string): unit
-            // if !vm.allow_emits {
-            //     return failf!(
-            //         vm.eval_span,
-            //         "emit() called in a context that does not allow emits"
-            //     );
-            // }
-            // let string_value = execute_expr_return_exit!(vm, k1, args[0])?;
-            // let string_id = value_to_string_id(k1, string_value);
-            // vm.emits.push(CodeEmission::String(string_id));
             Ok(VmResult::UNIT)
         }
         IntrinsicOperation::BakeStaticValue => {

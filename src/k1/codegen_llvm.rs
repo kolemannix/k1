@@ -2490,7 +2490,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Lambda(lambda_expr) => {
                 debug!("codegen lambda {:?}", lambda_expr);
                 let lambda_type = self.k1.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
-                let llvm_fn = self.codegen_function_signature(lambda_type.body_function_id)?;
+                let llvm_fn = self.codegen_function_signature(lambda_type.function_id)?;
                 let environment_struct_value = self
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
@@ -2679,6 +2679,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // pointer because we know it from the type still
                 let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
+                // fixme: this stores an aggregate
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
                 let fn_value =

@@ -344,7 +344,7 @@ pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
     pub parsed_id: ParsedId,
-    pub body_function_id: FunctionId,
+    pub function_id: FunctionId,
     // This kinda crosses the streams; its a value expression in a type, but
     // that's because a lambda's environment is basically values baked into a function
     // Its almost like a comptime-known value, aka the type 5
@@ -1332,7 +1332,7 @@ impl TypePool {
             function_type: function_type_id,
             env_type: environment_type,
             parsed_id,
-            body_function_id,
+            function_id: body_function_id,
             environment_struct,
         }));
         lambda_type_id
