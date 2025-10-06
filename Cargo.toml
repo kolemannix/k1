@@ -100,3 +100,4 @@ len_without_is_empty = "allow"
 # This rule overfits for the current-state; single matches
 # are more easily evolved to select more cases than if lets
 single_match = "allow"
+while_let_loop = "allow"

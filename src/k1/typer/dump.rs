@@ -650,6 +650,18 @@ impl TypedProgram {
                 w.write_str(&"  ".repeat(indentation))?;
                 w.write_str("}")
             }
+            TypedExpr::LogicalAnd(and) => {
+                self.display_expr_id(and.lhs, w, indentation)?;
+                w.write_str(" and ")?;
+                self.display_expr_id(and.rhs, w, indentation)?;
+                Ok(())
+            }
+            TypedExpr::LogicalOr(or) => {
+                self.display_expr_id(or.lhs, w, indentation)?;
+                w.write_str(" or ")?;
+                self.display_expr_id(or.rhs, w, indentation)?;
+                Ok(())
+            }
             TypedExpr::WhileLoop(while_loop) => {
                 w.write_str("while ")?;
                 self.display_matching_condition(w, &while_loop.condition, indentation)?;
