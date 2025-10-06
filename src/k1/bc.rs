@@ -167,6 +167,12 @@ pub struct ComeFromCase {
     value: InstId,
 }
 
+pub enum Value {
+    Inst(InstId),
+    Global(TypedGlobalId),
+    Imm:
+}
+
 //task(bc): Rename to lofi
 pub enum Inst {
     // Data
