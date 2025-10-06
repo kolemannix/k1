@@ -143,6 +143,14 @@ impl TypedProgram {
                     recurse!(arm.consequent_expr);
                 }
             }
+            TypedExpr::LogicalAnd(a) => {
+                recurse!(a.lhs);
+                recurse!(a.rhs);
+            }
+            TypedExpr::LogicalOr(o) => {
+                recurse!(o.lhs);
+                recurse!(o.rhs);
+            }
             TypedExpr::WhileLoop(while_loop) => {
                 if let Some(r) = self.visit_matching_condition(&while_loop.condition, state, action)
                 {

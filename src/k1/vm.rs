@@ -641,6 +641,29 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             //eprintln!("execute_match: {}", m.expr_to_string(expr));
             execute_match(vm, k1, &match_expr)
         }
+        TypedExpr::LogicalAnd(and) => {
+            // The language semantics guarantee short-circuiting of And
+            let and = *and;
+            let lhs = execute_expr_return_exit!(vm, k1, and.lhs)?.expect_bool();
+
+            if lhs {
+                let rhs = execute_expr_return_exit!(vm, k1, and.rhs)?.expect_bool();
+                Ok(Value::Bool(rhs).into())
+            } else {
+                Ok(Value::Bool(false).into())
+            }
+        }
+        TypedExpr::LogicalOr(or) => {
+            // The language semantics guarantee short-circuiting of Or
+            let or = *or;
+            let lhs = execute_expr_return_exit!(vm, k1, or.lhs)?.expect_bool();
+            if lhs {
+                Ok(Value::Bool(true).into())
+            } else {
+                let rhs = execute_expr_return_exit!(vm, k1, or.rhs)?.expect_bool();
+                Ok(Value::Bool(rhs).into())
+            }
+        }
         TypedExpr::WhileLoop(while_expr) => {
             let while_expr = while_expr.clone();
             let result = loop {
@@ -1357,7 +1380,7 @@ fn execute_call(
             "vm has to trigger compilation of body: {}",
             m.function_id_to_string(function_id, true)
         );
-        m.eval_function_body(function_id)?;
+        m.eval_function_body(function_id, true)?;
         log::set_max_level(prev_level);
     }
 
@@ -1624,27 +1647,6 @@ fn execute_intrinsic(
                 }
             };
             Ok(Value::Int(int_value).into())
-        }
-        IntrinsicOperation::LogicalAnd => {
-            // The language semantics guarantee short-circuiting of And
-            let lhs = execute_expr_return_exit!(vm, k1, args[0])?.expect_bool();
-
-            if lhs {
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?.expect_bool();
-                Ok(Value::Bool(rhs).into())
-            } else {
-                Ok(Value::Bool(false).into())
-            }
-        }
-        IntrinsicOperation::LogicalOr => {
-            // The language semantics guarantee short-circuiting of Or
-            let lhs = execute_expr_return_exit!(vm, k1, args[0])?.expect_bool();
-            if lhs {
-                Ok(Value::Bool(true).into())
-            } else {
-                let rhs = execute_expr_return_exit!(vm, k1, args[1])?.expect_bool();
-                Ok(Value::Bool(rhs).into())
-            }
         }
         IntrinsicOperation::PointerIndex => {
             // intern fn refAtIndex[T](self: Pointer, index: uword): T*

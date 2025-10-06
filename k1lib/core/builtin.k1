@@ -532,11 +532,6 @@ impl Equals for Pointer {
 
 ns bool {
   intern fn negated(self: bool): bool
-  // Does not behave semantically like a regular function
-  // with respect to its arguments.
-  // Only conditionally evaluates b2
-  intern fn _and(self: bool, b2: bool): bool
-  intern fn _or(self: bool, b2: bool): bool
 }
 
 impl Equals for unit { fn equals(self: unit, other: unit): bool { true } }

@@ -1381,6 +1381,20 @@ pub struct TypedMatchExpr {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy)]
+pub struct TypedLogicalAnd {
+    pub lhs: TypedExprId,
+    pub rhs: TypedExprId,
+    pub span: SpanId,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedLogicalOr {
+    pub lhs: TypedExprId,
+    pub rhs: TypedExprId,
+    pub span: SpanId,
+}
+
 nz_u32_id!(CallId);
 
 static_assert_size!(TypedExpr, 56);
@@ -1406,6 +1420,8 @@ pub enum TypedExpr {
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     Match(TypedMatchExpr),
+    LogicalAnd(TypedLogicalAnd),
+    LogicalOr(TypedLogicalOr),
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
@@ -1465,6 +1481,8 @@ impl TypedExpr {
             TypedExpr::Block(_) => "block",
             TypedExpr::Call { .. } => "call",
             TypedExpr::Match(_) => "match",
+            TypedExpr::LogicalAnd(_) => "and",
+            TypedExpr::LogicalOr(_) => "or",
             TypedExpr::WhileLoop(_) => "while_loop",
             TypedExpr::LoopExpr(_) => "loop",
             TypedExpr::EnumConstructor(_) => "enum_constructor",
@@ -1497,6 +1515,8 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::Call { return_type, .. } => *return_type,
             TypedExpr::Match(match_) => match_.result_type,
+            TypedExpr::LogicalAnd(_) => BOOL_TYPE_ID,
+            TypedExpr::LogicalOr(_) => BOOL_TYPE_ID,
             TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
             TypedExpr::EnumConstructor(enum_cons) => enum_cons.variant_type_id,
@@ -1529,6 +1549,8 @@ impl TypedExpr {
             TypedExpr::Block(b) => b.span,
             TypedExpr::Call { span, .. } => *span,
             TypedExpr::Match(match_) => match_.span,
+            TypedExpr::LogicalAnd(a) => a.span,
+            TypedExpr::LogicalOr(o) => o.span,
             TypedExpr::WhileLoop(while_loop) => while_loop.span,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
             TypedExpr::EnumConstructor(e) => e.span,
@@ -1864,8 +1886,6 @@ pub enum IntrinsicOperation {
     BitNot,
     ArithBinop(IntrinsicArithOpKind),
     BitwiseBinop(IntrinsicBitwiseBinopKind),
-    LogicalAnd,
-    LogicalOr,
     PointerIndex,
 
     // Actual functions
@@ -1900,8 +1920,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::BitNot => false,
             IntrinsicOperation::ArithBinop(_) => false,
             IntrinsicOperation::BitwiseBinop(_) => false,
-            IntrinsicOperation::LogicalAnd => false,
-            IntrinsicOperation::LogicalOr => false,
             IntrinsicOperation::PointerIndex => false,
             IntrinsicOperation::CompilerMessage => false,
             IntrinsicOperation::Allocate => false,
@@ -1931,8 +1949,6 @@ impl IntrinsicOperation {
             IntrinsicOperation::BitNot => true,
             IntrinsicOperation::ArithBinop(_) => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
-            IntrinsicOperation::LogicalAnd => true,
-            IntrinsicOperation::LogicalOr => true,
             IntrinsicOperation::PointerIndex => true,
             IntrinsicOperation::CompilerSourceLocation => true,
             IntrinsicOperation::CompilerMessage => true,
@@ -2352,11 +2368,12 @@ pub struct TypedProgram {
     pub alt_vms: Vec<vm::Vm>,
 
     /// Perm arena space
+    // nocommit tag this arena
     pub a: kmem::Mem,
     /// tmp arena space
+    // nocommit tag this arena
     pub tmp: kmem::Mem,
 
-    /// Option for the take trick
     pub bytecode: RefCell<bc::ProgramBytecode>,
 
     pub timing: Timing,
@@ -2657,6 +2674,7 @@ impl TypedProgram {
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());
         self.print_timing_info(&mut stderr()).unwrap();
+        eprintln!("\t{} instructions", self.bytecode.borrow().instrs.len());
 
         Ok(module_id)
     }
@@ -4988,6 +5006,35 @@ impl TypedProgram {
         }
     }
 
+    fn compile_expr_bytecode(&mut self, expr: TypedExprId) -> TyperResult<()> {
+        match bc::compile_top_level_expr(self, expr, false) {
+            Err(e) => return failf!(self.exprs.get(expr).get_span(), "bc failed: {}", e),
+            Ok(_) => {}
+        };
+
+        Ok(())
+    }
+
+    fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
+        loop {
+            if let Some(unit) = self.bytecode.get_mut().b_units_pending_compile.pop() {
+                match unit {
+                    bc::CompilableUnit::Function(function_id) => {
+                        eprintln!(
+                            "type-checking on-demand: {}",
+                            self.function_id_to_string(function_id, false)
+                        );
+                        self.eval_function_body(function_id, true)?;
+                    }
+                    bc::CompilableUnit::Expr(_typed_expr_id) => (),
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// no_reset: Do not wipe the VM on completion; this is passed when the global is evaluated
     /// from an existing static execution already
     fn execute_static_expr_with_vm(
@@ -5007,6 +5054,7 @@ impl TypedProgram {
         let static_ctx = ctx.static_ctx.unwrap();
 
         let expr = self.eval_expr(parsed_expr, ctx)?;
+        self.compile_expr_bytecode(expr)?;
         let span = self.exprs.get(expr).get_span();
         let required_type_id = self.exprs.get(expr).get_type();
         let output_type_id =
@@ -8423,11 +8471,17 @@ impl TypedProgram {
                             "Impossible pattern: variant does not have payload",
                         );
                     };
-                    let result_type_id = if is_referencing {
+                    let (result_type_id, is_mutable) = if is_referencing {
                         let mutable = self.types.get(target_expr_type).expect_reference().mutable;
-                        self.types.add_reference_type(payload_type_id, mutable)
+                        let r = self.types.add_reference_type(payload_type_id, mutable);
+                        (r, mutable)
                     } else {
-                        payload_type_id
+                        (payload_type_id, false)
+                    };
+                    let variant_target_type = if is_referencing {
+                        self.types.add_reference_type(variant_type_id, is_mutable)
+                    } else {
+                        variant_type_id
                     };
                     let enum_as_variant = self.exprs.add(TypedExpr::Cast(TypedCast {
                         cast_type: if is_referencing {
@@ -8435,7 +8489,7 @@ impl TypedProgram {
                         } else {
                             CastType::EnumToVariant
                         },
-                        target_type_id: variant_type_id,
+                        target_type_id: variant_target_type,
                         base_expr: target_expr,
                         span: enum_pattern.span,
                     }));
@@ -9351,20 +9405,40 @@ impl TypedProgram {
                 if lhs_is {
                     self.eval_standalone_matching_condition(binary_op_id, ctx)
                 } else {
-                    self.synth_typed_call_parsed_args(
-                        self.ast.idents.f.bool_and.with_span(binary_op.span),
-                        &[],
-                        &[binary_op.lhs, binary_op.rhs],
-                        ctx,
-                    )
+                    let lhs = self.eval_expr_with_coercion(
+                        binary_op.lhs,
+                        ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                        true,
+                    )?;
+                    let rhs = self.eval_expr_with_coercion(
+                        binary_op.rhs,
+                        ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                        true,
+                    )?;
+                    Ok(self.exprs.add(TypedExpr::LogicalAnd(TypedLogicalAnd {
+                        lhs,
+                        rhs,
+                        span: binary_op.span,
+                    })))
                 }
             }
-            K::Or => self.synth_typed_call_parsed_args(
-                self.ast.idents.f.bool_or.with_span(binary_op.span),
-                &[],
-                &[binary_op.lhs, binary_op.rhs],
-                ctx,
-            ),
+            K::Or => {
+                let lhs = self.eval_expr_with_coercion(
+                    binary_op.lhs,
+                    ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                    true,
+                )?;
+                let rhs = self.eval_expr_with_coercion(
+                    binary_op.rhs,
+                    ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                    true,
+                )?;
+                Ok(self.exprs.add(TypedExpr::LogicalOr(TypedLogicalOr {
+                    lhs,
+                    rhs,
+                    span: binary_op.span,
+                })))
+            }
             // We convert most binary ops into ability function calls by rewriting to parsed calls
             // and compiling the code
             K::Equals | K::NotEquals => self.eval_equality_expr(binary_op_id, ctx),
@@ -12289,8 +12363,6 @@ impl TypedProgram {
                 },
                 Some("bool") => match fn_name_str {
                     "negated" => Some(IntrinsicOperation::BoolNegate),
-                    "_and" => Some(IntrinsicOperation::LogicalAnd),
-                    "_or" => Some(IntrinsicOperation::LogicalOr),
                     _ => None,
                 },
                 Some("string") => None,
@@ -13175,7 +13247,13 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
-    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
+    /// `ensure_executable`: We need to run this function statically, so we need to compile
+    ///                      bytecode not just for it, but for everything it calls, recursively.
+    pub fn eval_function_body(
+        &mut self,
+        declaration_id: FunctionId,
+        ensure_executable: bool,
+    ) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
         if function.body_block.is_some() {
             return Ok(());
@@ -13189,6 +13267,7 @@ impl TypedProgram {
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External { .. });
+        let is_concrete = function.is_concrete;
         let ast_id = function.parsed_id.as_function_id().expect("expected function id");
         let is_intrinsic = function.intrinsic_type.is_some();
         let is_ability_defn = matches!(function.kind, TypedFunctionKind::AbilityDefn(_));
@@ -13207,7 +13286,7 @@ impl TypedProgram {
                 return failf!(function_signature_span, "unexpected function implementation");
             }
             Some(block_ast) => {
-                if function.specialization_info.is_some() && !function.is_concrete {
+                if function.specialization_info.is_some() && !is_concrete {
                     debug!(
                         "Skipping typecheck of body for non-concrete specialization of {}",
                         self.function_id_to_string(declaration_id, true),
@@ -13241,7 +13320,22 @@ impl TypedProgram {
         // Add the body now
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
+
+            // Compile bytecode
+            if is_concrete {
+                if let Err(e) = bc::compile_function(self, declaration_id, false) {
+                    return failf!(
+                        function_signature_span,
+                        "Failed to compile bytecode for function: {}",
+                        e
+                    );
+                };
+                if ensure_executable {
+                    self.compile_all_pending_bytecode()?;
+                }
+            }
         }
+
         if is_debug {
             eprintln!("DEBUG\n{}", self.function_id_to_string(declaration_id, true));
             self.pop_debug_level();
@@ -13764,7 +13858,7 @@ impl TypedProgram {
             let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
-            if let Err(e) = self.eval_function_body(impl_fn) {
+            if let Err(e) = self.eval_function_body(impl_fn, false) {
                 self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e.clone());
                 self.report_error(e);
             }
@@ -13797,7 +13891,7 @@ impl TypedProgram {
                 if let Some(function_declaration_id) =
                     self.function_ast_mappings.get(&parsed_function_id)
                 {
-                    if let Err(e) = self.eval_function_body(*function_declaration_id) {
+                    if let Err(e) = self.eval_function_body(*function_declaration_id, false) {
                         self.report_error(e);
                     };
                 }
