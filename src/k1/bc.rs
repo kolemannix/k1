@@ -22,6 +22,7 @@ use crate::{
 use crate::{ice_span, mformat};
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
+use log::debug;
 use smallvec::smallvec;
 use std::{borrow::Cow, fmt::Write};
 
@@ -498,19 +499,38 @@ pub fn compile_function(
     function_id: FunctionId,
     compile_deps: bool,
 ) -> BcResult<()> {
-    let mut bc = k1.bytecode.borrow_mut();
+    let start = k1.timing.clock.raw();
 
+    let mut bc = k1.bytecode.borrow_mut();
     let mut builder = Builder { bc: &mut bc, k1, cur_block: 0, cur_span: SpanId::NONE };
 
     compile_unit_rec(&mut builder, CompilableUnit::Function(function_id), compile_deps)?;
 
+    let elapsed = k1.timing.elapsed_nanos(start);
+    k1.timing.total_bytecode_nanos += elapsed;
+    Ok(())
+}
+
+pub fn compile_top_level_expr(
+    k1: &mut TypedProgram,
+    expr: TypedExprId,
+    compile_deps: bool,
+) -> BcResult<()> {
+    let start = k1.timing.clock.raw();
+
+    let mut bc = k1.bytecode.borrow_mut();
+    let mut b = Builder { bc: &mut bc, k1, cur_block: 0, cur_span: SpanId::NONE };
+    compile_unit_rec(&mut b, CompilableUnit::Expr(expr), compile_deps)?;
+
+    let elapsed = k1.timing.elapsed_nanos(start);
+    k1.timing.total_bytecode_nanos += elapsed;
     Ok(())
 }
 
 fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -> BcResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
-            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+            debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
             let name = b.bc.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
@@ -544,7 +564,7 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
             *b.bc.functions.get_mut(function_id) = Some(function);
         }
         CompilableUnit::Expr(typed_expr_id) => {
-            eprintln!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
+            debug!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
             let name = b.bc.mem.push_str("expr_");
             b.push_block(name);
             let _inst = compile_expr(b, None, typed_expr_id)?;
@@ -561,17 +581,6 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
             compile_unit_rec(b, u, compile_deps)?;
         }
     }
-    Ok(())
-}
-
-pub fn compile_top_level_expr(
-    k1: &mut TypedProgram,
-    expr: TypedExprId,
-    compile_deps: bool,
-) -> BcResult<()> {
-    let mut bc = k1.bytecode.borrow_mut();
-    let mut b = Builder { bc: &mut bc, k1, cur_block: 0, cur_span: SpanId::NONE };
-    compile_unit_rec(&mut b, CompilableUnit::Expr(expr), compile_deps)?;
     Ok(())
 }
 
@@ -1400,7 +1409,14 @@ fn compile_expr(
             }
         }
         TypedExpr::EnumConstructor(enumc) => {
-            let variant_struct_type = compile_type(b, enumc.variant_type_id)?.expect_value()?;
+            let variant_type = compile_type(b, enumc.variant_type_id)?;
+            if variant_type.is_terminator() {
+                let payload = enumc.payload.unwrap();
+                let crash = compile_expr(b, None, payload)?;
+                return Ok(crash);
+            }
+
+            let variant_struct_type = variant_type.expect_value()?;
             let enum_base = match dst {
                 Some(dst) => dst,
                 None => b.alloca_type(variant_struct_type),
@@ -1438,6 +1454,10 @@ fn compile_expr(
         }
         TypedExpr::EnumGetPayload(e_get_payload) => {
             let enum_variant_base = compile_expr(b, None, e_get_payload.enum_variant_expr)?;
+            if b.get_inst_kind(enum_variant_base).is_terminator() {
+                return Ok(enum_variant_base);
+            }
+
             let variant_type =
                 b.k1.types
                     .get_type_dereferenced(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
@@ -1445,11 +1465,6 @@ fn compile_expr(
             let variant_struct_type = compile_type(b, variant_type.my_type_id)?.expect_value()?;
             let payload_offset = b.push_struct_offset(variant_struct_type, enum_variant_base, 1);
             if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
-                b.k1.write_location(&mut std::io::stderr(), b.cur_span);
-                eprintln!(
-                    "base: {}",
-                    b.k1.type_id_to_string(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
-                );
                 let base_is_reference =
                     b.k1.get_expr_type(e_get_payload.enum_variant_expr).as_reference().is_some();
 
@@ -1560,7 +1575,6 @@ fn compile_cast(
     expr: TypedExprId,
 ) -> BcResult<InstId> {
     let TypedExpr::Cast(c) = b.k1.exprs.get(expr) else { unreachable!() };
-    eprintln!("bc cast {}", c.cast_type);
     match c.cast_type {
         CastType::EnumToVariant
         | CastType::VariantToEnum

@@ -2384,6 +2384,7 @@ pub struct Timing {
     pub total_infers: usize,
     pub total_infer_nanos: u64,
     pub total_vm_nanos: u64,
+    pub total_bytecode_nanos: u64,
 }
 
 impl Timing {
@@ -2532,7 +2533,13 @@ impl TypedProgram {
 
             bytecode: RefCell::new(bc::ProgramBytecode::make(16384, word_size)),
 
-            timing: Timing { clock, total_infers: 0, total_infer_nanos: 0, total_vm_nanos: 0 },
+            timing: Timing {
+                clock,
+                total_infers: 0,
+                total_infer_nanos: 0,
+                total_vm_nanos: 0,
+                total_bytecode_nanos: 0,
+            },
         }
     }
 
@@ -2674,7 +2681,11 @@ impl TypedProgram {
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());
         self.print_timing_info(&mut stderr()).unwrap();
-        eprintln!("\t{} instructions", self.bytecode.borrow().instrs.len());
+        eprintln!(
+            "\t{} instructions, {}ms bc",
+            self.bytecode.borrow().instrs.len(),
+            self.timing.total_bytecode_nanos / 1_000_000
+        );
 
         Ok(module_id)
     }
@@ -5020,7 +5031,7 @@ impl TypedProgram {
             if let Some(unit) = self.bytecode.get_mut().b_units_pending_compile.pop() {
                 match unit {
                     bc::CompilableUnit::Function(function_id) => {
-                        eprintln!(
+                        debug!(
                             "type-checking on-demand: {}",
                             self.function_id_to_string(function_id, false)
                         );
