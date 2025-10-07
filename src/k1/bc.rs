@@ -100,38 +100,17 @@ type BcResult<T> = Result<T, Cow<'static, str>>;
 
 #[derive(Clone, Copy)]
 pub enum Imm {
-    Unit,
-    I8(u8),
-    I16(u16),
-    I32(u32),
     I64(u64),
     Float(TypedFloatValue),
     PtrZero,
 }
 
-impl Imm {
-    const FALSE: Imm = Imm::I8(0);
-    const TRUE: Imm = Imm::I8(1);
-}
-
-fn imm_from_int_value(int_value: &TypedIntValue) -> Imm {
-    match int_value {
-        TypedIntValue::U8(i) => Imm::I8(*i),
-        TypedIntValue::U16(i) => Imm::I16(*i),
-        TypedIntValue::U32(i) => Imm::I32(*i),
-        TypedIntValue::U64(i) => Imm::I64(*i),
-        TypedIntValue::UWord32(i) => Imm::I32(*i),
-        TypedIntValue::UWord64(i) => Imm::I64(*i),
-        TypedIntValue::I8(i) => Imm::I8(*i as u8),
-        TypedIntValue::I16(i) => Imm::I16(*i as u16),
-        TypedIntValue::I32(i) => Imm::I32(*i as u32),
-        TypedIntValue::I64(i) => Imm::I64(*i as u64),
-        TypedIntValue::IWord32(i) => Imm::I32(*i as u32),
-        TypedIntValue::IWord64(i) => Imm::I64(*i as u64),
+nz_u32_id!(InstId);
+impl InstId {
+    fn as_value(&self) -> Value {
+        Value::Inst(*self)
     }
 }
-
-nz_u32_id!(InstId);
 pub type BlockId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -164,13 +143,39 @@ pub enum BcCallee {
 #[derive(Clone, Copy)]
 pub struct ComeFromCase {
     from: BlockId,
-    value: InstId,
+    value: Value,
 }
 
+#[derive(Clone, Copy)]
 pub enum Value {
     Inst(InstId),
-    Global(TypedGlobalId),
-    Imm:
+    Global(BcType, TypedGlobalId),
+    FunctionAddr(FunctionId),
+    Param(BcType),
+    // Large 'immediates' just get encoded as their own instruction
+    // We have space for u32, so we use it
+    Imm32(ScalarType, u32),
+    PtrZero,
+}
+
+impl Value {
+    const FALSE: Value = Value::from_byte(0);
+    const TRUE: Value = Value::from_byte(1);
+    const fn from_byte(u8: u8) -> Value {
+        Value::Imm32(ScalarType::I8, u8 as u32)
+    }
+    const fn from_u32(u32: u32) -> Value {
+        Value::Imm32(ScalarType::I(NumericWidth::B32), u32)
+    }
+    const fn from_f32(f32: f32) -> Value {
+        Value::Imm32(ScalarType::F32, f32.to_bits())
+    }
+}
+
+impl From<InstId> for Value {
+    fn from(inst: InstId) -> Self {
+        Value::Inst(inst)
+    }
 }
 
 //task(bc): Rename to lofi
@@ -179,6 +184,7 @@ pub enum Inst {
     Imm(Imm),
     FunctionAddr(FunctionId),
     StaticValue { t: BcType, id: StaticValueId },
+    //nocommit: I should go ahead and compile string lits to globals in typer
     String { id: StringId },
     Global { t: BcType, id: TypedGlobalId },
     //task(bc): I think we need Values separate from Instructions, to reduce
@@ -187,51 +193,57 @@ pub enum Inst {
 
     // Memory manipulation
     Alloca { t: BcType },
-    Store { dst: InstId, value: InstId },
-    Load { t: BcType, src: InstId },
-    Copy { dst: InstId, src: InstId, size: u32 },
-    StructOffset { struct_t: BcType, base: InstId, field_index: u32 },
-    ArrayOffset { element_t: BcType, base: InstId, element_index: InstId },
+    Store { dst: Value, value: Value },
+    Load { t: BcType, src: Value },
+    Copy { dst: Value, src: Value, size: u32 },
+    StructOffset { struct_t: BcType, base: Value, field_index: u32 },
+    ArrayOffset { element_t: BcType, base: Value, element_index: Value },
 
-    Call(InstKind, BcCallee, MSlice<InstId, ProgramBytecode>),
+    Call(InstKind, BcCallee, MSlice<Value, ProgramBytecode>),
 
     // Control Flow
     Jump(BlockId),
-    JumpIf { cond: InstId, cons: BlockId, alt: BlockId },
+    JumpIf { cond: Value, cons: BlockId, alt: BlockId },
     Unreachable,
     // goto considered harmful, but come-from is friend (phi node)
     ComeFrom { t: BcType, incomings: MSlice<ComeFromCase, ProgramBytecode> },
-    Ret(InstId),
+    Ret(Value),
 
     // Operations
-    BoolNegate { inst: InstId },
-    BitNot { inst: InstId },
-    IntTrunc { inst: InstId, to: BcType },
-    IntExtU { inst: InstId, to: BcType },
-    IntExtS { inst: InstId, to: BcType },
-    FloatTrunc { inst: InstId, to: BcType },
-    FloatExt { inst: InstId, to: BcType },
-    FloatToIntUnsigned { inst: InstId, to: BcType },
-    FloatToIntSigned { inst: InstId, to: BcType },
-    IntToFloatUnsigned { inst: InstId, to: BcType },
-    IntToFloatSigned { inst: InstId, to: BcType },
-    PtrToWord { inst: InstId },
-    WordToPtr { inst: InstId },
+    BoolNegate { v: Value },
+    BitNot { v: Value },
+    IntTrunc { v: Value, to: BcType },
+    IntExtU { v: Value, to: BcType },
+    IntExtS { v: Value, to: BcType },
+    FloatTrunc { v: Value, to: BcType },
+    FloatExt { v: Value, to: BcType },
+    FloatToIntUnsigned { v: Value, to: BcType },
+    FloatToIntSigned { v: Value, to: BcType },
+    IntToFloatUnsigned { v: Value, to: BcType },
+    IntToFloatSigned { v: Value, to: BcType },
+    PtrToWord { v: Value },
+    WordToPtr { v: Value },
     //task(bc): Break these out into their own instructions
-    ArithBin { op: IntrinsicArithOpKind, lhs: InstId, rhs: InstId },
-    BitwiseBin { op: IntrinsicBitwiseBinopKind, lhs: InstId, rhs: InstId },
+    ArithBin { op: IntrinsicArithOpKind, lhs: Value, rhs: Value },
+    BitwiseBin { op: IntrinsicBitwiseBinopKind, lhs: Value, rhs: Value },
 
     // Platform ops
-    Memset { t: BcType, dst: InstId, value: InstId },
+    Memset { t: BcType, dst: Value, value: Value },
+}
+fn get_value_kind(bc: &ProgramBytecode, value: &Value) -> InstKind {
+    match value {
+        Value::Inst(inst_id) => get_inst_kind(bc, *inst_id),
+        Value::Global(t, _) => InstKind::Value(*t),
+        Value::FunctionAddr(_) => InstKind::PTR,
+        Value::Param(bc_type) => InstKind::Value(*bc_type),
+        Value::Imm32(scalar_type, _) => InstKind::Value(BcType::Scalar(*scalar_type)),
+        Value::PtrZero => InstKind::PTR,
+    }
 }
 
 fn get_inst_kind(bc: &ProgramBytecode, inst_id: InstId) -> InstKind {
     match bc.instrs.get(inst_id) {
         Inst::Imm(imm) => match imm {
-            Imm::Unit => InstKind::I8,
-            Imm::I8(_) => InstKind::I8,
-            Imm::I16(_) => InstKind::U16,
-            Imm::I32(_) => InstKind::U32,
             Imm::I64(_) => InstKind::U64,
             Imm::Float(TypedFloatValue::F32(_)) => InstKind::Value(BcType::Scalar(ScalarType::F32)),
             Imm::Float(TypedFloatValue::F64(_)) => InstKind::Value(BcType::Scalar(ScalarType::F64)),
@@ -255,7 +267,7 @@ fn get_inst_kind(bc: &ProgramBytecode, inst_id: InstId) -> InstKind {
         Inst::ComeFrom { t, .. } => InstKind::Value(*t),
         Inst::Ret(_) => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::I8,
-        Inst::BitNot { inst } => get_inst_kind(bc, *inst),
+        Inst::BitNot { v } => get_value_kind(bc, v),
         Inst::IntTrunc { to, .. } => InstKind::Value(*to),
         Inst::IntExtU { to, .. } => InstKind::Value(*to),
         Inst::IntExtS { to, .. } => InstKind::Value(*to),
@@ -269,23 +281,23 @@ fn get_inst_kind(bc: &ProgramBytecode, inst_id: InstId) -> InstKind {
         Inst::WordToPtr { .. } => InstKind::PTR,
         Inst::ArithBin { op, lhs, .. } => match op.op {
             IntrinsicArithOpOp::Equals => InstKind::I8,
-            IntrinsicArithOpOp::Add => get_inst_kind(bc, *lhs),
-            IntrinsicArithOpOp::Sub => get_inst_kind(bc, *lhs),
-            IntrinsicArithOpOp::Mul => get_inst_kind(bc, *lhs),
-            IntrinsicArithOpOp::Div => get_inst_kind(bc, *lhs),
-            IntrinsicArithOpOp::Rem => get_inst_kind(bc, *lhs),
+            IntrinsicArithOpOp::Add => get_value_kind(bc, lhs),
+            IntrinsicArithOpOp::Sub => get_value_kind(bc, lhs),
+            IntrinsicArithOpOp::Mul => get_value_kind(bc, lhs),
+            IntrinsicArithOpOp::Div => get_value_kind(bc, lhs),
+            IntrinsicArithOpOp::Rem => get_value_kind(bc, lhs),
             IntrinsicArithOpOp::Lt => InstKind::I8,
             IntrinsicArithOpOp::Le => InstKind::I8,
             IntrinsicArithOpOp::Gt => InstKind::I8,
             IntrinsicArithOpOp::Ge => InstKind::I8,
         },
         Inst::BitwiseBin { op, lhs, .. } => match op {
-            IntrinsicBitwiseBinopKind::And => get_inst_kind(bc, *lhs),
-            IntrinsicBitwiseBinopKind::Or => get_inst_kind(bc, *lhs),
-            IntrinsicBitwiseBinopKind::Xor => get_inst_kind(bc, *lhs),
-            IntrinsicBitwiseBinopKind::ShiftLeft => get_inst_kind(bc, *lhs),
-            IntrinsicBitwiseBinopKind::SignedShiftRight => get_inst_kind(bc, *lhs),
-            IntrinsicBitwiseBinopKind::UnsignedShiftRight => get_inst_kind(bc, *lhs),
+            IntrinsicBitwiseBinopKind::And => get_value_kind(bc, lhs),
+            IntrinsicBitwiseBinopKind::Or => get_value_kind(bc, lhs),
+            IntrinsicBitwiseBinopKind::Xor => get_value_kind(bc, lhs),
+            IntrinsicBitwiseBinopKind::ShiftLeft => get_value_kind(bc, lhs),
+            IntrinsicBitwiseBinopKind::SignedShiftRight => get_value_kind(bc, lhs),
+            IntrinsicBitwiseBinopKind::UnsignedShiftRight => get_value_kind(bc, lhs),
         },
         Inst::Memset { .. } => InstKind::Void,
     }
@@ -307,19 +319,7 @@ pub enum ScalarType {
 }
 
 impl ScalarType {
-    fn zero(&self) -> Imm {
-        match self {
-            ScalarType::I(w) => match w {
-                NumericWidth::B8 => Imm::I8(0),
-                NumericWidth::B16 => Imm::I16(0),
-                NumericWidth::B32 => Imm::I32(0),
-                NumericWidth::B64 => Imm::I64(0),
-            },
-            ScalarType::F32 => Imm::Float(TypedFloatValue::F32(0.0)),
-            ScalarType::F64 => Imm::Float(TypedFloatValue::F64(0.0)),
-            ScalarType::Pointer => Imm::PtrZero,
-        }
-    }
+    pub const I8: ScalarType = ScalarType::I(NumericWidth::B8);
 }
 
 #[derive(Clone, Copy)]
@@ -647,29 +647,71 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.push_inst_to(self.cur_block, inst)
     }
 
-    fn push_struct_offset(&mut self, struct_t: BcType, base: InstId, field_index: u32) -> InstId {
+    fn push_struct_offset(&mut self, struct_t: BcType, base: Value, field_index: u32) -> InstId {
         self.push_inst(Inst::StructOffset { struct_t, base, field_index })
-    }
-
-    fn push_unit(&mut self) -> InstId {
-        self.push_inst(Inst::Imm(Imm::Unit))
     }
 
     fn push_jump(&mut self, block_id: BlockId) -> InstId {
         self.push_inst(Inst::Jump(block_id))
     }
 
-    fn push_copy(&mut self, dst: InstId, src: InstId, type_id: TypeId) -> InstId {
+    fn push_copy(&mut self, dst: Value, src: Value, type_id: TypeId) -> InstId {
         let layout = self.k1.types.get_layout(type_id);
         self.push_inst(Inst::Copy { dst, src, size: layout.size })
     }
 
-    fn push_load(&mut self, t: BcType, src: InstId) -> InstId {
+    fn push_load(&mut self, t: BcType, src: Value) -> InstId {
         self.push_inst(Inst::Load { t, src })
     }
 
-    fn push_store(&mut self, dst: InstId, value: InstId) -> InstId {
+    fn push_store(&mut self, dst: Value, value: Value) -> InstId {
         self.push_inst(Inst::Store { dst, value })
+    }
+
+    fn push_int_value(&mut self, int_value: &TypedIntValue) -> Value {
+        match int_value {
+            TypedIntValue::U8(i) => Value::Imm32(ScalarType::I(NumericWidth::B8), *i as u32),
+            TypedIntValue::U16(i) => Value::Imm32(ScalarType::I(NumericWidth::B16), *i as u32),
+            TypedIntValue::U32(i) | TypedIntValue::UWord32(i) => {
+                Value::Imm32(ScalarType::I(NumericWidth::B32), *i as u32)
+            }
+            TypedIntValue::U64(i) | TypedIntValue::UWord64(i) => {
+                if *i <= u32::MAX as u64 {
+                    Value::from_u32(*i as u32)
+                } else {
+                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)));
+                    inst.as_value()
+                }
+            }
+            TypedIntValue::I8(i) => Value::from_byte(*i as u8),
+            TypedIntValue::I16(i) => Value::Imm32(ScalarType::I(NumericWidth::B16), *i as u32),
+            TypedIntValue::I32(i) | TypedIntValue::IWord32(i) => Value::from_u32(*i as u32),
+            TypedIntValue::I64(i) | TypedIntValue::IWord64(i) => {
+                if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
+                    Value::from_u32(*i as u32)
+                } else {
+                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i as u64)));
+                    inst.as_value()
+                }
+            }
+        }
+    }
+
+    fn zero(&mut self, t: ScalarType) -> Value {
+        match t {
+            ScalarType::I(w) => match w {
+                NumericWidth::B8 => Value::from_byte(0),
+                NumericWidth::B16 => Value::Imm32(ScalarType::I(NumericWidth::B16), 0),
+                NumericWidth::B32 => Value::Imm32(ScalarType::I(NumericWidth::B32), 0),
+                NumericWidth::B64 => Value::Imm32(ScalarType::I(NumericWidth::B64), 0),
+            },
+            ScalarType::F32 => Value::Imm32(ScalarType::I(NumericWidth::B64), (0.0f32).to_bits()),
+            ScalarType::F64 => {
+                // Bit pattern is all zeroes anyway
+                Value::Imm32(ScalarType::I(NumericWidth::B64), (0.0f64).to_bits() as u32)
+            }
+            ScalarType::Pointer => Value::PtrZero,
+        }
     }
 
     fn push_block(&mut self, name: MStr<ProgramBytecode>) -> BlockId {
@@ -701,25 +743,21 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
     }
 }
 
-fn store_simple_if_dst(b: &mut Builder, dst: Option<InstId>, value: InstId) -> InstId {
+fn store_simple_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Value {
     match dst {
         None => value,
-        Some(dst) => b.push_store(dst, value),
+        Some(dst) => b.push_store(dst, value).into(),
     }
 }
 
-fn store_rich_if_dst(b: &mut Builder, dst: Option<InstId>, t: TypeId, value: InstId) -> InstId {
+fn store_rich_if_dst(b: &mut Builder, dst: Option<Value>, t: TypeId, value: Value) -> Value {
     match dst {
         None => value,
-        Some(dst) => store_value(b, t, dst, value),
+        Some(dst) => store_value(b, t, dst, value).into(),
     }
 }
 
-fn compile_block_stmts(
-    b: &mut Builder,
-    dst: Option<InstId>,
-    body: TypedExprId,
-) -> BcResult<InstId> {
+fn compile_block_stmts(b: &mut Builder, dst: Option<Value>, body: TypedExprId) -> BcResult<InstId> {
     let TypedExpr::Block(body) = b.k1.exprs.get(body) else {
         return Err("body is not a block".into());
     };
@@ -737,7 +775,7 @@ fn compile_block_stmts(
     }
 }
 
-fn compile_stmt(b: &mut Builder, dst: Option<InstId>, stmt: TypedStmtId) -> BcResult<()> {
+fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> BcResult<()> {
     let prev_span = b.cur_span;
     let stmt_span = b.k1.get_stmt_span(stmt);
     b.cur_span = stmt_span;
@@ -772,7 +810,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<InstId>, stmt: TypedStmtId) -> BcRe
                 let reference_inner_type_bc =
                     b.compile_type(reference_type.inner_type).expect_value()?;
                 let value_alloca = b.alloca_type(reference_inner_type_bc);
-                b.push_store(variable_alloca, value_alloca);
+                b.push_store(variable_alloca.as_value(), value_alloca.as_value());
                 value_alloca
             } else {
                 variable_alloca
@@ -780,7 +818,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<InstId>, stmt: TypedStmtId) -> BcRe
 
             // If there's an initializer, store it in value_ptr
             if let Some(init) = let_stmt.initializer {
-                compile_expr(b, Some(value_ptr), init)?;
+                compile_expr(b, Some(value_ptr.as_value()), init)?;
             }
             b.bc.b_variables.push(BuilderVariable {
                 id: let_stmt.variable_id,
@@ -789,32 +827,25 @@ fn compile_stmt(b: &mut Builder, dst: Option<InstId>, stmt: TypedStmtId) -> BcRe
             });
             Ok(())
         }
-        TypedStmt::Assignment(ass) => {
-            match ass.kind {
-                AssignmentKind::Set => {
-                    let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
-                        b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
-                    };
-                    let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
-                    if !builder_variable.indirect {
-                        b.k1.ice_with_span(
-                            "Expect an indirect variable for value assignment",
-                            v.span,
-                        )
-                    };
-                    let variable_inst = builder_variable.inst;
-                    let _rhs_stored = compile_expr(b, Some(variable_inst), ass.value)?;
-                    Ok(())
-                }
-                AssignmentKind::Store => {
-                    let lhs = compile_expr(b, None, ass.destination)?;
-                    let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
-                    // let value_type = b.k1.get_expr_type_id(ass.value);
-                    // b.push_store(value_type, lhs, rhs);
-                    Ok(())
-                }
+        TypedStmt::Assignment(ass) => match ass.kind {
+            AssignmentKind::Set => {
+                let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
+                    b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
+                };
+                let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
+                if !builder_variable.indirect {
+                    b.k1.ice_with_span("Expect an indirect variable for value assignment", v.span)
+                };
+                let variable_inst = builder_variable.inst;
+                let _rhs_stored = compile_expr(b, Some(variable_inst.as_value()), ass.value)?;
+                Ok(())
             }
-        }
+            AssignmentKind::Store => {
+                let lhs = compile_expr(b, None, ass.destination)?;
+                let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
+                Ok(())
+            }
+        },
         TypedStmt::Require(req) => {
             let continue_name = mformat!(b.bc.mem, "req_cont_{}", stmt.as_u32());
             let require_continue_block = b.push_block(continue_name);
@@ -848,49 +879,48 @@ fn compile_stmt(b: &mut Builder, dst: Option<InstId>, stmt: TypedStmtId) -> BcRe
 fn compile_expr(
     b: &mut Builder,
     // Where to put the result; aka value placement or destination-aware codegen
-    dst: Option<InstId>,
+    dst: Option<Value>,
     expr: TypedExprId,
-) -> BcResult<InstId> {
+) -> BcResult<Value> {
     let prev_span = b.cur_span;
     b.cur_span = b.k1.exprs.get(expr).get_span();
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr);
     match e {
         TypedExpr::Unit(_) => {
-            let imm = b.push_inst(Inst::Imm(Imm::Unit));
-            let store = store_simple_if_dst(b, dst, imm);
+            let store = store_simple_if_dst(b, dst, Value::from_byte(UNIT_BYTE_VALUE));
             Ok(store)
         }
         TypedExpr::Char(byte, _) => {
-            let imm = b.push_inst(Inst::Imm(Imm::I8(*byte)));
+            let imm = Value::from_byte(*byte);
             let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Bool(bv, _) => {
-            let imm = b.push_inst(Inst::Imm(Imm::I8(*bv as u8)));
+            let imm = Value::from_byte(*bv as u8);
             let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Integer(int) => {
-            let imm = imm_from_int_value(&int.value);
-            let inst_id = b.push_inst(Inst::Imm(imm));
-            let store = store_simple_if_dst(b, dst, inst_id);
+            let imm = b.push_int_value(&int.value);
+            let store = store_simple_if_dst(b, dst, imm);
             Ok(store)
         }
         TypedExpr::Float(float) => {
+            //task(bc): Pack small floats
             let imm = b.push_inst(Inst::Imm(Imm::Float(float.value)));
-            let store = store_simple_if_dst(b, dst, imm);
+            let store = store_simple_if_dst(b, dst, imm.as_value());
             Ok(store)
         }
         TypedExpr::String(string_id, _) => {
             let inst = b.push_inst(Inst::String { id: *string_id });
-            Ok(inst)
+            Ok(inst.as_value())
         }
         TypedExpr::Struct(struct_literal) => {
             let struct_type = compile_type(b, struct_literal.type_id)?.expect_value()?;
             let struct_base = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(struct_type),
+                None => b.alloca_type(struct_type).as_value(),
             };
             for (field_index, field) in struct_literal.fields.iter().enumerate() {
                 debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
@@ -899,7 +929,7 @@ fn compile_expr(
                     base: struct_base,
                     field_index: field_index as u32,
                 });
-                compile_expr(b, Some(struct_offset), field.expr)?;
+                compile_expr(b, Some(struct_offset.as_value()), field.expr)?;
             }
             Ok(struct_base)
         }
@@ -915,7 +945,7 @@ fn compile_expr(
                 b,
                 field_access.access_kind,
                 dst,
-                field_ptr,
+                field_ptr.as_value(),
                 field_access.result_type,
             );
             Ok(result)
@@ -935,12 +965,11 @@ fn compile_expr(
                 base: array_base,
                 element_index: index,
             });
-            // Possibly DRY up 3 sites 'kinded possibly-loading access'
             let result = build_field_access(
                 b,
                 array_get.access_kind,
                 dst,
-                element_ptr,
+                element_ptr.as_value(),
                 array_get.result_type,
             );
             Ok(result)
@@ -969,7 +998,7 @@ fn compile_expr(
                         Some(r) => r.inner_type,
                     };
                     let value_bc_type = b.compile_type(value_type).expect_value()?;
-                    let address = b.push_inst(Inst::Global { id: global_id, t: value_bc_type });
+                    let address = Value::Global(value_bc_type, global_id);
                     match value_bc_type {
                         BcType::Scalar(_) => {
                             // We have a scalar type, but do we have a pointer to it or just
@@ -980,8 +1009,9 @@ fn compile_expr(
                                 Ok(stored)
                             } else {
                                 // The value of the global is what we're after
+                                //task(bc): could be a copy
                                 let loaded = b.push_load(value_bc_type, address);
-                                let stored = store_simple_if_dst(b, dst, loaded);
+                                let stored = store_simple_if_dst(b, dst, loaded.as_value());
                                 Ok(stored)
                             }
                         }
@@ -1361,7 +1391,7 @@ fn compile_expr(
             }
 
             b.goto_block(end_block);
-            let unit = b.push_inst(Inst::Imm(Imm::Unit));
+            let unit = b.push_unit();
             Ok(unit)
         }
         TypedExpr::LoopExpr(loop_expr) => {
@@ -1551,10 +1581,10 @@ fn compile_expr(
 fn build_field_access(
     b: &mut Builder,
     access_kind: FieldAccessKind,
-    dst: Option<InstId>,
-    field_ptr: InstId,
+    dst: Option<Value>,
+    field_ptr: Value,
     result_type_id: TypeId,
-) -> InstId {
+) -> Value {
     if access_kind == FieldAccessKind::ReferenceThrough {
         let stored = store_simple_if_dst(b, dst, field_ptr);
         stored
@@ -1708,23 +1738,23 @@ fn compile_cast(
 /// A Dereference would the closest thing. But we take some liberties here;
 /// such as treating this as a no-op for values that are already represented
 /// by their location, aka IndirectValues
-fn load_value(b: &mut Builder, type_id: TypeId, src: InstId, make_copy: bool) -> InstId {
+fn load_value(b: &mut Builder, type_id: TypeId, src: Value, make_copy: bool) -> Value {
     let kind = b.compile_type(type_id).expect_value().unwrap();
     match kind.is_agg() {
         true => {
             if make_copy {
                 let layout = b.k1.types.get_layout(type_id);
                 let dst = b.alloca_type(kind);
-                b.push_inst(Inst::Copy { dst, src, size: layout.size })
+                b.push_inst(Inst::Copy { dst: dst.into(), src, size: layout.size }).into()
             } else {
                 src
             }
         }
-        false => b.push_load(kind, src),
+        false => b.push_load(kind, src).into(),
     }
 }
 
-fn store_value(b: &mut Builder, type_id: TypeId, dst: InstId, value: InstId) -> InstId {
+fn store_value(b: &mut Builder, type_id: TypeId, dst: Value, value: Value) -> InstId {
     let kind = b.compile_type(type_id);
     match kind.is_aggregate() {
         true => {
@@ -1740,12 +1770,12 @@ fn store_value(b: &mut Builder, type_id: TypeId, dst: InstId, value: InstId) -> 
 fn load_or_copy(
     b: &mut Builder,
     type_id: TypeId,
-    dst: Option<InstId>,
-    src: InstId,
+    dst: Option<Value>,
+    src: Value,
     copy_aggregates: bool,
-) -> InstId {
+) -> Value {
     match dst {
-        Some(dst) => b.push_copy(dst, src, type_id),
+        Some(dst) => b.push_copy(dst, src, type_id).as_value(),
         None => load_value(b, type_id, src, copy_aggregates),
     }
 }
@@ -1768,7 +1798,7 @@ fn compile_matching_condition(
                 compile_stmt(b, None, *let_stmt)?;
             }
             MatchingConditionInstr::Cond { value } => {
-                let cond_value: InstId = compile_expr(b, None, *value)?;
+                let cond_value: Value = compile_expr(b, None, *value)?;
                 if b.k1.get_expr_type_id(*value) == NEVER_TYPE_ID {
                     return Ok(());
                 }
@@ -2217,7 +2247,6 @@ fn display_bc_type(
 
 pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
     match imm {
-        Imm::Unit => write!(w, "unit"),
         Imm::I8(int) => write!(w, "i8 {}", int),
         Imm::I16(int) => write!(w, "i16 {}", int),
         Imm::I32(int) => write!(w, "i32 {}", int),
