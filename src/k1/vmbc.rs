@@ -23,7 +23,7 @@ use crate::{
     typer::{
         FunctionId, Layout, StaticValueId, TypedExprId, TypedFloatValue, TypedGlobalId,
         TypedIntValue, TypedProgram, TyperResult, VariableId,
-        types::{IntegerType, MaybeInlineType, STRING_TYPE_ID, ScalarType, TypeId, TypePool},
+        types::{IntegerType, PhysicalType, STRING_TYPE_ID, ScalarType, TypeId, TypePool},
     },
     vm_ice,
 };
@@ -1080,10 +1080,10 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn store_value(types: &TypePool, t: MaybeInlineType, dst: *mut u8, value: Value) {
+pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
     match t {
-        MaybeInlineType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
-        MaybeInlineType::AggId(pt_id) => {
+        PhysicalType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
+        PhysicalType::Agg(pt_id) => {
             let record = types.phys_types.get(pt_id);
             let src = value.expect_addr();
             unsafe {
@@ -1138,7 +1138,7 @@ enum RetTo {
 
 #[derive(Clone, Copy)]
 pub struct RetInfo {
-    t: MaybeInlineType,
+    t: PhysicalType,
     place: *mut u8,
     ip: u32,
     block: u32,
