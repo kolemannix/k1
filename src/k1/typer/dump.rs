@@ -550,10 +550,6 @@ impl TypedProgram {
             TypedExpr::Integer(int) => write!(w, "{}", int.value),
             TypedExpr::Float(float) => write!(w, "{}", float.value),
             TypedExpr::Bool(b, _) => write!(w, "{}", b),
-            TypedExpr::String(s, _) => {
-                write!(w, "\"{}\"", self.get_string(*s))?;
-                Ok(())
-            }
             TypedExpr::Struct(struc) => {
                 w.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {
@@ -762,10 +758,15 @@ impl TypedProgram {
                 w.write_str(")")?;
                 Ok(())
             }
-            TypedExpr::StaticValue(id, _, _) => {
-                w.write_str("#static ")?;
-                self.display_static_value(w, *id)?;
-                Ok(())
+            TypedExpr::StaticValue(s) => {
+                if s.is_typed_as_static {
+                    w.write_str("#static ")?;
+                    self.display_static_value(w, s.value_id)?;
+                    Ok(())
+                } else {
+                    self.display_static_value(w, s.value_id)?;
+                    Ok(())
+                }
             }
         }
     }

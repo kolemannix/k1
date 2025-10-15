@@ -97,7 +97,6 @@ impl TypedProgram {
             TypedExpr::Bool(_, _) => (),
             TypedExpr::Integer(_) => (),
             TypedExpr::Float(_) => (),
-            TypedExpr::String(_, _) => (),
             TypedExpr::Struct(s) => {
                 for f in s.fields.clone().iter() {
                     recurse!(f.expr);
@@ -183,7 +182,7 @@ impl TypedProgram {
             TypedExpr::FunctionPointer(_) => {}
             TypedExpr::FunctionToLambdaObject(_) => {}
             TypedExpr::PendingCapture(_) => {}
-            TypedExpr::StaticValue(_, _, _) => {}
+            TypedExpr::StaticValue(_) => {}
         };
         None
     }

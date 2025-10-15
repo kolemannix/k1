@@ -25,11 +25,10 @@ use crate::{
     typer::{
         self, CastType, FieldAccessKind, FunctionId, IntrinsicArithOpKind, IntrinsicArithOpOp,
         IntrinsicBitwiseBinopKind, IntrinsicOperation, Layout, MatchingCondition,
-        MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticEnum, StaticStruct,
-        StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult,
-        VariableExpr, VariableId,
-        static_value::StaticContainerKind,
+        MatchingConditionInstr, NameAndTypeId, StaticContainer, StaticContainerKind, StaticEnum,
+        StaticStruct, StaticValue, StaticValueId, TypedExpr, TypedExprId, TypedFloatValue,
+        TypedGlobalId, TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId,
+        TyperResult, VariableExpr, VariableId,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
             I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
@@ -551,10 +550,6 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
         TypedExpr::Bool(b, _) => Ok(Value::Bool(*b).into()),
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
-        TypedExpr::String(s, _) => {
-            let string_value = string_id_to_value(vm, StackSelection::CallStackCurrent, k1, *s);
-            Ok(string_value.into())
-        }
         TypedExpr::Struct(s) => {
             let mut values: SmallVec<[Value; 8]> = SmallVec::with_capacity(s.fields.len());
             let fields = s.fields.clone();
@@ -982,9 +977,9 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             Ok(lambda_object.into())
         }
         TypedExpr::PendingCapture(_) => k1.ice_with_span("pending capture in vm", vm.eval_span),
-        TypedExpr::StaticValue(value_id, _, _) => {
+        TypedExpr::StaticValue(s) => {
             let vm_value =
-                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, k1, *value_id)?;
+                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, k1, s.value_id)?;
             Ok(vm_value.into())
         }
     };
