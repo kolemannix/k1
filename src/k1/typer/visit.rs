@@ -92,8 +92,6 @@ impl TypedProgram {
         }
 
         match self.exprs.get(expr) {
-            TypedExpr::Unit(_) => (),
-            TypedExpr::Char(_, _) => (),
             TypedExpr::Bool(_, _) => (),
             TypedExpr::Integer(_) => (),
             TypedExpr::Float(_) => (),

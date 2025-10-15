@@ -969,15 +969,6 @@ fn compile_expr(
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr);
     match e {
-        TypedExpr::Unit(_) => {
-            let store = store_simple_if_dst(b, dst, Value::byte(UNIT_BYTE_VALUE));
-            Ok(store)
-        }
-        TypedExpr::Char(byte, _) => {
-            let imm = Value::byte(*byte);
-            let store = store_simple_if_dst(b, dst, imm);
-            Ok(store)
-        }
         TypedExpr::Bool(bv, _) => {
             let imm = Value::byte(*bv as u8);
             let store = store_simple_if_dst(b, dst, imm);
@@ -1696,7 +1687,41 @@ fn compile_expr(
         TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(stat.type_id);
-            Ok(Value::StaticValue { t, id: stat.value_id })
+            // We lower the simple scalar static values
+            // but leave the aggregates as globals
+            match b.k1.static_values.get(stat.value_id) {
+                StaticValue::Unit => {
+                    let store = store_simple_if_dst(b, dst, Value::byte(UNIT_BYTE_VALUE));
+                    Ok(store)
+                }
+                StaticValue::Bool(bv) => {
+                    let imm = Value::byte(*bv as u8);
+                    let store = store_simple_if_dst(b, dst, imm);
+                    Ok(store)
+                }
+                StaticValue::Char(byte) => {
+                    let imm = Value::byte(*byte);
+                    let store = store_simple_if_dst(b, dst, imm);
+                    Ok(store)
+                }
+                StaticValue::Int(int) => {
+                    let imm = b.push_int_value(int);
+                    let store = store_simple_if_dst(b, dst, imm);
+                    Ok(store)
+                }
+                StaticValue::Float(float) => {
+                    //task(bc): Pack small floats
+                    let imm = b.push_inst(Inst::Imm(Imm::Float(*float)));
+                    let store = store_simple_if_dst(b, dst, imm.as_value());
+                    Ok(store)
+                }
+                //task(bc) non-trival static lowerings! Zero can probably be our zero impl?
+                StaticValue::String(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+                StaticValue::Zero(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+                StaticValue::Struct(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+                StaticValue::Enum(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+                StaticValue::LinearContainer(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+            }
         }
     }
 }

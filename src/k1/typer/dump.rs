@@ -545,8 +545,6 @@ impl TypedProgram {
         indentation: usize,
     ) -> std::fmt::Result {
         match expr {
-            TypedExpr::Unit(_) => w.write_str("()"),
-            TypedExpr::Char(c, _) => write!(w, "'{}'", *c as char),
             TypedExpr::Integer(int) => write!(w, "{}", int.value),
             TypedExpr::Float(float) => write!(w, "{}", float.value),
             TypedExpr::Bool(b, _) => write!(w, "{}", b),

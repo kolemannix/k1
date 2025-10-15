@@ -1410,8 +1410,6 @@ static_assert_size!(TypedExpr, 56);
 pub enum TypedExpr {
     // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
     StaticValue(StaticConstantExpr),
-    Unit(SpanId),
-    Char(u8, SpanId),
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
@@ -1477,8 +1475,6 @@ impl From<VariableExpr> for TypedExpr {
 impl TypedExpr {
     pub fn kind_str(&self) -> &'static str {
         match self {
-            TypedExpr::Unit(_) => "unit",
-            TypedExpr::Char(_, _) => "char",
             TypedExpr::Integer(_) => "integer",
             TypedExpr::Float(_) => "float",
             TypedExpr::Bool(_, _) => "bool",
@@ -1510,8 +1506,6 @@ impl TypedExpr {
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::Unit(_) => UNIT_TYPE_ID,
-            TypedExpr::Char(_, _) => CHAR_TYPE_ID,
             TypedExpr::Integer(integer) => integer.get_type(),
             TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
@@ -1543,8 +1537,6 @@ impl TypedExpr {
 
     pub fn get_span(&self) -> SpanId {
         match self {
-            TypedExpr::Unit(span) => *span,
-            TypedExpr::Char(_, span) => *span,
             TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
             TypedExpr::Float(float) => float.span,
@@ -1584,10 +1576,6 @@ impl TypedExpr {
         } else {
             panic!("Expected call expression")
         }
-    }
-
-    pub fn is_unit(&self) -> bool {
-        matches!(self, TypedExpr::Unit(_))
     }
 }
 
@@ -4967,8 +4955,6 @@ impl TypedProgram {
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
             TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
-            TypedExpr::Unit(_) => Ok(Some(self.static_values.add(StaticValue::Unit))),
-            TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
             TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Bool(*b)))),
             TypedExpr::Integer(typed_integer_expr) => {
                 Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
@@ -6773,11 +6759,11 @@ impl TypedProgram {
                     }
                 }
             }
-            ParsedExpr::Literal(ParsedLiteral::Unit(span)) => {
-                Ok(self.exprs.add(TypedExpr::Unit(*span)))
-            }
+            ParsedExpr::Literal(ParsedLiteral::Unit(span)) => Ok(self.synth_unit(*span)),
             ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
-                Ok(self.exprs.add(TypedExpr::Char(*byte, *span)))
+                let value_id = self.static_values.add(StaticValue::Char(*byte));
+                let expr_id = self.add_static_constant_expr(value_id, CHAR_TYPE_ID, *span);
+                Ok(expr_id)
             }
             ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
                 let numeric_expr = self.eval_numeric_value(int.span, ctx)?;
@@ -7227,18 +7213,18 @@ impl TypedProgram {
         );
         if ctx.flags.contains(EvalExprFlags::GenericPass) {
             let typed_expr = match ctx.expected_type_id {
-                None => TypedExpr::Unit(span),
+                None => self.synth_unit(span),
                 Some(expected) => {
-                    let unit_expr = self.exprs.add(TypedExpr::Unit(span));
-                    TypedExpr::Cast(TypedCast {
+                    let unit_expr = self.synth_unit(span);
+                    self.exprs.add(TypedExpr::Cast(TypedCast {
                         cast_type: CastType::Transmute,
                         base_expr: unit_expr,
                         target_type_id: expected,
                         span,
-                    })
+                    }))
                 }
             };
-            return Ok(StaticExecutionResult::TypedExpr(self.exprs.add(typed_expr)));
+            return Ok(StaticExecutionResult::TypedExpr(typed_expr));
         }
 
         let kind = stat.kind;
@@ -7330,7 +7316,7 @@ impl TypedProgram {
                     if stat.is_definition {
                         Ok(StaticExecutionResult::Definitions(eco_vec![]))
                     } else {
-                        Ok(StaticExecutionResult::TypedExpr(self.exprs.add(TypedExpr::Unit(span))))
+                        Ok(StaticExecutionResult::TypedExpr(self.synth_unit(span)))
                     }
                 } else {
                     // First, we write the emitted code to a text buffer
@@ -8589,9 +8575,12 @@ impl TypedProgram {
                 match self.patterns.get(pattern) {
                     TypedPattern::LiteralUnit(_span) => Ok(()),
                     TypedPattern::LiteralChar(byte, span) => {
-                        let char_expr = self.exprs.add(TypedExpr::Char(*byte, *span));
+                        let char_value = self.static_values.add(StaticValue::Char(*byte));
+                        let span = *span;
+                        let char_expr =
+                            self.add_static_constant_expr(char_value, CHAR_TYPE_ID, span);
                         let equals_pattern_char =
-                            self.synth_equals_call(target_expr, char_expr, ctx, *span)?;
+                            self.synth_equals_call(target_expr, char_expr, ctx, span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_char });
                         Ok(())
                     }
@@ -8997,7 +8986,7 @@ impl TypedProgram {
             loop_scope_ctx,
             false,
         )?;
-        let unit_break = self.exprs.add(TypedExpr::Unit(body_span));
+        let unit_break = self.synth_unit(body_span);
         let break_expr = self.add_expr_stmt(TypedExpr::Break(TypedBreak {
             value: unit_break,
             loop_scope: loop_scope_id,
@@ -9123,11 +9112,7 @@ impl TypedProgram {
         } else {
             let alt_expr =
                 if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
-            if let Some(alt) = alt_expr {
-                alt
-            } else {
-                self.exprs.add(TypedExpr::Unit(if_expr.span))
-            }
+            if let Some(alt) = alt_expr { alt } else { self.synth_unit(if_expr.span) }
         };
         Ok(expr)
     }
@@ -9173,7 +9158,7 @@ impl TypedProgram {
             let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
         } else {
-            self.exprs.add(TypedExpr::Unit(if_expr.span))
+            self.synth_unit(if_expr.span)
         };
         let alternate_type = self.exprs.get(alternate).get_type();
         let alternate_span = self.exprs.get(alternate).get_span();
@@ -9813,7 +9798,7 @@ impl TypedProgram {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
         let return_value = match parsed_expr {
-            None => self.exprs.add(TypedExpr::Unit(span)),
+            None => self.synth_unit(span),
             Some(parsed_expr) => self.eval_expr_with_coercion(
                 parsed_expr,
                 ctx.with_expected_type(expected_return_type),
@@ -9913,7 +9898,7 @@ impl TypedProgram {
 
                 let arg = self.ast.p_call_args.get_first(fn_call.args);
                 let break_value = match arg {
-                    None => self.exprs.add(TypedExpr::Unit(call_span)),
+                    None => self.synth_unit(call_span),
                     Some(fn_call_arg) => {
                         // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
                         match loop_type {
@@ -10006,7 +9991,7 @@ impl TypedProgram {
                         // be seen at runtime, or even compile-time since we don't execute during
                         // the 'generic' pass. So we just provide a validly-typed value of type 'N'.
                         // We do it with a transmute cast
-                        let unit = self.exprs.add(TypedExpr::Unit(span));
+                        let unit = self.synth_unit(span);
                         self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
                     }
                     Some(s) => self.synth_uword(s as usize, span),
@@ -11278,14 +11263,6 @@ impl TypedProgram {
         // We match on the node type, not its type, since the point is to hoist literals, not
         // follow variables around and implement a whole extra damn compiler
         let result = match self.exprs.get(expr_id) {
-            TypedExpr::Unit(span) => {
-                let static_value_id = self.static_values.add(StaticValue::Unit);
-                Ok(self.add_static_value_expr(static_value_id, UNIT_TYPE_ID, *span))
-            }
-            TypedExpr::Char(c, span) => {
-                let static_value_id = self.static_values.add(StaticValue::Char(*c));
-                Ok(self.add_static_value_expr(static_value_id, CHAR_TYPE_ID, *span))
-            }
             TypedExpr::Bool(b, span) => {
                 let static_value_id = self.static_values.add(StaticValue::Bool(*b));
                 Ok(self.add_static_value_expr(static_value_id, BOOL_TYPE_ID, *span))
@@ -11388,10 +11365,11 @@ impl TypedProgram {
                     // and we just need to generate a term that typechecks, so a
                     // unit casted to the generic static type. We should probably invent
                     // a way to do this that doesn't require 2 nodes
-                    let unit_expr = self.exprs.add(TypedExpr::Unit(span));
+                    let static_type_arg_type_id = static_type_arg.type_id;
+                    let unit_expr = self.synth_unit(span);
                     Ok(self.synth_cast(
                         unit_expr,
-                        static_type_arg.type_id,
+                        static_type_arg_type_id,
                         CastType::Transmute,
                         None,
                     ))
@@ -12172,7 +12150,7 @@ impl TypedProgram {
                         | TypedStmt::Let(_)
                         | TypedStmt::Require(_)
                         | TypedStmt::Defer(_) => {
-                            let unit = self.exprs.add(TypedExpr::Unit(stmt_span));
+                            let unit = self.synth_unit(stmt_span);
                             let return_unit_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
                                 span: stmt_span,
                                 value: unit,
