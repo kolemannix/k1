@@ -357,17 +357,11 @@ impl<Tag> Mem<Tag> {
         SmallVec::from_slice(slice)
     }
 
-    pub fn get_slice_sv4<T: Copy, const N: usize>(
-        &self,
-        handle: MSlice<T, Tag>,
-    ) -> SmallVec<[T; 4]> {
+    pub fn get_slice_sv4<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 4]> {
         self.get_slice_sv(handle)
     }
 
-    pub fn get_slice_sv8<T: Copy, const N: usize>(
-        &self,
-        handle: MSlice<T, Tag>,
-    ) -> SmallVec<[T; 8]> {
+    pub fn get_slice_sv8<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 8]> {
         self.get_slice_sv(handle)
     }
 

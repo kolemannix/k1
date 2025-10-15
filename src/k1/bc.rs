@@ -534,11 +534,10 @@ pub fn compile_top_level_expr(
     };
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
-        let pt_id = b.get_physical_type_id(variable.type_id);
-        let t_packed = b.k1.types.pack_inline_type(pt_id);
+        let pt = b.get_physical_type(variable.type_id);
         b.bc.b_variables.push(BuilderVariable {
             id: *variable_id,
-            value: Value::StaticValue { t: t_packed, id: *static_value_id },
+            value: Value::StaticValue { t: pt, id: *static_value_id },
             indirect: false,
         })
     }
@@ -581,11 +580,10 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             // Set up parameters
             for (index, param_variable_id) in f.param_variables.iter().enumerate() {
                 let v = b.k1.variables.get(*param_variable_id);
-                let t = b.get_physical_type_id(v.type_id);
-                let t_packed = b.k1.types.pack_inline_type(t);
+                let t = b.get_physical_type(v.type_id);
                 b.bc.b_variables.push(BuilderVariable {
                     id: *param_variable_id,
-                    value: Value::FnParam { t: t_packed, index: index as u32 },
+                    value: Value::FnParam { t, index: index as u32 },
                     indirect: false,
                 });
             }
@@ -693,10 +691,9 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         get_value_kind(self.bc, &self.k1.types, value)
     }
 
-    fn alloca_type(&mut self, pt_id: PhysicalTypeId) -> InstId {
-        let record = self.k1.types.phys_types.get(pt_id);
-        let t = record.kind.pack_inline(pt_id);
-        self.push_inst_to(self.cur_block, Inst::Alloca { t, vm_layout: record.layout })
+    fn alloca_type(&mut self, pt: PhysicalType) -> InstId {
+        let layout = self.k1.types.get_pt_layout(&pt);
+        self.push_inst_to(self.cur_block, Inst::Alloca { t: pt, vm_layout: layout })
     }
 
     fn push_inst(&mut self, inst: Inst) -> InstId {
@@ -705,16 +702,15 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
 
     fn push_struct_offset(
         &mut self,
-        struct_pt_id: PhysicalTypeId,
+        agg_id: PhysicalTypeId,
         base: Value,
         field_index: u32,
     ) -> InstId {
-        let record = self.k1.types.phys_types.get(struct_pt_id);
-        let Some(offset) = self.k1.types.get_struct_field_offset(&record.kind, field_index) else {
+        let Some(offset) = self.k1.types.get_struct_field_offset(agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
         self.push_inst(Inst::StructOffset {
-            struct_t: struct_pt_id,
+            struct_t: agg_id,
             base,
             field_index,
             vm_offset: offset,
@@ -725,10 +721,9 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.push_inst(Inst::Jump(block_id))
     }
 
-    fn push_copy(&mut self, dst: Value, src: Value, pt_id: PhysicalTypeId) -> InstId {
-        let record = self.k1.types.phys_types.get(pt_id);
-        let t = self.k1.types.pack_inline_type(pt_id);
-        self.push_inst(Inst::Copy { dst, src, t, vm_size: record.layout.size })
+    fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType) -> InstId {
+        let layout = self.k1.types.get_pt_layout(&pt);
+        self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size })
     }
 
     fn push_load(&mut self, st: ScalarType, src: Value) -> InstId {
@@ -812,27 +807,18 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.bc.b_variables.iter().find(|bv| bv.id == variable_id)
     }
 
-    fn get_physical_type_id(&self, type_id: TypeId) -> PhysicalTypeId {
-        let resolved = self.k1.types.get_chased_id(type_id);
-        match self.k1.types.type_phys_type_lookup.get(resolved) {
-            None => b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string(type_id)),
-            Some(pt_id) => *pt_id,
-        }
-    }
-
-    fn get_physical_type(&self, type_id: TypeId) -> &PhysicalTypeRecord {
-        let pt_id = self.get_physical_type_id(type_id);
-        let rec = self.k1.types.phys_types.get(pt_id);
-        rec
+    fn get_physical_type(&self, type_id: TypeId) -> PhysicalType {
+        self.k1.types.get_physical_type(type_id).unwrap_or_else(|| {
+            b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string(type_id))
+        })
     }
 
     fn type_to_inst_kind(&self, type_id: TypeId) -> InstKind {
         if type_id == NEVER_TYPE_ID {
             InstKind::Terminator
         } else {
-            let t = self.get_physical_type_id(type_id);
-            let packed = self.k1.types.pack_inline_type(t);
-            InstKind::Value(packed)
+            let t = self.get_physical_type(type_id);
+            InstKind::Value(t)
         }
     }
 }
@@ -844,15 +830,10 @@ fn store_simple_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Val
     }
 }
 
-fn store_rich_if_dst(
-    b: &mut Builder,
-    dst: Option<Value>,
-    pt_id: PhysicalTypeId,
-    value: Value,
-) -> Value {
+fn store_rich_if_dst(b: &mut Builder, dst: Option<Value>, pt: PhysicalType, value: Value) -> Value {
     match dst {
         None => value,
-        Some(dst) => store_value(b, pt_id, dst, value).as_value(),
+        Some(dst) => store_value(b, pt, dst, value).as_value(),
     }
 }
 
@@ -895,7 +876,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 return Ok(v);
             }
 
-            let var_pt_id = b.get_physical_type_id(let_stmt.variable_type);
+            let var_pt_id = b.get_physical_type(let_stmt.variable_type);
 
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
@@ -909,7 +890,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 let Type::Reference(reference_type) = b.k1.types.get(let_stmt.variable_type) else {
                     panic!("Expected reference for referencing let");
                 };
-                let reference_inner_type_pt_id = b.get_physical_type_id(reference_type.inner_type);
+                let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
                 let value_alloca = b.alloca_type(reference_inner_type_pt_id);
                 b.push_store(variable_alloca.as_value(), value_alloca.as_value());
                 value_alloca
@@ -1014,21 +995,22 @@ fn compile_expr(
             Ok(store)
         }
         TypedExpr::Struct(struct_literal) => {
-            let struct_pt_id = b.get_physical_type_id(struct_literal.type_id);
-            let struct_pt_record = b.k1.types.phys_types.get(struct_pt_id);
+            let struct_pt = b.get_physical_type(struct_literal.type_id);
+            let struct_agg_id = struct_pt.expect_agg();
+            let struct_pt_record = b.k1.types.phys_types.get(struct_agg_id);
             let struct_base = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(struct_pt_id).as_value(),
+                None => b.alloca_type(struct_pt).as_value(),
             };
             for (field_index, field) in struct_literal.fields.iter().enumerate() {
                 debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
                 let Some(offset) =
-                    b.k1.types.get_struct_field_offset(&struct_pt_record.kind, field_index as u32)
+                    b.k1.types.get_struct_field_offset(struct_agg_id, field_index as u32)
                 else {
                     b_ice!(b, "Failed getting offset for field")
                 };
                 let struct_offset = b.push_inst(Inst::StructOffset {
-                    struct_t: struct_pt_id,
+                    struct_t: struct_agg_id,
                     base: struct_base,
                     field_index: field_index as u32,
                     vm_offset: offset,
@@ -1039,11 +1021,10 @@ fn compile_expr(
         }
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_base = compile_expr(b, None, field_access.base)?;
-            let struct_pt_id = b.get_physical_type_id(field_access.struct_type);
+            let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
             let struct_pt_record = b.k1.types.phys_types.get(struct_pt_id);
             let Some(offset) =
-                b.k1.types
-                    .get_struct_field_offset(&struct_pt_record.kind, field_access.field_index)
+                b.k1.types.get_struct_field_offset(struct_pt_id, field_access.field_index)
             else {
                 b_ice!(b, "Failed getting offset for field")
             };
@@ -1053,7 +1034,7 @@ fn compile_expr(
                 field_index: field_access.field_index,
                 vm_offset: offset,
             });
-            let result_type = b.get_physical_type_id(field_access.result_type);
+            let result_type = b.get_physical_type(field_access.result_type);
             let result = build_field_access(
                 b,
                 field_access.access_kind,
@@ -1065,16 +1046,15 @@ fn compile_expr(
         }
         TypedExpr::ArrayGetElement(array_get) => {
             let array_base = compile_expr(b, None, array_get.base)?;
-            let element_pt_id = b.get_physical_type_id(array_get.array_type);
-            let element_t_inl = b.k1.types.pack_inline_type(element_pt_id);
+            let element_pt = b.get_physical_type(array_get.array_type);
             let index = compile_expr(b, None, array_get.index)?;
 
             let element_ptr = b.push_inst(Inst::ArrayOffset {
-                element_t: element_t_inl,
+                element_t: element_pt,
                 base: array_base,
                 element_index: index,
             });
-            let result_type = b.get_physical_type_id(array_get.result_type);
+            let result_type = b.get_physical_type(array_get.result_type);
             let result = build_field_access(
                 b,
                 array_get.access_kind,
@@ -1107,10 +1087,8 @@ fn compile_expr(
                         None => variable.type_id,
                         Some(r) => r.inner_type,
                     };
-                    let value_pt_id = b.get_physical_type_id(value_type);
-                    let value_pt = b.k1.types.phys_types.get(value_pt_id).kind;
-                    let value_type_packed = b.k1.types.pack_inline_type(value_pt_id);
-                    let address = Value::Global { t: value_type_packed, id: global_id };
+                    let value_pt = b.get_physical_type(value_type);
+                    let address = Value::Global { t: value_pt, id: global_id };
                     match value_pt {
                         PhysicalType::Scalar(_) => {
                             // We have a scalar type, but do we have a pointer to it or just
@@ -1121,7 +1099,7 @@ fn compile_expr(
                                 Ok(stored)
                             } else {
                                 // The value of the global is what we're after
-                                let stored = load_or_copy(b, value_pt_id, dst, address, false);
+                                let stored = load_or_copy(b, value_pt, dst, address, false);
                                 Ok(stored)
                             }
                         }
@@ -1133,7 +1111,7 @@ fn compile_expr(
                                 // The source code is talking about an aggregate _value_
                                 // So if we have a dst, then it is of the aggregate's layout, not a Ptr-size!
                                 // So we have to copy
-                                let stored = store_rich_if_dst(b, dst, value_pt_id, address);
+                                let stored = store_rich_if_dst(b, dst, value_pt, address);
                                 Ok(stored)
                             }
                         }
@@ -1150,7 +1128,7 @@ fn compile_expr(
                         );
                         b.k1.ice_with_span("Missing variable", variable_expr.span)
                     };
-                    let var_type_pt_id = b.get_physical_type_id(variable_expr.type_id);
+                    let var_type_pt_id = b.get_physical_type(variable_expr.type_id);
                     let var_value = var.value;
                     if var.indirect {
                         let loaded = load_or_copy(b, var_type_pt_id, dst, var_value, false);
@@ -1164,10 +1142,10 @@ fn compile_expr(
         }
         TypedExpr::Deref(deref) => {
             let src = compile_expr(b, None, deref.target)?;
-            let target_pt_id = b.get_physical_type_id(deref.type_id);
+            let target_pt = b.get_physical_type(deref.type_id);
             let loaded = match dst {
-                Some(dst) => b.push_copy(dst, src, target_pt_id).as_value(),
-                None => load_value(b, target_pt_id, src, true),
+                Some(dst) => b.push_copy(dst, src, target_pt).as_value(),
+                None => load_value(b, target_pt, src, true),
             };
             Ok(loaded)
         }
@@ -1194,40 +1172,35 @@ fn compile_expr(
                         IntrinsicOperation::BakeStaticValue => Some(BcBuiltin::BakeStaticValue),
                         IntrinsicOperation::CompilerMessage => Some(BcBuiltin::CompilerMessage),
                         IntrinsicOperation::Zeroed => {
-                            // do this one, memset for aggregates
-                            // zero imm for basics
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                let p_type_id = b.get_physical_type_id(type_id);
-                                let p_type_record = b.get_physical_type(type_id);
-                                let p_type_size = p_type_record.layout.size;
-                                let p_type = p_type_record.kind;
-                                let zero = if p_type.is_agg() {
-                                    let dst = match dst {
-                                        None => b.alloca_type(p_type_id).as_value(),
-                                        Some(dst) => dst,
-                                    };
-                                    let zero_u8 = Value::byte(0);
-                                    let p_type_packed = b.k1.types.pack_inline_type(p_type_id);
-                                    b.push_inst(Inst::Memset {
-                                        t: p_type_packed,
-                                        size: Value::Imm32 { t: ScalarType::I8, data: p_type_size },
-                                        dst,
-                                        value: zero_u8,
-                                    });
-                                    dst
-                                } else {
-                                    let zero_v = match p_type {
-                                        PhysicalType::Scalar(s) => b.zero(s),
-                                        PhysicalType::Agg(_) => unreachable!(),
-                                    };
-                                    zero_v
+                                let pt = b.get_physical_type(type_id);
+                                let zero = match pt {
+                                    PhysicalType::Agg(agg_id) => {
+                                        let pt_layout = b.k1.types.phys_types.get(agg_id).layout;
+                                        let dst = match dst {
+                                            None => b.alloca_type(pt).as_value(),
+                                            Some(dst) => dst,
+                                        };
+                                        let zero_u8 = Value::byte(0);
+                                        b.push_inst(Inst::Memset {
+                                            t: pt,
+                                            size: Value::Imm32 {
+                                                t: ScalarType::I8,
+                                                data: pt_layout.size,
+                                            },
+                                            dst,
+                                            value: zero_u8,
+                                        });
+                                        dst
+                                    }
+                                    PhysicalType::Scalar(st) => b.zero(st),
                                 };
                                 Ok(zero)
                             };
                         }
 
-                        // do these
+                        // task(bc) nocommit do these
                         IntrinsicOperation::TypeName => Some(BcBuiltin::TypeName),
                         IntrinsicOperation::TypeSchema => Some(BcBuiltin::TypeSchema),
 
@@ -1270,12 +1243,11 @@ fn compile_expr(
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                                 let elem_type_id =
                                     b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                let elem_ptype_id = b.get_physical_type_id(elem_type_id);
-                                let elem_type_packed = b.k1.types.pack_inline_type(elem_ptype_id);
+                                let elem_pt = b.get_physical_type(elem_type_id);
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let element_index = compile_expr(b, None, call.args[1])?;
                                 let offset = b.push_inst(Inst::ArrayOffset {
-                                    element_t: elem_type_packed,
+                                    element_t: elem_pt,
                                     base,
                                     element_index,
                                 });
@@ -1313,20 +1285,20 @@ fn compile_expr(
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
-                        let lam_obj_type = b.get_physical_type_id(lam_obj_type_id);
-                        let ptr_ptype_id = b.get_physical_type_id(POINTER_TYPE_ID);
+                        let lam_obj_pt = b.get_physical_type(lam_obj_type_id).expect_agg();
+                        let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
                         let fn_ptr_addr = b.push_struct_offset(
-                            lam_obj_type,
+                            lam_obj_pt,
                             lambda_obj,
                             TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
                         );
-                        let fn_ptr = load_value(b, ptr_ptype_id, fn_ptr_addr.as_value(), false);
+                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr.as_value(), false);
                         let env_addr = b.push_struct_offset(
-                            lam_obj_type,
+                            lam_obj_pt,
                             lambda_obj,
                             TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                         );
-                        let env = load_value(b, ptr_ptype_id, env_addr.as_value(), false);
+                        let env = load_value(b, ptr_pt, env_addr.as_value(), false);
 
                         args.push(env);
                         BcCallee::Indirect(fn_ptr)
@@ -1356,7 +1328,7 @@ fn compile_expr(
             let call_dst = match dst {
                 None => match return_inst_kind {
                     InstKind::Value(_pt) => {
-                        let pt_id = b.get_physical_type_id(return_type_id);
+                        let pt_id = b.get_physical_type(return_type_id);
                         Some(b.alloca_type(pt_id).as_value())
                     }
                     InstKind::Void => None,
@@ -1403,9 +1375,8 @@ fn compile_expr(
             let result_inst_kind = b.type_to_inst_kind(match_expr.result_type);
             let result_came_from = match result_inst_kind {
                 InstKind::Value(_) => {
-                    let pt_id = b.get_physical_type_id(match_expr.result_type);
-                    let pt_inlined = b.k1.types.pack_inline_type(pt_id);
-                    Some(b.push_inst(Inst::CameFrom { t: pt_inlined, incomings: MSlice::empty() }))
+                    let pt = b.get_physical_type(match_expr.result_type);
+                    Some(b.push_inst(Inst::CameFrom { t: pt, incomings: MSlice::empty() }))
                 }
                 InstKind::Void => {
                     eprintln!("expr {}", b.k1.expr_to_string(expr));
@@ -1451,7 +1422,7 @@ fn compile_expr(
                         unreachable!()
                     };
                     *i = real_incomings;
-                    let pt_id = b.get_physical_type_id(match_expr.result_type);
+                    let pt_id = b.get_physical_type(match_expr.result_type);
                     Ok(store_rich_if_dst(b, dst, pt_id, came_from.as_value()))
                 }
             }
@@ -1553,7 +1524,7 @@ fn compile_expr(
             let end_name = mformat!(b.bc.mem, "loop_end__{}", expr.as_u32());
             let loop_end_block = b.push_block(end_name);
 
-            let break_pt_id = b.get_physical_type_id(loop_expr.break_type);
+            let break_pt_id = b.get_physical_type(loop_expr.break_type);
 
             let break_value = if loop_expr.break_type != UNIT_TYPE_ID {
                 Some(b.alloca_type(break_pt_id))
@@ -1603,10 +1574,10 @@ fn compile_expr(
                 return Ok(crash);
             }
 
-            let variant_pt_id = b.get_physical_type_id(enumc.variant_type_id);
+            let variant_pt = b.get_physical_type(enumc.variant_type_id);
             let enum_base = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(variant_pt_id).as_value(),
+                None => b.alloca_type(variant_pt).as_value(),
             };
 
             let tag_base = enum_base;
@@ -1616,7 +1587,7 @@ fn compile_expr(
             b.push_store(tag_base, int_imm);
 
             if let Some(payload_expr) = &enumc.payload {
-                let payload_offset = b.push_struct_offset(variant_pt_id, enum_base, 1);
+                let payload_offset = b.push_struct_offset(variant_pt.expect_agg(), enum_base, 1);
                 let _payload_value =
                     compile_expr(b, Some(payload_offset.as_value()), *payload_expr)?;
             }
@@ -1630,9 +1601,11 @@ fn compile_expr(
                     .get_type_dereferenced(b.k1.get_expr_type_id(e_get_tag.enum_expr_or_reference))
                     .expect_enum();
             let tag_type = enum_type.tag_type;
-            let tag_pt_id = b.get_physical_type(tag_type).kind.expect_scalar();
+            let tag_scalar = b.get_physical_type(tag_type).expect_scalar();
+
             // Load straight from the enum base, dont bother with a struct gep
-            let tag = b.push_load(tag_pt_id, enum_base).as_value();
+            // task(bc): Copy if dst
+            let tag = b.push_load(tag_scalar, enum_base).as_value();
             let stored = store_simple_if_dst(b, dst, tag);
             Ok(stored)
         }
@@ -1646,8 +1619,8 @@ fn compile_expr(
                 b.k1.types
                     .get_type_dereferenced(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
                     .expect_enum_variant();
-            let variant_struct_type = b.get_physical_type_id(variant_type.my_type_id);
-            let payload_offset = b.push_struct_offset(variant_struct_type, enum_variant_base, 1);
+            let variant_pt = b.get_physical_type(variant_type.my_type_id).expect_agg();
+            let payload_offset = b.push_struct_offset(variant_pt, enum_variant_base, 1);
             if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                 let base_is_reference =
                     b.k1.get_expr_type(e_get_payload.enum_variant_expr).as_reference().is_some();
@@ -1668,7 +1641,7 @@ fn compile_expr(
                     FieldAccessKind::ReferenceThrough => unreachable!(),
                 };
                 let payload_type_id = variant_type.payload.unwrap();
-                let payload_pt_id = b.get_physical_type_id(payload_type_id);
+                let payload_pt_id = b.get_physical_type(payload_type_id);
                 let copied =
                     load_or_copy(b, payload_pt_id, dst, payload_offset.as_value(), make_copy);
                 Ok(copied)
@@ -1693,12 +1666,12 @@ fn compile_expr(
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
-            let ptr_pt = b.get_physical_type_id(POINTER_TYPE_ID);
+            let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp);
             Ok(stored)
         }
         TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
-            let obj_struct_type = b.get_physical_type_id(fn_to_lam_obj.lambda_object_type_id);
+            let obj_struct_type = b.get_physical_type(fn_to_lam_obj.lambda_object_type_id);
             let lam_obj_ptr = match dst {
                 Some(dst) => dst,
                 None => b.alloca_type(obj_struct_type).as_value(),
@@ -1706,14 +1679,14 @@ fn compile_expr(
             let fn_ptr = Value::FunctionAddr(fn_to_lam_obj.function_id);
             let lam_obj_fn_ptr_addr = b
                 .push_struct_offset(
-                    obj_struct_type,
+                    obj_struct_type.expect_agg(),
                     lam_obj_ptr,
                     TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
                 )
                 .as_value();
             b.push_store(lam_obj_fn_ptr_addr, fn_ptr);
             let lam_obj_env_ptr_addr = b.push_struct_offset(
-                obj_struct_type,
+                obj_struct_type.expect_agg(),
                 lam_obj_ptr,
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
             );
@@ -1722,9 +1695,8 @@ fn compile_expr(
         }
         TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),
         TypedExpr::StaticValue(stat) => {
-            let t = b.get_physical_type_id(stat.type_id);
-            let inl = b.k1.types.pack_inline_type(t);
-            Ok(Value::StaticValue { t: inl, id: stat.value_id })
+            let t = b.get_physical_type(stat.type_id);
+            Ok(Value::StaticValue { t, id: stat.value_id })
         }
     }
 }
@@ -1734,7 +1706,7 @@ fn build_field_access(
     access_kind: FieldAccessKind,
     dst: Option<Value>,
     field_ptr: Value,
-    result_pt_id: PhysicalTypeId,
+    result_pt: PhysicalType,
 ) -> Value {
     if access_kind == FieldAccessKind::ReferenceThrough {
         let stored = store_simple_if_dst(b, dst, field_ptr);
@@ -1749,7 +1721,7 @@ fn build_field_access(
             FieldAccessKind::Dereference => true,
             FieldAccessKind::ReferenceThrough => unreachable!(),
         };
-        let loaded = load_or_copy(b, result_pt_id, dst, field_ptr, make_copy);
+        let loaded = load_or_copy(b, result_pt, dst, field_ptr, make_copy);
         loaded
     }
 }
@@ -1781,8 +1753,8 @@ fn compile_cast(
         | CastType::IntegerCast(IntegerCastDirection::Truncate)
         | CastType::IntegerExtendFromChar => {
             let base = compile_expr(b, None, c.base_expr)?;
-            let to_record = b.get_physical_type(c.target_type_id);
-            let to = to_record.kind.expect_scalar();
+            let to_pt = b.get_physical_type(c.target_type_id);
+            let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
                 CastType::IntegerCast(IntegerCastDirection::Extend)
                 | CastType::IntegerExtendFromChar => {
@@ -1824,7 +1796,7 @@ fn compile_cast(
         | CastType::IntegerUnsignedToFloat
         | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
-            let to = b.get_physical_type(c.target_type_id).kind.expect_scalar();
+            let to = b.get_physical_type(c.target_type_id).expect_scalar();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { v: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { v: base, to },
@@ -1841,7 +1813,7 @@ fn compile_cast(
         CastType::LambdaToLambdaObject => {
             let lambda_type = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
 
-            let lambda_env_type = b.get_physical_type_id(lambda_type.env_type);
+            let lambda_env_type = b.get_physical_type(lambda_type.env_type);
             // It seems that representing the environment of lambda objects as a pointer
             // is problematic since the lambda object will only be 'good' as long as that pointer
             // is 'good', and currently we use stack space for it. But it could be that the
@@ -1849,8 +1821,7 @@ fn compile_cast(
             // But, all lambda objects must be the same size. It seems maybe we should
             // heap-allocate the environments, but in k1 that would mean using the current
             // allocator, or requiring one.
-            let obj_struct_type =
-                b.get_physical_type_id(b.k1.types.builtins.dyn_lambda_obj.unwrap());
+            let obj_struct_type = b.get_physical_type(b.k1.types.builtins.dyn_lambda_obj.unwrap());
 
             // Now we need a pointer to the environment
             // nocommit(3): dyn lambda durability: Change to arena.push_struct call. This feels like
@@ -1871,14 +1842,14 @@ fn compile_cast(
             };
             // Store fn ptr, then env ptr into the object
             let lam_obj_fn_ptr_addr = b.push_struct_offset(
-                obj_struct_type,
+                obj_struct_type.expect_agg(),
                 lam_obj_ptr,
                 TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
             );
             b.push_store(lam_obj_fn_ptr_addr.as_value(), fn_ptr);
 
             let lam_obj_env_ptr_addr = b.push_struct_offset(
-                obj_struct_type,
+                obj_struct_type.expect_agg(),
                 lam_obj_ptr,
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
             );
@@ -1895,20 +1866,14 @@ fn compile_cast(
 /// A Dereference would the closest thing. But we take some liberties here;
 /// such as treating this as a no-op for values that are already represented
 /// by their location, aka IndirectValues
-fn load_value(b: &mut Builder, pt_id: PhysicalTypeId, src: Value, make_copy: bool) -> Value {
-    let pt_record = b.k1.types.phys_types.get(pt_id);
-    match pt_record.kind {
+fn load_value(b: &mut Builder, pt: PhysicalType, src: Value, make_copy: bool) -> Value {
+    match pt {
         PhysicalType::Agg(_) => {
             if make_copy {
-                let dst = b.alloca_type(pt_id);
-                let t = b.k1.types.pack_inline_type(pt_id);
-                b.push_inst(Inst::Copy {
-                    dst: dst.as_value(),
-                    src,
-                    t,
-                    vm_size: pt_record.layout.size,
-                })
-                .as_value()
+                let dst = b.alloca_type(pt);
+                let pt_layout = b.k1.types.get_pt_layout(&pt);
+                b.push_inst(Inst::Copy { dst: dst.as_value(), src, t: pt, vm_size: pt_layout.size })
+                    .as_value()
             } else {
                 src
             }
@@ -1917,28 +1882,27 @@ fn load_value(b: &mut Builder, pt_id: PhysicalTypeId, src: Value, make_copy: boo
     }
 }
 
-fn store_value(b: &mut Builder, pt_id: PhysicalTypeId, dst: Value, value: Value) -> InstId {
-    let record = b.k1.types.phys_types.get(pt_id);
-    match record.kind.is_agg() {
-        true => {
+fn store_value(b: &mut Builder, pt: PhysicalType, dst: Value, value: Value) -> InstId {
+    match pt {
+        PhysicalType::Agg(_) => {
             // Rename to `src` shows that, since we have an aggregate, `value` is a location.
             let src = value;
-            b.push_copy(dst, src, pt_id)
+            b.push_copy(dst, src, pt)
         }
-        false => b.push_store(dst, value),
+        PhysicalType::Scalar(_) => b.push_store(dst, value),
     }
 }
 
 fn load_or_copy(
     b: &mut Builder,
-    pt_id: PhysicalTypeId,
+    pt: PhysicalType,
     dst: Option<Value>,
     src: Value,
     copy_aggregates: bool,
 ) -> Value {
     match dst {
-        Some(dst) => b.push_copy(dst, src, pt_id).as_value(),
-        None => load_value(b, pt_id, src, copy_aggregates),
+        Some(dst) => b.push_copy(dst, src, pt).as_value(),
+        None => load_value(b, pt, src, copy_aggregates),
     }
 }
 
@@ -2175,7 +2139,7 @@ pub fn display_inst(
         }
         Inst::Alloca { t, vm_layout } => {
             write!(w, "alloca ")?;
-            display_inl_type(w, &k1.types, t)?;
+            display_pt(w, &k1.types, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value } => {
@@ -2194,12 +2158,12 @@ pub fn display_inst(
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            display_p_type(w, &k1.types, &k1.types.phys_types.get(*struct_t).kind)?;
+            display_pt(w, &k1.types, &PhysicalType::Agg(*struct_t))?;
             write!(w, ".{}, {} ({})", *field_index, *base, *vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            display_inl_type(w, &k1.types, element_t)?;
+            display_pt(w, &k1.types, element_t)?;
             write!(w, " {}[{}]", *base, *element_index)?;
         }
         Inst::Call { id } => {
@@ -2242,7 +2206,7 @@ pub fn display_inst(
         }
         Inst::CameFrom { t, incomings } => {
             write!(w, "comefrom ")?;
-            display_inl_type(w, &k1.types, t)?;
+            display_pt(w, &k1.types, t)?;
             write!(w, " [")?;
             for (i, incoming) in bc.mem.get_slice(*incomings).iter().enumerate() {
                 if i > 0 {
@@ -2320,7 +2284,7 @@ pub fn display_inst(
         }
         Inst::Memset { t, dst, value, size } => {
             write!(w, "memset {} ", size)?;
-            display_inl_type(w, &k1.types, t)?;
+            display_pt(w, &k1.types, t)?;
             write!(w, ", {}, {}", *dst, *value)?;
         }
     };
@@ -2339,50 +2303,40 @@ pub fn display_inst_kind(
     kind: &InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => display_inl_type(w, types, t),
+        InstKind::Value(t) => display_pt(w, types, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }
 }
 
-fn display_inl_type(
+fn display_pt(
     w: &mut impl std::fmt::Write,
     types: &TypePool,
     t: &PhysicalType,
 ) -> std::fmt::Result {
     match t {
         PhysicalType::Scalar(st) => write!(w, "{}", st),
-        PhysicalType::Agg(pt_id) => display_p_type(w, types, &types.phys_types.get(*pt_id).kind),
-    }
-}
-
-fn display_p_type(
-    w: &mut impl std::fmt::Write,
-    types: &TypePool,
-    t: &PhysicalType,
-) -> std::fmt::Result {
-    match t {
-        PhysicalType::Scalar(st) => write!(w, "{}", st),
-        PhysicalType::Agg(agg) => match agg {
+        PhysicalType::Agg(agg) => match &types.phys_types.get(*agg).agg_type {
             // Important specialization since wrappers are common
-            AggLayout::Struct1(t1) => {
+            AggType::Struct1(t1) => {
                 w.write_str("{ ")?;
-                display_inl_type(w, types, t1)?;
+                display_pt(w, types, t1)?;
                 w.write_str(" }")?;
                 Ok(())
             }
-            // Important specialization used for enum variants
-            AggLayout::Struct2(scalar, t2) => {
-                w.write_str("{ ")?;
-                write!(w, "{} ", scalar)?;
-                display_inl_type(w, types, t2)?;
+            AggType::EnumVariant(evl) => {
+                write!(w, "{{ tag({})", evl.tag)?;
+                if let Some(payload) = &evl.payload {
+                    write!(w, ", ")?;
+                    display_pt(w, types, payload)?;
+                };
                 w.write_str(" }")?;
                 Ok(())
             }
-            AggLayout::Struct { fields } => {
+            AggType::Struct { fields } => {
                 w.write_str("{ ")?;
                 for (index, field) in types.mem.get_slice(*fields).iter().enumerate() {
-                    display_p_type(w, types, &field.field_t)?;
+                    display_pt(w, types, &field.field_t)?;
                     let last = index == fields.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
@@ -2391,13 +2345,13 @@ fn display_p_type(
                 w.write_str(" }")?;
                 Ok(())
             }
-            AggLayout::Array { len, element_t: t } => {
+            AggType::Array { len, element_t: t } => {
                 w.write_str("[")?;
-                display_inl_type(w, types, t)?;
+                display_pt(w, types, t)?;
                 write!(w, " x {}]", *len)?;
                 Ok(())
             }
-            AggLayout::Opaque { layout } => {
+            AggType::Opaque { layout } => {
                 write!(w, "opaque {}, align {}", layout.size, layout.align)
             }
         },
