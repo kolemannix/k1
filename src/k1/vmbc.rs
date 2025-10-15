@@ -338,13 +338,13 @@ fn execute_compiled_unit(
     // TODO: Set the IS_STATIC global
 
     for (param_index, arg) in args.iter().enumerate() {
-        let value = static_value_to_vm_value(vm, dst_stack, k1, *arg);
+        let value = static_value_to_vm_value(vm, k1, *arg);
         vm.stack.param_values[frame_index as usize][param_index] = value;
     }
 
     macro_rules! exec_value {
         ($v:expr) => {
-            execute_value(k1, vm, StackSelection::CallStackCurrent, inst_offset, $v)
+            resolve_value(k1, vm, inst_offset, $v)
         };
     }
     loop {
@@ -389,7 +389,7 @@ fn execute_compiled_unit(
                     .as_scalar()
                     .unwrap();
                 let vm_value = exec_value!(value);
-                let _size = store_scalar(t, dst_addr.cast_mut(), vm_value);
+                store_scalar(t, dst_addr.cast_mut(), vm_value);
 
                 // Store Produces no value, no need to set
                 ip += 1;
@@ -419,7 +419,7 @@ fn execute_compiled_unit(
                 }
                 ip += 1
             }
-            bc::Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
+            bc::Inst::StructOffset { base, vm_offset, .. } => {
                 let base_value = exec_value!(base);
                 let base_ptr = base_value.as_addr().unwrap_or_else(|| {
                     vm_ice!(k1, vm, "StructOffset from non-addr: {}", base_value)
@@ -438,7 +438,7 @@ fn execute_compiled_unit(
                 let Value::D64(index) = index_value else {
                     return failf!(span, "ArrayOffset index is not B64: {}", index_value);
                 };
-                let elem_layout = k1.types.get_inline_type_layout(element_t);
+                let elem_layout = k1.types.get_pt_layout(element_t);
 
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.size as usize * index as usize) };
@@ -449,14 +449,7 @@ fn execute_compiled_unit(
             bc::Inst::Call { id } => {
                 let call = bc.calls.get(*id);
                 let return_type = match &call.ret_inst_kind {
-                    InstKind::Value(ret_type) => {
-                        let layout = k1.types.get_inline_type_layout(ret_type);
-                        let ptr = vm
-                            .get_destination_stack(dst_stack)
-                            .push_layout_uninit(layout)
-                            .cast_const();
-                        Some(ret_type)
-                    }
+                    InstKind::Value(ret_type) => Some(ret_type),
                     InstKind::Void => None,
                     InstKind::Terminator => None,
                 };
@@ -467,7 +460,7 @@ fn execute_compiled_unit(
                         // - located on our frame
                         // - but recorded as the ret_place on _its_ frame record
                         if let Some(return_type) = return_type {
-                            let layout = k1.types.get_inline_type_layout(return_type);
+                            let layout = k1.types.get_pt_layout(return_type);
                             let ptr =
                                 vm.get_destination_stack(dst_stack).push_layout_uninit(layout);
                             Some(ptr)
@@ -524,8 +517,20 @@ fn execute_compiled_unit(
                     None => None,
                     Some((t, v)) => Some(RetInfo { t, place: v, ip, block: b }),
                 };
+
                 let frame =
                     vm.stack.push_new_frame(None, Some(inst_span), *compiled_function, ret_info);
+
+                // Gotta set arguments too, duh.
+                for (index, arg) in bc.mem.get_slice(call.args).iter().enumerate() {
+                    // Note: It is ok that these are executed after pushing because executing a 'BcValue'
+                    // doesn't use the stack.
+                    let vm_value = exec_value!(arg);
+                    match vm.stack.param_values[frame.index as usize].get_mut(index) {
+                        None => vm.stack.param_values[frame.index as usize].push(vm_value),
+                        Some(prev_v) => *prev_v = vm_value,
+                    };
+                }
 
                 blocks = compiled_function.blocks;
                 b = 0;
@@ -545,7 +550,7 @@ fn execute_compiled_unit(
                 let returned_value = exec_value!(bc_value);
                 store_value(&k1.types, ret_info.t, return_slot, returned_value);
 
-                let popped = vm.stack.pop_frame();
+                let _popped = vm.stack.pop_frame();
 
                 blocks = vm.stack.current_frame().unit.blocks;
                 b = ret_info.block;
@@ -613,13 +618,7 @@ fn execute_compiled_unit(
 }
 
 #[inline(always)]
-fn execute_value(
-    k1: &TypedProgram,
-    vm: &mut Vm,
-    dst_stack: StackSelection,
-    inst_offset: u32,
-    value: &BcValue,
-) -> Value {
+fn resolve_value(k1: &TypedProgram, vm: &mut Vm, inst_offset: u32, value: &BcValue) -> Value {
     match value {
         BcValue::Inst(inst_id) => {
             let inst_index = inst_to_index(*inst_id, inst_offset);
@@ -633,7 +632,7 @@ fn execute_value(
             *v
         }
         BcValue::StaticValue { t, id } => {
-            let v = static_value_to_vm_value(vm, dst_stack, k1, *id);
+            let v = static_value_to_vm_value(vm, k1, *id);
             v
         }
         BcValue::FunctionAddr(function_id) => function_id_to_ref_value(*function_id),
@@ -671,7 +670,6 @@ fn function_id_to_ref_value(function_id: FunctionId) -> Value {
 
 pub fn static_value_to_vm_value(
     vm: &mut Vm,
-    dst_stack: StackSelection,
     k1: &TypedProgram,
     static_value_id: StaticValueId,
 ) -> Value {
@@ -1128,12 +1126,6 @@ pub struct Stack {
     // Indexed by stack frame index, then function parameter index
     param_values: Vec<Vec<Value>>,
     cursor: *const u8,
-}
-
-// nocommit clean up ret to, please. How do we refer to the caller's _blocks_ stably but more simply
-enum RetTo {
-    Function(FunctionId),
-    Expr(TypedExprId),
 }
 
 #[derive(Clone, Copy)]

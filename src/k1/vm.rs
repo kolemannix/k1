@@ -1855,7 +1855,7 @@ pub fn store_value(types: &TypePool, dst: *mut u8, value: Value) -> usize {
                 let struct_layout = types.get_layout(type_id);
                 let size_bytes = struct_layout.size as usize;
                 // Equivalent of memcpy
-                eprintln!(
+                debug!(
                     "copy {} from {:?} -> {:?} {size_bytes}",
                     types.get(type_id).kind_name(),
                     ptr,
@@ -2038,9 +2038,9 @@ fn build_struct_unaligned(
 ) {
     let struct_layout = &types.get_struct_layout(struct_type_id);
 
-    for (value, field_offset) in members.iter().zip(struct_layout.field_offsets.iter()) {
+    for (value, field) in members.iter().zip(struct_layout.iter()) {
         // Go to offset
-        let field_dst = unsafe { dst.byte_add(*field_offset as usize) };
+        let field_dst = unsafe { dst.byte_add(field.offset as usize) };
         store_value(types, field_dst, *value);
     }
 }
@@ -2057,8 +2057,9 @@ pub fn gep_struct_field(
     struct_ptr: *const u8,
     field_index: usize,
 ) -> *const u8 {
-    let struct_type = types.get_struct_layout(struct_type);
-    let field_offset_bytes = struct_type.field_offsets[field_index];
+    let struct_agg_id = types.get_physical_type(struct_type).unwrap().expect_agg();
+    let field_offset_bytes =
+        types.get_struct_field_offset(struct_agg_id, field_index as u32).unwrap();
 
     let field_ptr = unsafe { struct_ptr.byte_add(field_offset_bytes as usize) };
     field_ptr

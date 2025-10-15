@@ -15182,7 +15182,7 @@ impl TypedProgram {
                     self.register_type_metainfo(f.type_id, span);
 
                     let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
-                    let offset_u32 = struct_layout.field_offsets[index];
+                    let offset_u32 = struct_layout[index].offset;
                     let offset_value_id = self
                         .static_values
                         .add(StaticValue::Int(TypedIntValue::UWord64(offset_u32 as u64)));
