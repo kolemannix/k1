@@ -969,11 +969,6 @@ fn compile_expr(
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr);
     match e {
-        TypedExpr::Bool(bv, _) => {
-            let imm = Value::byte(*bv as u8);
-            let store = store_simple_if_dst(b, dst, imm);
-            Ok(store)
-        }
         TypedExpr::Integer(int) => {
             let imm = b.push_int_value(&int.value);
             let store = store_simple_if_dst(b, dst, imm);

@@ -547,7 +547,6 @@ impl TypedProgram {
         match expr {
             TypedExpr::Integer(int) => write!(w, "{}", int.value),
             TypedExpr::Float(float) => write!(w, "{}", float.value),
-            TypedExpr::Bool(b, _) => write!(w, "{}", b),
             TypedExpr::Struct(struc) => {
                 w.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {

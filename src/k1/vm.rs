@@ -545,7 +545,6 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
     //std::io::stdin().read_line(&mut s).unwrap();
 
     let result: TyperResult<VmResult> = match k1.exprs.get(expr) {
-        TypedExpr::Bool(b, _) => Ok(Value::Bool(*b).into()),
         TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
         TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::Struct(s) => {
