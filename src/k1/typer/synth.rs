@@ -16,7 +16,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_bool(&mut self, value: bool, span: SpanId) -> TypedExprId {
-        let expr_id = self.exprs.add(TypedExpr::Bool(value, span));
+        let value_id = self.static_values.add(StaticValue::Bool(value));
+        let expr_id = self.add_static_constant_expr(value_id, BOOL_TYPE_ID, span);
         expr_id
     }
 

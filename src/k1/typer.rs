@@ -1410,7 +1410,6 @@ static_assert_size!(TypedExpr, 56);
 pub enum TypedExpr {
     // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
     StaticValue(StaticConstantExpr),
-    Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
     Struct(StructLiteral),
@@ -1477,7 +1476,6 @@ impl TypedExpr {
         match self {
             TypedExpr::Integer(_) => "integer",
             TypedExpr::Float(_) => "float",
-            TypedExpr::Bool(_, _) => "bool",
             TypedExpr::Struct(_) => "struct",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
             TypedExpr::ArrayGetElement(_) => "array_get_element",
@@ -1508,7 +1506,6 @@ impl TypedExpr {
         match self {
             TypedExpr::Integer(integer) => integer.get_type(),
             TypedExpr::Float(float) => float.get_type(),
-            TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
@@ -1537,7 +1534,6 @@ impl TypedExpr {
 
     pub fn get_span(&self) -> SpanId {
         match self {
-            TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
             TypedExpr::Float(float) => float.span,
             TypedExpr::Struct(struc) => struc.span,
@@ -4955,7 +4951,6 @@ impl TypedProgram {
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
             TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
-            TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Bool(*b)))),
             TypedExpr::Integer(typed_integer_expr) => {
                 Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
             }
@@ -6770,8 +6765,9 @@ impl TypedProgram {
                 Ok(self.exprs.add(numeric_expr))
             }
             ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => {
-                let expr = TypedExpr::Bool(*b, *span);
-                Ok(self.exprs.add(expr))
+                // nocommit(3): Store cached Ids for all the most common static values like bool,
+                // unit, int(0), int(1), et.al.
+                Ok(self.synth_bool(*b, *span))
             }
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
                 let static_value_id = self.static_values.add_string(*string_id);
@@ -6921,7 +6917,7 @@ impl TypedProgram {
                         let debug = self.ast.config.debug;
                         Ok(self.synth_bool(debug, *span))
                     }
-                    "IS_STATIC" => Ok(self.exprs.add(TypedExpr::Bool(false, *span))),
+                    "IS_STATIC" => Ok(self.synth_bool(false, *span)),
                     "MULTITHREADING" => {
                         let bool_value = self.program_settings.multithreaded;
                         Ok(self.synth_bool(bool_value, *span))
@@ -8611,9 +8607,10 @@ impl TypedProgram {
                         Ok(())
                     }
                     TypedPattern::LiteralBool(bool_value, span) => {
-                        let bool_expr = self.exprs.add(TypedExpr::Bool(*bool_value, *span));
+                        let span = *span;
+                        let bool_expr = self.synth_bool(*bool_value, span);
                         let equals_pattern_bool =
-                            self.synth_equals_call(target_expr, bool_expr, ctx, *span)?;
+                            self.synth_equals_call(target_expr, bool_expr, ctx, span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_bool });
                         Ok(())
                     }
@@ -11263,10 +11260,6 @@ impl TypedProgram {
         // We match on the node type, not its type, since the point is to hoist literals, not
         // follow variables around and implement a whole extra damn compiler
         let result = match self.exprs.get(expr_id) {
-            TypedExpr::Bool(b, span) => {
-                let static_value_id = self.static_values.add(StaticValue::Bool(*b));
-                Ok(self.add_static_value_expr(static_value_id, BOOL_TYPE_ID, *span))
-            }
             TypedExpr::Integer(int_expr) => {
                 let static_value_id = self.static_values.add(StaticValue::Int(int_expr.value));
                 Ok(self.add_static_value_expr(static_value_id, int_expr.get_type(), int_expr.span))

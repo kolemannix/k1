@@ -92,7 +92,6 @@ impl TypedProgram {
         }
 
         match self.exprs.get(expr) {
-            TypedExpr::Bool(_, _) => (),
             TypedExpr::Integer(_) => (),
             TypedExpr::Float(_) => (),
             TypedExpr::Struct(s) => {
