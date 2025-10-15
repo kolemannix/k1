@@ -113,10 +113,11 @@ impl TypedProgram {
         self.instantiate_generic_type(OPTIONAL_TYPE_ID, args)
     }
 
-    pub(super) fn synth_optional_some(&mut self, expression: TypedExpr) -> (TypedExprId, TypeId) {
-        let optional_type = self.synth_optional_type(expression.get_type());
-        let span = expression.get_span();
-        let expr_id = self.exprs.add(expression);
+    pub(super) fn synth_optional_some(&mut self, expr_id: TypedExprId) -> (TypedExprId, TypeId) {
+        let expr = self.exprs.get(expr_id);
+        let span = expr.get_span();
+        let inner_type = expr.get_type();
+        let optional_type = self.synth_optional_type(inner_type);
         let some_variant = self
             .types
             .get(optional_type)
@@ -349,11 +350,11 @@ impl TypedProgram {
 
     pub(super) fn synth_string_literal(
         &mut self,
-        msg: impl AsRef<str>,
+        string_id: StringId,
         span: SpanId,
     ) -> TypedExprId {
-        let string_id = self.ast.strings.intern(msg);
-        self.exprs.add(TypedExpr::String(string_id, span))
+        let string_value = self.static_values.add_string(string_id);
+        self.add_static_constant_expr(string_value, STRING_TYPE_ID, span)
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
@@ -362,13 +363,11 @@ impl TypedProgram {
 
         let source = self.ast.sources.source_by_span(self.ast.spans.get(span));
         let filename_string_id = self.ast.strings.intern(&source.filename);
+        let filename_expr = self.synth_string_literal(filename_string_id, span);
 
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: eco_vec![
-                StructLiteralField {
-                    name: self.ast.idents.b.filename,
-                    expr: self.exprs.add(TypedExpr::String(filename_string_id, span)),
-                },
+                StructLiteralField { name: self.ast.idents.b.filename, expr: filename_expr },
                 StructLiteralField {
                     name: self.ast.idents.b.line,
                     expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
@@ -390,7 +389,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let message_string_id = self.ast.strings.intern(message);
-        let message_expr = self.exprs.add(TypedExpr::String(message_string_id, span));
+        let message_expr = self.synth_string_literal(message_string_id, span);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_crash.with_span(span),
             &[],

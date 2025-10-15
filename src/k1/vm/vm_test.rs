@@ -3,7 +3,6 @@
 
 #[cfg(test)]
 mod stack_tests {
-    use ecow::eco_vec;
 
     use crate::parse::Ident;
     use crate::typer::types::{StructType, StructTypeField, U8_TYPE_ID, U32_TYPE_ID};

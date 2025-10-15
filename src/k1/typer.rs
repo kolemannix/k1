@@ -15,7 +15,10 @@ use crate::bc;
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
-use static_value::{StaticContainerKind, StaticValuePool};
+pub use static_value::{
+    StaticContainer, StaticContainerKind, StaticEnum, StaticStruct, StaticValue, StaticValueId,
+    StaticValuePool,
+};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -39,9 +42,6 @@ use either::Either;
 use fxhash::{FxHashMap, FxHashSet};
 use log::{debug, error, trace};
 use smallvec::{SmallVec, smallvec};
-pub(crate) use static_value::{
-    StaticContainer, StaticEnum, StaticStruct, StaticValue, StaticValueId,
-};
 
 use scopes::*;
 use types::*;
@@ -1395,17 +1395,26 @@ pub struct TypedLogicalOr {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy)]
+pub struct StaticConstantExpr {
+    pub value_id: StaticValueId,
+    pub type_id: TypeId,
+    pub is_typed_as_static: bool,
+    pub span: SpanId,
+}
+
 nz_u32_id!(CallId);
 
 static_assert_size!(TypedExpr, 56);
 #[derive(Clone)]
 pub enum TypedExpr {
+    // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
+    StaticValue(StaticConstantExpr),
     Unit(SpanId),
     Char(u8, SpanId),
     Bool(bool, SpanId),
     Integer(TypedIntegerExpr),
     Float(TypedFloatExpr),
-    String(StringId, SpanId),
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     ArrayGetElement(ArrayGetElement),
@@ -1422,6 +1431,8 @@ pub enum TypedExpr {
     Match(TypedMatchExpr),
     LogicalAnd(TypedLogicalAnd),
     LogicalOr(TypedLogicalOr),
+    // Current largest variant at 56 bytes
+    // nocommit(3): Deal with the size of MatchingCondition
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
@@ -1455,7 +1466,6 @@ pub enum TypedExpr {
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
-    StaticValue(StaticValueId, TypeId, SpanId),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1469,7 +1479,6 @@ impl TypedExpr {
         match self {
             TypedExpr::Unit(_) => "unit",
             TypedExpr::Char(_, _) => "char",
-            TypedExpr::String(_, _) => "string",
             TypedExpr::Integer(_) => "integer",
             TypedExpr::Float(_) => "float",
             TypedExpr::Bool(_, _) => "bool",
@@ -1495,7 +1504,7 @@ impl TypedExpr {
             TypedExpr::FunctionPointer(_) => "function_pointer",
             TypedExpr::FunctionToLambdaObject(_) => "function_to_lambda_object",
             TypedExpr::PendingCapture(_) => "pending_capture",
-            TypedExpr::StaticValue(_, _, _) => "static_value",
+            TypedExpr::StaticValue(_) => "static_value",
         }
     }
 
@@ -1503,7 +1512,6 @@ impl TypedExpr {
         match self {
             TypedExpr::Unit(_) => UNIT_TYPE_ID,
             TypedExpr::Char(_, _) => CHAR_TYPE_ID,
-            TypedExpr::String(_, _) => STRING_TYPE_ID,
             TypedExpr::Integer(integer) => integer.get_type(),
             TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Bool(_, _) => BOOL_TYPE_ID,
@@ -1529,7 +1537,7 @@ impl TypedExpr {
             TypedExpr::FunctionPointer(f) => f.function_pointer_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
-            TypedExpr::StaticValue(_, type_id, _) => *type_id,
+            TypedExpr::StaticValue(s) => s.type_id,
         }
     }
 
@@ -1540,7 +1548,6 @@ impl TypedExpr {
             TypedExpr::Bool(_, span) => *span,
             TypedExpr::Integer(int) => int.span,
             TypedExpr::Float(float) => float.span,
-            TypedExpr::String(_, span) => *span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::ArrayGetElement(ag) => ag.span,
@@ -1563,7 +1570,7 @@ impl TypedExpr {
             TypedExpr::FunctionPointer(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
-            TypedExpr::StaticValue(_, _, span) => *span,
+            TypedExpr::StaticValue(s) => s.span,
         }
     }
 
@@ -2404,34 +2411,7 @@ impl Timing {
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
         const EXPECTED_TYPE_COUNT: usize = 131072;
-        let types = TypePool {
-            types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
-            hashes: FxHashMap::new(),
-
-            layouts: VPool::make_with_hint("type_layouts", EXPECTED_TYPE_COUNT),
-            type_variable_counts: VPool::make_with_hint(
-                "type_variable_counts",
-                EXPECTED_TYPE_COUNT,
-            ),
-            instance_info: VPool::make_with_hint("instance_info", EXPECTED_TYPE_COUNT),
-
-            defn_info: FxHashMap::new(),
-            specializations: FxHashMap::new(),
-            ast_type_defn_mapping: FxHashMap::new(),
-            ast_ability_mapping: FxHashMap::new(),
-            builtins: BuiltinTypes {
-                string: None,
-                buffer: None,
-                dyn_lambda_obj: None,
-                types_layout: None,
-                types_type_schema: None,
-                types_int_kind: None,
-                types_int_value: None,
-            },
-            type_slices: VPool::make_with_hint("type_slices", 32768),
-            mem: kmem::Mem::make(),
-            config: TypesConfig { ptr_size_bits: config.target.word_size().bits() },
-        };
+        let types = TypePool::empty(config.target.word_size().bits());
 
         let ast = ParsedProgram::make(program_name, config);
         let root_ident = ast.idents.b.root_module_name;
@@ -3501,8 +3481,8 @@ impl TypedProgram {
                 let (static_value, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
                 let static_value_id = self.static_values.add(static_value);
-                let static_type = StaticType { inner_type_id, value_id: Some(static_value_id) };
-                let static_type_id = self.types.add_anon(Type::Static(static_type));
+                let static_type_id =
+                    self.types.add_static_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
             }
         }?;
@@ -4986,6 +4966,7 @@ impl TypedProgram {
         _scope_id: ScopeId,
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
+            TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
             TypedExpr::Unit(_) => Ok(Some(self.static_values.add(StaticValue::Unit))),
             TypedExpr::Char(byte, _) => Ok(Some(self.static_values.add(StaticValue::Char(*byte)))),
             TypedExpr::Bool(b, _) => Ok(Some(self.static_values.add(StaticValue::Bool(*b)))),
@@ -4995,7 +4976,6 @@ impl TypedProgram {
             TypedExpr::Float(typed_float_expr) => {
                 Ok(Some(self.static_values.add(StaticValue::Float(typed_float_expr.value))))
             }
-            TypedExpr::String(s, _) => Ok(Some(self.static_values.add(StaticValue::String(*s)))),
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -5017,8 +4997,12 @@ impl TypedProgram {
         }
     }
 
-    fn compile_expr_bytecode(&mut self, expr: TypedExprId) -> TyperResult<()> {
-        match bc::compile_top_level_expr(self, expr, false) {
+    fn compile_expr_bytecode(
+        &mut self,
+        expr: TypedExprId,
+        input_parameters: &[(VariableId, StaticValueId)],
+    ) -> TyperResult<()> {
+        match bc::compile_top_level_expr(self, expr, input_parameters, false) {
             Err(e) => return failf!(self.exprs.get(expr).get_span(), "bc failed: {}", e),
             Ok(_) => {}
         };
@@ -5065,7 +5049,6 @@ impl TypedProgram {
         let static_ctx = ctx.static_ctx.unwrap();
 
         let expr = self.eval_expr(parsed_expr, ctx)?;
-        self.compile_expr_bytecode(expr)?;
         let span = self.exprs.get(expr).get_span();
         let required_type_id = self.exprs.get(expr).get_type();
         let output_type_id =
@@ -5077,6 +5060,8 @@ impl TypedProgram {
                 static_value_id: shortcut_value_id,
             });
         }
+
+        self.compile_expr_bytecode(expr, input_parameters)?;
 
         let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
             |mut e| {
@@ -6475,16 +6460,16 @@ impl TypedProgram {
                         ctx.with_scope(block_scope).with_no_expected_type(),
                         false,
                     )?;
-                    let (consequent, consequent_type_id) =
-                        self.synth_optional_some(TypedExpr::StructFieldAccess(FieldAccess {
-                            base: opt_unwrap,
-                            target_field: field_name,
-                            field_index: field_index as u32,
-                            span,
-                            access_kind: FieldAccessKind::ValueToValue,
-                            result_type: field_type,
-                            struct_type: opt_inner_type,
-                        }));
+                    let field_access = self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
+                        base: opt_unwrap,
+                        target_field: field_name,
+                        field_index: field_index as u32,
+                        span,
+                        access_kind: FieldAccessKind::ValueToValue,
+                        result_type: field_type,
+                        struct_type: opt_inner_type,
+                    }));
+                    let (consequent, consequent_type_id) = self.synth_optional_some(field_access);
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
                         MSlice::empty(),
@@ -6803,15 +6788,20 @@ impl TypedProgram {
                 Ok(self.exprs.add(expr))
             }
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
-                if ctx.is_inference() {
-                    let static_value_id = self.static_values.add(StaticValue::String(*string_id));
-                    let t = self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id));
-                    let expr = TypedExpr::StaticValue(static_value_id, t, *span);
-                    Ok(self.exprs.add(expr))
+                let static_value_id = self.static_values.add_string(*string_id);
+                let is_typed_as_static = ctx.is_inference();
+                let type_to_use = if is_typed_as_static {
+                    self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id))
                 } else {
-                    let expr = TypedExpr::String(*string_id, *span);
-                    Ok(self.exprs.add(expr))
-                }
+                    STRING_TYPE_ID
+                };
+                let static_expr = self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+                    value_id: static_value_id,
+                    type_id: type_to_use,
+                    is_typed_as_static,
+                    span: *span,
+                }));
+                Ok(static_expr)
             }
             ParsedExpr::Variable(_variable) => Ok(self.eval_variable(expr_id, ctx.scope_id)?.1),
             ParsedExpr::FieldAccess(field_access) => {
@@ -6932,10 +6922,10 @@ impl TypedProgram {
                         Ok(self.synth_bool(is_test_build, *span))
                     }
                     "OS" => {
-                        // TODO: Ideally this is an enum! But we don't support comptime enums yet
+                        // TODO: Ideally this is an enum!
                         let os_str = self.ast.config.target.target_os().to_str();
                         let string_id = self.ast.strings.intern(os_str);
-                        Ok(self.exprs.add(TypedExpr::String(string_id, *span)))
+                        Ok(self.synth_string_literal(string_id, *span))
                     }
                     "NO_STD" => {
                         let no_std = self.ast.config.no_std;
@@ -6967,9 +6957,8 @@ impl TypedProgram {
                 let span_content =
                     self.ast.sources.get_span_content(self.ast.spans.get(parsed_stmt_span));
                 let string_id = self.ast.strings.intern(span_content);
+                let id = self.synth_string_literal(string_id, code.span);
                 // debug!("content for #code is exactly: `{span_content}`");
-                let parsed_code_string = TypedExpr::String(string_id, code.span);
-                let id = self.exprs.add(parsed_code_string);
                 Ok(id)
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
@@ -7035,6 +7024,35 @@ impl TypedProgram {
                 }
             }
         }
+    }
+
+    fn add_static_value_expr(
+        &mut self,
+        value_id: StaticValueId,
+        inner_type_id: TypeId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
+        self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+            value_id,
+            type_id: static_type_id,
+            is_typed_as_static: true,
+            span,
+        }))
+    }
+
+    fn add_static_constant_expr(
+        &mut self,
+        value_id: StaticValueId,
+        type_id: TypeId,
+        span: SpanId,
+    ) -> TypedExprId {
+        self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+            value_id,
+            type_id,
+            is_typed_as_static: false,
+            span,
+        }))
     }
 
     fn eval_list_literal(
@@ -7398,14 +7416,9 @@ impl TypedProgram {
                 }
             }
             ParsedStaticBlockKind::Value => {
-                let static_type_id =
-                    self.types.add_static_type(vm_result.type_id, Some(vm_result.static_value_id));
-                let static_value_expr = self.exprs.add(TypedExpr::StaticValue(
-                    vm_result.static_value_id,
-                    static_type_id,
-                    span,
-                ));
-                Ok(StaticExecutionResult::TypedExpr(static_value_expr))
+                let static_value_expr_id =
+                    self.add_static_value_expr(vm_result.static_value_id, vm_result.type_id, span);
+                Ok(StaticExecutionResult::TypedExpr(static_value_expr_id))
             }
         }
     }
@@ -7739,13 +7752,13 @@ impl TypedProgram {
 
         let part_count = interpolated_string.parts.len();
         if part_count == 1 {
-            let parse::InterpolatedStringPart::String(s) =
+            let parse::InterpolatedStringPart::String(string_id) =
                 interpolated_string.parts.first().unwrap().clone()
             else {
                 self.ice_with_span("String had only one part that was not a string", span)
             };
-            let s = self.exprs.add(TypedExpr::String(s, span));
-            Ok(s)
+            let e = self.synth_string_literal(string_id, span);
+            Ok(e)
         } else {
             let interpolated_string = interpolated_string.clone();
             let mut block = self.synth_block(ctx.scope_id, span);
@@ -7773,8 +7786,8 @@ impl TypedProgram {
             self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
             for part in interpolated_string.parts.into_iter() {
                 let print_expr = match part {
-                    parse::InterpolatedStringPart::String(s) => {
-                        let string_expr = self.exprs.add(TypedExpr::String(s, span));
+                    parse::InterpolatedStringPart::String(string_id) => {
+                        let string_expr = self.synth_string_literal(string_id, span);
                         self.synth_printto_call(
                             string_expr,
                             string_builder_var.variable_expr,
@@ -8616,9 +8629,10 @@ impl TypedProgram {
                         Ok(())
                     }
                     TypedPattern::LiteralString(string_id, span) => {
-                        let string_expr = self.exprs.add(TypedExpr::String(*string_id, *span));
+                        let span = *span;
+                        let string_expr = self.synth_string_literal(*string_id, span);
                         let condition =
-                            self.synth_equals_call(target_expr, string_expr, ctx, *span)?;
+                            self.synth_equals_call(target_expr, string_expr, ctx, span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: condition });
                         Ok(())
                     }
@@ -9962,7 +9976,8 @@ impl TypedProgram {
                 let expr = match result {
                     Err(typer_error) => {
                         let string_id = self.ast.strings.intern(typer_error.message);
-                        self.synth_optional_some(TypedExpr::String(string_id, call_span)).0
+                        let string_expr = self.synth_string_literal(string_id, call_span);
+                        self.synth_optional_some(string_expr).0
                     }
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
@@ -10074,7 +10089,8 @@ impl TypedProgram {
                     ctx,
                     false,
                 )?;
-                let crash_message = self.synth_string_literal("Array index out of bounds", span);
+                let string_id = self.ast.strings.intern("Array index out of bounds");
+                let crash_message = self.synth_string_literal(string_id, span);
                 let crash_oob = self.synth_typed_call_typed_args(
                     self.ast.idents.f.core_crashBounds.with_span(span),
                     &[],
@@ -10603,15 +10619,16 @@ impl TypedProgram {
                 self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
             let cast_type =
                 if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
+            let cast_expr = self.exprs.add(TypedExpr::Cast(TypedCast {
+                cast_type,
+                base_expr,
+                target_type_id: resulting_type_id,
+                span,
+            }));
             let (consequent, consequent_type_id) =
                 // base_expr is the enum type, or a reference to it
                 // resulting_type_id is the variant, or a reference to it
-                self.synth_optional_some(TypedExpr::Cast(TypedCast {
-                    cast_type,
-                    base_expr,
-                    target_type_id: resulting_type_id,
-                    span,
-                }));
+                self.synth_optional_some(cast_expr);
             let alternate = self.synth_optional_none(resulting_type_id, span);
 
             Ok(Some(self.synth_if_else(
@@ -11253,7 +11270,8 @@ impl TypedProgram {
         // value. Easy examples that must work include:
         // - all scalar literals,
         // - string literals,
-        // - Perhaps struct and enum literals, if we're feeling motivated
+        // - Perhaps struct and enum literals, if all of their fields also meet the other criteria
+        // recursively
         // - LIST literals are tricky because they've already been compiled to a block of
         //   imperative code
 
@@ -11262,43 +11280,33 @@ impl TypedProgram {
         let result = match self.exprs.get(expr_id) {
             TypedExpr::Unit(span) => {
                 let static_value_id = self.static_values.add(StaticValue::Unit);
-                let static_type = self.types.add_static_type(UNIT_TYPE_ID, Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
+                Ok(self.add_static_value_expr(static_value_id, UNIT_TYPE_ID, *span))
             }
             TypedExpr::Char(c, span) => {
                 let static_value_id = self.static_values.add(StaticValue::Char(*c));
-                let static_type = self.types.add_static_type(CHAR_TYPE_ID, Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
+                Ok(self.add_static_value_expr(static_value_id, CHAR_TYPE_ID, *span))
             }
             TypedExpr::Bool(b, span) => {
                 let static_value_id = self.static_values.add(StaticValue::Bool(*b));
-                let static_type = self.types.add_static_type(BOOL_TYPE_ID, Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
+                Ok(self.add_static_value_expr(static_value_id, BOOL_TYPE_ID, *span))
             }
             TypedExpr::Integer(int_expr) => {
                 let static_value_id = self.static_values.add(StaticValue::Int(int_expr.value));
-                let static_type =
-                    self.types.add_static_type(int_expr.get_type(), Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(
-                    static_value_id,
-                    static_type,
-                    int_expr.span,
-                )))
+                Ok(self.add_static_value_expr(static_value_id, int_expr.get_type(), int_expr.span))
             }
             TypedExpr::Float(float_expr) => {
                 let static_value_id = self.static_values.add(StaticValue::Float(float_expr.value));
-                let static_type =
-                    self.types.add_static_type(float_expr.get_type(), Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(
+                Ok(self.add_static_value_expr(
                     static_value_id,
-                    static_type,
+                    float_expr.get_type(),
                     float_expr.span,
-                )))
+                ))
             }
-            TypedExpr::String(string_id, span) => {
-                let static_value_id = self.static_values.add(StaticValue::String(*string_id));
-                let static_type = self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id));
-                Ok(self.exprs.add(TypedExpr::StaticValue(static_value_id, static_type, *span)))
+            TypedExpr::StaticValue(static_constant) if !static_constant.is_typed_as_static => {
+                let value_id = static_constant.value_id;
+                let inner_type_id = static_constant.type_id;
+                let span = static_constant.span;
+                Ok(self.add_static_value_expr(value_id, inner_type_id, span))
             }
             e => {
                 failf!(
@@ -11345,8 +11353,12 @@ impl TypedProgram {
                 let Some(value) = self.static_values.get_opt(static_value_id) else {
                     return failf!(span, "No static value with id {}", static_value_id);
                 };
-                let static_value_expr =
-                    TypedExpr::StaticValue(static_value_id, value.get_type(), span);
+                let static_value_expr = TypedExpr::StaticValue(StaticConstantExpr {
+                    value_id: static_value_id,
+                    type_id: value.get_type(),
+                    is_typed_as_static: false,
+                    span,
+                });
                 Ok(self.exprs.add(static_value_expr))
             }
             IntrinsicOperation::StaticTypeToValue => {
@@ -11364,10 +11376,18 @@ impl TypedProgram {
                     );
                 };
                 if let Some(static_value_id) = static_type.value_id {
-                    let static_value_expr =
-                        TypedExpr::StaticValue(static_value_id, return_static_type, span);
+                    let static_value_expr = TypedExpr::StaticValue(StaticConstantExpr {
+                        value_id: static_value_id,
+                        type_id: return_static_type,
+                        is_typed_as_static: true,
+                        span,
+                    });
                     Ok(self.exprs.add(static_value_expr))
                 } else {
+                    // Since the static type has no value, we know this is generic code
+                    // and we just need to generate a term that typechecks, so a
+                    // unit casted to the generic static type. We should probably invent
+                    // a way to do this that doesn't require 2 nodes
                     let unit_expr = self.exprs.add(TypedExpr::Unit(span));
                     Ok(self.synth_cast(
                         unit_expr,

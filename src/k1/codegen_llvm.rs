@@ -43,7 +43,6 @@ use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
-use crate::typer::static_value::{StaticContainerKind, StaticValuePool};
 use crate::typer::types::{
     BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID,
     I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo,
@@ -53,9 +52,9 @@ use crate::typer::{
     AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
     IntegerCastDirection, IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind,
     IntrinsicOperation, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition,
-    MatchingConditionInstr, StaticValue, StaticValueId, TypedBlock, TypedCast, TypedExpr,
-    TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue, TypedMatchExpr,
-    TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
+    MatchingConditionInstr, StaticContainerKind, StaticValue, StaticValueId, StaticValuePool,
+    TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId,
+    TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
 };
 
 #[derive(Debug)]
@@ -2226,10 +2225,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(self.codegen_integer_value(integer.value).unwrap().into())
             }
             TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
-            TypedExpr::String(string_value, _) => {
-                let string_pointer = self.codegen_string_id(*string_value)?;
-                Ok(string_pointer.as_basic_value_enum().into())
-            }
             TypedExpr::Variable(ir_var) => {
                 if let Some(variable_value) = self.variable_to_value.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
@@ -2590,8 +2585,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // representation type for aggregates _is_ ptr in our codegen
                 Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
             }
-            TypedExpr::StaticValue(value_id, ..) => {
-                let static_value = self.codegen_static_value_as_code(*value_id)?;
+            TypedExpr::StaticValue(s) => {
+                let static_value = self.codegen_static_value_as_code(s.value_id)?;
                 Ok(static_value.into())
             }
             TypedExpr::PendingCapture(_) => {
