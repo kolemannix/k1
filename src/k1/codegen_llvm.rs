@@ -2210,13 +2210,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.set_debug_location_from_span(span);
         debug!("codegen expr\n{}", self.k1.expr_to_string_with_type(expr_id));
         match expr {
-            TypedExpr::Unit(_) => Ok(self.builtin_types.unit_basic().into()),
-            TypedExpr::Char(byte, _) => Ok(self
-                .builtin_types
-                .char
-                .const_int(*byte as u64, false)
-                .as_basic_value_enum()
-                .into()),
             TypedExpr::Bool(b, _) => match b {
                 true => Ok(self.builtin_types.true_value.as_basic_value_enum().into()),
                 false => Ok(self.builtin_types.false_value.as_basic_value_enum().into()),

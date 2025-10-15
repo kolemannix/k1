@@ -20,6 +20,11 @@ impl TypedProgram {
         expr_id
     }
 
+    pub(super) fn synth_unit(&mut self, span: SpanId) -> TypedExprId {
+        let value_id = self.static_values.add(StaticValue::Unit);
+        self.add_static_constant_expr(value_id, UNIT_TYPE_ID, span)
+    }
+
     pub(super) fn synth_equals_call(
         &mut self,
         lhs: TypedExprId,
