@@ -15,24 +15,15 @@ use memmap2::{MmapMut, MmapOptions};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
-    bc::{
-        self, BcCallee, CompilableUnit, CompiledUnit, InstId, InstKind, ProgramBytecode,
-        Value as BcValue,
-    },
+    bc::{self, BcCallee, CompilableUnit, CompiledUnit, InstId, InstKind, Value as BcValue},
     compiler::WordSize,
-    errf, failf,
-    kmem::MSlice,
+    failf,
     lex::SpanId,
     parse::{Ident, StringId},
     typer::{
-        self, FunctionId, Layout, StaticContainer, StaticEnum, StaticStruct, StaticValue,
-        StaticValueId, TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
-        TyperResult, VariableId,
-        types::{
-            BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, FloatType, IntegerType, MaybeInlineType,
-            POINTER_TYPE_ID, STRING_TYPE_ID, ScalarType, StructLayout, Type, TypeId, TypePool,
-            TypedEnumVariant, UNIT_TYPE_ID,
-        },
+        FunctionId, Layout, StaticValueId, TypedExprId, TypedFloatValue, TypedGlobalId,
+        TypedIntValue, TypedProgram, TyperResult, VariableId,
+        types::{IntegerType, MaybeInlineType, STRING_TYPE_ID, ScalarType, TypeId, TypePool},
     },
     vm_ice,
 };
@@ -182,8 +173,7 @@ impl Vm {
         writeln!(w, "Locals").unwrap();
         let locals = self.stack.inst_values[frame_index].iter().copied().enumerate().collect_vec();
         for (inst_index, value) in locals.into_iter() {
-            let inst_id =
-                InstId::from_u32(frame.unit.base_inst_id.as_u32() + inst_index as u32).unwrap();
+            let inst_id = InstId::from_u32(frame.unit.inst_offset + inst_index as u32).unwrap();
             let kind = bc::get_inst_kind(&k1.bytecode.borrow(), &k1.types, inst_id);
             write!(w, "  i{}: ", inst_id).unwrap();
             bc::display_inst_kind(w, &k1.types, &kind).unwrap();
@@ -325,7 +315,7 @@ fn execute_compiled_unit(
     let span = k1.exprs.get(expr_id).get_span();
     let unit = bc.exprs.get(&expr_id).unwrap();
     let dst_stack = StackSelection::CallStackCurrent;
-    let inst_offset = unit.base_inst_id.as_u32();
+    let inst_offset = unit.inst_offset;
     let mut prev_b: u32 = 0;
 
     // These 3 variables constitute our instruction pointer
@@ -334,7 +324,7 @@ fn execute_compiled_unit(
     let mut ip: u32 = 0;
 
     match unit.unit {
-        CompilableUnit::Function(function_id) => {
+        CompilableUnit::Function(_function_id) => {
             return failf!(span, "Cannot execute function from top");
         }
         CompilableUnit::Expr(_) => {
@@ -342,7 +332,7 @@ fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let mut frame = vm.stack.push_new_frame(None, Some(span), *unit, None);
+    let frame = vm.stack.push_new_frame(None, Some(span), *unit, None);
     let frame_index = frame.index;
 
     // TODO: Set the IS_STATIC global
@@ -1081,7 +1071,7 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
             ScalarType::I8 => dst.write(value.expect_data() as u8),
             ScalarType::I16 => (dst as *mut u16).write(value.expect_data() as u16),
             ScalarType::I32 => (dst as *mut u32).write(value.expect_data() as u32),
-            ScalarType::I64 => (dst as *mut u64).write(value.expect_data() as u64),
+            ScalarType::I64 => (dst as *mut u64).write(value.expect_data()),
             ScalarType::F32 => (dst as *mut u32).write(value.expect_data() as u32),
             ScalarType::F64 => (dst as *mut u64).write(value.expect_data()),
             ScalarType::Pointer => (dst as *mut usize).write(value.expect_data() as usize),
@@ -1089,6 +1079,7 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     }
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &TypePool, t: MaybeInlineType, dst: *mut u8, value: Value) {
     match t {
         MaybeInlineType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),

@@ -13356,9 +13356,9 @@ impl TypedProgram {
             if is_concrete {
                 if let Err(e) = bc::compile_function(self, declaration_id, false) {
                     return failf!(
-                        function_signature_span,
+                        e.span,
                         "Failed to compile bytecode for function: {}",
-                        e
+                        e.message
                     );
                 };
                 if ensure_executable {

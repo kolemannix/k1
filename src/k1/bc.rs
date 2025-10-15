@@ -8,7 +8,6 @@ use crate::compiler::WordSize;
 // But I currently think there's going to be a lot of value
 // in having our own. It'll be easier to write an interpreter for
 // and will help make adding other backends far, far easier
-use crate::mformat;
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{
@@ -19,12 +18,13 @@ use crate::{
     pool::VPool,
     typer::{types::*, *},
 };
+use crate::{failf, mformat};
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use log::debug;
 use smallvec::smallvec;
-use std::{borrow::Cow, fmt::Write};
+use std::fmt::Write;
 
 macro_rules! b_ice {
     ($b:expr, $($format_args:expr),*) => {
@@ -111,11 +111,9 @@ pub struct CompiledUnit {
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
-    pub base_inst_id: InstId,
+    pub inst_offset: u32,
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
 }
-
-type BcResult<T> = Result<T, Cow<'static, str>>;
 
 #[derive(Clone, Copy)]
 pub enum Imm {
@@ -191,9 +189,6 @@ impl Value {
     }
     const fn imm32(u32: u32) -> Value {
         Value::Imm32 { t: ScalarType::I32, data: u32 }
-    }
-    const fn from_f32(f32: f32) -> Value {
-        Value::Imm32 { t: ScalarType::F32, data: f32.to_bits() }
     }
 }
 
@@ -459,10 +454,10 @@ impl InstKind {
         matches!(self, InstKind::Value(_))
     }
     #[track_caller]
-    pub fn expect_value(&self) -> BcResult<MaybeInlineType> {
+    pub fn expect_value(&self) -> Result<MaybeInlineType, String> {
         match self {
             InstKind::Value(t) => Ok(*t),
-            _ => Err(format!("Expected value, got {}", self.kind_str()).into()),
+            _ => Err(format!("Expected value, got {}", self.kind_str())),
         }
     }
     fn as_value(&self) -> Option<MaybeInlineType> {
@@ -500,12 +495,18 @@ pub fn compile_function(
     k1: &mut TypedProgram,
     function_id: FunctionId,
     compile_deps: bool,
-) -> BcResult<()> {
+) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
     let mut bc = k1.bytecode.borrow_mut();
-    let mut builder =
-        Builder { bc: &mut bc, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
+    let mut builder = Builder {
+        inst_offset: bc.instrs.len() as u32,
+        bc: &mut bc,
+        k1,
+        block_count: 0,
+        cur_block: 0,
+        cur_span: SpanId::NONE,
+    };
 
     compile_unit_rec(&mut builder, CompilableUnit::Function(function_id), compile_deps)?;
 
@@ -519,11 +520,18 @@ pub fn compile_top_level_expr(
     expr: TypedExprId,
     input_parameters: &[(VariableId, StaticValueId)],
     compile_deps: bool,
-) -> BcResult<()> {
+) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
     let mut bc = k1.bytecode.borrow_mut();
-    let mut b = Builder { bc: &mut bc, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
+    let mut b = Builder {
+        inst_offset: bc.instrs.len() as u32,
+        bc: &mut bc,
+        k1,
+        block_count: 0,
+        cur_block: 0,
+        cur_span: SpanId::NONE,
+    };
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
         let pt_id = b.get_physical_type_id(variable.type_id);
@@ -541,7 +549,7 @@ pub fn compile_top_level_expr(
     Ok(())
 }
 
-fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -> BcResult<()> {
+fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -> TyperResult<()> {
     let mut unit = Some(unit);
     loop {
         if unit.is_none() {
@@ -560,7 +568,7 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
     }
 }
 
-fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> BcResult<()> {
+fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
             debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
@@ -583,18 +591,18 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> BcResult<()> {
             }
 
             let Some(body) = f.body_block else {
-                return Err(format!(
+                return failf!(
+                    b.cur_span,
                     "Function has no body: {}",
                     b.k1.function_id_to_string(function_id, false)
-                )
-                .into());
+                );
             };
             compile_block_stmts(b, None, body)?;
 
             let compiled_blocks = b.bake_blocks();
             let function = CompiledUnit {
                 unit: CompilableUnit::Function(function_id),
-                base_inst_id: b.first_inst(),
+                inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
             };
             b.reset_compilation_unit();
@@ -610,7 +618,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> BcResult<()> {
             let compiled_blocks = b.bake_blocks();
             let compiled_expr = CompiledUnit {
                 unit: CompilableUnit::Expr(typed_expr_id),
-                base_inst_id: b.first_inst(),
+                inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
             };
             b.reset_compilation_unit();
@@ -637,6 +645,7 @@ pub struct Builder<'bc, 'k1> {
 
     bc: &'bc mut ProgramBytecode,
 
+    inst_offset: u32,
     block_count: u32,
     cur_block: BlockId,
     cur_span: SpanId,
@@ -647,13 +656,14 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         for b in &mut self.bc.b_blocks {
             b.instrs.clear();
         }
+        self.block_count = 0;
         self.bc.b_variables.clear();
         self.bc.b_loops.clear();
     }
 
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
         let mut blocks = self.bc.mem.new_vec(self.bc.b_blocks.len() as u32);
-        for b in self.bc.b_blocks.iter() {
+        for b in Builder::builder_blocks_iter(self.block_count, &self.bc.b_blocks) {
             let instrs = self.bc.mem.push_slice(&b.instrs);
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
@@ -661,8 +671,8 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         self.bc.mem.vec_to_mslice(&blocks)
     }
 
-    fn first_inst(&self) -> InstId {
-        self.bc.b_blocks[0].instrs[0]
+    fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
+        b_blocks[0..block_count as usize].iter()
     }
 
     fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
@@ -790,15 +800,6 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         id as BlockId
     }
 
-    fn get_block(&self, block_id: BlockId) -> &Block {
-        &self.bc.b_blocks[block_id as usize]
-    }
-
-    #[allow(unused)]
-    fn get_inst_mut(&mut self, inst_id: InstId) -> &mut Inst {
-        self.bc.instrs.get_mut(inst_id)
-    }
-
     #[track_caller]
     fn goto_block(&mut self, block_id: BlockId) {
         match self.bc.b_blocks.get(block_id as usize) {
@@ -812,7 +813,8 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
     }
 
     fn get_physical_type_id(&self, type_id: TypeId) -> PhysicalTypeId {
-        match self.k1.types.type_phys_type_lookup.get(type_id) {
+        let resolved = self.k1.types.get_chased_id(type_id);
+        match self.k1.types.type_phys_type_lookup.get(resolved) {
             None => b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string(type_id)),
             Some(pt_id) => *pt_id,
         }
@@ -826,7 +828,7 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
 
     fn type_to_inst_kind(&self, type_id: TypeId) -> InstKind {
         if type_id == NEVER_TYPE_ID {
-            InstKind::Void
+            InstKind::Terminator
         } else {
             let t = self.get_physical_type_id(type_id);
             let packed = self.k1.types.pack_inline_type(t);
@@ -858,9 +860,9 @@ fn compile_block_stmts(
     b: &mut Builder,
     dst: Option<Value>,
     body: TypedExprId,
-) -> BcResult<Option<Value>> {
+) -> TyperResult<Option<Value>> {
     let TypedExpr::Block(body) = b.k1.exprs.get(body) else {
-        return Err("body is not a block".into());
+        return failf!(b.cur_span, "body is not a block");
     };
 
     let mut last_ret = None;
@@ -873,7 +875,7 @@ fn compile_block_stmts(
     Ok(last_ret)
 }
 
-fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> BcResult<Value> {
+fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> TyperResult<Value> {
     let prev_span = b.cur_span;
     let stmt_span = b.k1.get_stmt_span(stmt);
     b.cur_span = stmt_span;
@@ -980,7 +982,7 @@ fn compile_expr(
     // Where to put the result; aka value placement or destination-aware codegen
     dst: Option<Value>,
     expr: TypedExprId,
-) -> BcResult<Value> {
+) -> TyperResult<Value> {
     let prev_span = b.cur_span;
     b.cur_span = b.k1.exprs.get(expr).get_span();
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
@@ -1171,7 +1173,7 @@ fn compile_expr(
         }
         TypedExpr::Block(_) => {
             let Some(last) = compile_block_stmts(b, dst, expr)? else {
-                return Err("Block has no value".into());
+                return failf!(b.cur_span, "Block has no value");
             };
             Ok(last)
         }
@@ -1307,7 +1309,7 @@ fn compile_expr(
                         args.push(lambda_env);
                         BcCallee::Direct(*function_id)
                     }
-                    Callee::Abstract { .. } => return Err("bc abstract call".into()),
+                    Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
@@ -1334,7 +1336,7 @@ fn compile_expr(
                         BcCallee::Indirect(callee_inst)
                     }
                     Callee::DynamicAbstract { .. } => {
-                        return Err("bc abstract call".into());
+                        return failf!(b.cur_span, "bc abstract call");
                     }
                 }
             };
@@ -1353,7 +1355,7 @@ fn compile_expr(
             }
             let call_dst = match dst {
                 None => match return_inst_kind {
-                    InstKind::Value(pt) => {
+                    InstKind::Value(_pt) => {
                         let pt_id = b.get_physical_type_id(return_type_id);
                         Some(b.alloca_type(pt_id).as_value())
                     }
@@ -1405,7 +1407,10 @@ fn compile_expr(
                     let pt_inlined = b.k1.types.pack_inline_type(pt_id);
                     Some(b.push_inst(Inst::CameFrom { t: pt_inlined, incomings: MSlice::empty() }))
                 }
-                InstKind::Void => return Err("come from void".into()),
+                InstKind::Void => {
+                    eprintln!("expr {}", b.k1.expr_to_string(expr));
+                    return failf!(b.cur_span, "come from void");
+                }
                 InstKind::Terminator => None,
             };
 
@@ -1599,7 +1604,6 @@ fn compile_expr(
             }
 
             let variant_pt_id = b.get_physical_type_id(enumc.variant_type_id);
-            let variant_struct_type = enumc_inst_kind.expect_value()?;
             let enum_base = match dst {
                 Some(dst) => dst,
                 None => b.alloca_type(variant_pt_id).as_value(),
@@ -1756,7 +1760,7 @@ fn compile_cast(
     // Where to put the result; aka value placement or destination-aware codegen
     dst: Option<Value>,
     expr: TypedExprId,
-) -> BcResult<Value> {
+) -> TyperResult<Value> {
     let TypedExpr::Cast(c) = b.k1.exprs.get(expr) else { unreachable!() };
     match c.cast_type {
         CastType::EnumToVariant
@@ -1943,7 +1947,7 @@ fn compile_matching_condition(
     mc: &MatchingCondition,
     cons_block: BlockId,
     condition_fail_block: BlockId,
-) -> BcResult<()> {
+) -> TyperResult<()> {
     b.cur_span = mc.span;
     if mc.instrs.is_empty() {
         // Always true
@@ -2000,7 +2004,7 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                         errors.push(format!("store dst v{} is not a ptr", *inst_id))
                     }
                 }
-                Inst::Load { t, src } => {
+                Inst::Load { src, .. } => {
                     let src_kind = get_value_kind(&bc, &k1.types, src);
                     if !src_kind.is_storage() {
                         errors.push(format!("i{inst_id}: load src is not storage"))
@@ -2185,7 +2189,7 @@ pub fn display_inst(
             display_scalar_type(w, t)?;
             write!(w, " from {}", *src)?;
         }
-        Inst::Copy { dst, src, t, vm_size } => {
+        Inst::Copy { dst, src, t: _, vm_size } => {
             write!(w, "copy {} {}, src {}", *vm_size, *dst, *src)?;
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {

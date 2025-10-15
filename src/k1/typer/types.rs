@@ -1280,7 +1280,7 @@ impl TypePool {
                 // HARD AGREE 4 months later!
                 // Checklist is:
                 // - manage the hash
-                // - Update the 3 SoA fields: variable counts, layout, and instance_info
+                // - Update the 4 SoA fields: variable counts, layout, phys_type_mapping, and instance_info
                 // - Manage both the resolve vs insert paths
                 // - Handle enums since they are self-referential
 
@@ -1290,6 +1290,8 @@ impl TypePool {
 
                 let layout = self.compute_type_layout(unresolved_type_id);
                 *self.layouts.get_mut(unresolved_type_id) = layout;
+                let pt_id = self.compile_physical_type(unresolved_type_id);
+                *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
             }
         };
     }
@@ -1668,10 +1670,6 @@ impl TypePool {
     }
 
     pub fn compile_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalTypeId> {
-        if let Some(pt) = self.type_phys_type_lookup.get(type_id) {
-            return Some(*pt);
-        };
-
         match self.get(type_id) {
             //task(bc): Eventually, Unit should correspond to Void, not a byte. But only once we can
             //successfully lower it to a zero-sized type everywhere; for example a struct member of
