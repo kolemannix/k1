@@ -2126,7 +2126,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: MSlice<AbilityImplFunction>,
+    pub functions: MSlice<AbilityImplFunction, MemPerm>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2135,7 +2135,7 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(&self, mem: &kmem::Mem, index: u32) -> &AbilityImplFunction {
+    pub fn function_at_index(&self, mem: &kmem::Mem<MemPerm>, index: u32) -> &AbilityImplFunction {
         mem.get_nth(self.functions, index as usize)
     }
 
@@ -2310,6 +2310,9 @@ pub struct ProgramSettings {
     pub executable: bool,
 }
 
+pub struct MemTmp;
+pub struct MemPerm;
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     pub program_settings: ProgramSettings,
@@ -2375,11 +2378,9 @@ pub struct TypedProgram {
     pub alt_vms: Vec<vm::Vm>,
 
     /// Perm arena space
-    // nocommit tag this arena
-    pub a: kmem::Mem,
+    pub a: kmem::Mem<MemPerm>,
     /// tmp arena space
-    // nocommit tag this arena
-    pub tmp: kmem::Mem,
+    pub tmp: kmem::Mem<MemTmp>,
 
     pub bytecode: RefCell<bc::ProgramBytecode>,
 
@@ -3732,8 +3733,7 @@ impl TypedProgram {
                                 ty_app.args.len()
                             );
                         }
-                        let mut type_arguments: FixVec<TypeId> =
-                            self.tmp.new_vec(ty_app.args.len() as u32);
+                        let mut type_arguments = self.tmp.new_vec(ty_app.args.len() as u32);
                         for parsed_arg in self.ast.p_type_args.copy_slice_sv8(ty_app.args) {
                             let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                                 return failf!(
@@ -7081,7 +7081,7 @@ impl TypedProgram {
         list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: FixVec<TypedExprId> = {
+        let elements: FixVec<TypedExprId, MemTmp> = {
             let mut elements = self.tmp.new_vec(element_count as u32);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
@@ -8219,7 +8219,7 @@ impl TypedProgram {
         let mut expected_arm_type_id = ctx.expected_type_id;
         let match_scope_id = ctx.scope_id;
 
-        let mut all_unguarded_patterns: FixVec<(TypedPatternId, usize)> =
+        let mut all_unguarded_patterns: FixVec<(TypedPatternId, usize), MemTmp> =
             self.tmp.new_vec(cases.iter().map(|pc| pc.patterns.len() as u32).sum());
         let target_expr_type = self.exprs.get(target_expr).get_type();
         let target_expr_span = self.exprs.get(target_expr).get_span();
@@ -10491,7 +10491,7 @@ impl TypedProgram {
             fn_call.span,
             ctx.scope_id,
         )?;
-        let mut parameter_constraints: FixVec<Option<TypeId>> =
+        let mut parameter_constraints: FixVec<Option<TypeId>, MemTmp> =
             self.tmp.new_vec(ability_params.len() as u32);
         for ab_param in &ability_params {
             if ab_param.is_impl_param {
@@ -14602,7 +14602,7 @@ impl TypedProgram {
             )
         }
 
-        debug_assert_eq!(self.types.types.len(), self.types.layouts.len());
+        debug_assert_eq!(self.types.types.len(), self.types.type_phys_type_lookup.len());
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
         for type_id in self.types.iter_ids().collect_vec() {

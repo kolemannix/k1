@@ -169,10 +169,10 @@ pub struct CameFromCase {
 #[derive(Clone, Copy)]
 pub enum Value {
     Inst(InstId),
-    Global { t: MaybeInlineType, id: TypedGlobalId },
-    StaticValue { t: MaybeInlineType, id: StaticValueId },
+    Global { t: PhysicalType, id: TypedGlobalId },
+    StaticValue { t: PhysicalType, id: StaticValueId },
     FunctionAddr(FunctionId),
-    FnParam { t: MaybeInlineType, index: u32 },
+    FnParam { t: PhysicalType, index: u32 },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
@@ -220,7 +220,7 @@ pub enum Inst {
 
     // Memory manipulation
     Alloca {
-        t: MaybeInlineType,
+        t: PhysicalType,
         vm_layout: Layout,
     },
     Store {
@@ -234,7 +234,7 @@ pub enum Inst {
     Copy {
         dst: Value,
         src: Value,
-        t: MaybeInlineType,
+        t: PhysicalType,
         vm_size: u32,
     },
     StructOffset {
@@ -244,7 +244,7 @@ pub enum Inst {
         vm_offset: u32,
     },
     ArrayOffset {
-        element_t: MaybeInlineType,
+        element_t: PhysicalType,
         base: Value,
         element_index: Value,
     },
@@ -271,7 +271,7 @@ pub enum Inst {
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
     CameFrom {
-        t: MaybeInlineType,
+        t: PhysicalType,
         incomings: MSlice<CameFromCase, ProgramBytecode>,
     },
     Ret(Value),
@@ -339,7 +339,7 @@ pub enum Inst {
 
     // Platform ops
     Memset {
-        t: MaybeInlineType,
+        t: PhysicalType,
         size: Value,
         dst: Value,
         value: Value,
@@ -354,7 +354,7 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
         Value::Imm32 { t: scalar_type, data: _ } => {
-            InstKind::Value(MaybeInlineType::Scalar(*scalar_type))
+            InstKind::Value(PhysicalType::Scalar(*scalar_type))
         }
         Value::PtrZero => InstKind::PTR,
     }
@@ -419,7 +419,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
 
 #[derive(Clone, Copy)]
 pub enum InstKind {
-    Value(MaybeInlineType),
+    Value(PhysicalType),
     Void,
     Terminator,
 }
@@ -432,20 +432,20 @@ impl InstKind {
     pub const U64: InstKind = Self::scalar(ScalarType::I64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
-        InstKind::Value(MaybeInlineType::Scalar(st))
+        InstKind::Value(PhysicalType::Scalar(st))
     }
 
     fn is_ptr(&self) -> bool {
-        matches!(self, InstKind::Value(MaybeInlineType::Scalar(ScalarType::Pointer)))
+        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)))
     }
     fn is_int(&self) -> bool {
-        matches!(self, InstKind::Value(MaybeInlineType::Scalar(st)) if st.is_int())
+        matches!(self, InstKind::Value(PhysicalType::Scalar(st)) if st.is_int())
     }
     fn is_byte(&self) -> bool {
-        matches!(self, InstKind::Value(MaybeInlineType::Scalar(ScalarType::I8)))
+        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::I8)))
     }
     fn is_aggregate(&self) -> bool {
-        matches!(self, InstKind::Value(MaybeInlineType::AggId(_)))
+        matches!(self, InstKind::Value(PhysicalType::Agg(_)))
     }
     fn is_storage(&self) -> bool {
         self.is_ptr() || self.is_aggregate()
@@ -454,13 +454,13 @@ impl InstKind {
         matches!(self, InstKind::Value(_))
     }
     #[track_caller]
-    pub fn expect_value(&self) -> Result<MaybeInlineType, String> {
+    pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
             InstKind::Value(t) => Ok(*t),
             _ => Err(format!("Expected value, got {}", self.kind_str())),
         }
     }
-    fn as_value(&self) -> Option<MaybeInlineType> {
+    fn as_value(&self) -> Option<PhysicalType> {
         match self {
             InstKind::Value(t) => Some(*t),
             _ => None,
@@ -475,14 +475,14 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::I8)) => "i8",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::I16)) => "i16",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::I32)) => "i32",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::I64)) => "i64",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::F32)) => "f32",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::F64)) => "f64",
-            InstKind::Value(MaybeInlineType::Scalar(ScalarType::Pointer)) => "ptr",
-            InstKind::Value(MaybeInlineType::AggId(_)) => "agg",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::I8)) => "i8",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::I16)) => "i16",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::I32)) => "i32",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::I64)) => "i64",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::F32)) => "f32",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::F64)) => "f64",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => "ptr",
+            InstKind::Value(PhysicalType::Agg(_)) => "agg",
             InstKind::Void => "void",
             InstKind::Terminator => "terminator",
         }
@@ -1481,7 +1481,7 @@ fn compile_expr(
             b.goto_block(final_block);
             let incomings_handle = b.bc.mem.vec_to_mslice(&incomings);
             let result_came_from = b.push_inst(Inst::CameFrom {
-                t: MaybeInlineType::Scalar(ScalarType::I8),
+                t: PhysicalType::Scalar(ScalarType::I8),
                 incomings: incomings_handle,
             });
             Ok(result_came_from.as_value())
@@ -1514,7 +1514,7 @@ fn compile_expr(
             let incomings_handle = b.bc.mem.vec_to_mslice(&incomings);
             let result_came_from = b
                 .push_inst(Inst::CameFrom {
-                    t: MaybeInlineType::Scalar(ScalarType::I8),
+                    t: PhysicalType::Scalar(ScalarType::I8),
                     incomings: incomings_handle,
                 })
                 .as_value();
@@ -2348,13 +2348,11 @@ pub fn display_inst_kind(
 fn display_inl_type(
     w: &mut impl std::fmt::Write,
     types: &TypePool,
-    t: &MaybeInlineType,
+    t: &PhysicalType,
 ) -> std::fmt::Result {
     match t {
-        MaybeInlineType::Scalar(st) => write!(w, "{}", st),
-        MaybeInlineType::AggId(pt_id) => {
-            display_p_type(w, types, &types.phys_types.get(*pt_id).kind)
-        }
+        PhysicalType::Scalar(st) => write!(w, "{}", st),
+        PhysicalType::Agg(pt_id) => display_p_type(w, types, &types.phys_types.get(*pt_id).kind),
     }
 }
 

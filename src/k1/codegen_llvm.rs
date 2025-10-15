@@ -108,7 +108,7 @@ impl Error for CodegenError {}
 
 #[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
-    Layout { size: td.get_bit_size(typ) as u32 / 8, align: td.get_abi_alignment(typ) }
+    Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
 }
 
 trait BuilderResultExt {
@@ -1269,8 +1269,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   variant, plus alignment end padding
                 // - *********** NEW: We no longer rely on fabricating an 'envelope' struct for the
                 //   union. Instead we represent the enum itself as an i8 array, and only the
-                //   variants as structs, and use LLVM's `align` attribute where needed to specify
-                //   the alignment of the enum.
+                //   variants as structs, and use LLVM's `align` attribute on the actual
+                //   operations, like alloca, to specify the alignment of the enum.
                 // - *********** OLD: In order to get to an actual LLVM type that has this alignment and size, we copy clang,
                 //   and 'devise' a struct that will do it for us. This struct is simply 2 fields:
                 //   - First, the strictestly-aligned variant. This sets the alignment of our
@@ -1421,9 +1421,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //     if llvm_layout.size != k1_layout.stride() {
         //         self.k1.ice(
         //             format!(
-        //                 "DIFFERENT SIZES for {} {} llvm={} k1={}",
-        //                 self.k1.types.get(type_id).kind_name(),
+        //                 "DIFFERENT SIZES for {} (llvm {}) llvm={} k1={}",
         //                 self.k1.type_id_to_string(type_id),
+        //                 codegened_type.rich_repr_type(),
         //                 llvm_layout.size,
         //                 k1_layout.stride()
         //             ),

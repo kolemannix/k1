@@ -913,7 +913,7 @@ impl ScalarType {
 // This fixes the problem of what to name MaybeInlineType as well; it just becomes the new PhysicalType
 pub enum PhysicalType {
     Scalar(ScalarType),
-    Agg(AggLayout),
+    Agg(PhysicalTypeId),
 }
 
 impl PhysicalType {
@@ -941,24 +941,10 @@ impl PhysicalType {
         matches!(self, PhysicalType::Scalar(_))
     }
 
-    pub fn pack_inline(&self, my_id: PhysicalTypeId) -> MaybeInlineType {
+    pub fn pack_inline(&self, my_id: PhysicalTypeId) -> PhysicalType {
         match self {
-            PhysicalType::Scalar(s) => MaybeInlineType::Scalar(*s),
-            PhysicalType::Agg(_) => MaybeInlineType::AggId(my_id),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum MaybeInlineType {
-    Scalar(ScalarType),
-    AggId(PhysicalTypeId),
-}
-impl MaybeInlineType {
-    pub(crate) fn as_scalar(&self) -> Option<ScalarType> {
-        match self {
-            MaybeInlineType::Scalar(s) => Some(*s),
-            MaybeInlineType::AggId(_) => None,
+            PhysicalType::Scalar(s) => PhysicalType::Scalar(*s),
+            PhysicalType::Agg(_) => PhysicalType::Agg(my_id),
         }
     }
 }
@@ -970,13 +956,23 @@ pub struct StructField {
 }
 
 #[derive(Clone, Copy)]
+pub struct EnumVariantLayout {
+    tag: ScalarType,
+    payload: Option<PhysicalType>,
+    envelope: Layout,
+}
+
+// - nocommit Finish moving off old Layout (incl get_struct_layout)
+// - Move to EnumVariant; see if old vm works again
+// - Convert MaybeInlineType -> PhysicalTypeV2
+
+#[derive(Clone, Copy)]
 pub enum AggLayout {
     // Important specialization since wrappers are common
-    Struct1(MaybeInlineType),
-    // Important specialization used for enum variants
-    Struct2(ScalarType, MaybeInlineType),
+    Struct1(PhysicalType),
+    EnumVariant(EnumVariantLayout),
     Struct { fields: MSlice<StructField, TypePool> },
-    Array { element_t: MaybeInlineType, len: u32 },
+    Array { element_t: PhysicalType, len: u32 },
     Opaque { layout: Layout },
     // We could do this, and avoid opaque, but I don't think we can
     // or should avoid 'knowing sizes' in the bytecode
@@ -989,7 +985,7 @@ pub enum AggLayout {
 nz_u32_id!(AggLayoutId);
 nz_u32_id!(PhysicalTypeId);
 pub struct PhysicalTypeRecord {
-    pub kind: PhysicalType,
+    pub kind: AggLayout,
     pub origin_type_id: TypeId,
     pub layout: Layout,
 }
@@ -1003,8 +999,8 @@ pub struct TypePool {
 
     /// AoS-style info associated with each type id
     // nocommit: deprecated, moving to type_phys_type_lookup
-    pub layouts: VPool<Layout, TypeId>,
-    pub type_phys_type_lookup: VPool<Option<PhysicalTypeId>, TypeId>,
+    // pub layouts: VPool<Layout, TypeId>,
+    pub type_phys_type_lookup: VPool<Option<PhysicalType>, TypeId>,
     pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
@@ -1034,7 +1030,7 @@ impl TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
             hashes: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT),
 
-            layouts: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
+            // layouts: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
             type_phys_type_lookup: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
             type_variable_counts: VPool::make_with_hint(
                 "type_variable_counts",
@@ -1114,13 +1110,12 @@ impl TypePool {
                 self.hashes.insert(hash, type_id);
 
                 // 4 AoS fields to handle
-                // pub layouts
                 // pub type_phys_type_lookup
                 // pub type_variable_counts
                 // pub instance_info
 
-                let layout = self.compute_type_layout(type_id);
-                self.layouts.add(layout);
+                // let layout = self.compute_type_layout(type_id);
+                // self.layouts.add(layout);
                 let pt_id = self.compile_physical_type(type_id);
                 self.type_phys_type_lookup.add(pt_id);
 
@@ -1136,7 +1131,6 @@ impl TypePool {
                 type_id
             }
         };
-        debug_assert_eq!(self.layouts.len(), self.types.len());
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
         debug_assert_eq!(self.instance_info.len(), self.types.len());
         debug_assert_eq!(self.instance_info.len(), self.type_phys_type_lookup.len());
@@ -1220,24 +1214,24 @@ impl TypePool {
         };
 
         // Set the layout for the enum, then insert for each variant
-        let layout = self.compute_type_layout(enum_type_id);
+        // let layout = self.compute_type_layout(enum_type_id);
         let pt_id = self.compile_physical_type(enum_type_id);
         match type_id_to_use {
             None => {
-                self.layouts.add(layout);
+                // self.layouts.add(layout);
                 self.type_phys_type_lookup.add(pt_id);
             }
             Some(_) => {
-                *self.layouts.get_mut(enum_type_id) = layout;
+                // *self.layouts.get_mut(enum_type_id) = layout;
                 *self.type_phys_type_lookup.get_mut(enum_type_id) = pt_id;
             }
         };
         for _ in 0..variant_count {
             // We always add variants, even
-            self.layouts.add(layout);
+            // self.layouts.add(layout);
         }
 
-        debug_assert_eq!(self.types.len(), self.layouts.len());
+        // debug_assert_eq!(self.types.len(), self.layouts.len());
         debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
         debug_assert_eq!(self.types.len(), self.instance_info.len());
         debug_assert_eq!(self.types.len(), self.type_phys_type_lookup.len());
@@ -1288,8 +1282,8 @@ impl TypePool {
                 *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
                 *self.instance_info.get_mut(unresolved_type_id) = instance_info;
 
-                let layout = self.compute_type_layout(unresolved_type_id);
-                *self.layouts.get_mut(unresolved_type_id) = layout;
+                // let layout = self.compute_type_layout(unresolved_type_id);
+                // *self.layouts.get_mut(unresolved_type_id) = layout;
                 let pt_id = self.compile_physical_type(unresolved_type_id);
                 *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
             }
@@ -1787,10 +1781,7 @@ impl TypePool {
                         None
                     } else {
                         let fields_handle = self.mem.vec_to_mslice(&fields);
-                        Some((
-                            PhysicalType::Agg(AggLayout::Struct { fields: fields_handle }),
-                            layout,
-                        ))
+                        Some((AggLayout::Struct { fields: fields_handle }, layout))
                     }
                 };
                 let record = maybe_pt.map(|(pt, layout)| PhysicalTypeRecord {
@@ -1875,7 +1866,7 @@ impl TypePool {
                     }
                 } else {
                     self.add_physical_type(Some(PhysicalTypeRecord {
-                        kind: PhysicalType::Agg(AggLayout::Struct1(MaybeInlineType::Scalar(
+                        kind: PhysicalType::Agg(AggLayout::Struct1(PhysicalType::Scalar(
                             tag_scalar,
                         ))),
                         origin_type_id: type_id,
@@ -1933,25 +1924,25 @@ impl TypePool {
         pt_id
     }
 
-    pub fn pack_inline_type(&self, pt_id: PhysicalTypeId) -> MaybeInlineType {
+    pub fn pack_inline_type(&self, pt_id: PhysicalTypeId) -> PhysicalType {
         let elem_t = self.phys_types.get(pt_id);
         match elem_t.kind {
-            PhysicalType::Scalar(scalar_type) => MaybeInlineType::Scalar(scalar_type),
-            PhysicalType::Agg(_) => MaybeInlineType::AggId(pt_id),
+            PhysicalType::Scalar(scalar_type) => PhysicalType::Scalar(scalar_type),
+            PhysicalType::Agg(_) => PhysicalType::Agg(pt_id),
         }
     }
 
-    pub fn unpack_inline_type(&self, inl: &MaybeInlineType) -> PhysicalType {
+    pub fn unpack_inline_type(&self, inl: &PhysicalType) -> PhysicalType {
         match inl {
-            MaybeInlineType::Scalar(scalar_type) => PhysicalType::Scalar(*scalar_type),
-            MaybeInlineType::AggId(pt_id) => self.phys_types.get(*pt_id).kind,
+            PhysicalType::Scalar(scalar_type) => PhysicalType::Scalar(*scalar_type),
+            PhysicalType::Agg(pt_id) => self.phys_types.get(*pt_id).kind,
         }
     }
 
-    pub fn get_inline_type_layout(&self, inl: &MaybeInlineType) -> Layout {
+    pub fn get_inline_type_layout(&self, inl: &PhysicalType) -> Layout {
         match inl {
-            MaybeInlineType::Scalar(scalar_type) => self.get_scalar_layout(*scalar_type),
-            MaybeInlineType::AggId(pt_id) => self.phys_types.get(*pt_id).layout,
+            PhysicalType::Scalar(scalar_type) => self.get_scalar_layout(*scalar_type),
+            PhysicalType::Agg(pt_id) => self.phys_types.get(*pt_id).layout,
         }
     }
 
@@ -1963,7 +1954,7 @@ impl TypePool {
         let PhysicalType::Agg(agg) = physical_type else {
             return None;
         };
-        match agg {
+        match self.phys_types.get(agg) {
             AggLayout::Struct1(_) => {
                 if field_index == 0 {
                     Some(0)
@@ -1994,16 +1985,27 @@ impl TypePool {
         }
     }
 
-    pub fn get_struct_layout(&self, struct_type_id: TypeId) -> StructLayout {
-        let struct_type = self.get(struct_type_id).expect_struct();
-        let mut layout = Layout::ZERO;
-        let mut field_offsets: SV8<u32> = smallvec![];
-        for field in self.mem.get_slice(struct_type.fields) {
-            let field_layout = self.get_layout(field.type_id);
-            let field_offset = layout.append_to_aggregate(field_layout);
-            field_offsets.push(field_offset)
+    pub fn get_physical_type_id(&self, type_id: TypeId) -> Option<PhysicalTypeId> {
+        match self.type_phys_type_lookup.get(type_id) {
+            None => None,
+            Some(pt_id) => Some(*pt_id),
         }
-        StructLayout { layout, field_offsets }
+    }
+
+    pub fn get_physical_type(&self, type_id: TypeId) -> Option<&PhysicalTypeRecord> {
+        match self.type_phys_type_lookup.get(type_id) {
+            None => None,
+            Some(pt_id) => Some(self.phys_types.get(*pt_id)),
+        }
+    }
+
+    pub fn get_struct_layout(&self, struct_type_id: TypeId) -> &[StructField] {
+        let struct_pt = self.get_physical_type(struct_type_id).unwrap();
+        match struct_pt.kind {
+            PhysicalType::Agg(AggLayout::Struct1(t)) => &[StructField { offset: 0, field_t: t }],
+            PhysicalType::Agg(AggLayout::Struct { fields }) => self.mem.get_slice(fields),
+            _ => panic!("not a struct"),
+        }
     }
 
     pub fn compute_type_layout(&self, type_id: TypeId) -> Layout {
@@ -2112,11 +2114,11 @@ impl TypePool {
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Layout {
-        let root_type_id = match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => rr.root_type_id,
-            _ => type_id,
-        };
-        *self.layouts.get(root_type_id)
+        let chased = self.get_chased_id(type_id);
+        match self.type_phys_type_lookup.get(chased) {
+            None => Layout::ZERO,
+            Some(pt_id) => self.phys_types.get(*pt_id).layout,
+        }
     }
 
     pub fn get_ast_node(&self, type_id: TypeId) -> Option<ParsedId> {

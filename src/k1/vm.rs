@@ -1855,7 +1855,12 @@ pub fn store_value(types: &TypePool, dst: *mut u8, value: Value) -> usize {
                 let struct_layout = types.get_layout(type_id);
                 let size_bytes = struct_layout.size as usize;
                 // Equivalent of memcpy
-                debug!("copy_from {:?} -> {:?} {size_bytes}", dst, ptr);
+                eprintln!(
+                    "copy {} from {:?} -> {:?} {size_bytes}",
+                    types.get(type_id).kind_name(),
+                    ptr,
+                    dst
+                );
                 copy_aggregate(dst, ptr, size_bytes);
                 size_bytes
             }
