@@ -9,20 +9,18 @@ use std::{
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use itertools::Itertools;
-use k1_types::K1ViewLike;
 use log::debug;
 use memmap2::{MmapMut, MmapOptions};
-use smallvec::{SmallVec, smallvec};
 
 use crate::{
     bc::{self, BcCallee, CompilableUnit, CompiledUnit, InstId, InstKind, Value as BcValue},
     compiler::WordSize,
-    failf,
+    failf, ice_span,
     lex::SpanId,
     parse::{Ident, StringId},
     typer::{
-        FunctionId, Layout, StaticValueId, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedProgram, TyperResult, VariableId,
+        FunctionId, Layout, StaticValue, StaticValueId, TypedExprId, TypedFloatValue,
+        TypedGlobalId, TypedIntValue, TypedProgram, TyperResult, VariableId,
         types::{IntegerType, PhysicalType, STRING_TYPE_ID, ScalarType, TypeId, TypePool},
     },
     vm_ice,
@@ -87,13 +85,6 @@ pub enum StackSelection {
 }
 
 pub struct Vm {
-    /// Code may update globals; so we store this VM run's 'copy' of that global's
-    /// value here; these are (currently) reset on each invocation of #static code
-    ///
-    /// One example from k1 is code that sets the global, thread-local, default allocator
-    ///
-    /// If we need to preserve them for the entire compilation, we may need to re-use
-    /// the same VM, currently we create one per static execution
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
@@ -117,6 +108,7 @@ impl Vm {
         let stack = Stack::make(stack_size_bytes);
         let static_stack = Stack::make(static_size_bytes);
         Self {
+            // nocommit(4): Pass in upper bound on globals from the AST
             globals: FxHashMap::with_capacity(8192),
             static_stack,
             stack,
@@ -143,12 +135,20 @@ impl Vm {
         }
     }
 
-    pub fn insert_local(&mut self, frame_index: u32, inst_index: u32, value: Value) {
-        self.stack.inst_values[frame_index as usize][inst_index as usize] = value;
+    pub fn set_inst_value(&mut self, frame_index: u32, inst_index: u32, value: Value) {
+        match self.stack.inst_values.get_mut(frame_index as usize) {
+            None => self.stack.inst_values.push(vec![Value::D64(0); 64]),
+            Some(_) => (),
+        };
+        let frame_values = &mut self.stack.inst_values[frame_index as usize];
+        match frame_values.get_mut(inst_index as usize) {
+            None => frame_values.push(value),
+            Some(r) => *r = value,
+        }
     }
 
     pub fn set_cur_inst_value(&mut self, inst_index: u32, value: Value) {
-        self.insert_local(self.stack.current_frame_index(), inst_index, value)
+        self.set_inst_value(self.stack.current_frame_index(), inst_index, value)
     }
 
     pub fn get_cur_inst_value(&mut self, inst_index: u32) -> Option<Value> {
@@ -174,7 +174,7 @@ impl Vm {
         let locals = self.stack.inst_values[frame_index].iter().copied().enumerate().collect_vec();
         for (inst_index, value) in locals.into_iter() {
             let inst_id = InstId::from_u32(frame.unit.inst_offset + inst_index as u32).unwrap();
-            let kind = bc::get_inst_kind(&k1.bytecode.borrow(), &k1.types, inst_id);
+            let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, inst_id);
             write!(w, "  i{}: ", inst_id).unwrap();
             bc::display_inst_kind(w, &k1.types, &kind).unwrap();
             render_debug_value(w, self, k1, value);
@@ -250,6 +250,8 @@ pub enum Value {
 }
 
 impl Value {
+    pub const TRUE: Value = Value::D64(1);
+
     #[track_caller]
     fn expect_data(&self) -> u64 {
         match self {
@@ -303,20 +305,21 @@ fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
     inst_id.as_u32() - offset
 }
 
-fn execute_compiled_unit(
-    k1: &TypedProgram,
+pub fn execute_compiled_unit(
+    k1: &mut TypedProgram,
     vm: &mut Vm,
     expr_id: TypedExprId,
     args: &[StaticValueId],
     // These should have gotten compiled to StaticValue instructions
     _input_parameters: &[(VariableId, StaticValueId)],
 ) -> TyperResult<Value> {
-    let bc = k1.bytecode.borrow();
     let span = k1.exprs.get(expr_id).get_span();
-    let unit = bc.exprs.get(&expr_id).unwrap();
+    let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
     let dst_stack = StackSelection::CallStackCurrent;
     let inst_offset = unit.inst_offset;
     let mut prev_b: u32 = 0;
+
+    eprintln!("[vmbc] Executing {}", k1.expr_to_string(expr_id));
 
     // These 3 variables constitute our instruction pointer
     let mut blocks = unit.blocks;
@@ -332,13 +335,13 @@ fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let frame = vm.stack.push_new_frame(None, Some(span), *unit, None);
+    let frame = vm.stack.push_new_frame(None, Some(span), unit, None);
     let frame_index = frame.index;
 
-    // TODO: Set the IS_STATIC global
+    vm.globals.insert(GLOBAL_ID_STATIC, Value::TRUE);
 
     for (param_index, arg) in args.iter().enumerate() {
-        let value = static_value_to_vm_value(vm, k1, *arg);
+        let value = static_value_to_vm_value(k1, *arg, span);
         vm.stack.param_values[frame_index as usize][param_index] = value;
     }
 
@@ -349,14 +352,18 @@ fn execute_compiled_unit(
     }
     loop {
         // Fetch
-        let inst_id = *bc.mem.get_nth(bc.mem.get_nth(blocks, b as usize).instrs, ip as usize);
+        let instrs = k1.bytecode.mem.get_nth(blocks, b as usize).instrs;
+        if instrs.len() == 0 {
+            ice_span!(k1, span, "empty block (from root span)")
+        }
+        let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // ~Decode~ Execute
-        match bc.instrs.get(inst_id) {
+        match *k1.bytecode.instrs.get(inst_id) {
             bc::Inst::Imm(imm) => {
                 let value = match imm {
-                    bc::Imm::I64(v) => Value::D64(*v),
+                    bc::Imm::I64(v) => Value::D64(v),
                     bc::Imm::Float(fv) => match fv {
                         TypedFloatValue::F32(f32) => {
                             // The lower 32 bits can be relied upon to reconstruct the f32.
@@ -372,7 +379,7 @@ fn execute_compiled_unit(
             }
             bc::Inst::Alloca { t, vm_layout } => {
                 let s = vm.get_destination_stack(dst_stack);
-                let ptr = s.push_layout_uninit(*vm_layout);
+                let ptr = s.push_layout_uninit(vm_layout);
 
                 vm.set_cur_inst_value(inst_index, Value::Addr { ptr });
                 ip += 1
@@ -383,7 +390,7 @@ fn execute_compiled_unit(
                     return failf!(span, "store dst is not an addr");
                 };
 
-                let t = bc::get_value_kind(&bc, &k1.types, value)
+                let t = bc::get_value_kind(&k1.bytecode, &k1.types, &value)
                     .expect_value()
                     .unwrap()
                     .as_scalar()
@@ -399,7 +406,7 @@ fn execute_compiled_unit(
                 let src_ptr = src_value
                     .as_addr()
                     .unwrap_or_else(|| vm_ice!(k1, vm, "Load from non-addr: {}", src_value));
-                let loaded_value = load_scalar(*t, src_ptr);
+                let loaded_value = load_scalar(t, src_ptr);
 
                 vm.set_cur_inst_value(inst_index, loaded_value);
                 ip += 1;
@@ -415,7 +422,7 @@ fn execute_compiled_unit(
                     .unwrap_or_else(|| vm_ice!(k1, vm, "Copy from non-addr: {}", src_value));
 
                 unsafe {
-                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr.cast_mut(), *vm_size as usize);
+                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
                 }
                 ip += 1
             }
@@ -424,7 +431,7 @@ fn execute_compiled_unit(
                 let base_ptr = base_value.as_addr().unwrap_or_else(|| {
                     vm_ice!(k1, vm, "StructOffset from non-addr: {}", base_value)
                 });
-                let field_ptr = unsafe { base_ptr.byte_add(*vm_offset as usize) };
+                let field_ptr = unsafe { base_ptr.byte_add(vm_offset as usize) };
 
                 vm.set_cur_inst_value(inst_index, Value::Addr { ptr: field_ptr });
                 ip += 1
@@ -438,7 +445,7 @@ fn execute_compiled_unit(
                 let Value::D64(index) = index_value else {
                     return failf!(span, "ArrayOffset index is not B64: {}", index_value);
                 };
-                let elem_layout = k1.types.get_pt_layout(element_t);
+                let elem_layout = k1.types.get_pt_layout(&element_t);
 
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.size as usize * index as usize) };
@@ -447,13 +454,13 @@ fn execute_compiled_unit(
                 ip += 1
             }
             bc::Inst::Call { id } => {
-                let call = bc.calls.get(*id);
+                let call = *k1.bytecode.calls.get(id);
                 let return_type = match &call.ret_inst_kind {
                     InstKind::Value(ret_type) => Some(ret_type),
                     InstKind::Void => None,
                     InstKind::Terminator => None,
                 };
-                let return_place = match &call.dst {
+                let return_place = match call.dst {
                     Some(dst) => Some(exec_value!(dst).expect_addr().cast_mut()),
                     None => {
                         // Allocate a place for the caller to return its value to;
@@ -469,9 +476,8 @@ fn execute_compiled_unit(
                         }
                     }
                 };
-                let dispatch_function_id = match &call.callee {
+                let dispatch_function_id = match call.callee {
                     BcCallee::Builtin(bc_builtin) => match bc_builtin {
-                        bc::BcBuiltin::Zeroed => todo!(),
                         bc::BcBuiltin::TypeSchema => todo!(),
                         bc::BcBuiltin::TypeName => todo!(),
                         bc::BcBuiltin::Allocate => todo!(),
@@ -485,7 +491,7 @@ fn execute_compiled_unit(
                         bc::BcBuiltin::BakeStaticValue => todo!(),
                         bc::BcBuiltin::CompilerMessage => todo!(),
                     },
-                    BcCallee::Direct(function_id) => *function_id,
+                    BcCallee::Direct(function_id) => function_id,
                     BcCallee::Indirect(value) => {
                         // Decode function id from 'pointer'
                         let callee_value = exec_value!(value);
@@ -501,14 +507,18 @@ fn execute_compiled_unit(
                         function_id
                     }
                 };
-                let inst_span = *bc.sources.get(inst_id);
-                let Some(compiled_function) = bc.functions.get(dispatch_function_id) else {
+                let inst_span = *k1.bytecode.sources.get(inst_id);
+                let Some(compiled_function) = k1.bytecode.functions.get(dispatch_function_id)
+                else {
                     return failf!(
                         span,
-                        "Call to uncompiled function id: {}",
-                        dispatch_function_id
+                        "Call to uncompiled function: {}. ({} are pending)",
+                        k1.function_id_to_string(dispatch_function_id, false),
+                        k1.bytecode.b_units_pending_compile.len()
                     );
                 };
+                let function_blocks = compiled_function.blocks;
+
                 // 'Dispatch' to the function:
                 // - Push a stack frame
                 // - Set 'pc' (which is blocks + b + i)
@@ -522,23 +532,17 @@ fn execute_compiled_unit(
                     vm.stack.push_new_frame(None, Some(inst_span), *compiled_function, ret_info);
 
                 // Gotta set arguments too, duh.
-                for (index, arg) in bc.mem.get_slice(call.args).iter().enumerate() {
+                for (index, arg) in k1.bytecode.mem.get_slice(call.args).iter().enumerate() {
                     // Note: It is ok that these are executed after pushing because executing a 'BcValue'
                     // doesn't use the stack.
-                    let vm_value = exec_value!(arg);
-                    match vm.stack.param_values[frame.index as usize].get_mut(index) {
-                        None => vm.stack.param_values[frame.index as usize].push(vm_value),
-                        Some(prev_v) => *prev_v = vm_value,
-                    };
+                    let vm_value = exec_value!(*arg);
+                    // task(vmbc): Slight optimization to avoid extra accessing the param vec for this frame repeatedly
+                    vm.stack.set_param_value(frame.index, index as u32, vm_value);
                 }
 
-                blocks = compiled_function.blocks;
+                blocks = function_blocks;
                 b = 0;
                 ip = 0;
-
-                // if let Some(return_place) = return_place {
-                //     vm.set_cur_inst_value(inst_index, Value::Addr { ptr: return_place })
-                // };
             }
             bc::Inst::Ret(bc_value) => {
                 let cur_frame = vm.stack.current_frame_index();
@@ -558,7 +562,7 @@ fn execute_compiled_unit(
             }
             bc::Inst::Jump(block_index) => {
                 prev_b = b;
-                b = *block_index;
+                b = block_index;
                 ip = 0;
             }
             bc::Inst::JumpIf { cond, cons, alt } => {
@@ -569,11 +573,11 @@ fn execute_compiled_unit(
                 let as_u8 = cond_u64 as u8;
                 if as_u8 == 1 {
                     prev_b = b;
-                    b = *cons;
+                    b = cons;
                     ip = 0;
                 } else if as_u8 == 0 {
                     prev_b = b;
-                    b = *alt;
+                    b = alt;
                     ip = 0;
                 } else {
                     return failf!(span, "Bad boolean value: {cond_u64}");
@@ -585,14 +589,14 @@ fn execute_compiled_unit(
             bc::Inst::CameFrom { t: _, incomings } => {
                 debug_assert!(incomings.len() > 0);
                 let mut value: core::mem::MaybeUninit<BcValue> = core::mem::MaybeUninit::uninit();
-                for case in bc.mem.get_slice(*incomings) {
+                for case in k1.bytecode.mem.get_slice(incomings) {
                     if case.from == prev_b {
                         value = core::mem::MaybeUninit::new(case.value);
                         break;
                     }
                 }
                 let value = unsafe { value.assume_init() };
-                let vm_value = exec_value!(&value);
+                let vm_value = exec_value!(value);
 
                 vm.set_cur_inst_value(inst_index, vm_value);
                 ip += 1;
@@ -612,37 +616,82 @@ fn execute_compiled_unit(
             bc::Inst::WordToPtr { v } => todo!(),
             bc::Inst::ArithBin { op, lhs, rhs } => todo!(),
             bc::Inst::BitwiseBin { op, lhs, rhs } => todo!(),
-            bc::Inst::Memset { t, dst, value, size } => todo!(),
         }
     }
 }
 
 #[inline(always)]
-fn resolve_value(k1: &TypedProgram, vm: &mut Vm, inst_offset: u32, value: &BcValue) -> Value {
+fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: BcValue) -> Value {
     match value {
         BcValue::Inst(inst_id) => {
-            let inst_index = inst_to_index(*inst_id, inst_offset);
+            let inst_index = inst_to_index(inst_id, inst_offset);
             let v = vm
                 .get_cur_inst_value(inst_index)
-                .unwrap_or_else(|| vm_ice!(k1, vm, "missing inst: {}", *inst_id));
+                .unwrap_or_else(|| vm_ice!(k1, vm, "missing inst: {}", inst_id));
             v
         }
         BcValue::Global { t, id } => {
-            let v = vm.globals.get(id).unwrap_or_else(|| vm_ice!(k1, vm, "missing global: {}", id));
-            *v
+            // Handle global
+            // Case 1: It's a constant, already evaluated, stored in the global static space
+            // Case 2: It's in this VM because its mutable, and we already evaluated it during this execution
+            // Case 3: First evaluation. If not mutable, put in globals. If mutable, put in this
+            // vm's static space.
+            // ** If referencing, allocate layout and perform a store to produce a valid address
+            match k1.vmbc_global_constant_lookups.get(&id) {
+                Some(v) => *v,
+                None => {
+                    match vm.globals.get(&id) {
+                        Some(v) => *v,
+                        None => {
+                            let global = k1.globals.get(id);
+                            let is_referencing = global.is_referencing;
+                            let is_constant = global.is_constant;
+                            let initial_value_id = match global.initial_value {
+                                None => {
+                                    k1.eval_global_body(global.ast_id, None, None).unwrap();
+                                    k1.globals.get(id).initial_value.unwrap()
+                                }
+                                Some(value_id) => value_id,
+                            };
+                            let shared_vm_value =
+                                static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+                            let layout = k1.types.get_pt_layout(&t);
+                            if is_referencing {
+                                if is_constant {
+                                    let dst = k1.vmbc_static_stack.push_layout_uninit(layout);
+                                    store_value(&k1.types, t, dst, shared_vm_value);
+                                    let addr = Value::Addr { ptr: dst.cast_const() };
+                                    k1.vmbc_global_constant_lookups.insert(id, addr);
+                                    addr
+                                } else {
+                                    // We need a local copy of this
+                                    let dst = vm.static_stack.push_layout_uninit(layout);
+                                    store_value(&k1.types, t, dst, shared_vm_value);
+                                    let addr = Value::Addr { ptr: dst.cast_const() };
+                                    vm.globals.insert(id, addr);
+                                    addr
+                                }
+                            } else {
+                                vm.globals.insert(id, shared_vm_value);
+                                shared_vm_value
+                            }
+                        }
+                    }
+                }
+            }
         }
         BcValue::StaticValue { t, id } => {
-            let v = static_value_to_vm_value(vm, k1, *id);
+            let v = static_value_to_vm_value(k1, id, vm.eval_span);
             v
         }
-        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(*function_id),
+        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
         BcValue::FnParam { t, index } => {
             let current_params = &vm.stack.param_values[vm.stack.current_frame_index() as usize];
-            let value = current_params[*index as usize];
+            let value = current_params[index as usize];
             value
         }
         BcValue::Imm32 { t, data } => {
-            let u32_data = *data;
+            let u32_data = data;
             match t {
                 ScalarType::I8 => Value::D64(u32_data as u64),
                 ScalarType::I16 => Value::D64(u32_data as u64),
@@ -653,7 +702,7 @@ fn resolve_value(k1: &TypedProgram, vm: &mut Vm, inst_offset: u32, value: &BcVal
                 ScalarType::Pointer => Value::D64(u32_data as u64),
             }
         }
-        BcValue::PtrZero => todo!(),
+        BcValue::PtrZero => Value::D64(0),
     }
 }
 
@@ -669,123 +718,119 @@ fn function_id_to_ref_value(function_id: FunctionId) -> Value {
 }
 
 pub fn static_value_to_vm_value(
-    vm: &mut Vm,
-    k1: &TypedProgram,
+    k1: &mut TypedProgram,
     static_value_id: StaticValueId,
+    span: SpanId,
 ) -> Value {
-    todo!()
+    if let Some(v) = k1.vmbc_static_value_lookups.get(&static_value_id) {
+        return *v;
+    };
+
     // task(vmbc): We need to cache these; treat it more like a reference to a constant in static
     // space than a stack literal!
-    // match k1.static_values.get(static_value_id) {
-    //     StaticValue::Unit => Value::D64(0),
-    //     StaticValue::Bool(bool_value) => Value::D64(*bool_value as u64),
-    //     StaticValue::Char(char_byte) => Value::D64(*char_byte as u64),
-    //     StaticValue::Int(iv) => Value::D64(iv.to_u64_unconditional()),
-    //     StaticValue::Float(fv) => Value::D64(fv.as_f64().to_bits()),
-    //     StaticValue::String(string_id) => {
-    //         let value = string_id_to_value(vm, dst_stack, k1, *string_id);
-    //         value
-    //     }
-    //     StaticValue::Zero(type_id) => {
-    //         let layout = k1.types.get_layout(*type_id);
-    //         let ptr = vm.get_destination_stack(dst_stack).push_layout_uninit(layout);
-    //         unsafe { std::ptr::write_bytes(ptr, 0, layout.size as usize) };
-    //
-    //         let zero_value = zero_value(vm, k1, *type_id)
-    //             .unwrap_or_else(|e| vm_ice!(k1, vm, "zero_value failed: {}", e.message));
-    //         zero_value
-    //     }
-    //     StaticValue::Struct(static_struct) => {
-    //         let mut values: SmallVec<[Value; 8]> = smallvec![];
-    //         // This is bad to do the values then copy them into the right place
-    //         // Let's just re-write for this round
-    //         let struct_layout = k1.types.get_struct_layout(static_struct.type_id);
-    //         let struct_base =
-    //             vm.get_destination_stack(dst_stack).push_layout_uninit(struct_layout.layout);
-    //         for (field_index, f) in
-    //             k1.static_values.mem.get_slice(static_struct.fields).iter().enumerate()
-    //         {
-    //             let value = static_value_to_vm_value(vm, dst_stack, k1, *f);
-    //             // Handle it right here.
-    //             let field_offset = struct_layout.field_offsets[field_index];
-    //             let field_ptr = unsafe { struct_base.byte_add(field_offset as usize) };
-    //             let field_type_id = k1.static_values.get(f).get_type();
-    //             store_value(field_type, field_ptr, value);
-    //             values.push(value);
-    //         }
-    //         //let struct_value = vm.get_destination_stack(dst_stack).push_struct_values(
-    //         //    &k1.types,
-    //         //    static_struct.type_id,
-    //         //    &values,
-    //         //);
-    //         Ok(struct_value)
-    //     }
-    //     StaticValue::Enum(e) => {
-    //         // This is bad to do the payload then copy it into the right place
-    //         // Let's just re-write for this round
-    //         let payload_value = match e.payload {
-    //             None => None,
-    //             Some(static_value_id) => {
-    //                 let value = static_value_to_vm_value(vm, dst_stack, k1, static_value_id)?;
-    //                 Some(value)
-    //             }
-    //         };
-    //         let enum_ptr = vm.get_destination_stack(dst_stack).push_enum(
-    //             &k1.types,
-    //             e.variant_type_id,
-    //             payload_value,
-    //         );
-    //         let type_id = if e.typed_as_enum {
-    //             k1.types.get(e.variant_type_id).expect_enum_variant().enum_type_id
-    //         } else {
-    //             e.variant_type_id
-    //         };
-    //         Ok(Value::Agg { type_id, ptr: enum_ptr })
-    //     }
-    //     StaticValue::LinearContainer(cont) => {
-    //         let (element_type, _) = k1.types.get_as_container_instance(cont.type_id).unwrap();
-    //
-    //         let layout = k1.types.get_layout(element_type);
-    //         let view_allocation_layout = layout.array_me(cont.len());
-    //
-    //         debug!(
-    //             "Pushing {} bytes for container {}",
-    //             view_allocation_layout.size,
-    //             k1.static_value_to_string(static_value_id)
-    //         );
-    //         let data_base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
-    //
-    //         for (index, elem_value_id) in
-    //             k1.static_values.get_slice(cont.elements).iter().enumerate()
-    //         {
-    //             let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
-    //             let elem_dst_ptr = unsafe { data_base_mem.byte_add(index * layout.size as usize) };
-    //             store_value(&k1.types, elem_dst_ptr, elem_value);
-    //         }
-    //         match cont.kind {
-    //             StaticContainerKind::View => {
-    //                 let rust_view = K1ViewLike {
-    //                     len: cont.elements.len() as usize,
-    //                     data: data_base_mem.cast_const(),
-    //                 };
-    //                 let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
-    //
-    //                 Ok(Value::Agg { type_id: cont.type_id, ptr: view_struct_ptr })
-    //             }
-    //             StaticContainerKind::Array => {
-    //                 Ok(Value::Agg { type_id: cont.type_id, ptr: data_base_mem })
-    //             }
-    //         }
-    //     }
-    // }
+    match k1.static_values.get(static_value_id) {
+        StaticValue::Unit => Value::D64(0),
+        StaticValue::Bool(bool_value) => Value::D64(*bool_value as u64),
+        StaticValue::Char(char_byte) => Value::D64(*char_byte as u64),
+        StaticValue::Int(iv) => Value::D64(iv.to_u64_unconditional()),
+        StaticValue::Float(fv) => Value::D64(fv.as_f64().to_bits()),
+        StaticValue::String(string_id) => {
+            let value = string_id_to_value(k1, *string_id);
+            value
+        }
+        StaticValue::Zero(type_id) => {
+            let layout = k1.types.get_layout(*type_id);
+            static_zero_value(k1, *type_id, span)
+        }
+        StaticValue::Struct(static_struct) => {
+            todo!("struct")
+            // let mut values: SmallVec<[Value; 8]> = smallvec![];
+            // // This is bad to do the values then copy them into the right place
+            // // Let's just re-write for this round
+            // let struct_layout = k1.types.get_struct_layout(static_struct.type_id);
+            // let struct_base =
+            //     vm.get_destination_stack(dst_stack).push_layout_uninit(struct_layout.layout);
+            // for (field_index, f) in
+            //     k1.static_values.mem.get_slice(static_struct.fields).iter().enumerate()
+            // {
+            //     let value = static_value_to_vm_value(vm, dst_stack, k1, *f);
+            //     // Handle it right here.
+            //     let field_offset = struct_layout.field_offsets[field_index];
+            //     let field_ptr = unsafe { struct_base.byte_add(field_offset as usize) };
+            //     let field_type_id = k1.static_values.get(f).get_type();
+            //     store_value(field_type, field_ptr, value);
+            //     values.push(value);
+            // }
+            // //let struct_value = vm.get_destination_stack(dst_stack).push_struct_values(
+            // //    &k1.types,
+            // //    static_struct.type_id,
+            // //    &values,
+            // //);
+            // Ok(struct_value)
+        }
+        StaticValue::Enum(e) => {
+            // This is bad to do the payload then copy it into the right place
+            // Let's just re-write for this round
+            // let payload_value = match e.payload {
+            //     None => None,
+            //     Some(static_value_id) => {
+            //         let value = static_value_to_vm_value(vm, dst_stack, k1, static_value_id)?;
+            //         Some(value)
+            //     }
+            // };
+            // let enum_ptr = vm.get_destination_stack(dst_stack).push_enum(
+            //     &k1.types,
+            //     e.variant_type_id,
+            //     payload_value,
+            // );
+            // let type_id = if e.typed_as_enum {
+            //     k1.types.get(e.variant_type_id).expect_enum_variant().enum_type_id
+            // } else {
+            //     e.variant_type_id
+            // };
+            // Ok(Value::Agg { type_id, ptr: enum_ptr })
+            todo!()
+        }
+        StaticValue::LinearContainer(cont) => {
+            todo!()
+            // let (element_type, _) = k1.types.get_as_container_instance(cont.type_id).unwrap();
+            //
+            // let layout = k1.types.get_layout(element_type);
+            // let view_allocation_layout = layout.array_me(cont.len());
+            //
+            // debug!(
+            //     "Pushing {} bytes for container {}",
+            //     view_allocation_layout.size,
+            //     k1.static_value_to_string(static_value_id)
+            // );
+            // let data_base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
+            //
+            // for (index, elem_value_id) in
+            //     k1.static_values.get_slice(cont.elements).iter().enumerate()
+            // {
+            //     let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
+            //     let elem_dst_ptr = unsafe { data_base_mem.byte_add(index * layout.size as usize) };
+            //     store_value(&k1.types, elem_dst_ptr, elem_value);
+            // }
+            // match cont.kind {
+            //     StaticContainerKind::View => {
+            //         let rust_view = K1ViewLike {
+            //             len: cont.elements.len() as usize,
+            //             data: data_base_mem.cast_const(),
+            //         };
+            //         let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
+            //
+            //         Ok(Value::Agg { type_id: cont.type_id, ptr: view_struct_ptr })
+            //     }
+            //     StaticContainerKind::Array => {
+            //         Ok(Value::Agg { type_id: cont.type_id, ptr: data_base_mem })
+            //     }
+            // }
+        }
+    }
 }
 
-pub fn string_id_to_value(
-    vm: &mut Vm,
-    dst_stack: StackSelection,
-    k1: &TypedProgram,
-    string_id: StringId,
-) -> Value {
+pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let s = k1.get_string(string_id);
     // This just points into the Rust memory for the string's data. Teehee uwuu
     // I need to guarantee it can't re-allocate because that's still sadly using the library
@@ -797,7 +842,7 @@ pub fn string_id_to_value(
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
-    let string_stack_addr = vm.get_destination_stack(dst_stack).push_t(k1_string);
+    let string_stack_addr = k1.vmbc_static_stack.push_t(k1_string);
     Value::Addr { ptr: string_stack_addr }
 }
 
@@ -1167,14 +1212,29 @@ impl Stack {
         let mmap_mut = mmap_options.len(size).map_anon().unwrap();
         let base_ptr = (*mmap_mut).as_ptr();
         let frames_cap = if size == 0 { 0 } else { 512 };
+        let values_cap = 1024;
+        let params_cap = 256;
+        let mut inst_values = Vec::with_capacity(frames_cap);
+
+        // nocommit(4): The static stacks don't need this stuff
+        let empty_values = vec![Value::D64(0); values_cap];
+        for _ in 0..frames_cap {
+            inst_values.push(empty_values.clone());
+        }
+
+        let empty_params = vec![Value::D64(0); params_cap];
+        let mut param_values = Vec::with_capacity(frames_cap);
+        for _ in 0..frames_cap {
+            param_values.push(empty_params.clone())
+        }
+
         Self {
             // Calls libc::munmap(ptr, len as libc::size_t) on Drop
             allocation: mmap_mut,
             base_ptr,
             frames: Vec::with_capacity(frames_cap),
-            // nocommit: Preallocate the inner vecs as well
-            inst_values: Vec::with_capacity(frames_cap),
-            param_values: Vec::with_capacity(frames_cap),
+            inst_values,
+            param_values,
             cursor: base_ptr,
         }
     }
@@ -1221,6 +1281,20 @@ impl Stack {
 
     fn current_frame(&self) -> &StackFrame {
         self.frames.last().unwrap()
+    }
+
+    fn param_values_for_frame(&mut self, frame_index: u32) -> &mut Vec<Value> {
+        &mut self.param_values[frame_index as usize]
+    }
+
+    fn set_param_value(&mut self, frame_index: u32, param_index: u32, value: Value) {
+        let vs = self.param_values_for_frame(frame_index);
+        vs[param_index as usize] = value;
+    }
+
+    fn get_param_value(&mut self, frame_index: u32, param_index: u32) -> Value {
+        let vs = self.param_values_for_frame(frame_index);
+        vs[param_index as usize]
     }
 
     #[inline]
@@ -1648,6 +1722,28 @@ fn debug_value_to_string(vm: &mut Vm, k1: &TypedProgram, value: Value) -> String
     let mut w = String::new();
     render_debug_value(&mut w, vm, k1, value);
     w
+}
+
+fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
+    match k1.types.get_physical_type(type_id) {
+        None => ice_span!(
+            k1,
+            span,
+            "not a value type; zeroed() for type {} is undefined",
+            k1.types.get(type_id).kind_name()
+        ),
+        Some(PhysicalType::Scalar(st)) => match st {
+            ScalarType::Pointer => Value::Addr { ptr: core::ptr::null() },
+            _ => Value::D64(0),
+        },
+        Some(PhysicalType::Agg(agg_id)) => {
+            let layout = k1.types.phys_types.get(agg_id).layout;
+            let data: *mut u8 = k1.vmbc_static_stack.push_layout_uninit(layout);
+            unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
+
+            Value::Addr { ptr: data.cast_const() }
+        }
+    }
 }
 
 fn integer_cast(

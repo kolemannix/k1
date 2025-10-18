@@ -145,6 +145,8 @@ impl TypedProgram {
     }
 
     pub fn type_id_to_string_ext(&self, type_id: TypeId, expand: bool) -> String {
+        // nocommit(4): make this a bit more efficient since its happy path code to push
+        // the type name as a rtti static value
         let mut s = String::with_capacity(1028);
         self.display_type_ext(&mut s, type_id, expand).unwrap();
         s
@@ -545,8 +547,6 @@ impl TypedProgram {
         indentation: usize,
     ) -> std::fmt::Result {
         match expr {
-            TypedExpr::Integer(int) => write!(w, "{}", int.value),
-            TypedExpr::Float(float) => write!(w, "{}", float.value),
             TypedExpr::Struct(struc) => {
                 w.write_str("{\n")?;
                 for (idx, field) in struc.fields.iter().enumerate() {

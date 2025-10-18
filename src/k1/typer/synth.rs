@@ -6,24 +6,15 @@
 use super::*;
 
 impl TypedProgram {
-    pub(super) fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
-        let value = match self.target_word_size() {
-            WordSize::W32 => TypedIntValue::UWord32(value as u32),
-            WordSize::W64 => TypedIntValue::UWord64(value as u64),
-        };
-        let expr_id = self.exprs.add(TypedExpr::Integer(TypedIntegerExpr { value, span }));
-        expr_id
-    }
-
     pub(super) fn synth_bool(&mut self, value: bool, span: SpanId) -> TypedExprId {
         let value_id = self.static_values.add(StaticValue::Bool(value));
-        let expr_id = self.add_static_constant_expr(value_id, BOOL_TYPE_ID, span);
+        let expr_id = self.add_static_constant_expr(value_id, span);
         expr_id
     }
 
     pub(super) fn synth_unit(&mut self, span: SpanId) -> TypedExprId {
         let value_id = self.static_values.add(StaticValue::Unit);
-        self.add_static_constant_expr(value_id, UNIT_TYPE_ID, span)
+        self.add_static_constant_expr(value_id, span)
     }
 
     pub(super) fn synth_equals_call(
@@ -360,7 +351,20 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let string_value = self.static_values.add_string(string_id);
-        self.add_static_constant_expr(string_value, STRING_TYPE_ID, span)
+        self.add_static_constant_expr(string_value, span)
+    }
+
+    pub(super) fn synth_int(&mut self, int_value: TypedIntValue, span: SpanId) -> TypedExprId {
+        let int_value_id = self.static_values.add_int(int_value);
+        self.add_static_constant_expr(int_value_id, span)
+    }
+
+    pub(super) fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
+        let value = match self.target_word_size() {
+            WordSize::W32 => TypedIntValue::UWord32(value as u32),
+            WordSize::W64 => TypedIntValue::UWord64(value as u64),
+        };
+        self.synth_int(value, span)
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
@@ -376,10 +380,7 @@ impl TypedProgram {
                 StructLiteralField { name: self.ast.idents.b.filename, expr: filename_expr },
                 StructLiteralField {
                     name: self.ast.idents.b.line,
-                    expr: self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                        value: TypedIntValue::U64(line_number as u64),
-                        span,
-                    })),
+                    expr: self.synth_int(TypedIntValue::U64(line_number as u64), span),
                 },
             ],
             type_id: COMPILER_SOURCE_LOC_TYPE_ID,
@@ -439,8 +440,7 @@ impl TypedProgram {
             result_type_id: tag_type,
             span,
         }));
-        let variant_tag_expr =
-            self.exprs.add(TypedExpr::Integer(TypedIntegerExpr { value: variant_tag, span }));
+        let variant_tag_expr = self.synth_int(variant_tag, span);
         let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
         Ok(tag_equals)
     }

@@ -11,7 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::bc;
+use crate::{bc, vmbc};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -708,10 +708,11 @@ impl TypedPatternPool {
 
 #[derive(Clone, Copy)]
 pub enum TypedPattern {
+    // Consider replacing with a single Literal using StaticValue
     LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
-    LiteralInteger(TypedIntValue, SpanId),
-    LiteralFloat(TypedFloatValue, SpanId),
+    LiteralInteger(StaticValueId, SpanId),
+    LiteralFloat(StaticValueId, SpanId),
     LiteralBool(bool, SpanId),
     LiteralString(StringId, SpanId),
     Variable(VariablePattern),
@@ -1108,8 +1109,6 @@ pub struct FieldAccess {
     pub access_kind: FieldAccessKind,
     pub span: SpanId,
 }
-// nocommit(3) 28 is too big for Copy imo; that's over 3 registers
-impl_copy_if_small!(28, FieldAccess);
 
 impl FieldAccess {
     pub fn is_reference_through(&self) -> bool {
@@ -1408,10 +1407,8 @@ nz_u32_id!(CallId);
 static_assert_size!(TypedExpr, 56);
 #[derive(Clone)]
 pub enum TypedExpr {
-    // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
     StaticValue(StaticConstantExpr),
-    Integer(TypedIntegerExpr),
-    Float(TypedFloatExpr),
+    // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     ArrayGetElement(ArrayGetElement),
@@ -1474,8 +1471,6 @@ impl From<VariableExpr> for TypedExpr {
 impl TypedExpr {
     pub fn kind_str(&self) -> &'static str {
         match self {
-            TypedExpr::Integer(_) => "integer",
-            TypedExpr::Float(_) => "float",
             TypedExpr::Struct(_) => "struct",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
             TypedExpr::ArrayGetElement(_) => "array_get_element",
@@ -1504,8 +1499,6 @@ impl TypedExpr {
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::Integer(integer) => integer.get_type(),
-            TypedExpr::Float(float) => float.get_type(),
             TypedExpr::Struct(struc) => struc.type_id,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
@@ -1534,8 +1527,6 @@ impl TypedExpr {
 
     pub fn get_span(&self) -> SpanId {
         match self {
-            TypedExpr::Integer(int) => int.span,
-            TypedExpr::Float(float) => float.span,
             TypedExpr::Struct(struc) => struc.span,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::ArrayGetElement(ag) => ag.span,
@@ -2312,7 +2303,7 @@ pub struct TypedProgram {
     pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
-    pub type_names: FxHashMap<TypeId, StringId>,
+    pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
     pub namespaces: Namespaces,
@@ -2358,15 +2349,26 @@ pub struct TypedProgram {
     // Used to execute static code if it is first encountered
     // while excuting the surrounding code statically
     // It should be run in its own environment; as it should
-    // not see any of the values from its environment.
+    // not see any of the values from its calling environment, just
+    // like how comptime code can't see runtime values. Each level
+    // of static execution has the same relationship with its outer caller
     pub alt_vms: Vec<vm::Vm>,
+
+    // nocommit(4) can we consolidate this stuff into 1 struct :/
+    pub vmbc: Box<Option<vmbc::Vm>>,
+    pub alt_vmbcs: Vec<vmbc::Vm>,
+    // For every static value, once evaluated, we store its runtime representation
+    // here; the data lives in static_stack
+    pub vmbc_static_stack: vmbc::Stack,
+    pub vmbc_global_constant_lookups: FxHashMap<TypedGlobalId, vmbc::Value>,
+    pub vmbc_static_value_lookups: FxHashMap<StaticValueId, vmbc::Value>,
 
     /// Perm arena space
     pub a: kmem::Mem<MemPerm>,
     /// tmp arena space
     pub tmp: kmem::Mem<MemTmp>,
 
-    pub bytecode: RefCell<bc::ProgramBytecode>,
+    pub bytecode: bc::ProgramBytecode,
 
     pub timing: Timing,
 }
@@ -2492,11 +2494,20 @@ impl TypedProgram {
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
+            vmbc: Box::new(Some(vmbc::Vm::make(vm_stack_size, vm_static_stack_size))),
+            alt_vmbcs: vec![
+                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
+            ],
+            vmbc_static_stack: vmbc::Stack::make(vm_stack_size),
+            vmbc_global_constant_lookups: FxHashMap::default(),
+            vmbc_static_value_lookups: FxHashMap::default(),
 
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: RefCell::new(bc::ProgramBytecode::make(16384, word_size)),
+            bytecode: bc::ProgramBytecode::make(16384, word_size),
 
             timing: Timing {
                 clock,
@@ -2648,7 +2659,7 @@ impl TypedProgram {
         self.print_timing_info(&mut stderr()).unwrap();
         eprintln!(
             "\t{} instructions, {}ms bc",
-            self.bytecode.borrow().instrs.len(),
+            self.bytecode.instrs.len(),
             self.timing.total_bytecode_nanos / 1_000_000
         );
 
@@ -3112,12 +3123,12 @@ impl TypedProgram {
                 let size_type_id = match self.ast.type_exprs.get(arr.size_expr).clone() {
                     ParsedTypeExpr::StaticLiteral(parsed_literal) => {
                         // For array sizes, we want numeric literals to be interpreted as uword
-                        let (static_value, inner_type_id) = self.literal_to_static_value_and_type(
-                            &parsed_literal,
-                            scope_id,
-                            Some(UWORD_TYPE_ID),
-                        )?;
-                        let static_value_id = self.static_values.add(static_value);
+                        let (static_value_id, inner_type_id) = self
+                            .literal_to_static_value_and_type(
+                                &parsed_literal,
+                                scope_id,
+                                Some(UWORD_TYPE_ID),
+                            )?;
                         let static_type =
                             StaticType { inner_type_id, value_id: Some(static_value_id) };
                         self.types.add_anon(Type::Static(static_type))
@@ -3396,16 +3407,18 @@ impl TypedProgram {
                     type_from_id.id_expr,
                     EvalExprContext::make(scope_id).with_expected_type(Some(U64_TYPE_ID)),
                 )?;
-                let TypedExpr::Integer(typed_int) = self.exprs.get(id_expr_id) else {
+                let TypedExpr::StaticValue(static_const) = self.exprs.get(id_expr_id) else {
                     self.ice_with_span(
                         "Expected an integer expression for TypeFromId",
                         type_from_id.span,
                     );
                 };
-                let TypedIntValue::U64(u64_value) = typed_int.value else {
-                    self.ice_with_span("Expected a u64 value for TypeFromId", type_from_id.span);
+                let StaticValue::Int(TypedIntValue::U64(u64_value)) =
+                    self.static_values.get(static_const.value_id)
+                else {
+                    self.ice_with_span("Expected a u64 value for TypeFromId", type_from_id.span)
                 };
-                let Some(type_id) = TypeId::from_u32(u64_value as u32) else {
+                let Some(type_id) = TypeId::from_u32(*u64_value as u32) else {
                     return failf!(type_from_id.span, "Type ID {} is out of bounds", u64_value);
                 };
                 Ok(type_id)
@@ -3463,9 +3476,8 @@ impl TypedProgram {
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
                 let parsed_literal = *parsed_literal;
-                let (static_value, inner_type_id) =
+                let (static_value_id, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
-                let static_value_id = self.static_values.add(static_value);
                 let static_type_id =
                     self.types.add_static_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
@@ -3479,27 +3491,25 @@ impl TypedProgram {
         parsed_literal: &ParsedLiteral,
         scope_id: ScopeId,
         expected_type_hint: Option<TypeId>,
-    ) -> TyperResult<(StaticValue, TypeId)> {
+    ) -> TyperResult<(StaticValueId, TypeId)> {
         match parsed_literal {
-            ParsedLiteral::Unit(_) => Ok((StaticValue::Unit, UNIT_TYPE_ID)),
-            ParsedLiteral::Char(byte, _) => Ok((StaticValue::Char(*byte), CHAR_TYPE_ID)),
-            ParsedLiteral::Bool(b, _) => Ok((StaticValue::Bool(*b), BOOL_TYPE_ID)),
-            ParsedLiteral::String(s, _) => Ok((StaticValue::String(*s), STRING_TYPE_ID)),
+            ParsedLiteral::Unit(_) => Ok((self.static_values.add(StaticValue::Unit), UNIT_TYPE_ID)),
+            ParsedLiteral::Char(byte, _) => {
+                Ok((self.static_values.add(StaticValue::Char(*byte)), CHAR_TYPE_ID))
+            }
+            ParsedLiteral::Bool(b, _) => {
+                Ok((self.static_values.add(StaticValue::Bool(*b)), BOOL_TYPE_ID))
+            }
+            ParsedLiteral::String(s, _) => {
+                Ok((self.static_values.add(StaticValue::String(*s)), STRING_TYPE_ID))
+            }
             ParsedLiteral::Numeric(numeric) => {
                 // Parse the numeric literal and determine its type and value
                 // Use the expected type hint if provided (e.g., uword for array sizes)
                 let eval_context =
                     EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
-                let parsed_value = self.eval_numeric_value(numeric.span, eval_context)?;
-                match parsed_value {
-                    TypedExpr::Integer(int_expr) => {
-                        Ok((StaticValue::Int(int_expr.value), int_expr.get_type()))
-                    }
-                    TypedExpr::Float(float_expr) => {
-                        Ok((StaticValue::Float(float_expr.value), float_expr.get_type()))
-                    }
-                    _ => unreachable!("eval_numeric_value should only return Integer or Float"),
-                }
+                let num_static_value_id = self.eval_numeric_value(numeric.span, eval_context)?;
+                Ok((num_static_value_id, self.static_values.get(num_static_value_id).get_type()))
             }
         }
     }
@@ -4252,25 +4262,26 @@ impl TypedProgram {
                     },
                     ParsedLiteral::Numeric(num_lit) => {
                         let num_lit = *num_lit;
-                        match self.eval_numeric_value(
+                        let num_value_id = self.eval_numeric_value(
                             num_lit.span,
                             EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
-                        )? {
-                            TypedExpr::Integer(value) => match self.types.get(target_type_id) {
-                                Type::Integer(_integer_type) => Ok(self
+                        )?;
+                        match self.static_values.get(num_value_id) {
+                            StaticValue::Int(_) => match self.types.get(target_type_id) {
+                                Type::Integer(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralInteger(value.value, num_lit.span))),
+                                    .add(TypedPattern::LiteralInteger(num_value_id, num_lit.span))),
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
                                     "integer literal pattern will never match {}",
                                     self.type_id_to_string(target_type_id)
                                 ),
                             },
-                            TypedExpr::Float(value) => match self.types.get(target_type_id) {
-                                Type::Float(_integer_type) => Ok(self
+                            StaticValue::Float(_) => match self.types.get(target_type_id) {
+                                Type::Float(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralFloat(value.value, num_lit.span))),
+                                    .add(TypedPattern::LiteralFloat(num_value_id, num_lit.span))),
                                 _ => failf!(
                                     self.ast.get_pattern_span(pat_expr),
                                     "float literal pattern will never match {}",
@@ -4951,12 +4962,6 @@ impl TypedProgram {
     ) -> TyperResult<Option<StaticValueId>> {
         match self.exprs.get(expr_id) {
             TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
-            TypedExpr::Integer(typed_integer_expr) => {
-                Ok(Some(self.static_values.add(StaticValue::Int(typed_integer_expr.value))))
-            }
-            TypedExpr::Float(typed_float_expr) => {
-                Ok(Some(self.static_values.add(StaticValue::Float(typed_float_expr.value))))
-            }
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
@@ -4992,8 +4997,9 @@ impl TypedProgram {
     }
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
+        eprintln!("compile_all_pending_bytecode {}", self.bytecode.b_units_pending_compile.len());
         loop {
-            if let Some(unit) = self.bytecode.get_mut().b_units_pending_compile.pop() {
+            if let Some(unit) = self.bytecode.b_units_pending_compile.pop() {
                 match unit {
                     bc::CompilableUnit::Function(function_id) => {
                         debug!(
@@ -5016,6 +5022,7 @@ impl TypedProgram {
     fn execute_static_expr_with_vm(
         &mut self,
         vm: &mut vm::Vm,
+        vmbc: &mut vmbc::Vm,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         no_reset: bool,
@@ -5043,6 +5050,17 @@ impl TypedProgram {
         }
 
         self.compile_expr_bytecode(expr, input_parameters)?;
+        self.compile_all_pending_bytecode()?;
+
+        let my_test = vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters);
+        match my_test {
+            Err(e) => {
+                eprintln!("vm execute returned err:\n{}", e.message)
+            }
+            Ok(v) => {
+                eprintln!("vm execute returned ok:\n{}", v)
+            }
+        };
 
         let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
             |mut e| {
@@ -5082,7 +5100,7 @@ impl TypedProgram {
                 let alt_vm = match maybe_alt {
                     None => {
                         eprintln!(
-                            "Had to make a new alt VM at {}:{}. We should make them faster to make (virtual alloc?)",
+                            "Had to make a new alt VM at {}:{}",
                             source.filename,
                             location.line_number()
                         );
@@ -5102,13 +5120,49 @@ impl TypedProgram {
             }
             Some(vm) => (vm, false),
         };
-        let res =
-            self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, no_reset, input_parameters);
+        let (mut vmbc, _used_alt) = match *std::mem::take(&mut self.vmbc) {
+            None => {
+                let span = self.ast.get_expr_span(parsed_expr);
+                let maybe_alt = self.alt_vmbcs.pop();
+                let (source, location) = self.get_span_location(span);
+                let alt_vm = match maybe_alt {
+                    None => {
+                        eprintln!(
+                            "Had to make a new alt VM at {}:{}",
+                            source.filename,
+                            location.line_number()
+                        );
+                        let new_vm = vmbc::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+                        new_vm
+                    }
+                    Some(alt_vm) => {
+                        eprintln!(
+                            "Recycling alt vm at {}:{}",
+                            source.filename,
+                            location.line_number()
+                        );
+                        alt_vm
+                    }
+                };
+                (alt_vm, true)
+            }
+            Some(vm) => (vm, false),
+        };
+        let res = self.execute_static_expr_with_vm(
+            &mut vm,
+            &mut vmbc,
+            parsed_expr,
+            ctx,
+            no_reset,
+            input_parameters,
+        );
         if !used_alt {
             *self.vm = Some(vm);
+            *self.vmbc = Some(vmbc);
         } else {
-            eprintln!("Restoring an alt VM");
-            self.alt_vms.push(vm)
+            eprintln!("Restoring alt VM to pool");
+            self.alt_vms.push(vm);
+            self.alt_vmbcs.push(vmbc);
         }
         res
     }
@@ -5188,6 +5242,7 @@ impl TypedProgram {
         &mut self,
         parsed_global_id: ParsedGlobalId,
         vm_to_use: Option<&mut vm::Vm>,
+        vmbc_to_use: Option<&mut vmbc::Vm>,
     ) -> TyperResult<()> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
@@ -5227,7 +5282,14 @@ impl TypedProgram {
             None => self.execute_static_expr(value_expr_id, ctx, false, &[]),
             Some(vm) => {
                 let no_reset = true;
-                self.execute_static_expr_with_vm(vm, value_expr_id, ctx, no_reset, &[])
+                self.execute_static_expr_with_vm(
+                    vm,
+                    vmbc_to_use.unwrap(),
+                    value_expr_id,
+                    ctx,
+                    no_reset,
+                    &[],
+                )
             }
         }?;
 
@@ -5266,7 +5328,7 @@ impl TypedProgram {
         }
         function.is_concrete = is_concrete;
         self.functions.add(function);
-        self.bytecode.get_mut().functions.add(None);
+        self.bytecode.functions.add(None);
         id
     }
 
@@ -5920,16 +5982,21 @@ impl TypedProgram {
         })
     }
 
-    fn eval_numeric_value(&mut self, span: SpanId, ctx: EvalExprContext) -> TyperResult<TypedExpr> {
+    fn eval_numeric_value(
+        &mut self,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<StaticValueId> {
         let parsed_text = self.ast.get_span_content(span);
         let is_float = parsed_text.contains('.');
         if is_float {
-            Ok(TypedExpr::Float(TypedFloatExpr { value: self.eval_float_value(span, ctx)?, span }))
+            let float_value = self.eval_float_value(span, ctx)?;
+            let value_id = self.static_values.add(StaticValue::Float(float_value));
+            Ok(value_id)
         } else {
-            Ok(TypedExpr::Integer(TypedIntegerExpr {
-                value: self.eval_integer_value(span, ctx)?,
-                span,
-            }))
+            let int_value = self.eval_integer_value(span, ctx)?;
+            let value_id = self.static_values.add(StaticValue::Int(int_value));
+            Ok(value_id)
         }
     }
 
@@ -6757,12 +6824,14 @@ impl TypedProgram {
             ParsedExpr::Literal(ParsedLiteral::Unit(span)) => Ok(self.synth_unit(*span)),
             ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
                 let value_id = self.static_values.add(StaticValue::Char(*byte));
-                let expr_id = self.add_static_constant_expr(value_id, CHAR_TYPE_ID, *span);
+                let expr_id = self.add_static_constant_expr(value_id, *span);
                 Ok(expr_id)
             }
             ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
-                let numeric_expr = self.eval_numeric_value(int.span, ctx)?;
-                Ok(self.exprs.add(numeric_expr))
+                let span = int.span;
+                let value_id = self.eval_numeric_value(span, ctx)?;
+                let expr_id = self.add_static_constant_expr(value_id, span);
+                Ok(expr_id)
             }
             ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => {
                 // nocommit(3): Store cached Ids for all the most common static values like bool,
@@ -7008,12 +7077,8 @@ impl TypedProgram {
         }
     }
 
-    fn add_static_value_expr(
-        &mut self,
-        value_id: StaticValueId,
-        inner_type_id: TypeId,
-        span: SpanId,
-    ) -> TypedExprId {
+    fn add_static_value_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
+        let inner_type_id = self.static_values.get(value_id).get_type();
         let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
         self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
             value_id,
@@ -7023,12 +7088,8 @@ impl TypedProgram {
         }))
     }
 
-    fn add_static_constant_expr(
-        &mut self,
-        value_id: StaticValueId,
-        type_id: TypeId,
-        span: SpanId,
-    ) -> TypedExprId {
+    fn add_static_constant_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
+        let type_id = self.static_values.get(value_id).get_type();
         self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
             value_id,
             type_id,
@@ -7399,7 +7460,7 @@ impl TypedProgram {
             }
             ParsedStaticBlockKind::Value => {
                 let static_value_expr_id =
-                    self.add_static_value_expr(vm_result.static_value_id, vm_result.type_id, span);
+                    self.add_static_value_expr(vm_result.static_value_id, span);
                 Ok(StaticExecutionResult::TypedExpr(static_value_expr_id))
             }
         }
@@ -8573,36 +8634,31 @@ impl TypedProgram {
                     TypedPattern::LiteralChar(byte, span) => {
                         let char_value = self.static_values.add(StaticValue::Char(*byte));
                         let span = *span;
-                        let char_expr =
-                            self.add_static_constant_expr(char_value, CHAR_TYPE_ID, span);
+                        let char_expr = self.add_static_constant_expr(char_value, span);
                         let equals_pattern_char =
                             self.synth_equals_call(target_expr, char_expr, ctx, span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_char });
                         Ok(())
                     }
                     TypedPattern::LiteralInteger(int_value, span) => {
+                        let span = *span;
                         let pattern_integer_literal =
-                            self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                                value: *int_value,
-                                span: *span,
-                            }));
+                            self.add_static_constant_expr(*int_value, span);
                         let equals_pattern_int = self.synth_equals_call(
                             target_expr,
                             pattern_integer_literal,
                             ctx,
-                            *span,
+                            span,
                         )?;
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_int });
                         Ok(())
                     }
                     TypedPattern::LiteralFloat(float_value, span) => {
+                        let span = *span;
                         let pattern_float_literal =
-                            self.exprs.add(TypedExpr::Float(TypedFloatExpr {
-                                value: *float_value,
-                                span: *span,
-                            }));
+                            self.add_static_constant_expr(*float_value, span);
                         let equals_pattern_float =
-                            self.synth_equals_call(target_expr, pattern_float_literal, ctx, *span)?;
+                            self.synth_equals_call(target_expr, pattern_float_literal, ctx, span)?;
                         instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_float });
                         Ok(())
                     }
@@ -11260,23 +11316,10 @@ impl TypedProgram {
         // We match on the node type, not its type, since the point is to hoist literals, not
         // follow variables around and implement a whole extra damn compiler
         let result = match self.exprs.get(expr_id) {
-            TypedExpr::Integer(int_expr) => {
-                let static_value_id = self.static_values.add(StaticValue::Int(int_expr.value));
-                Ok(self.add_static_value_expr(static_value_id, int_expr.get_type(), int_expr.span))
-            }
-            TypedExpr::Float(float_expr) => {
-                let static_value_id = self.static_values.add(StaticValue::Float(float_expr.value));
-                Ok(self.add_static_value_expr(
-                    static_value_id,
-                    float_expr.get_type(),
-                    float_expr.span,
-                ))
-            }
             TypedExpr::StaticValue(static_constant) if !static_constant.is_typed_as_static => {
                 let value_id = static_constant.value_id;
-                let inner_type_id = static_constant.type_id;
                 let span = static_constant.span;
-                Ok(self.add_static_value_expr(value_id, inner_type_id, span))
+                Ok(self.add_static_value_expr(value_id, span))
             }
             e => {
                 failf!(
@@ -11311,13 +11354,17 @@ impl TypedProgram {
                 let static_value_id_arg = self.exprs.get(call.args[0]);
                 // For now, require a literal. We could relax this and evaluate it
                 // if that's useful
-                let TypedExpr::Integer(int_expr) = static_value_id_arg else {
+                // This is fun because we take a static value id pointing to an integer and interpret that
+                // integer as a static value id!
+                let TypedExpr::StaticValue(static_const) = static_value_id_arg else {
                     return failf!(span, "Argument must be an integer literal");
                 };
-                let TypedIntValue::U64(u64_value) = int_expr.value else {
+                let StaticValue::Int(TypedIntValue::U64(u64_value)) =
+                    self.static_values.get(static_const.value_id)
+                else {
                     return failf!(span, "Argument must be a u64 literal");
                 };
-                let Some(static_value_id) = StaticValueId::from_u32(u64_value as u32) else {
+                let Some(static_value_id) = StaticValueId::from_u32(*u64_value as u32) else {
                     return failf!(span, "Invalid static value id: {}. Must be a u32", u64_value);
                 };
                 let Some(value) = self.static_values.get_opt(static_value_id) else {
@@ -11383,11 +11430,8 @@ impl TypedProgram {
                 // Same for typeName
                 self.register_type_metainfo(type_id, span);
 
-                let int_expr = TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntValue::U64(type_id_u64),
-                    span,
-                });
-                Ok(self.exprs.add(int_expr))
+                let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
+                Ok(int_expr)
             }
             IntrinsicOperation::SizeOf
             | IntrinsicOperation::SizeOfStride
@@ -11400,10 +11444,7 @@ impl TypedProgram {
                     IntrinsicOperation::AlignOf => layout.align as u64,
                     _ => unreachable!(),
                 };
-                Ok(self.exprs.add(TypedExpr::Integer(TypedIntegerExpr {
-                    value: TypedIntValue::UWord64(value_bytes),
-                    span,
-                })))
+                Ok(self.synth_int(TypedIntValue::UWord64(value_bytes), span))
             }
             _ => self.ice(format!("Unexpected intrinsic in type phase: {:?}", intrinsic), None),
         }
@@ -13885,7 +13926,7 @@ impl TypedProgram {
                 self.compile_ns_body(namespace, skip_defns);
             }
             ParsedId::Global(global_id) => {
-                if let Err(e) = self.eval_global_body(global_id, None) {
+                if let Err(e) = self.eval_global_body(global_id, None, None) {
                     self.report_error(e)
                 };
             }
@@ -15439,16 +15480,17 @@ impl TypedProgram {
         static_value_id
     }
 
-    fn get_type_name(&mut self, type_id: TypeId) -> StringId {
+    fn get_type_name(&mut self, type_id: TypeId) -> StaticValueId {
         if let Some(existing) = self.type_names.get(&type_id) {
             return *existing;
         }
 
         let type_string = self.type_id_to_string(type_id);
         let string_id = self.ast.strings.intern(type_string);
+        let value_id = self.static_values.add_string(string_id);
 
-        self.type_names.insert(type_id, string_id);
-        string_id
+        self.type_names.insert(type_id, value_id);
+        value_id
     }
 
     fn register_type_metainfo(&mut self, type_id: TypeId, span: SpanId) {

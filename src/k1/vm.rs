@@ -116,9 +116,6 @@ pub struct Vm {
     /// value here; these are (currently) reset on each invocation of #static code
     ///
     /// One example from k1 is code that sets the global, thread-local, default allocator
-    ///
-    /// If we need to preserve them for the entire compilation, we may need to re-use
-    /// the same VM, currently we create one per static execution
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
@@ -545,8 +542,6 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
     //std::io::stdin().read_line(&mut s).unwrap();
 
     let result: TyperResult<VmResult> = match k1.exprs.get(expr) {
-        TypedExpr::Integer(typed_integer_expr) => Ok(Value::Int(typed_integer_expr.value).into()),
-        TypedExpr::Float(typed_float_expr) => Ok(Value::Float(typed_float_expr.value).into()),
         TypedExpr::Struct(s) => {
             let mut values: SmallVec<[Value; 8]> = SmallVec::with_capacity(s.fields.len());
             let fields = s.fields.clone();
@@ -560,7 +555,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             Ok(struct_value.into())
         }
         TypedExpr::StructFieldAccess(field_access) => {
-            let field_access = *field_access;
+            let field_access = field_access.clone();
             let struct_value = execute_expr_return_exit!(vm, k1, field_access.base)?;
             let struct_ptr = match struct_value {
                 Value::Agg { ptr: struct_ptr, .. } => struct_ptr,
@@ -1020,9 +1015,10 @@ fn execute_variable_expr(
     let variable = m.variables.get(v_id);
     if let Some(global_id) = variable.global_id {
         // Handle global
-        // Case 1: It's in the VM because someone mutated it
-        //         OR we already evaluated it during this execution
-        // Case 2: Grab it from the module
+        // Case 1: The runtime-repr is in the VM already in `globals`
+        // Case 2: We load the global from the module, and it has either been compiled or not.
+        //     2a: Not compiled. Compile it, convert to a runtime value, add to globals.
+        //     2b: Compiled but not evaluated. Grab the runtime value from globals
         return match vm.globals.get(&global_id) {
             Some(global_value) => Ok(global_value.into()),
             None => {
@@ -1031,7 +1027,7 @@ fn execute_variable_expr(
                 let is_referencing = global.is_referencing;
                 let global_value = match global.initial_value {
                     None => {
-                        m.eval_global_body(global.ast_id, Some(vm))?;
+                        m.eval_global_body(global.ast_id, Some(vm), None)?;
                         m.globals.get(global_id).initial_value.unwrap()
                     }
                     Some(value_id) => value_id,
@@ -1547,8 +1543,10 @@ fn execute_intrinsic(
                 k1.ice_with_span("Malformed TypeName call", vm.eval_span)
             };
             let type_id = TypeId::from_nzu32(NonZeroU32::new(type_id_value as u32).unwrap());
-            let string_id = *k1.type_names.get(&type_id).unwrap();
-            let value = string_id_to_value(vm, StackSelection::CallStackCurrent, k1, string_id);
+            let name_value_id = *k1.type_names.get(&type_id).unwrap();
+
+            let value =
+                static_value_to_vm_value(vm, StackSelection::CallStackCurrent, k1, name_value_id)?;
             Ok(VmResult::Value(value))
         }
         IntrinsicOperation::TypeSchema => {

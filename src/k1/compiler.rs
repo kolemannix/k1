@@ -401,7 +401,7 @@ pub fn compile_program(
     // bytecode testing
     if let Some(main_id) = p.get_main_function_id() {
         crate::bc::compile_function(&mut p, main_id, false).unwrap();
-        let bc = p.bytecode.borrow();
+        let bc = &p.bytecode;
         let mut errors = Vec::new();
         crate::bc::validate_function(&p, main_id, &mut errors);
         if !errors.is_empty() {
