@@ -131,12 +131,12 @@ pub type BlockId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BcBuiltin {
-    Zeroed,
-
-    // nocommit(2) functions with runtime switches
-    //             Codegen this in BC IR
+    // In LLVM backend, this is becomes a runtime switch
+    // In the VM, just a lookup. So we leave it as a builtin
+    // rather than generate bytecode for it due to that difference
     TypeSchema,
     TypeName,
+
     // Platform-provided
     Allocate,
     AllocateZeroed,
@@ -336,14 +336,6 @@ pub enum Inst {
         lhs: Value,
         rhs: Value,
     },
-
-    // Platform ops
-    Memset {
-        t: PhysicalType,
-        size: Value,
-        dst: Value,
-        value: Value,
-    },
 }
 
 pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> InstKind {
@@ -412,8 +404,6 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
             IntrinsicBitwiseBinopKind::SignedShiftRight => get_value_kind(bc, types, lhs),
             IntrinsicBitwiseBinopKind::UnsignedShiftRight => get_value_kind(bc, types, lhs),
         },
-        // nocommit: Memset should be a Call
-        Inst::Memset { .. } => InstKind::Void,
     }
 }
 
@@ -498,15 +488,9 @@ pub fn compile_function(
 ) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
-    let mut bc = k1.bytecode.borrow_mut();
-    let mut builder = Builder {
-        inst_offset: bc.instrs.len() as u32,
-        bc: &mut bc,
-        k1,
-        block_count: 0,
-        cur_block: 0,
-        cur_span: SpanId::NONE,
-    };
+    let inst_offset = k1.bytecode.instrs.len() as u32;
+    let mut builder =
+        Builder { inst_offset, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
 
     compile_unit_rec(&mut builder, CompilableUnit::Function(function_id), compile_deps)?;
 
@@ -523,19 +507,12 @@ pub fn compile_top_level_expr(
 ) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
-    let mut bc = k1.bytecode.borrow_mut();
-    let mut b = Builder {
-        inst_offset: bc.instrs.len() as u32,
-        bc: &mut bc,
-        k1,
-        block_count: 0,
-        cur_block: 0,
-        cur_span: SpanId::NONE,
-    };
+    let inst_offset = k1.bytecode.instrs.len() as u32;
+    let mut b = Builder { inst_offset, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
         let pt = b.get_physical_type(variable.type_id);
-        b.bc.b_variables.push(BuilderVariable {
+        b.k1.bytecode.b_variables.push(BuilderVariable {
             id: *variable_id,
             value: Value::StaticValue { t: pt, id: *static_value_id },
             indirect: false,
@@ -553,7 +530,7 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
     loop {
         if unit.is_none() {
             if compile_deps {
-                unit = b.bc.b_units_pending_compile.pop();
+                unit = b.k1.bytecode.b_units_pending_compile.pop();
             }
         }
 
@@ -570,32 +547,24 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
 fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
-            debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
-            let name = b.bc.mem.push_str("entry");
+            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+            let name = b.k1.bytecode.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
             let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
             b.cur_span = fn_span;
 
             // Set up parameters
-            for (index, param_variable_id) in f.param_variables.iter().enumerate() {
+            let param_variables = f.param_variables.clone();
+            for (index, param_variable_id) in param_variables.iter().enumerate() {
                 let v = b.k1.variables.get(*param_variable_id);
                 let t = b.get_physical_type(v.type_id);
-                b.bc.b_variables.push(BuilderVariable {
+                b.k1.bytecode.b_variables.push(BuilderVariable {
                     id: *param_variable_id,
                     value: Value::FnParam { t, index: index as u32 },
                     indirect: false,
                 });
             }
-
-            let Some(body) = f.body_block else {
-                return failf!(
-                    b.cur_span,
-                    "Function has no body: {}",
-                    b.k1.function_id_to_string(function_id, false)
-                );
-            };
-            compile_block_stmts(b, None, body)?;
 
             let compiled_blocks = b.bake_blocks();
             let function = CompiledUnit {
@@ -605,14 +574,17 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             };
             b.reset_compilation_unit();
 
-            *b.bc.functions.get_mut(function_id) = Some(function);
+            *b.k1.bytecode.functions.get_mut(function_id) = Some(function);
             Ok(())
         }
         CompilableUnit::Expr(typed_expr_id) => {
-            debug!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
-            let name = b.bc.mem.push_str("expr_");
+            eprintln!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
+            let name = b.k1.bytecode.mem.push_str("expr_");
             b.push_block(name);
-            let _inst = compile_expr(b, None, typed_expr_id)?;
+
+            let result = compile_expr(b, None, typed_expr_id)?;
+            b.push_inst(Inst::Ret(result));
+
             let compiled_blocks = b.bake_blocks();
             let compiled_expr = CompiledUnit {
                 unit: CompilableUnit::Expr(typed_expr_id),
@@ -620,7 +592,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                 blocks: compiled_blocks,
             };
             b.reset_compilation_unit();
-            b.bc.exprs.insert(typed_expr_id, compiled_expr);
+            b.k1.bytecode.exprs.insert(typed_expr_id, compiled_expr);
             Ok(())
         }
     }
@@ -637,11 +609,9 @@ struct LoopInfo {
     break_value: Option<InstId>,
     end_block: BlockId,
 }
-pub struct Builder<'bc, 'k1> {
+pub struct Builder<'k1> {
     // Dependencies
-    k1: &'k1 TypedProgram,
-
-    bc: &'bc mut ProgramBytecode,
+    k1: &'k1 mut TypedProgram,
 
     inst_offset: u32,
     block_count: u32,
@@ -649,24 +619,24 @@ pub struct Builder<'bc, 'k1> {
     cur_span: SpanId,
 }
 
-impl<'bc, 'k1> Builder<'bc, 'k1> {
+impl<'k1> Builder<'k1> {
     fn reset_compilation_unit(&mut self) {
-        for b in &mut self.bc.b_blocks {
+        for b in &mut self.k1.bytecode.b_blocks {
             b.instrs.clear();
         }
         self.block_count = 0;
-        self.bc.b_variables.clear();
-        self.bc.b_loops.clear();
+        self.k1.bytecode.b_variables.clear();
+        self.k1.bytecode.b_loops.clear();
     }
 
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
-        let mut blocks = self.bc.mem.new_vec(self.bc.b_blocks.len() as u32);
-        for b in Builder::builder_blocks_iter(self.block_count, &self.bc.b_blocks) {
-            let instrs = self.bc.mem.push_slice(&b.instrs);
+        let mut blocks = self.k1.bytecode.mem.new_vec(self.k1.bytecode.b_blocks.len() as u32);
+        for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
+            let instrs = self.k1.bytecode.mem.push_slice(&b.instrs);
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
-        self.bc.mem.vec_to_mslice(&blocks)
+        self.k1.bytecode.mem.vec_to_mslice(&blocks)
     }
 
     fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
@@ -674,21 +644,21 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
     }
 
     fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
-        let id = self.bc.instrs.add(inst);
-        let ids = self.bc.sources.add(self.cur_span);
-        let idc = self.bc.comments.add(MStr::empty());
+        let id = self.k1.bytecode.instrs.add(inst);
+        let ids = self.k1.bytecode.sources.add(self.cur_span);
+        let idc = self.k1.bytecode.comments.add(MStr::empty());
         debug_assert!(id == ids && id == idc);
 
-        self.bc.b_blocks[block as usize].instrs.push(id);
+        self.k1.bytecode.b_blocks[block as usize].instrs.push(id);
         id
     }
 
     pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
-        get_inst_kind(self.bc, &self.k1.types, inst)
+        get_inst_kind(&self.k1.bytecode, &self.k1.types, inst)
     }
 
     pub fn get_value_kind(&self, value: &Value) -> InstKind {
-        get_value_kind(self.bc, &self.k1.types, value)
+        get_value_kind(&self.k1.bytecode, &self.k1.types, value)
     }
 
     fn alloca_type(&mut self, pt: PhysicalType) -> InstId {
@@ -763,32 +733,17 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
         }
     }
 
-    fn zero(&mut self, t: ScalarType) -> Value {
-        match t {
-            ScalarType::I8 => Value::byte(0),
-            ScalarType::I16 => Value::Imm32 { t: ScalarType::I16, data: 0 },
-            ScalarType::I32 => Value::Imm32 { t: ScalarType::I32, data: 0 },
-            ScalarType::I64 => Value::Imm32 { t: ScalarType::I64, data: 0 },
-            ScalarType::F32 => Value::Imm32 { t: ScalarType::I64, data: (0.0f32).to_bits() },
-            ScalarType::F64 => {
-                // Bit pattern is all zeroes anyway
-                Value::Imm32 { t: ScalarType::I64, data: (0.0f64).to_bits() as u32 }
-            }
-            ScalarType::Pointer => Value::PtrZero,
-        }
-    }
-
     fn push_block(&mut self, name: MStr<ProgramBytecode>) -> BlockId {
         let id = self.block_count;
         // Recycle builder blocks
-        match self.bc.b_blocks.get_mut(self.block_count as usize) {
+        match self.k1.bytecode.b_blocks.get_mut(self.block_count as usize) {
             Some(recycled) => {
                 self.block_count += 1;
                 recycled.name = name;
             }
             None => {
                 self.block_count += 1;
-                self.bc.b_blocks.push(Block { name, instrs: vec![] });
+                self.k1.bytecode.b_blocks.push(Block { name, instrs: vec![] });
             }
         }
 
@@ -797,14 +752,14 @@ impl<'bc, 'k1> Builder<'bc, 'k1> {
 
     #[track_caller]
     fn goto_block(&mut self, block_id: BlockId) {
-        match self.bc.b_blocks.get(block_id as usize) {
+        match self.k1.bytecode.b_blocks.get(block_id as usize) {
             None => panic!("goto_block on non-existent block: {}", block_id),
             Some(_) => self.cur_block = block_id,
         }
     }
 
     fn get_variable(&self, variable_id: VariableId) -> Option<&BuilderVariable> {
-        self.bc.b_variables.iter().find(|bv| bv.id == variable_id)
+        self.k1.bytecode.b_variables.iter().find(|bv| bv.id == variable_id)
     }
 
     fn get_physical_type(&self, type_id: TypeId) -> PhysicalType {
@@ -847,8 +802,9 @@ fn compile_block_stmts(
     };
 
     let mut last_ret = None;
-    for (index, &stmt) in body.statements.iter().enumerate() {
-        let is_last = index == body.statements.len() - 1;
+    let statements = body.statements.clone();
+    for (index, &stmt) in statements.iter().enumerate() {
+        let is_last = index == statements.len() - 1;
         let stmt_dst = if is_last { dst } else { None };
         last_ret = Some(compile_stmt(b, stmt_dst, stmt)?);
     }
@@ -864,10 +820,12 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
 
     match b.k1.stmts.get(stmt) {
         TypedStmt::Expr(typed_expr_id, _) => {
-            let v = compile_expr(b, dst, *typed_expr_id)?;
+            let typed_expr_id = *typed_expr_id;
+            let v = compile_expr(b, dst, typed_expr_id)?;
             Ok(v)
         }
         TypedStmt::Let(let_stmt) => {
+            let let_stmt = *let_stmt;
             // Handle the case where the rhs crashes first, ugh
             if let_stmt.variable_type == NEVER_TYPE_ID {
                 // If there's an initializer, run it so we crash
@@ -902,36 +860,44 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             if let Some(init) = let_stmt.initializer {
                 compile_expr(b, Some(value_ptr.as_value()), init)?;
             }
-            b.bc.b_variables.push(BuilderVariable {
+            b.k1.bytecode.b_variables.push(BuilderVariable {
                 id: let_stmt.variable_id,
                 value: variable_alloca.as_value(),
                 indirect: true,
             });
             Ok(Value::UNIT)
         }
-        TypedStmt::Assignment(ass) => match ass.kind {
-            AssignmentKind::Set => {
-                let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
-                    b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
-                };
-                let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
-                if !builder_variable.indirect {
-                    b.k1.ice_with_span("Expect an indirect variable for value assignment", v.span)
-                };
-                let variable_value = builder_variable.value;
-                let _rhs_stored = compile_expr(b, Some(variable_value), ass.value)?;
-                Ok(Value::UNIT)
+        TypedStmt::Assignment(ass) => {
+            let ass = *ass;
+            match ass.kind {
+                AssignmentKind::Set => {
+                    let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
+                        b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
+                    };
+                    let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
+                    if !builder_variable.indirect {
+                        b.k1.ice_with_span(
+                            "Expect an indirect variable for value assignment",
+                            v.span,
+                        )
+                    };
+                    let variable_value = builder_variable.value;
+                    let _rhs_stored = compile_expr(b, Some(variable_value), ass.value)?;
+                    Ok(Value::UNIT)
+                }
+                AssignmentKind::Store => {
+                    let lhs = compile_expr(b, None, ass.destination)?;
+                    let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
+                    Ok(Value::UNIT)
+                }
             }
-            AssignmentKind::Store => {
-                let lhs = compile_expr(b, None, ass.destination)?;
-                let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
-                Ok(Value::UNIT)
-            }
-        },
+        }
         TypedStmt::Require(req) => {
-            let continue_name = mformat!(b.bc.mem, "req_cont_{}", stmt.as_u32());
+            //task(bc): matching condition clone
+            let req = req.clone();
+            let continue_name = mformat!(b.k1.bytecode.mem, "req_cont_{}", stmt.as_u32());
             let require_continue_block = b.push_block(continue_name);
-            let else_name = mformat!(b.bc.mem, "req_else_{}", stmt.as_u32());
+            let else_name = mformat!(b.k1.bytecode.mem, "req_else_{}", stmt.as_u32());
             let require_else_block = b.push_block(else_name);
 
             compile_matching_condition(
@@ -967,23 +933,11 @@ fn compile_expr(
     let prev_span = b.cur_span;
     b.cur_span = b.k1.exprs.get(expr).get_span();
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
-    let e = b.k1.exprs.get(expr);
+    let e = b.k1.exprs.get(expr).clone();
     match e {
-        TypedExpr::Integer(int) => {
-            let imm = b.push_int_value(&int.value);
-            let store = store_simple_if_dst(b, dst, imm);
-            Ok(store)
-        }
-        TypedExpr::Float(float) => {
-            //task(bc): Pack small floats
-            let imm = b.push_inst(Inst::Imm(Imm::Float(float.value)));
-            let store = store_simple_if_dst(b, dst, imm.as_value());
-            Ok(store)
-        }
         TypedExpr::Struct(struct_literal) => {
             let struct_pt = b.get_physical_type(struct_literal.type_id);
             let struct_agg_id = struct_pt.expect_agg();
-            let struct_pt_record = b.k1.types.phys_types.get(struct_agg_id);
             let struct_base = match dst {
                 Some(dst) => dst,
                 None => b.alloca_type(struct_pt).as_value(),
@@ -1008,7 +962,6 @@ fn compile_expr(
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_base = compile_expr(b, None, field_access.base)?;
             let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
-            let struct_pt_record = b.k1.types.phys_types.get(struct_pt_id);
             let Some(offset) =
                 b.k1.types.get_struct_field_offset(struct_pt_id, field_access.field_index)
             else {
@@ -1054,7 +1007,7 @@ fn compile_expr(
             let variable = b.k1.variables.get(variable_expr.variable_id);
             match variable.global_id {
                 Some(global_id) => {
-                    // Globals are pretty complex. We always generated an instruction
+                    // Globals are pretty complex. We always generate an instruction
                     // representing the **address** of the global, because they are always
                     // addresses to static memory. For reference types, that address _is_
                     // the value of the expression referring to the global, but for
@@ -1107,7 +1060,8 @@ fn compile_expr(
                     let Some(var) = b.get_variable(variable_expr.variable_id) else {
                         eprintln!(
                             "Variables are: {}",
-                            b.bc.b_variables
+                            b.k1.bytecode
+                                .b_variables
                                 .iter()
                                 .map(|bv| format!("{} {}", bv.id, bv.value))
                                 .join("\n")
@@ -1142,8 +1096,9 @@ fn compile_expr(
             Ok(last)
         }
         TypedExpr::Call { call_id, return_type, .. } => {
-            let call = b.k1.calls.get(*call_id);
-            let mut args = b.bc.mem.new_vec(call.args.len() as u32 + 1);
+            // task(bc): deal with clone() of Call and TypedExpr
+            let call = b.k1.calls.get(call_id).clone();
+            let mut args = b.k1.bytecode.mem.new_vec(call.args.len() as u32 + 1);
             let builtin = if let Some(function_id) = call.callee.maybe_function_id() {
                 if let Some(intrinsic) = b.k1.get_function(function_id).intrinsic_type {
                     match intrinsic {
@@ -1160,35 +1115,43 @@ fn compile_expr(
                         IntrinsicOperation::Zeroed => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                let pt = b.get_physical_type(type_id);
-                                let zero = match pt {
-                                    PhysicalType::Agg(agg_id) => {
+                                match b.get_physical_type(type_id) {
+                                    pt @ PhysicalType::Agg(agg_id) => {
                                         let pt_layout = b.k1.types.phys_types.get(agg_id).layout;
                                         let dst = match dst {
                                             None => b.alloca_type(pt).as_value(),
                                             Some(dst) => dst,
                                         };
                                         let zero_u8 = Value::byte(0);
-                                        b.push_inst(Inst::Memset {
-                                            t: pt,
-                                            size: Value::Imm32 {
-                                                t: ScalarType::I8,
-                                                data: pt_layout.size,
-                                            },
-                                            dst,
-                                            value: zero_u8,
-                                        });
-                                        dst
+                                        // intern fn set(dst: Pointer, value: u8, count: uword): unit
+                                        let count = Value::Imm32 {
+                                            t: ScalarType::I8,
+                                            data: pt_layout.size,
+                                        };
+                                        let memset_args =
+                                            b.k1.bytecode.mem.push_slice(&[dst, zero_u8, count]);
+                                        let memset_call = BcCall {
+                                            dst: None,
+                                            ret_inst_kind: InstKind::Void,
+                                            callee: BcCallee::Builtin(BcBuiltin::MemSet),
+                                            args: memset_args,
+                                        };
+                                        let call_id = b.k1.bytecode.calls.add(memset_call);
+                                        b.push_inst(Inst::Call { id: call_id });
+                                        Ok(dst)
                                     }
-                                    PhysicalType::Scalar(st) => b.zero(st),
-                                };
-                                Ok(zero)
+                                    PhysicalType::Scalar(st) => {
+                                        let zero_value = zero(st);
+                                        let stored = store_simple_if_dst(b, dst, zero_value);
+                                        Ok(stored)
+                                    }
+                                }
                             };
                         }
 
-                        // task(bc) nocommit do these
-                        IntrinsicOperation::TypeName => Some(BcBuiltin::TypeName),
-                        IntrinsicOperation::TypeSchema => Some(BcBuiltin::TypeSchema),
+                        IntrinsicOperation::TypeName | IntrinsicOperation::TypeSchema => {
+                            unreachable!("handled as normal call")
+                        }
 
                         IntrinsicOperation::BoolNegate => {
                             return {
@@ -1299,14 +1262,16 @@ fn compile_expr(
                 }
             };
             if let BcCallee::Direct(function_id) = &callee {
-                match b.bc.functions.get(*function_id) {
+                match b.k1.bytecode.functions.get(*function_id) {
                     None => {
-                        b.bc.b_units_pending_compile.push(CompilableUnit::Function(*function_id))
+                        b.k1.bytecode
+                            .b_units_pending_compile
+                            .push(CompilableUnit::Function(*function_id))
                     }
                     _ => {}
                 }
             }
-            let return_type_id = *return_type;
+            let return_type_id = return_type;
             let return_inst_kind: InstKind = b.type_to_inst_kind(return_type_id);
             for arg in &call.args {
                 args.push(compile_expr(b, None, *arg)?);
@@ -1322,8 +1287,8 @@ fn compile_expr(
                 },
                 Some(dst) => Some(dst),
             };
-            let args_handle = b.bc.mem.vec_to_mslice(&args);
-            let call_id = b.bc.calls.add(BcCall {
+            let args_handle = b.k1.bytecode.mem.vec_to_mslice(&args);
+            let call_id = b.k1.bytecode.calls.add(BcCall {
                 dst: call_dst,
                 ret_inst_kind: return_inst_kind,
                 callee,
@@ -1338,10 +1303,11 @@ fn compile_expr(
                 compile_stmt(b, None, *stmt)?;
             }
 
-            let mut arm_blocks = b.bc.mem.new_vec(match_expr.arms.len() as u32);
+            let mut arm_blocks = b.k1.bytecode.mem.new_vec(match_expr.arms.len() as u32);
             for (arm_index, _arm) in match_expr.arms.iter().enumerate() {
-                let name = mformat!(b.bc.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
-                let name_cons = mformat!(b.bc.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
+                let name = mformat!(b.k1.bytecode.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
+                let name_cons =
+                    mformat!(b.k1.bytecode.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
                 let arm_block = b.push_block(name);
                 let arm_consequent_block = b.push_block(name_cons);
                 arm_blocks.push((arm_block, arm_consequent_block));
@@ -1350,12 +1316,12 @@ fn compile_expr(
             let first_arm_block = arm_blocks[0].0;
             b.push_jump(first_arm_block);
 
-            let fail_name = mformat!(b.bc.mem, "match_fail__{}", expr.as_u32());
+            let fail_name = mformat!(b.k1.bytecode.mem, "match_fail__{}", expr.as_u32());
             let fail_block = b.push_block(fail_name);
             b.goto_block(fail_block);
             b.push_inst(Inst::Unreachable);
 
-            let end_name = mformat!(b.bc.mem, "match_end__{}", expr.as_u32());
+            let end_name = mformat!(b.k1.bytecode.mem, "match_end__{}", expr.as_u32());
             let match_end_block = b.push_block(end_name);
             b.goto_block(match_end_block);
             let result_inst_kind = b.type_to_inst_kind(match_expr.result_type);
@@ -1403,8 +1369,10 @@ fn compile_expr(
                     Ok(inst.as_value())
                 }
                 Some(came_from) => {
-                    let real_incomings = b.bc.mem.push_slice(&incomings);
-                    let Inst::CameFrom { incomings: i, .. } = b.bc.instrs.get_mut(came_from) else {
+                    let real_incomings = b.k1.bytecode.mem.push_slice(&incomings);
+                    let Inst::CameFrom { incomings: i, .. } =
+                        b.k1.bytecode.instrs.get_mut(came_from)
+                    else {
                         unreachable!()
                     };
                     *i = real_incomings;
@@ -1414,14 +1382,14 @@ fn compile_expr(
             }
         }
         TypedExpr::LogicalAnd(and) => {
-            let rhs_check_name = mformat!(b.bc.mem, "and_rhs__{}", expr.as_u32());
+            let rhs_check_name = mformat!(b.k1.bytecode.mem, "and_rhs__{}", expr.as_u32());
             let rhs_check = b.push_block(rhs_check_name);
-            let short_circuit_name = mformat!(b.bc.mem, "and_short__{}", expr.as_u32());
+            let short_circuit_name = mformat!(b.k1.bytecode.mem, "and_short__{}", expr.as_u32());
             let short_circuit = b.push_block(short_circuit_name);
-            let final_block_name = mformat!(b.bc.mem, "and_end__{}", expr.as_u32());
+            let final_block_name = mformat!(b.k1.bytecode.mem, "and_end__{}", expr.as_u32());
             let final_block = b.push_block(final_block_name);
 
-            let mut incomings = b.bc.mem.new_vec(2);
+            let mut incomings = b.k1.bytecode.mem.new_vec(2);
 
             let start_block = b.cur_block;
             let lhs = compile_expr(b, None, and.lhs)?;
@@ -1436,7 +1404,7 @@ fn compile_expr(
             b.push_jump(final_block);
 
             b.goto_block(final_block);
-            let incomings_handle = b.bc.mem.vec_to_mslice(&incomings);
+            let incomings_handle = b.k1.bytecode.mem.vec_to_mslice(&incomings);
             let result_came_from = b.push_inst(Inst::CameFrom {
                 t: PhysicalType::Scalar(ScalarType::I8),
                 incomings: incomings_handle,
@@ -1445,14 +1413,14 @@ fn compile_expr(
         }
         TypedExpr::LogicalOr(or) => {
             // Short-circuiting control-flow Or
-            let rhs_check_name = mformat!(b.bc.mem, "or_rhs__{}", expr.as_u32());
+            let rhs_check_name = mformat!(b.k1.bytecode.mem, "or_rhs__{}", expr.as_u32());
             let rhs_check = b.push_block(rhs_check_name);
-            let short_circuit_name = mformat!(b.bc.mem, "or_short__{}", expr.as_u32());
+            let short_circuit_name = mformat!(b.k1.bytecode.mem, "or_short__{}", expr.as_u32());
             let short_circuit = b.push_block(short_circuit_name);
-            let final_block_name = mformat!(b.bc.mem, "or_end__{}", expr.as_u32());
+            let final_block_name = mformat!(b.k1.bytecode.mem, "or_end__{}", expr.as_u32());
             let final_block = b.push_block(final_block_name);
 
-            let mut incomings = b.bc.mem.new_vec(2);
+            let mut incomings = b.k1.bytecode.mem.new_vec(2);
 
             let start_block = b.cur_block;
             let lhs = compile_expr(b, None, or.lhs)?;
@@ -1468,7 +1436,7 @@ fn compile_expr(
             b.push_jump(final_block);
 
             b.goto_block(final_block);
-            let incomings_handle = b.bc.mem.vec_to_mslice(&incomings);
+            let incomings_handle = b.k1.bytecode.mem.vec_to_mslice(&incomings);
             let result_came_from = b
                 .push_inst(Inst::CameFrom {
                     t: PhysicalType::Scalar(ScalarType::I8),
@@ -1478,15 +1446,15 @@ fn compile_expr(
             Ok(result_came_from)
         }
         TypedExpr::WhileLoop(w) => {
-            let cond_name = mformat!(b.bc.mem, "while_cond__{}", expr.as_u32());
+            let cond_name = mformat!(b.k1.bytecode.mem, "while_cond__{}", expr.as_u32());
             let cond_block = b.push_block(cond_name);
-            let body_name = mformat!(b.bc.mem, "while_body__{}", expr.as_u32());
+            let body_name = mformat!(b.k1.bytecode.mem, "while_body__{}", expr.as_u32());
             let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.bc.mem, "while_end__{}", expr.as_u32());
+            let end_name = mformat!(b.k1.bytecode.mem, "while_end__{}", expr.as_u32());
             let end_block = b.push_block(end_name);
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
-            b.bc.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
+            b.k1.bytecode.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
 
             b.push_jump(cond_block);
 
@@ -1505,9 +1473,9 @@ fn compile_expr(
         TypedExpr::LoopExpr(loop_expr) => {
             // let start_block = self.builder.get_insert_block().unwrap();
             // let current_fn = start_block.get_parent().unwrap();
-            let body_name = mformat!(b.bc.mem, "loop_body__{}", expr.as_u32());
+            let body_name = mformat!(b.k1.bytecode.mem, "loop_body__{}", expr.as_u32());
             let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.bc.mem, "loop_end__{}", expr.as_u32());
+            let end_name = mformat!(b.k1.bytecode.mem, "loop_end__{}", expr.as_u32());
             let loop_end_block = b.push_block(end_name);
 
             let break_pt_id = b.get_physical_type(loop_expr.break_type);
@@ -1520,8 +1488,10 @@ fn compile_expr(
             let TypedExpr::Block(body_block) = b.k1.exprs.get(loop_expr.body_block) else {
                 unreachable!()
             };
-            b.bc.b_loops
-                .insert(body_block.scope_id, LoopInfo { break_value, end_block: loop_end_block });
+            let body_scope_id = body_block.scope_id;
+            b.k1.bytecode
+                .b_loops
+                .insert(body_scope_id, LoopInfo { break_value, end_block: loop_end_block });
 
             // Go to the body
             b.push_jump(loop_body_block);
@@ -1540,7 +1510,7 @@ fn compile_expr(
             }
         }
         TypedExpr::Break(brk) => {
-            let loop_info = b.bc.b_loops.get(&brk.loop_scope).unwrap();
+            let loop_info = b.k1.bytecode.b_loops.get(&brk.loop_scope).unwrap();
             let end_block = loop_info.end_block;
             if let Some(break_dst) = loop_info.break_value {
                 let _stored = compile_expr(b, Some(break_dst.as_value()), brk.value)?;
@@ -1606,6 +1576,7 @@ fn compile_expr(
                     .get_type_dereferenced(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
                     .expect_enum_variant();
             let variant_pt = b.get_physical_type(variant_type.my_type_id).expect_agg();
+            let variant_payload = variant_type.payload;
             let payload_offset = b.push_struct_offset(variant_pt, enum_variant_base, 1);
             if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                 let base_is_reference =
@@ -1626,14 +1597,14 @@ fn compile_expr(
                     FieldAccessKind::Dereference => true,
                     FieldAccessKind::ReferenceThrough => unreachable!(),
                 };
-                let payload_type_id = variant_type.payload.unwrap();
+                let payload_type_id = variant_payload.unwrap();
                 let payload_pt_id = b.get_physical_type(payload_type_id);
                 let copied =
                     load_or_copy(b, payload_pt_id, dst, payload_offset.as_value(), make_copy);
                 Ok(copied)
             }
         }
-        TypedExpr::Cast(_) => compile_cast(b, dst, expr),
+        TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
         TypedExpr::Return(typed_return) => {
             //task(bc): Return value optimization
             let inst = compile_expr(b, None, typed_return.value)?;
@@ -1642,10 +1613,11 @@ fn compile_expr(
         }
         TypedExpr::Lambda(lam_expr) => {
             let l = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let env_struct = l.environment_struct;
             match dst {
-                Some(dst) => compile_expr(b, Some(dst), l.environment_struct),
+                Some(dst) => compile_expr(b, Some(dst), env_struct),
                 None => {
-                    let env = compile_expr(b, None, l.environment_struct)?;
+                    let env = compile_expr(b, None, env_struct)?;
                     Ok(env)
                 }
             }
@@ -1700,13 +1672,15 @@ fn compile_expr(
                     Ok(store)
                 }
                 StaticValue::Int(int) => {
-                    let imm = b.push_int_value(int);
+                    let int = *int;
+                    let imm = b.push_int_value(&int);
                     let store = store_simple_if_dst(b, dst, imm);
                     Ok(store)
                 }
                 StaticValue::Float(float) => {
+                    let float = *float;
                     //task(bc): Pack small floats
-                    let imm = b.push_inst(Inst::Imm(Imm::Float(*float)));
+                    let imm = b.push_inst(Inst::Imm(Imm::Float(float)));
                     let store = store_simple_if_dst(b, dst, imm.as_value());
                     Ok(store)
                 }
@@ -1751,9 +1725,9 @@ fn compile_cast(
     b: &mut Builder,
     // Where to put the result; aka value placement or destination-aware codegen
     dst: Option<Value>,
-    expr: TypedExprId,
+    c: &TypedCast,
+    _expr_id: TypedExprId,
 ) -> TyperResult<Value> {
-    let TypedExpr::Cast(c) = b.k1.exprs.get(expr) else { unreachable!() };
     match c.cast_type {
         CastType::EnumToVariant
         | CastType::VariantToEnum
@@ -1832,6 +1806,7 @@ fn compile_cast(
         }
         CastType::LambdaToLambdaObject => {
             let lambda_type = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+            let lambda_function_id = lambda_type.function_id;
 
             let lambda_env_type = b.get_physical_type(lambda_type.env_type);
             // It seems that representing the environment of lambda objects as a pointer
@@ -1853,7 +1828,6 @@ fn compile_cast(
             // We store the environment directly into our stack pointer
             let _lambda_env_inst = compile_expr(b, Some(lambda_env_ptr), c.base_expr)?;
 
-            let lambda_function_id = lambda_type.function_id;
             let fn_ptr = Value::FunctionAddr(lambda_function_id);
 
             let lam_obj_ptr = match dst {
@@ -1962,16 +1936,31 @@ fn compile_matching_condition(
     Ok(())
 }
 
+pub fn zero(t: ScalarType) -> Value {
+    match t {
+        ScalarType::I8 => Value::byte(0),
+        ScalarType::I16 => Value::Imm32 { t: ScalarType::I16, data: 0 },
+        ScalarType::I32 => Value::Imm32 { t: ScalarType::I32, data: 0 },
+        ScalarType::I64 => Value::Imm32 { t: ScalarType::I64, data: 0 },
+        ScalarType::F32 => Value::Imm32 { t: ScalarType::I64, data: (0.0f32).to_bits() },
+        ScalarType::F64 => {
+            // Bit pattern is all zeroes anyway
+            Value::Imm32 { t: ScalarType::I64, data: (0.0f64).to_bits() as u32 }
+        }
+        ScalarType::Pointer => Value::PtrZero,
+    }
+}
+
 ////////////////////////////// Validation //////////////////////////////
 
 pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut Vec<String>) {
-    let bc = k1.bytecode.borrow();
+    let bc = &k1.bytecode;
     let f = bc.functions.get(function).as_ref().unwrap();
     for (block_index, block) in bc.mem.get_slice(f.blocks).iter().enumerate() {
         for (index, inst_id) in bc.mem.get_slice(block.instrs).iter().enumerate() {
             let is_last = index as u32 == block.instrs.len() - 1;
             let inst = bc.instrs.get(*inst_id);
-            let inst_kind = get_inst_kind(&bc, &k1.types, *inst_id);
+            let inst_kind = get_inst_kind(bc, &k1.types, *inst_id);
             if !is_last && inst_kind.is_terminator() {
                 errors.push(format!("b{block_index}: stray terminator"))
             };
@@ -1983,36 +1972,36 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::Imm(_imm) => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
-                    let dst_type = get_value_kind(&bc, &k1.types, dst);
+                    let dst_type = get_value_kind(bc, &k1.types, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("store dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::Load { src, .. } => {
-                    let src_kind = get_value_kind(&bc, &k1.types, src);
+                    let src_kind = get_value_kind(bc, &k1.types, src);
                     if !src_kind.is_storage() {
                         errors.push(format!("i{inst_id}: load src is not storage"))
                     }
                 }
                 Inst::Copy { dst, src, .. } => {
-                    let src_type = get_value_kind(&bc, &k1.types, src);
+                    let src_type = get_value_kind(bc, &k1.types, src);
                     if !src_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy src is not a ptr"))
                     }
-                    let dst_type = get_value_kind(&bc, &k1.types, dst);
+                    let dst_type = get_value_kind(bc, &k1.types, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
-                    let base_type = get_value_kind(&bc, &k1.types, base);
+                    let base_type = get_value_kind(bc, &k1.types, base);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: struct_offset base is not a ptr"))
                     }
                 }
                 Inst::ArrayOffset { base, element_index, .. } => {
-                    let base_type = get_value_kind(&bc, &k1.types, base);
-                    let index_type = get_value_kind(&bc, &k1.types, element_index);
+                    let base_type = get_value_kind(bc, &k1.types, base);
+                    let index_type = get_value_kind(bc, &k1.types, element_index);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: array_offset base is not a ptr"))
                     }
@@ -2032,7 +2021,7 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                     }
                 }
                 Inst::JumpIf { cond, .. } => {
-                    let cond_type = get_value_kind(&bc, &k1.types, cond);
+                    let cond_type = get_value_kind(bc, &k1.types, cond);
                     if !cond_type.is_value() {
                         errors.push(format!("i{inst_id}: jumpif cond is not a value"))
                     }
@@ -2040,19 +2029,19 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::Unreachable => (),
                 Inst::CameFrom { .. } => (),
                 Inst::Ret(v) => {
-                    let ret_val_type = get_value_kind(&bc, &k1.types, v);
+                    let ret_val_type = get_value_kind(bc, &k1.types, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
                         errors.push(format!("i{inst_id}: ret value is not a value"))
                     }
                 }
                 Inst::BoolNegate { v } => {
-                    let inst_type = get_value_kind(&bc, &k1.types, v);
+                    let inst_type = get_value_kind(bc, &k1.types, v);
                     if !inst_type.is_byte() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
                 Inst::BitNot { v } => {
-                    let inst_type = get_value_kind(&bc, &k1.types, v);
+                    let inst_type = get_value_kind(bc, &k1.types, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: bit_not src is not an int"))
                     }
@@ -2072,13 +2061,13 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::IntToFloatUnsigned { .. } => (),
                 Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { v } => {
-                    let inst_type = get_value_kind(&bc, &k1.types, v);
+                    let inst_type = get_value_kind(bc, &k1.types, v);
                     if !inst_type.is_storage() {
                         errors.push(format!("i{inst_id}: ptr_to_word src is not a ptr"))
                     }
                 }
                 Inst::WordToPtr { v } => {
-                    let inst_type = get_value_kind(&bc, &k1.types, v);
+                    let inst_type = get_value_kind(bc, &k1.types, v);
                     if inst_type.as_value().and_then(|t| t.as_scalar()) != Some(bc.word_sized_int())
                     {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a word-sized int",))
@@ -2089,16 +2078,6 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 }
                 Inst::BitwiseBin { .. } => {
                     //task(bc): Validate bitwise bins
-                }
-                Inst::Memset { dst, value, .. } => {
-                    let dst_type = get_value_kind(&bc, &k1.types, dst);
-                    if !dst_type.is_storage() {
-                        errors.push(format!("i{inst_id}: memset dst is not a ptr"))
-                    }
-                    let value_type = get_value_kind(&bc, &k1.types, value);
-                    if !value_type.is_byte() {
-                        errors.push(format!("i{inst_id}: memset value is not a byte"))
-                    }
                 }
             }
         }
@@ -2302,11 +2281,6 @@ pub fn display_inst(
         Inst::BitwiseBin { op, lhs, rhs } => {
             write!(w, "{:?} {} {}", op, *lhs, *rhs)?;
         }
-        Inst::Memset { t, dst, value, size } => {
-            write!(w, "memset {} ", size)?;
-            display_pt(w, &k1.types, t)?;
-            write!(w, ", {}, {}", *dst, *value)?;
-        }
     };
     if show_source {
         let span_id = bc.sources.get(inst_id);
@@ -2419,4 +2393,96 @@ fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::Imm32 { t, data } => write!(w, "{} {}", t, data),
         Value::PtrZero => write!(w, "ptr0"),
     }
+}
+
+fn generate_typename_or_schema_function() {
+    // nocommit pull out once working
+    // let type_id_arg = f.param_variables[0];
+    // let is_type_name = f.intrinsic_type == Some(IntrinsicOperation::TypeName);
+    // let return_pt = if is_type_name {
+    //     // typeName returns string
+    //     b.get_physical_type(STRING_TYPE_ID)
+    // } else {
+    //     // typeSchema returns TypeSchema
+    //     b.get_physical_type(b.k1.types.builtins.types_type_schema.unwrap())
+    // };
+    // let entry_block = b.cur_block;
+    //
+    // // nocommit(4) fix this MStr thing when you just want a static string
+    // let else_name = b.k1.bytecode.mem.push_str("miss");
+    // let else_block = b.push_block(else_name);
+    // b.goto_block(else_block);
+    //
+    // // TODO: We should print what happened and call exit properly
+    // b.push_inst(Inst::Unreachable);
+    //
+    // let finish_name = b.k1.bytecode.mem.push_str("finish");
+    // let finish_block = b.push_block(finish_name);
+    //
+    // // Value and block index
+    // let mut cases: Vec<(Value, u32)> = Vec::with_capacity(b.k1.type_schemas.len());
+    // if is_type_name {
+    //     for (type_id, string_value_id) in
+    //         b.k1.type_names
+    //             .iter()
+    //             .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+    //     {
+    //         if b.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
+    //         {
+    //             // Skips abstract types; obviously; but should this be an assertion
+    //             // instead? Does this happen?
+    //             panic!("typename of abstract type happened");
+    //             // continue;
+    //         }
+    //         let arm_block_name =
+    //             b.k1.bytecode.mem.push_str(&format!("arm_type_{}", type_id.as_u32()));
+    //         let arm_block = b.push_block(arm_block_name);
+    //         b.goto_block(arm_block);
+    //         let type_id_inst =
+    //             b.push_inst(Inst::Imm(Imm::I64(type_id.as_u32() as u64)));
+    //         let type_id_value = Value::Inst(type_id_inst);
+    //
+    //         let string_type = b.get_physical_type(STRING_TYPE_ID);
+    //         let global_value =
+    //             Value::StaticValue { t: string_type, id: *string_value_id };
+    //         store_value();
+    //         self.store_k1_value(&return_llvm_type, sret_ptr, value);
+    //         self.builder.build_unconditional_branch(finish_block).unwrap();
+    //         cases.push((type_id_int_value, arm_block));
+    //     }
+    // } else {
+    //     for (type_id, schema_value_id) in self
+    //         .k1
+    //         .type_schemas
+    //         .iter()
+    //         .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+    //     {
+    //         if self
+    //             .k1
+    //             .types
+    //             .get_contained_type_variable_counts(*type_id)
+    //             .is_abstract()
+    //         {
+    //             // No point re-ifying types that don't exist at runtime
+    //             // like type parameters
+    //             continue;
+    //         }
+    //         let my_block =
+    //             self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+    //         self.builder.position_at_end(my_block);
+    //         let type_id_int_value =
+    //             self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+    //
+    //         let value = self.codegen_static_value_as_code(*schema_value_id)?;
+    //         self.store_k1_value(&return_llvm_type, sret_ptr, value);
+    //         self.builder.build_unconditional_branch(finish_block).unwrap();
+    //         cases.push((type_id_int_value, my_block));
+    //     }
+    // }
+    // self.builder.position_at_end(entry_block);
+    // let _switch =
+    //     self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
+    //
+    // self.builder.position_at_end(finish_block);
+    // self.builder.build_return(None).unwrap()
 }

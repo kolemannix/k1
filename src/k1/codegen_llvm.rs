@@ -2210,10 +2210,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.set_debug_location_from_span(span);
         debug!("codegen expr\n{}", self.k1.expr_to_string_with_type(expr_id));
         match expr {
-            TypedExpr::Integer(integer) => {
-                Ok(self.codegen_integer_value(integer.value).unwrap().into())
-            }
-            TypedExpr::Float(float) => Ok(self.codegen_float_value(float.value).unwrap().into()),
             TypedExpr::Variable(ir_var) => {
                 if let Some(variable_value) = self.variable_to_value.get(&ir_var.variable_id) {
                     let llvm_type = self.codegen_type(ir_var.type_id)?;
@@ -3318,11 +3314,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::MemSet => {
-                // intern fn set(
-                //   dst: Pointer,
-                //   value: u8,
-                //   count: uword
-                // ): unit
+                // intern fn set(dst: Pointer, value: u8, count: uword): unit
                 todo!("vm memset")
             }
             IntrinsicOperation::MemEquals => {
@@ -3378,7 +3370,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Vec::with_capacity(self.k1.type_schemas.len());
                 // TODO: sort the schemas so codegen more predictably
                 if is_type_name {
-                    for (type_id, string_id) in self
+                    for (type_id, static_string_id) in self
                         .k1
                         .type_names
                         .iter()
@@ -3397,6 +3389,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
                         let value = {
+                            let StaticValue::String(string_id) =
+                                self.k1.static_values.get(*static_string_id)
+                            else {
+                                panic!("typename should be a string")
+                            };
                             let global_value = self.codegen_string_id(*string_id)?;
                             global_value.as_pointer_value().as_basic_value_enum()
                         };

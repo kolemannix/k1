@@ -92,8 +92,6 @@ impl TypedProgram {
         }
 
         match self.exprs.get(expr) {
-            TypedExpr::Integer(_) => (),
-            TypedExpr::Float(_) => (),
             TypedExpr::Struct(s) => {
                 for f in s.fields.clone().iter() {
                     recurse!(f.expr);

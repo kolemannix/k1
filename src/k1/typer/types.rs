@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use std::collections::hash_map::Entry;
-use std::env;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
@@ -989,8 +988,6 @@ pub struct TypePool {
     pub hashes: FxHashMap<u64, TypeId>,
 
     /// AoS-style info associated with each type id
-    // nocommit: deprecated, moving to type_phys_type_lookup
-    // pub layouts: VPool<Layout, TypeId>,
     pub type_phys_type_lookup: VPool<Option<PhysicalType>, TypeId>,
     pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
@@ -1021,8 +1018,10 @@ impl TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
             hashes: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT),
 
-            // layouts: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
-            type_phys_type_lookup: VPool::make_with_hint("layouts", EXPECTED_TYPE_COUNT),
+            type_phys_type_lookup: VPool::make_with_hint(
+                "type_phys_type_lookup",
+                EXPECTED_TYPE_COUNT,
+            ),
             type_variable_counts: VPool::make_with_hint(
                 "type_variable_counts",
                 EXPECTED_TYPE_COUNT,
@@ -1102,13 +1101,11 @@ impl TypePool {
                 let type_id = self.types.add(typ);
                 self.hashes.insert(hash, type_id);
 
-                // 4 AoS fields to handle
+                // 3 AoS fields to handle
                 // pub type_phys_type_lookup
                 // pub type_variable_counts
                 // pub instance_info
 
-                // let layout = self.compute_type_layout(type_id);
-                // self.layouts.add(layout);
                 let pt_id = self.compile_physical_type(type_id);
                 self.type_phys_type_lookup.add(pt_id);
 
@@ -1284,7 +1281,6 @@ impl TypePool {
             }
         };
 
-        // debug_assert_eq!(self.types.len(), self.layouts.len());
         debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
         debug_assert_eq!(self.types.len(), self.instance_info.len());
         debug_assert_eq!(self.types.len(), self.type_phys_type_lookup.len());
@@ -1327,7 +1323,7 @@ impl TypePool {
                 // HARD AGREE 4 months later!
                 // Checklist is:
                 // - manage the hash
-                // - Update the 4 SoA fields: variable counts, layout, phys_type_mapping, and instance_info
+                // - Update the 3 SoA fields: variable counts, phys_type_mapping, and instance_info
                 // - Manage both the resolve vs insert paths
                 // - Handle enums since they are self-referential
 
@@ -1335,8 +1331,6 @@ impl TypePool {
                 *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
                 *self.instance_info.get_mut(unresolved_type_id) = instance_info;
 
-                // let layout = self.compute_type_layout(unresolved_type_id);
-                // *self.layouts.get_mut(unresolved_type_id) = layout;
                 let pt_id = self.compile_physical_type(unresolved_type_id);
                 *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
             }
@@ -1916,89 +1910,6 @@ impl TypePool {
             _ => panic!("not a struct"),
         }
     }
-
-    //pub fn compute_type_layout(&self, type_id: TypeId) -> Layout {
-    //    const Z: Layout = Layout::ZERO;
-    //    match self.get_no_follow(type_id) {
-    //        Type::Unit => Layout::from_scalar_bytes(1),
-    //        Type::Char => Layout::from_scalar_bytes(1),
-    //        Type::Integer(integer_type) => Layout::from_scalar_bits(integer_type.width().bits()),
-    //        Type::Float(float_type) => Layout::from_scalar_bits(float_type.size().bits()),
-    //        Type::Bool => Layout::from_scalar_bytes(1),
-    //        Type::Pointer | Type::FunctionPointer(_) => {
-    //            Layout::from_scalar_bits(self.word_size_bits())
-    //        }
-    //        Type::Struct(struct_type) => {
-    //            let mut layout = Layout::ZERO;
-    //            for field in self.mem.get_slice(struct_type.fields) {
-    //                let field_layout = self.compute_type_layout(field.type_id);
-    //                layout.append_to_aggregate(field_layout);
-    //            }
-    //            layout
-    //        }
-    //        Type::Reference(_reference_type) => Layout::from_scalar_bits(self.word_size_bits()),
-    //        Type::Enum(typed_enum) => {
-    //            let payload_layouts: Vec<Option<Layout>> = typed_enum
-    //                .variants
-    //                .iter()
-    //                .map(|v| v.payload.map(|p| self.compute_type_layout(p)))
-    //                .collect();
-
-    //            // Enum sizing and layout rules:
-    //            // - Alignment of the enum is the max(alignment) of the variants
-    //            // - Size of the enum is the size of the largest variant, not necessarily the same
-    //            //   variant, plus alignment end padding
-    //            let tag_layout = self.compute_type_layout(typed_enum.tag_type);
-    //            let mut max_variant_align = 0;
-    //            let mut max_variant_size = 0;
-    //            for (_variant, payload_layout) in typed_enum.variants.iter().zip(payload_layouts) {
-    //                let struct_repr = {
-    //                    let mut l = Layout::ZERO;
-    //                    l.append_to_aggregate(tag_layout);
-    //                    if let Some(payload_layout) = payload_layout {
-    //                        l.append_to_aggregate(payload_layout);
-    //                    }
-    //                    l
-    //                };
-    //                if struct_repr.align > max_variant_align {
-    //                    max_variant_align = struct_repr.align
-    //                };
-    //                if struct_repr.size > max_variant_size {
-    //                    max_variant_size = struct_repr.size
-    //                };
-    //            }
-    //            let enum_size = Layout { size: max_variant_size, align: max_variant_align };
-    //            enum_size
-    //        }
-    //        Type::EnumVariant(variant) => self.compute_type_layout(variant.enum_type_id),
-    //        Type::Never => Z,
-    //        Type::Function(_) => Z,
-    //        Type::Lambda(lambda_type) => self.compute_type_layout(lambda_type.env_type),
-    //        Type::LambdaObject(lambda_object_type) => {
-    //            self.compute_type_layout(lambda_object_type.struct_representation)
-    //        }
-    //        // Note: Eventually we will treat statics as ZSTs as an optimization;
-    //        //       the value contains no information
-    //        //       I am preparing for this by _NOT_ doing the lazy thing
-    //        //       and allowing static and their underlying types to be interchanged
-    //        //       But rather inserting explicit casts and conversions so that,
-    //        //       once the physical type is not the same, we are already correct
-    //        Type::Static(stat) => self.compute_type_layout(stat.inner_type_id),
-    //        Type::Generic(_) => Z,
-    //        Type::TypeParameter(_) => Z,
-    //        Type::FunctionTypeParameter(_) => Z,
-    //        Type::InferenceHole(_) => Z,
-    //        Type::Unresolved(_) => Z,
-    //        Type::RecursiveReference(_) => Z,
-    //        Type::Array(arr) => {
-    //            let element_layout = self.compute_type_layout(arr.element_type);
-    //            match arr.concrete_count {
-    //                None => Z,
-    //                Some(size) => Layout::array_me(&element_layout, size as usize),
-    //            }
-    //        }
-    //    }
-    //}
 
     pub fn enum_variant_payload_fields(
         &self,
