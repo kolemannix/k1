@@ -2086,6 +2086,8 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
 
 ////////////////////////////// Display //////////////////////////////
 
+pub fn compiled_unit_to_string(k1: &TypedProgram) -> String {}
+
 pub fn display_function(
     w: &mut impl Write,
     k1: &TypedProgram,
