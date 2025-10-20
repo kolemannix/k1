@@ -108,6 +108,8 @@ pub struct CompiledBlock {
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
     pub unit: CompilableUnit,
+    /// If a compiled expression, the 'return' value is here.
+    pub expr_ret: Option<Value>,
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
@@ -325,17 +327,136 @@ pub enum Inst {
     WordToPtr {
         v: Value,
     },
-    //task(bc): Break these out into their own instructions
-    ArithBin {
-        op: IntrinsicArithOpKind,
+    IntAdd {
         lhs: Value,
         rhs: Value,
+        width: u8,
     },
+    IntSub {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntMul {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntDivUnsigned {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntDivSigned {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntRemUnsigned {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntRemSigned {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    IntCmp {
+        lhs: Value,
+        rhs: Value,
+        pred: IntCmpPred,
+        width: u8,
+    },
+    FloatAdd {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    FloatSub {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    FloatMul {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    FloatDiv {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    FloatRem {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    FloatCmp {
+        lhs: Value,
+        rhs: Value,
+        pred: FloatCmpPred,
+        width: u8,
+    },
+    //task(bc): Break these out into their own instructions
     BitwiseBin {
         op: IntrinsicBitwiseBinopKind,
         lhs: Value,
         rhs: Value,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IntCmpPred {
+    Eq,
+    Slt,
+    Sle,
+    Sgt,
+    Sge,
+    Ult,
+    Ule,
+    Ugt,
+    Uge,
+}
+
+impl std::fmt::Display for IntCmpPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            IntCmpPred::Eq => "eq",
+            IntCmpPred::Slt => "slt",
+            IntCmpPred::Sle => "sle",
+            IntCmpPred::Sgt => "sgt",
+            IntCmpPred::Sge => "sge",
+            IntCmpPred::Ult => "ult",
+            IntCmpPred::Ule => "ule",
+            IntCmpPred::Ugt => "ugt",
+            IntCmpPred::Uge => "uge",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FloatCmpPred {
+    Eq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl std::fmt::Display for FloatCmpPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            FloatCmpPred::Eq => "eq",
+            FloatCmpPred::Lt => "lt",
+            FloatCmpPred::Le => "le",
+            FloatCmpPred::Gt => "gt",
+            FloatCmpPred::Ge => "ge",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> InstKind {
@@ -384,18 +505,20 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(*to),
         Inst::PtrToWord { .. } => InstKind::scalar(bc.word_sized_int()),
         Inst::WordToPtr { .. } => InstKind::PTR,
-        Inst::ArithBin { op, lhs, .. } => match op.op {
-            IntrinsicArithOpOp::Equals => InstKind::I8,
-            IntrinsicArithOpOp::Add => get_value_kind(bc, types, lhs),
-            IntrinsicArithOpOp::Sub => get_value_kind(bc, types, lhs),
-            IntrinsicArithOpOp::Mul => get_value_kind(bc, types, lhs),
-            IntrinsicArithOpOp::Div => get_value_kind(bc, types, lhs),
-            IntrinsicArithOpOp::Rem => get_value_kind(bc, types, lhs),
-            IntrinsicArithOpOp::Lt => InstKind::I8,
-            IntrinsicArithOpOp::Le => InstKind::I8,
-            IntrinsicArithOpOp::Gt => InstKind::I8,
-            IntrinsicArithOpOp::Ge => InstKind::I8,
-        },
+        Inst::IntAdd { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntSub { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntMul { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntDivUnsigned { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntDivSigned { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntRemUnsigned { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntRemSigned { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntCmp { .. } => InstKind::I8,
+        Inst::FloatAdd { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatSub { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatMul { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatDiv { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatRem { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatCmp { .. } => InstKind::I8,
         Inst::BitwiseBin { op, lhs, .. } => match op {
             IntrinsicBitwiseBinopKind::And => get_value_kind(bc, types, lhs),
             IntrinsicBitwiseBinopKind::Or => get_value_kind(bc, types, lhs),
@@ -488,9 +611,7 @@ pub fn compile_function(
 ) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
-    let inst_offset = k1.bytecode.instrs.len() as u32;
-    let mut builder =
-        Builder { inst_offset, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
+    let mut builder = Builder::new(k1);
 
     compile_unit_rec(&mut builder, CompilableUnit::Function(function_id), compile_deps)?;
 
@@ -507,8 +628,8 @@ pub fn compile_top_level_expr(
 ) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
-    let inst_offset = k1.bytecode.instrs.len() as u32;
-    let mut b = Builder { inst_offset, k1, block_count: 0, cur_block: 0, cur_span: SpanId::NONE };
+    let mut b = Builder::new(k1);
+
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
         let pt = b.get_physical_type(variable.type_id);
@@ -547,12 +668,17 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
 fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
-            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, true));
             let name = b.k1.bytecode.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
             let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
             b.cur_span = fn_span;
+
+            let Some(body_block) = &f.body_block else {
+                return failf!(fn_span, "Function has no body to compile");
+            };
+            let body_block = *body_block;
 
             // Set up parameters
             let param_variables = f.param_variables.clone();
@@ -566,9 +692,12 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                 });
             }
 
+            compile_block_stmts(b, None, body_block)?;
+
             let compiled_blocks = b.bake_blocks();
             let function = CompiledUnit {
                 unit: CompilableUnit::Function(function_id),
+                expr_ret: None,
                 inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
             };
@@ -583,11 +712,19 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             b.push_block(name);
 
             let result = compile_expr(b, None, typed_expr_id)?;
-            b.push_inst(Inst::Ret(result));
+            // nocommit: make exit an instruction
+            let id = b.k1.bytecode.calls.add(BcCall {
+                dst: None,
+                ret_inst_kind: InstKind::Terminator,
+                callee: BcCallee::Builtin(BcBuiltin::Exit),
+                args: MSlice::empty(),
+            });
+            b.push_inst(Inst::Call { id });
 
             let compiled_blocks = b.bake_blocks();
             let compiled_expr = CompiledUnit {
                 unit: CompilableUnit::Expr(typed_expr_id),
+                expr_ret: Some(result),
                 inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
             };
@@ -615,11 +752,24 @@ pub struct Builder<'k1> {
 
     inst_offset: u32,
     block_count: u32,
+    last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
 }
 
 impl<'k1> Builder<'k1> {
+    fn new(k1: &'k1 mut TypedProgram) -> Self {
+        let inst_offset = k1.bytecode.instrs.len() as u32;
+        Self {
+            inst_offset,
+            k1,
+            block_count: 0,
+            last_alloca_index: None,
+            cur_block: 0,
+            cur_span: SpanId::NONE,
+        }
+    }
+
     fn reset_compilation_unit(&mut self) {
         for b in &mut self.k1.bytecode.b_blocks {
             b.instrs.clear();
@@ -643,14 +793,30 @@ impl<'k1> Builder<'k1> {
         b_blocks[0..block_count as usize].iter()
     }
 
-    fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
+    fn make_inst(&mut self, inst: Inst) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
         let ids = self.k1.bytecode.sources.add(self.cur_span);
         let idc = self.k1.bytecode.comments.add(MStr::empty());
         debug_assert!(id == ids && id == idc);
+        id
+    }
+
+    fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
+        let id = self.make_inst(inst);
 
         self.k1.bytecode.b_blocks[block as usize].instrs.push(id);
         id
+    }
+
+    fn push_alloca(&mut self, pt: PhysicalType) -> InstId {
+        let layout = self.k1.types.get_pt_layout(&pt);
+        let index = match self.last_alloca_index {
+            None => 0,
+            Some(i) => i as usize + 1,
+        };
+        let inst_id = self.make_inst(Inst::Alloca { t: pt, vm_layout: layout });
+        self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
+        inst_id
     }
 
     pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
@@ -659,11 +825,6 @@ impl<'k1> Builder<'k1> {
 
     pub fn get_value_kind(&self, value: &Value) -> InstKind {
         get_value_kind(&self.k1.bytecode, &self.k1.types, value)
-    }
-
-    fn alloca_type(&mut self, pt: PhysicalType) -> InstId {
-        let layout = self.k1.types.get_pt_layout(&pt);
-        self.push_inst_to(self.cur_block, Inst::Alloca { t: pt, vm_layout: layout })
     }
 
     fn push_inst(&mut self, inst: Inst) -> InstId {
@@ -800,6 +961,7 @@ fn compile_block_stmts(
     let TypedExpr::Block(body) = b.k1.exprs.get(body) else {
         return failf!(b.cur_span, "body is not a block");
     };
+    debug!("compiling block {}", b.k1.block_to_string(body));
 
     let mut last_ret = None;
     let statements = body.statements.clone();
@@ -813,6 +975,7 @@ fn compile_block_stmts(
 }
 
 fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> TyperResult<Value> {
+    debug!("compiling stmt {}", b.k1.stmt_to_string(stmt));
     let prev_span = b.cur_span;
     let stmt_span = b.k1.get_stmt_span(stmt);
     b.cur_span = stmt_span;
@@ -839,7 +1002,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
-            let variable_alloca = b.alloca_type(var_pt_id);
+            let variable_alloca = b.push_alloca(var_pt_id);
 
             // value_ptr means a pointer matching the type of the rhs
             // For a referencing let, the original alloca a ptr
@@ -849,7 +1012,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     panic!("Expected reference for referencing let");
                 };
                 let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
-                let value_alloca = b.alloca_type(reference_inner_type_pt_id);
+                let value_alloca = b.push_alloca(reference_inner_type_pt_id);
                 b.push_store(variable_alloca.as_value(), value_alloca.as_value());
                 value_alloca
             } else {
@@ -934,13 +1097,14 @@ fn compile_expr(
     b.cur_span = b.k1.exprs.get(expr).get_span();
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr).clone();
+    debug!("compiling {} {}", e.kind_str(), b.k1.expr_to_string(expr));
     match e {
         TypedExpr::Struct(struct_literal) => {
             let struct_pt = b.get_physical_type(struct_literal.type_id);
             let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(struct_pt).as_value(),
+                None => b.push_alloca(struct_pt).as_value(),
             };
             for (field_index, field) in struct_literal.fields.iter().enumerate() {
                 debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
@@ -1119,7 +1283,7 @@ fn compile_expr(
                                     pt @ PhysicalType::Agg(agg_id) => {
                                         let pt_layout = b.k1.types.phys_types.get(agg_id).layout;
                                         let dst = match dst {
-                                            None => b.alloca_type(pt).as_value(),
+                                            None => b.push_alloca(pt).as_value(),
                                             Some(dst) => dst,
                                         };
                                         let zero_u8 = Value::byte(0);
@@ -1170,13 +1334,7 @@ fn compile_expr(
                             };
                         }
                         IntrinsicOperation::ArithBinop(op) => {
-                            return {
-                                let lhs = compile_expr(b, None, call.args[0])?;
-                                let rhs = compile_expr(b, None, call.args[1])?;
-                                let res = b.push_inst(Inst::ArithBin { op, lhs, rhs });
-                                let stored = store_simple_if_dst(b, dst, res.as_value());
-                                Ok(stored)
-                            };
+                            return compile_arith_binop(b, op, &call, dst);
                         }
                         IntrinsicOperation::BitwiseBinop(op) => {
                             return {
@@ -1271,16 +1429,15 @@ fn compile_expr(
                     _ => {}
                 }
             }
-            let return_type_id = return_type;
-            let return_inst_kind: InstKind = b.type_to_inst_kind(return_type_id);
+            let return_inst_kind: InstKind = b.type_to_inst_kind(return_type);
             for arg in &call.args {
                 args.push(compile_expr(b, None, *arg)?);
             }
             let call_dst = match dst {
                 None => match return_inst_kind {
-                    InstKind::Value(_pt) => {
-                        let pt_id = b.get_physical_type(return_type_id);
-                        Some(b.alloca_type(pt_id).as_value())
+                    InstKind::Value(PhysicalType::Scalar(_)) => None,
+                    InstKind::Value(pt @ PhysicalType::Agg(_)) => {
+                        Some(b.push_alloca(pt).as_value())
                     }
                     InstKind::Void => None,
                     InstKind::Terminator => None,
@@ -1296,7 +1453,10 @@ fn compile_expr(
             });
             let call_inst = Inst::Call { id: call_id };
             let call_inst_id = b.push_inst(call_inst);
-            Ok(call_inst_id.as_value())
+            match call_dst {
+                Some(dst) => Ok(dst),
+                None => Ok(call_inst_id.as_value()),
+            }
         }
         TypedExpr::Match(match_expr) => {
             for stmt in &match_expr.initial_let_statements {
@@ -1481,7 +1641,7 @@ fn compile_expr(
             let break_pt_id = b.get_physical_type(loop_expr.break_type);
 
             let break_value = if loop_expr.break_type != UNIT_TYPE_ID {
-                Some(b.alloca_type(break_pt_id))
+                Some(b.push_alloca(break_pt_id))
             } else {
                 None
             };
@@ -1533,7 +1693,7 @@ fn compile_expr(
             let variant_pt = b.get_physical_type(enumc.variant_type_id);
             let enum_base = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(variant_pt).as_value(),
+                None => b.push_alloca(variant_pt).as_value(),
             };
 
             let tag_base = enum_base;
@@ -1606,7 +1766,6 @@ fn compile_expr(
         }
         TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
         TypedExpr::Return(typed_return) => {
-            //task(bc): Return value optimization
             let inst = compile_expr(b, None, typed_return.value)?;
             let ret = b.push_inst(Inst::Ret(inst));
             Ok(ret.as_value())
@@ -1632,7 +1791,7 @@ fn compile_expr(
             let obj_struct_type = b.get_physical_type(fn_to_lam_obj.lambda_object_type_id);
             let lam_obj_ptr = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(obj_struct_type).as_value(),
+                None => b.push_alloca(obj_struct_type).as_value(),
             };
             let fn_ptr = Value::FunctionAddr(fn_to_lam_obj.function_id);
             let lam_obj_fn_ptr_addr = b
@@ -1821,7 +1980,7 @@ fn compile_cast(
             // Now we need a pointer to the environment
             // nocommit(3): dyn lambda durability: Change to arena.push_struct call. This feels like
             //           code that might be able to live in typer.k1
-            let lambda_env_ptr = b.alloca_type(lambda_env_type).as_value();
+            let lambda_env_ptr = b.push_alloca(lambda_env_type).as_value();
 
             // Produces just the lambda's environment as a value. We don't need the function
             // pointer because we know it from the type still
@@ -1832,7 +1991,7 @@ fn compile_cast(
 
             let lam_obj_ptr = match dst {
                 Some(dst) => dst,
-                None => b.alloca_type(obj_struct_type).as_value(),
+                None => b.push_alloca(obj_struct_type).as_value(),
             };
             // Store fn ptr, then env ptr into the object
             let lam_obj_fn_ptr_addr = b.push_struct_offset(
@@ -1854,6 +2013,85 @@ fn compile_cast(
     }
 }
 
+fn compile_arith_binop(
+    b: &mut Builder,
+    op: IntrinsicArithOpKind,
+    call: &Call,
+    dst: Option<Value>,
+) -> TyperResult<Value> {
+    let lhs = compile_expr(b, None, call.args[0])?;
+    let rhs = compile_expr(b, None, call.args[1])?;
+    use IntrinsicArithOpClass as Class;
+    use IntrinsicArithOpOp as Op;
+    let lhs_type = b.k1.get_expr_type_id(call.args[0]);
+    let lhs_width = b.k1.types.get_layout(lhs_type).size_bits() as u8;
+    let inst = match (op.op, op.class) {
+        (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntAdd { lhs, rhs, width: lhs_width }
+        }
+        (Op::Sub, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntSub { lhs, rhs, width: lhs_width }
+        }
+        (Op::Mul, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntMul { lhs, rhs, width: lhs_width }
+        }
+        (Op::Div, Class::UnsignedInt) => Inst::IntDivUnsigned { lhs, rhs, width: lhs_width },
+        (Op::Div, Class::SignedInt) => Inst::IntDivSigned { lhs, rhs, width: lhs_width },
+        (Op::Rem, Class::UnsignedInt) => Inst::IntRemUnsigned { lhs, rhs, width: lhs_width },
+        (Op::Rem, Class::SignedInt) => Inst::IntRemSigned { lhs, rhs, width: lhs_width },
+        (Op::Equals, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Eq, width: lhs_width }
+        }
+        (Op::Lt, Class::UnsignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ult, width: lhs_width }
+        }
+        (Op::Lt, Class::SignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Slt, width: lhs_width }
+        }
+        (Op::Le, Class::UnsignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ule, width: lhs_width }
+        }
+        (Op::Le, Class::SignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sle, width: lhs_width }
+        }
+        (Op::Gt, Class::UnsignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ugt, width: lhs_width }
+        }
+        (Op::Gt, Class::SignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sgt, width: lhs_width }
+        }
+        (Op::Ge, Class::UnsignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Uge, width: lhs_width }
+        }
+        (Op::Ge, Class::SignedInt) => {
+            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sge, width: lhs_width }
+        }
+        (Op::Add, Class::Float) => Inst::FloatAdd { lhs, rhs, width: lhs_width },
+        (Op::Sub, Class::Float) => Inst::FloatSub { lhs, rhs, width: lhs_width },
+        (Op::Mul, Class::Float) => Inst::FloatMul { lhs, rhs, width: lhs_width },
+        (Op::Div, Class::Float) => Inst::FloatDiv { lhs, rhs, width: lhs_width },
+        (Op::Rem, Class::Float) => Inst::FloatRem { lhs, rhs, width: lhs_width },
+        (Op::Equals, Class::Float) => {
+            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Eq, width: lhs_width }
+        }
+        (Op::Lt, Class::Float) => {
+            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Lt, width: lhs_width }
+        }
+        (Op::Le, Class::Float) => {
+            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Le, width: lhs_width }
+        }
+        (Op::Gt, Class::Float) => {
+            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Gt, width: lhs_width }
+        }
+        (Op::Ge, Class::Float) => {
+            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Ge, width: lhs_width }
+        }
+    };
+    let res = b.push_inst(inst);
+    let stored = store_simple_if_dst(b, dst, res.as_value());
+    Ok(stored)
+}
+
 /// Loads a value of a given type from 'src'.
 /// 'Load' in this context is an operation internal to this
 /// IR; it doesn't have a direct analog in the source language.
@@ -1864,7 +2102,7 @@ fn load_value(b: &mut Builder, pt: PhysicalType, src: Value, make_copy: bool) ->
     match pt {
         PhysicalType::Agg(_) => {
             if make_copy {
-                let dst = b.alloca_type(pt);
+                let dst = b.push_alloca(pt);
                 let pt_layout = b.k1.types.get_pt_layout(&pt);
                 b.push_inst(Inst::Copy { dst: dst.as_value(), src, t: pt, vm_size: pt_layout.size })
                     .as_value()
@@ -2057,7 +2295,6 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                 Inst::FloatExt { .. } => (),
                 Inst::FloatToIntSigned { .. } => (),
                 Inst::FloatToIntUnsigned { .. } => (),
-
                 Inst::IntToFloatUnsigned { .. } => (),
                 Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { v } => {
@@ -2073,18 +2310,72 @@ pub fn validate_function(k1: &TypedProgram, function: FunctionId, errors: &mut V
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a word-sized int",))
                     }
                 }
-                Inst::ArithBin { .. } => {
-                    //task(bc): Validate arith bins
-                }
-                Inst::BitwiseBin { .. } => {
-                    //task(bc): Validate bitwise bins
-                }
+                Inst::IntAdd { .. } => (),
+                Inst::IntSub { .. } => (),
+                Inst::IntMul { .. } => (),
+                Inst::IntDivUnsigned { .. } => (),
+                Inst::IntDivSigned { .. } => (),
+                Inst::IntRemUnsigned { .. } => (),
+                Inst::IntRemSigned { .. } => (),
+                Inst::IntCmp { .. } => (),
+                Inst::FloatAdd { .. } => (),
+                Inst::FloatSub { .. } => (),
+                Inst::FloatMul { .. } => (),
+                Inst::FloatDiv { .. } => (),
+                Inst::FloatRem { .. } => (),
+                Inst::FloatCmp { .. } => (),
+                Inst::BitwiseBin { .. } => (),
             }
         }
     }
 }
 
 ////////////////////////////// Display //////////////////////////////
+
+pub fn compiled_unit_to_string(
+    k1: &TypedProgram,
+    unit: &CompiledUnit,
+    show_source: bool,
+) -> String {
+    let mut s = String::new();
+    display_unit(&mut s, k1, unit, show_source).unwrap();
+    s
+}
+
+pub fn display_unit(
+    w: &mut impl Write,
+    k1: &TypedProgram,
+    unit: &CompiledUnit,
+    show_source: bool,
+) -> std::fmt::Result {
+    match unit.unit {
+        CompilableUnit::Function(function_id) => {
+            k1.write_ident(w, k1.functions.get(function_id).name)?;
+        }
+        CompilableUnit::Expr(typed_expr_id) => {
+            let expr_span = k1.exprs.get(typed_expr_id).get_span();
+            let (source, line) = k1.get_span_location(expr_span);
+            write!(w, "expr {}:{}", &source.filename, line.line_number())?;
+        }
+    };
+    writeln!(w, " (offset={})", unit.inst_offset)?;
+    for (index, _block) in k1.bytecode.mem.get_slice(unit.blocks).iter().enumerate() {
+        let id = index as BlockId;
+        display_block(w, k1, &k1.bytecode, unit, id, show_source)?;
+    }
+    Ok(())
+}
+
+pub fn display_compiled_expr(
+    w: &mut impl Write,
+    k1: &TypedProgram,
+    bc: &ProgramBytecode,
+    expr_id: TypedExprId,
+    show_source: bool,
+) -> std::fmt::Result {
+    let Some(unit) = bc.exprs.get(&expr_id) else { return Ok(()) };
+    display_unit(w, k1, unit, show_source)
+}
 
 pub fn display_function(
     w: &mut impl Write,
@@ -2093,23 +2384,19 @@ pub fn display_function(
     function: FunctionId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let Some(function) = bc.functions.get(function) else { return Ok(()) };
-    for (index, _block) in bc.mem.get_slice(function.blocks).iter().enumerate() {
-        let id = index as BlockId;
-        display_block(w, k1, bc, function, id, show_source)?;
-    }
-    Ok(())
+    let Some(unit) = bc.functions.get(function) else { return Ok(()) };
+    display_unit(w, k1, unit, show_source)
 }
 
 pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
     bc: &ProgramBytecode,
-    function: &CompiledUnit,
+    unit: &CompiledUnit,
     block_id: BlockId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let block = bc.mem.get_nth(function.blocks, block_id as usize);
+    let block = bc.mem.get_nth(unit.blocks, block_id as usize);
     write!(w, "b{} ", block_id)?;
     if !block.name.is_empty() {
         w.write_str(bc.mem.get_str(block.name))?;
@@ -2122,6 +2409,17 @@ pub fn display_block(
     }
     writeln!(w, "END")?;
     Ok(())
+}
+
+pub fn inst_to_string(
+    k1: &TypedProgram,
+    bc: &ProgramBytecode,
+    inst_id: InstId,
+    show_source: bool,
+) -> String {
+    let mut s = String::new();
+    display_inst(&mut s, k1, bc, inst_id, show_source).unwrap();
+    s
 }
 
 pub fn display_inst(
@@ -2275,11 +2573,50 @@ pub fn display_inst(
         Inst::WordToPtr { v } => {
             write!(w, "inttoptr {}", v)?;
         }
-        Inst::ArithBin { op, lhs, rhs } => {
-            write!(w, "{:?} {} {}", op.op, *lhs, *rhs)?;
-        }
         Inst::BitwiseBin { op, lhs, rhs } => {
             write!(w, "{:?} {} {}", op, *lhs, *rhs)?;
+        }
+        Inst::IntAdd { lhs, rhs, width } => {
+            write!(w, "add i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntSub { lhs, rhs, width } => {
+            write!(w, "sub i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntMul { lhs, rhs, width } => {
+            write!(w, "mul i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntDivUnsigned { lhs, rhs, width } => {
+            write!(w, "udiv i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntDivSigned { lhs, rhs, width } => {
+            write!(w, "sdiv i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntRemUnsigned { lhs, rhs, width } => {
+            write!(w, "urem i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntRemSigned { lhs, rhs, width } => {
+            write!(w, "srem i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::IntCmp { lhs, rhs, pred, width } => {
+            write!(w, "icmp i{width} {} {} {}", pred, *lhs, *rhs)?;
+        }
+        Inst::FloatAdd { lhs, rhs, width } => {
+            write!(w, "fadd f{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::FloatSub { lhs, rhs, width } => {
+            write!(w, "fsub f{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::FloatMul { lhs, rhs, width } => {
+            write!(w, "fmul f{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::FloatDiv { lhs, rhs, width } => {
+            write!(w, "fdiv f{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::FloatRem { lhs, rhs, width } => {
+            write!(w, "frem f{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::FloatCmp { lhs, rhs, pred, width } => {
+            write!(w, "fcmp f{width} {} {} {}", pred, *lhs, *rhs)?;
         }
     };
     if show_source {
@@ -2383,7 +2720,7 @@ impl std::fmt::Display for Value {
     }
 }
 
-fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
+pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
     match value {
         Value::Inst(inst_id) => write!(w, "i{}", inst_id.as_u32()),
         Value::Global { id, .. } => write!(w, "g{}", id.as_u32()),

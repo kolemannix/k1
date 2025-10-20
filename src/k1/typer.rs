@@ -20,7 +20,6 @@ pub use static_value::{
     StaticValuePool,
 };
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
@@ -2293,7 +2292,7 @@ pub struct TypedProgram {
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
 
-    functions: VPool<TypedFunction, FunctionId>,
+    pub functions: VPool<TypedFunction, FunctionId>,
 
     pub variables: VPool<Variable, VariableId>,
     pub types: TypePool,
@@ -4997,8 +4996,11 @@ impl TypedProgram {
     }
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
-        eprintln!("compile_all_pending_bytecode {}", self.bytecode.b_units_pending_compile.len());
         loop {
+            eprintln!(
+                "compile_all_pending_bytecode {}",
+                self.bytecode.b_units_pending_compile.len()
+            );
             if let Some(unit) = self.bytecode.b_units_pending_compile.pop() {
                 match unit {
                     bc::CompilableUnit::Function(function_id) => {
@@ -5006,7 +5008,7 @@ impl TypedProgram {
                             "type-checking on-demand: {}",
                             self.function_id_to_string(function_id, false)
                         );
-                        self.eval_function_body(function_id, true)?;
+                        self.eval_function_body(function_id, false)?;
                     }
                     bc::CompilableUnit::Expr(_typed_expr_id) => (),
                 }
