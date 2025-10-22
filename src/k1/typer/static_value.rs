@@ -214,15 +214,38 @@ pub struct StaticValuePool {
     pub mem: kmem::Mem<StaticValuePool>,
     pub pool: VPool<StaticValue, StaticValueId>,
     pub hashes: FxHashMap<u64, StaticValueId>,
+
+    unit_id: StaticValueId,
+    false_id: StaticValueId,
+    true_id: StaticValueId,
 }
 
 impl StaticValuePool {
     pub fn make_with_hint(size_hint: usize) -> StaticValuePool {
+        let mut pool = VPool::make_with_hint("static_values", size_hint);
+        let unit_id = pool.add(StaticValue::Unit);
+        let false_id = pool.add(StaticValue::Bool(false));
+        let true_id = pool.add(StaticValue::Bool(true));
         StaticValuePool {
             mem: kmem::Mem::make(),
-            pool: VPool::make_with_hint("static_values", size_hint),
+            pool,
             hashes: FxHashMap::with_capacity(size_hint),
+            unit_id,
+            false_id,
+            true_id,
         }
+    }
+
+    pub fn unit_id(&self) -> StaticValueId {
+        self.unit_id
+    }
+
+    pub fn false_id(&self) -> StaticValueId {
+        self.false_id
+    }
+
+    pub fn true_id(&self) -> StaticValueId {
+        self.true_id
     }
 
     pub fn next_id(&self) -> StaticValueId {
@@ -281,6 +304,12 @@ impl StaticValuePool {
     }
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
+        match value {
+            StaticValue::Unit => return self.unit_id(),
+            StaticValue::Bool(false) => return self.false_id(),
+            StaticValue::Bool(true) => return self.true_id(),
+            _ => {}
+        };
         let hash = self.hash(&value);
         if let Entry::Occupied(entry) = self.hashes.entry(hash) {
             let existing_id = *entry.get();

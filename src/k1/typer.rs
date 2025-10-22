@@ -319,6 +319,10 @@ impl Layout {
         self.size.next_multiple_of(self.align)
     }
 
+    pub fn offset_at_index(&self, index: usize) -> usize {
+        self.stride() as usize * index
+    }
+
     // Returns: the start, or offset, of the new field
     pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
         debug_assert_ne!(layout.align, 0);
@@ -2713,6 +2717,10 @@ impl TypedProgram {
         self.functions.iter_with_ids()
     }
 
+    pub fn get_function_span(&self, function_id: FunctionId) -> SpanId {
+        self.ast.get_span_for_id(self.functions.get(function_id).parsed_id)
+    }
+
     pub fn program_name(&self) -> &str {
         &self.ast.name
     }
@@ -4215,7 +4223,10 @@ impl TypedProgram {
 
         let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
         else {
-            panic!("Expected module manifest to be a struct")
+            panic!(
+                "Expected module manifest to be a struct, got: {}",
+                self.static_value_to_string(manifest_result.static_value_id)
+            )
         };
         let value_fields = self.static_values.mem.get_slice(value.fields);
         let kind = self.static_values.get(value_fields[0]).as_enum().unwrap();
@@ -4971,9 +4982,23 @@ impl TypedProgram {
                     );
                 };
                 let global = self.globals.get(global_id);
-                if let Some(value) = global.initial_value {
-                    let value = self.static_values.get(value).clone();
-                    Ok(Some(self.static_values.add(value)))
+                if let Some(value) = global.initial_value { Ok(Some(value)) } else { Ok(None) }
+            }
+            TypedExpr::Call { call_id, .. } => {
+                // If a call to zeroed(), we can use the StaticValue::Zeroed() shortcut to avoid
+                // running silly code
+
+                let call = self.calls.get(*call_id);
+                if let Some(function_id) = call.callee.maybe_function_id() {
+                    let function = self.functions.get(function_id);
+                    if let Some(IntrinsicOperation::Zeroed) = function.intrinsic_type {
+                        let return_type_id = self.exprs.get(expr_id).get_type();
+                        let static_value_id =
+                            self.static_values.add(StaticValue::Zero(return_type_id));
+                        Ok(Some(static_value_id))
+                    } else {
+                        Ok(None)
+                    }
                 } else {
                     Ok(None)
                 }
@@ -5060,7 +5085,7 @@ impl TypedProgram {
                 eprintln!("vm execute returned err:\n{}", e.message)
             }
             Ok(v) => {
-                eprintln!("vm execute returned ok:\n{}", v)
+                eprintln!("vm execute returned ok:\n{}", self.static_value_to_string(v))
             }
         };
 
@@ -15276,7 +15301,7 @@ impl TypedProgram {
                     self.types.get_as_view_instance(variants_view_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
                 let tag_type_value_id = self.static_values.add(StaticValue::Enum(
-                    TypedProgram::make_int_kind(int_kind_enum, word_enum, *tag_type),
+                    TypedProgram::make_int_kind(int_kind_enum, word_enum, tag_type),
                 ));
                 let mut variant_values =
                     self.static_values.mem.new_vec(typed_enum.variants.len() as u32);
@@ -15561,7 +15586,7 @@ impl TypedProgram {
 
     pub fn write_qualified_name(
         &self,
-        w: &mut impl std::io::Write,
+        w: &mut impl std::fmt::Write,
         scope: ScopeId,
         name: &str,
         delimiter: &str,
@@ -15588,9 +15613,9 @@ impl TypedProgram {
         delimiter: &str,
         skip_root: bool,
     ) -> String {
-        let mut buf = Vec::with_capacity(64);
+        let mut buf = String::with_capacity(64);
         self.write_qualified_name(&mut buf, scope, self.ident_str(name), delimiter, skip_root);
-        String::from_utf8(buf).unwrap()
+        buf
     }
 
     // Errors and logging

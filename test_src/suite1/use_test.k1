@@ -3,7 +3,7 @@ ns use_test;
 // Use a function from top-level
 use core/types/typeId
 // Use a constant from top-level
-use core/files/unix/SEEK_END as SEEKEND
+use core/libc/files/SEEK_END as SEEKEND
 
 ns foo {
   fn getOne(): int { 1 }
@@ -15,9 +15,9 @@ fn test(): unit {
   assert(typeIdAlias[never]() == typeId[never]()); 
 
   // Use a constant from stmt w/ alias
-  use core/files/unix/SEEK_END as S;
-  assert(S == core/files/unix/SEEK_END);
-  assert(SEEKEND == core/files/unix/SEEK_END);
+  use core/libc/files/SEEK_END as S;
+  assert(S == core/libc/files/SEEK_END);
+  assert(SEEKEND == core/libc/files/SEEK_END);
 
   // Use a basic type
   use core/string as str;

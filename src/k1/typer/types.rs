@@ -760,9 +760,9 @@ impl Type {
     }
 
     #[track_caller]
-    pub fn expect_integer(&self) -> &IntegerType {
+    pub fn expect_integer(&self) -> IntegerType {
         match self {
-            Type::Integer(int) => int,
+            Type::Integer(int) => *int,
             _ => panic!("expect_integer called on: {}", self.kind_name()),
         }
     }
@@ -897,6 +897,8 @@ pub enum ScalarType {
     I16,
     I32,
     I64,
+    // task(bc): Do we even want F32 and F64 as separate scalar types? We already ditched
+    // signedness, I think it might be useless / wrong
     F32,
     F64,
     Pointer,

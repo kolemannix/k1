@@ -619,6 +619,16 @@ ns libc {
 
   extern("__errno_location") fn errno(): *i32
 
+  ns files {
+    let SEEK_END: i32 = 2;
+    let SEEK_SET: i32 = 0;
+    extern("fopen")  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
+    extern("fseek")  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
+    extern("fread")  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
+    extern("fclose") fn fclose(fileDesc: Pointer): i32
+    extern("ftell")  fn ftell(fileDesc: Pointer): i64
+  }
+
 }
 
 fn assert(context locn: compiler/SourceLocation)(value: bool): unit {

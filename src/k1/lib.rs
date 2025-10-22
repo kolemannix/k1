@@ -27,6 +27,17 @@ pub type SV4<T> = SmallVec<[T; 4]>;
 pub type SV8<T> = SmallVec<[T; 8]>;
 
 #[macro_export]
+macro_rules! writestr {
+    ($display:ident, $($args:expr),*) => {
+        {
+            let mut s = String::new();
+            $display(&mut s, $($args),*).unwrap();
+            s
+        }
+    }
+}
+
+#[macro_export]
 macro_rules! nz_u32_id {
     ($name: ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
