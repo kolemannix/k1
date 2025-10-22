@@ -125,7 +125,7 @@ impl TypedIntValue {
         int_binop!(self, other, bitxor)
     }
 
-    pub fn to_u64_unconditional(&self) -> u64 {
+    pub fn to_u64_bits(&self) -> u64 {
         match self {
             TypedIntValue::U8(v) => *v as u64,
             TypedIntValue::U16(v) => *v as u64,

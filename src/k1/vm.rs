@@ -779,7 +779,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
                             if int_to_cast.is_signed() {
                                 TypedFloatValue::F64(int_to_cast.to_i64() as f64)
                             } else {
-                                TypedFloatValue::F64(int_to_cast.to_u64_unconditional() as f64)
+                                TypedFloatValue::F64(int_to_cast.to_u64_bits() as f64)
                             }
                         }
                         _ => unreachable!(),
@@ -1625,15 +1625,15 @@ fn execute_intrinsic(
                 IntrinsicBitwiseBinopKind::Or => inta.bit_or(&intb),
                 IntrinsicBitwiseBinopKind::Xor => inta.bit_xor(&intb),
                 IntrinsicBitwiseBinopKind::ShiftLeft => {
-                    int_shift!(inta, intb.to_u64_unconditional(), shl)
+                    int_shift!(inta, intb.to_u64_bits(), shl)
                 }
                 // Doesn't matter which, since Rust always does logical shifts on signed values,
                 // and we're using Rust integers in TypedIntValue
                 IntrinsicBitwiseBinopKind::SignedShiftRight => {
-                    int_shift!(inta, intb.to_u64_unconditional(), shr)
+                    int_shift!(inta, intb.to_u64_bits(), shr)
                 }
                 IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
-                    int_shift!(inta, intb.to_u64_unconditional(), shr)
+                    int_shift!(inta, intb.to_u64_bits(), shr)
                 }
             };
             Ok(Value::Int(int_value).into())
@@ -2743,18 +2743,16 @@ fn integer_cast(
         IntegerType::U8 => int_to_cast.to_u8().into(),
         IntegerType::U16 => int_to_cast.to_u16().into(),
         IntegerType::U32 => int_to_cast.to_u32().into(),
-        IntegerType::U64 => int_to_cast.to_u64_unconditional().into(),
+        IntegerType::U64 => int_to_cast.to_u64_bits().into(),
         IntegerType::I8 => (int_to_cast.to_u8() as i8).into(),
         IntegerType::I16 => (int_to_cast.to_u16() as i16).into(),
         IntegerType::I32 => (int_to_cast.to_u32() as i32).into(),
-        IntegerType::I64 => (int_to_cast.to_u64_unconditional() as i64).into(),
+        IntegerType::I64 => (int_to_cast.to_u64_bits() as i64).into(),
         IntegerType::UWord(WordSize::W32) => unreachable!(),
-        IntegerType::UWord(WordSize::W64) => {
-            TypedIntValue::UWord64(int_to_cast.to_u64_unconditional())
-        }
+        IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(int_to_cast.to_u64_bits()),
         IntegerType::IWord(WordSize::W32) => unreachable!(),
         IntegerType::IWord(WordSize::W64) => {
-            TypedIntValue::IWord64(int_to_cast.to_u64_unconditional() as i64)
+            TypedIntValue::IWord64(int_to_cast.to_u64_bits() as i64)
         }
     }
 }

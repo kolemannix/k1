@@ -797,11 +797,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn write_type_name(
         &self,
-        w: &mut impl std::io::Write,
+        w: &mut impl std::fmt::Write,
         type_id: TypeId,
         defn_info: Option<TypeDefnInfo>,
     ) {
-        // FIXME: We need to revisit the entire story around names in codegen
+        // FIXME: Using this typename is bad; it needs to be purpose-built and mangled
         let name = self.k1.type_id_to_string(type_id);
         match defn_info {
             None => write!(w, "{}", name).unwrap(),
@@ -810,9 +810,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<TypeDefnInfo>) -> String {
-        let mut s = Vec::with_capacity(64);
+        let mut s = String::with_capacity(64);
         self.write_type_name(&mut s, type_id, defn_info);
-        String::from_utf8(s).unwrap()
+        s
     }
 
     fn make_debug_struct_type<'names>(
@@ -1256,8 +1256,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         envelope_type: self.ctx.i8_type().array_type(0),
                         variant_struct_type: variant_struct,
                         payload_type,
-                        tag_value: tag_int_type
-                            .const_int(variant.tag_value.to_u64_unconditional(), false),
+                        tag_value: tag_int_type.const_int(variant.tag_value.to_u64_bits(), false),
                         di_type: variant_struct_debug,
                         layout: self.get_layout(variant.my_type_id),
                     });
@@ -3879,9 +3878,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let llvm_int_ty = llvm_ty.rich_repr_type().into_int_type();
         let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
         let llvm_value = if int_type.is_signed() {
-            llvm_int_ty.const_int(integer.to_u64_unconditional(), true)
+            llvm_int_ty.const_int(integer.to_u64_bits(), true)
         } else {
-            llvm_int_ty.const_int(integer.to_u64_unconditional(), false)
+            llvm_int_ty.const_int(integer.to_u64_bits(), false)
         };
         Ok(llvm_value.as_basic_value_enum())
     }

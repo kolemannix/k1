@@ -85,6 +85,14 @@ New tagline? "C with typeclasses and tagged unions"
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker
 
+## Project: Instruction-level IR ('bytecode')
+Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
+- [x] Try to compile a function to bytecode
+- [ ] 
+
+## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
+- [ ] Real layouts, in a mem pool, to save roundtripping and increase locality
+
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
 - [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
@@ -118,10 +126,6 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: More LSP features
 - [ ] Hover
 - [ ] Go-to
-
-## Project: Instruction-level IR ('bytecode')
-Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
-- [ ] Try to compile a function to bytecode
 
 ## Project: VM for `static` execution
 - [x] vm: static execution
