@@ -1189,6 +1189,13 @@ impl TypedFloatValue {
         }
     }
 
+    pub fn get_scalar_type(&self) -> ScalarType {
+        match self {
+            TypedFloatValue::F32(_) => ScalarType::F32,
+            TypedFloatValue::F64(_) => ScalarType::F64,
+        }
+    }
+
     pub fn get_width(&self) -> NumericWidth {
         match self {
             TypedFloatValue::F32(_) => NumericWidth::B32,
@@ -4221,25 +4228,31 @@ impl TypedProgram {
             &[],
         )?;
 
-        let StaticValue::Struct(value) = self.static_values.get(manifest_result.static_value_id)
-        else {
-            panic!(
+        match self.static_values.get(manifest_result.static_value_id) {
+            StaticValue::Struct(value) => {
+                let value_fields = self.static_values.mem.get_slice(value.fields);
+                let kind = self.static_values.get(value_fields[0]).as_enum().unwrap();
+                let kind = match kind.variant_index {
+                    0 => ModuleKind::Library,
+                    1 => ModuleKind::Executable,
+                    2 => ModuleKind::Script,
+                    i => panic!("Unecognized module kind index: {}", i),
+                };
+                let deps = vec![];
+                let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
+
+                Ok(Some(ModuleManifest { kind, deps, multithreading }))
+            }
+            StaticValue::Zero(_) => Ok(Some(ModuleManifest {
+                kind: ModuleKind::Library,
+                deps: vec![],
+                multithreading: false,
+            })),
+            _ => panic!(
                 "Expected module manifest to be a struct, got: {}",
                 self.static_value_to_string(manifest_result.static_value_id)
-            )
-        };
-        let value_fields = self.static_values.mem.get_slice(value.fields);
-        let kind = self.static_values.get(value_fields[0]).as_enum().unwrap();
-        let kind = match kind.variant_index {
-            0 => ModuleKind::Library,
-            1 => ModuleKind::Executable,
-            2 => ModuleKind::Script,
-            i => panic!("Unecognized module kind index: {}", i),
-        };
-        let deps = vec![];
-        let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
-
-        Ok(Some(ModuleManifest { kind, deps, multithreading }))
+            ),
+        }
     }
 
     fn eval_pattern(

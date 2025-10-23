@@ -274,6 +274,15 @@ impl IntegerType {
             IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(0),
         }
     }
+
+    pub fn get_scalar_type(&self) -> ScalarType {
+        match self.width() {
+            NumericWidth::B8 => ScalarType::I8,
+            NumericWidth::B16 => ScalarType::I16,
+            NumericWidth::B32 => ScalarType::I32,
+            NumericWidth::B64 => ScalarType::I64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -972,6 +981,16 @@ pub enum AggType {
     Struct { fields: MSlice<StructField, TypePool> },
     Array { element_t: PhysicalType, len: u32 },
     Opaque { layout: Layout },
+}
+
+impl AggType {
+    #[track_caller]
+    pub fn expect_enum_variant(&self) -> &EnumVariantLayout {
+        match self {
+            AggType::EnumVariant(ev) => ev,
+            _ => panic!("Expected enum variant agg type"),
+        }
+    }
 }
 
 nz_u32_id!(AggLayoutId);
@@ -1728,12 +1747,7 @@ impl TypePool {
 
             // Drops signedness since its now encoded in ops
             Type::Integer(i) => {
-                let st = match i.width() {
-                    NumericWidth::B8 => ScalarType::I8,
-                    NumericWidth::B16 => ScalarType::I16,
-                    NumericWidth::B32 => ScalarType::I32,
-                    NumericWidth::B64 => ScalarType::I64,
-                };
+                let st = i.get_scalar_type();
                 Some(PhysicalType::Scalar(st))
             }
 
@@ -2063,4 +2077,59 @@ pub enum ContainerKind {
     Buffer,
     View,
     List,
+}
+
+pub fn display_pt(
+    w: &mut impl std::fmt::Write,
+    types: &TypePool,
+    t: &PhysicalType,
+) -> std::fmt::Result {
+    match t {
+        PhysicalType::Scalar(st) => write!(w, "{}", st),
+        PhysicalType::Agg(agg) => match &types.phys_types.get(*agg).agg_type {
+            // Important specialization since wrappers are common
+            AggType::Struct1(t1) => {
+                w.write_str("{ ")?;
+                display_pt(w, types, t1)?;
+                w.write_str(" }")?;
+                Ok(())
+            }
+            AggType::EnumVariant(evl) => {
+                write!(w, "{{ tag({})", evl.tag)?;
+                if let Some(payload) = &evl.payload {
+                    write!(w, ", ")?;
+                    display_pt(w, types, payload)?;
+                };
+                w.write_str(" }")?;
+                Ok(())
+            }
+            AggType::Struct { fields } => {
+                w.write_str("{ ")?;
+                for (index, field) in types.mem.get_slice(*fields).iter().enumerate() {
+                    display_pt(w, types, &field.field_t)?;
+                    let last = index == fields.len() as usize - 1;
+                    if !last {
+                        w.write_str(", ")?;
+                    }
+                }
+                w.write_str(" }")?;
+                Ok(())
+            }
+            AggType::Array { len, element_t: t } => {
+                w.write_str("[")?;
+                display_pt(w, types, t)?;
+                write!(w, " x {}]", *len)?;
+                Ok(())
+            }
+            AggType::Opaque { layout } => {
+                write!(w, "opaque {}, align {}", layout.size, layout.align)
+            }
+        },
+    }
+}
+
+pub fn pt_to_string(types: &TypePool, t: &PhysicalType) -> String {
+    let mut s = String::new();
+    display_pt(&mut s, types, t).unwrap();
+    s
 }

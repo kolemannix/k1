@@ -1,4 +1,4 @@
-// Copyright (c) 2025 knia
+// Copyright (c) 2025 knix
 // All rights reserved.
 
 use std::{
@@ -12,6 +12,9 @@ use itertools::Itertools;
 use log::debug;
 use memmap2::{MmapMut, MmapOptions};
 
+#[cfg(test)]
+mod vm_test;
+
 use crate::{
     bc::{self, BcCallee, CompilableUnit, CompiledUnit, InstId, InstKind, Value as BcValue},
     compiler::WordSize,
@@ -21,9 +24,9 @@ use crate::{
     typer::{
         FunctionId, Layout, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
         StaticValue, StaticValueId, TypedExprId, TypedFloatValue, TypedGlobalId, TypedIntValue,
-        TypedProgram, TyperResult, VariableId,
+        TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
         types::{
-            AggType, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType,
+            self, AggType, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType,
             STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
         },
     },
@@ -267,6 +270,7 @@ impl Vm {
 pub struct Value(u64);
 
 impl Value {
+    pub const UNIT: Value = Self::u8(UNIT_BYTE_VALUE);
     pub const TRUE: Value = Self::bool(true);
     pub const NULLPTR: Value = Self(0);
 
@@ -277,7 +281,7 @@ impl Value {
     fn as_bool(&self) -> bool {
         #[cfg(debug_assertions)]
         {
-            let v = self.as_u64();
+            let v = self.bits();
             debug_assert!(
                 v == 0 || v == 1,
                 "Attempted to extract boolean from non-boolean Value: {}",
@@ -291,44 +295,61 @@ impl Value {
         Value(ptr.addr() as u64)
     }
 
-    fn as_u64(&self) -> u64 {
+    const fn bits(&self) -> u64 {
         self.0
     }
 
-    fn u8(u8: u8) -> Value {
+    const fn as_usize(&self) -> usize {
+        self.0 as usize
+    }
+
+    const fn u8(u8: u8) -> Value {
         Value(u8 as u64)
     }
 
-    fn u16(u16: u16) -> Value {
+    const fn u16(u16: u16) -> Value {
         Value(u16 as u64)
     }
 
-    fn u32(u32: u32) -> Value {
+    const fn u32(u32: u32) -> Value {
         Value(u32 as u64)
     }
 
-    fn u64(u64: u64) -> Value {
+    const fn u64(u64: u64) -> Value {
         Value(u64)
     }
 
-    fn i8(i8: i8) -> Value {
+    const fn i8(i8: i8) -> Value {
         Value(i8 as u64)
     }
 
-    fn i16(i16: i16) -> Value {
+    const fn i16(i16: i16) -> Value {
         Value(i16 as u64)
     }
 
-    fn i32(i32: i32) -> Value {
+    const fn i32(i32: i32) -> Value {
         Value(i32 as u64)
     }
 
-    fn i64(i64: i64) -> Value {
+    const fn i64(i64: i64) -> Value {
         Value(i64 as u64)
     }
 
+    pub fn typed_int(int: TypedIntValue) -> Value {
+        match int {
+            TypedIntValue::U8(v) => Value::u8(v),
+            TypedIntValue::U16(v) => Value::u16(v),
+            TypedIntValue::U32(v) | TypedIntValue::UWord32(v) => Value::u32(v),
+            TypedIntValue::U64(v) | TypedIntValue::UWord64(v) => Value::u64(v),
+            TypedIntValue::I8(v) => Value::i8(v),
+            TypedIntValue::I16(v) => Value::i16(v),
+            TypedIntValue::I32(v) | TypedIntValue::IWord32(v) => Value::i32(v),
+            TypedIntValue::I64(v) | TypedIntValue::IWord64(v) => Value::i64(v),
+        }
+    }
+
     pub fn as_typed_int(&self, int_type: IntegerType) -> TypedIntValue {
-        let u64 = self.as_u64();
+        let u64 = self.bits();
         match int_type {
             IntegerType::U8 => TypedIntValue::U8(u64 as u8),
             IntegerType::U16 => TypedIntValue::U16(u64 as u16),
@@ -362,12 +383,12 @@ impl Value {
     }
 
     pub fn as_f32(&self) -> f32 {
-        let bits = self.as_u64() as u32;
+        let bits = self.bits() as u32;
         f32::from_bits(bits)
     }
 
     pub fn as_f64(&self) -> f64 {
-        let bits = self.as_u64();
+        let bits = self.bits();
         f64::from_bits(bits)
     }
 
@@ -477,6 +498,7 @@ fn exec_loop(
             resolve_value(k1, vm, unit.inst_offset, $v)
         };
     }
+
     let exit_code = 'exec: loop {
         // Fetch
         let instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
@@ -488,6 +510,14 @@ fn exec_loop(
             "  ".repeat(vm.stack.current_frame_index() as usize),
             bc::inst_to_string(k1, &k1.bytecode, inst_id, true)
         );
+
+        macro_rules! builtin_return {
+            ($value:expr) => {{
+                vm.stack.set_cur_inst_value(inst_index, $value);
+                ip += 1;
+                continue 'exec;
+            }};
+        }
 
         // ~Decode~ Execute
         match *k1.bytecode.instrs.get(inst_id) {
@@ -537,9 +567,7 @@ fn exec_loop(
                 let dst_ptr = dst_value.as_ptr();
                 let src_ptr = src_value.as_ptr();
 
-                unsafe {
-                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
-                }
+                memcopy(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
                 ip += 1
             }
             bc::Inst::StructOffset { base, vm_offset, .. } => {
@@ -554,7 +582,7 @@ fn exec_loop(
                 let base_value = resolve_value!(base);
                 let base_ptr = base_value.as_ptr();
                 let index_value = resolve_value!(element_index);
-                let index = index_value.as_u64();
+                let index = index_value.bits();
                 let elem_layout = k1.types.get_pt_layout(&element_t);
 
                 let element_ptr =
@@ -587,14 +615,96 @@ fn exec_loop(
                     BcCallee::Builtin(bc_builtin) => match bc_builtin {
                         bc::BcBuiltin::TypeSchema => todo!(),
                         bc::BcBuiltin::TypeName => todo!(),
-                        bc::BcBuiltin::Allocate => todo!(),
-                        bc::BcBuiltin::AllocateZeroed => todo!(),
-                        bc::BcBuiltin::Reallocate => todo!(),
-                        bc::BcBuiltin::Free => todo!(),
-                        bc::BcBuiltin::MemCopy => todo!(),
+                        bc::BcBuiltin::Allocate | bc::BcBuiltin::AllocateZeroed => {
+                            // intern fn allocZeroed(size: uword, align: uword): Pointer
+                            let zero = bc_builtin == bc::BcBuiltin::AllocateZeroed;
+                            let size: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                            let align: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                            let Ok(layout) = std::alloc::Layout::from_size_align(
+                                size.0 as usize,
+                                align.0 as usize,
+                            ) else {
+                                vm_crash(
+                                    k1,
+                                    vm,
+                                    format!(
+                                        "Rust didn't like this layout: size={size}, align={align}"
+                                    ),
+                                )
+                            };
+                            let ptr = allocate(layout, zero);
+
+                            builtin_return!(Value::ptr(ptr.cast_const()));
+                        }
+                        bc::BcBuiltin::Reallocate => {
+                            // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+                            let old_ptr: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                            let old_size: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                            let align: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                            let new_size: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 3));
+                            let layout = std::alloc::Layout::from_size_align(
+                                old_size.as_usize(),
+                                align.as_usize(),
+                            )
+                            .unwrap();
+                            let ptr = unsafe {
+                                std::alloc::realloc(
+                                    old_ptr.as_ptr().cast_mut(),
+                                    layout,
+                                    new_size.as_usize(),
+                                )
+                            };
+
+                            builtin_return!(Value::ptr(ptr.cast_const()));
+                        }
+                        bc::BcBuiltin::Free => {
+                            // intern fn free(ptr: Pointer, size: uword, align: uword): unit
+                            let ptr =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).as_ptr();
+                            let size =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1)).as_usize();
+                            let align =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2)).as_usize();
+
+                            let layout =
+                                std::alloc::Layout::from_size_align(size as usize, align as usize)
+                                    .unwrap();
+                            unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
+
+                            builtin_return!(Value::ptr(ptr))
+                        }
+                        bc::BcBuiltin::MemCopy => {
+                            // intern fn copy( dst: Pointer, src: Pointer, count: uword): unit
+                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                            let src: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                            let count: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                            memcopy(src.as_ptr(), dst.as_ptr().cast_mut(), count.as_usize());
+
+                            builtin_return!(Value::UNIT)
+                        }
                         bc::BcBuiltin::MemSet => {
                             //intern fn set(dst: Pointer, value: u8, count: uword): unit
-                            todo!()
+                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                            let value: u8 =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1)).bits() as u8;
+                            let count: Value =
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                            unsafe {
+                                std::ptr::write_bytes(
+                                    dst.as_ptr().cast_mut(),
+                                    value,
+                                    count.as_usize(),
+                                )
+                            };
+
+                            builtin_return!(Value::UNIT)
                         }
                         bc::BcBuiltin::MemEquals => {
                             //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
@@ -605,7 +715,7 @@ fn exec_loop(
 
                             let p1_ptr = p1.as_ptr();
                             let p2_ptr = p2.as_ptr();
-                            let size_usize = size.as_u64() as usize;
+                            let size_usize = size.bits() as usize;
 
                             let p1_slice =
                                 unsafe { slice_from_raw_parts_checked(vm, k1, p1_ptr, size_usize) };
@@ -615,13 +725,11 @@ fn exec_loop(
                             let eq = p1_slice == p2_slice;
                             let value = Value::bool(eq);
 
-                            vm.stack.set_cur_inst_value(inst_index, value);
-                            ip += 1;
-                            continue 'exec;
+                            builtin_return!(value)
                         }
                         bc::BcBuiltin::Exit => {
                             let exit_code =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).as_u64();
+                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
                             if exit_code == 0 {
                                 if let Some(expr_ret) = unit.expr_ret {
                                     exit_value = Some(resolve_value!(expr_ret));
@@ -636,7 +744,7 @@ fn exec_loop(
                     BcCallee::Indirect(value) => {
                         // Decode function id from 'pointer'
                         let callee_value = resolve_value!(value);
-                        let function_id_u64 = callee_value.as_u64();
+                        let function_id_u64 = callee_value.bits();
                         let function_id_nzu32 = NonZeroU32::new(function_id_u64 as u32).unwrap();
                         let function_id = FunctionId::from_nzu32(function_id_nzu32);
                         function_id
@@ -723,7 +831,7 @@ fn exec_loop(
             }
             bc::Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = resolve_value!(cond);
-                let cond_u64 = cond_value.as_u64() as u8;
+                let cond_u64 = cond_value.bits() as u8;
                 let as_u8 = cond_u64 as u8;
                 if as_u8 == 1 {
                     prev_b = b;
@@ -761,19 +869,206 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::BitNot { v } => {
-                todo!("BitNot: we need to only invert the bits that are in play for the type")
-                // vm.stack.set_cur_inst_value(inst_index, Value::D64(result));
-                // ip += 1
+                // We invert all bits, even the ones not in play for the width;
+                // but that is fine since we're operating on a Vm Value not a
+                // memory address where we're worried about corrupting data
+                let input = resolve_value!(v);
+                let result = !input.bits();
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result));
+                ip += 1
             }
-            bc::Inst::IntTrunc { v, to } => todo!(),
-            bc::Inst::IntExtU { v, to } => todo!(),
-            bc::Inst::IntExtS { v, to } => todo!(),
-            bc::Inst::FloatTrunc { v, to } => todo!(),
-            bc::Inst::FloatExt { v, to } => todo!(),
-            bc::Inst::FloatToIntUnsigned { v, to } => todo!(),
-            bc::Inst::FloatToIntSigned { v, to } => todo!(),
-            bc::Inst::IntToFloatUnsigned { v, to } => todo!(),
-            bc::Inst::IntToFloatSigned { v, to } => todo!(),
+            bc::Inst::IntTrunc { v, to } => {
+                let input = resolve_value!(v);
+
+                // For now, truncate is a no-op
+                let result = input;
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1
+            }
+            bc::Inst::IntExtU { v, to } => {
+                let input = resolve_value!(v);
+
+                // For now, extend is a no-op
+                let result = input;
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1
+            }
+            bc::Inst::IntExtS { v, to } => {
+                let input = resolve_value!(v);
+
+                // For now, extend is a no-op
+                let result = input;
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1
+            }
+            bc::Inst::FloatTrunc { v, to } => {
+                let from: f64 = resolve_value!(v).as_f64();
+                let result = from as f32;
+
+                vm.stack.set_cur_inst_value(inst_index, Value::f32(result));
+                ip += 1
+            }
+            bc::Inst::FloatExt { v, to } => {
+                let from: f32 = resolve_value!(v).as_f32();
+                let result = from as f64;
+
+                vm.stack.set_cur_inst_value(inst_index, Value::f64(result));
+                ip += 1
+            }
+            bc::Inst::Float32ToIntUnsigned { v, to } => {
+                // This changes bits; not a no-op
+                let f = resolve_value!(v).as_f32();
+
+                let result = match to {
+                    ScalarType::I8 => Value::u8(f as u8),
+                    ScalarType::I16 => Value::u16(f as u16),
+                    ScalarType::I32 => Value::u32(f as u32),
+                    ScalarType::I64 => Value::u64(f as u64),
+                    ScalarType::F32 => unreachable!(),
+                    ScalarType::F64 => unreachable!(),
+                    ScalarType::Pointer => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1;
+            }
+            bc::Inst::Float32ToIntSigned { v, to } => {
+                // This changes bits; not a no-op
+                let f = resolve_value!(v).as_f32();
+
+                let result = match to {
+                    ScalarType::I8 => Value::i8(f as i8),
+                    ScalarType::I16 => Value::i16(f as i16),
+                    ScalarType::I32 => Value::i32(f as i32),
+                    ScalarType::I64 => Value::i64(f as i64),
+                    ScalarType::F32 => unreachable!(),
+                    ScalarType::F64 => unreachable!(),
+                    ScalarType::Pointer => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1;
+            }
+            bc::Inst::Float64ToIntUnsigned { v, to } => {
+                // This changes bits; not a no-op
+                let f = resolve_value!(v).as_f64();
+
+                let result = match to {
+                    ScalarType::I8 => Value::u8(f as u8),
+                    ScalarType::I16 => Value::u16(f as u16),
+                    ScalarType::I32 => Value::u32(f as u32),
+                    ScalarType::I64 => Value::u64(f as u64),
+                    ScalarType::F32 => unreachable!(),
+                    ScalarType::F64 => unreachable!(),
+                    ScalarType::Pointer => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1;
+            }
+            bc::Inst::Float64ToIntSigned { v, to } => {
+                // This changes bits; not a no-op
+                let f = resolve_value!(v).as_f64();
+
+                let result = match to {
+                    ScalarType::I8 => Value::i8(f as i8),
+                    ScalarType::I16 => Value::i16(f as i16),
+                    ScalarType::I32 => Value::i32(f as i32),
+                    ScalarType::I64 => Value::i64(f as i64),
+                    ScalarType::F32 => unreachable!(),
+                    ScalarType::F64 => unreachable!(),
+                    ScalarType::Pointer => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1;
+            }
+            bc::Inst::IntToFloatUnsigned { v, from, to } => {
+                let int_value = resolve_value!(v);
+                let result = match (from, to) {
+                    (ScalarType::I8, ScalarType::F32) => {
+                        let i = int_value.bits() as u8;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I16, ScalarType::F32) => {
+                        let i = int_value.bits() as u16;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I32, ScalarType::F32) => {
+                        let i = int_value.bits() as u32;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I64, ScalarType::F32) => {
+                        let i = int_value.bits() as u64;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I8, ScalarType::F64) => {
+                        let i = int_value.bits() as u8;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I16, ScalarType::F64) => {
+                        let i = int_value.bits() as u16;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I32, ScalarType::F64) => {
+                        let i = int_value.bits() as u32;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I64, ScalarType::F64) => {
+                        let i = int_value.bits() as u64;
+                        Value::f64(i as f64)
+                    }
+                    _ => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1
+            }
+            bc::Inst::IntToFloatSigned { v, from, to } => {
+                let int_value = resolve_value!(v);
+                let result = match (from, to) {
+                    (ScalarType::I8, ScalarType::F32) => {
+                        let i = int_value.bits() as i8;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I16, ScalarType::F32) => {
+                        let i = int_value.bits() as i16;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I32, ScalarType::F32) => {
+                        let i = int_value.bits() as i32;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I64, ScalarType::F32) => {
+                        let i = int_value.bits() as i64;
+                        Value::f32(i as f32)
+                    }
+                    (ScalarType::I8, ScalarType::F64) => {
+                        let i = int_value.bits() as i8;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I16, ScalarType::F64) => {
+                        let i = int_value.bits() as i16;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I32, ScalarType::F64) => {
+                        let i = int_value.bits() as i32;
+                        Value::f64(i as f64)
+                    }
+                    (ScalarType::I64, ScalarType::F64) => {
+                        let i = int_value.bits() as i64;
+                        Value::f64(i as f64)
+                    }
+                    _ => unreachable!(),
+                };
+
+                vm.stack.set_cur_inst_value(inst_index, result);
+                ip += 1
+            }
             bc::Inst::PtrToWord { v } => {
                 let v = resolve_value!(v);
 
@@ -788,32 +1083,32 @@ fn exec_loop(
             }
             bc::Inst::BitwiseBin { op, lhs, rhs } => todo!(),
             bc::Inst::IntAdd { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_add, lhs, rhs);
 
                 vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
                 ip += 1
             }
             bc::Inst::IntSub { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_sub, lhs, rhs);
 
                 vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
                 ip += 1
             }
             bc::Inst::IntMul { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_mul, lhs, rhs);
 
                 vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
                 ip += 1
             }
             bc::Inst::IntDivUnsigned { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
                     return failf!(span, "Division by zero");
                 }
@@ -824,8 +1119,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::IntDivSigned { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
                     return failf!(span, "Division by zero");
                 }
@@ -836,8 +1131,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::IntRemUnsigned { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
                     return failf!(span, "Division by zero");
                 }
@@ -848,8 +1143,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::IntRemSigned { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
                     return failf!(span, "Division by zero");
                 }
@@ -860,8 +1155,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::IntCmp { lhs, rhs, pred, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 let b = match (width, pred) {
                     (_, bc::IntCmpPred::Eq) => lhs == rhs,
                     (8, bc::IntCmpPred::Slt) => (lhs as i8) < (rhs as i8),
@@ -903,8 +1198,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::FloatAdd { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 use std::ops::Add;
                 let result = casted_float_op!(width, add, lhs, rhs);
 
@@ -912,8 +1207,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::FloatSub { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 use std::ops::Sub;
                 let result = casted_float_op!(width, sub, lhs, rhs);
 
@@ -921,8 +1216,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::FloatMul { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 use std::ops::Mul;
                 let result = casted_float_op!(width, mul, lhs, rhs);
 
@@ -930,8 +1225,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::FloatDiv { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 use std::ops::Div;
                 let result = casted_float_op!(width, div, lhs, rhs);
 
@@ -939,8 +1234,8 @@ fn exec_loop(
                 ip += 1
             }
             bc::Inst::FloatRem { lhs, rhs, width } => {
-                let lhs = resolve_value!(lhs).as_u64();
-                let rhs = resolve_value!(rhs).as_u64();
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
                 use std::ops::Rem;
                 let result = casted_float_op!(width, rem, lhs, rhs);
 
@@ -951,7 +1246,7 @@ fn exec_loop(
                 let lhs = resolve_value!(lhs);
                 let rhs = resolve_value!(rhs);
                 let b = match (width, pred) {
-                    (_, bc::FloatCmpPred::Eq) => lhs.as_u64() == rhs.as_u64(),
+                    (_, bc::FloatCmpPred::Eq) => lhs.bits() == rhs.bits(),
                     (32, bc::FloatCmpPred::Lt) => lhs.as_f32() < rhs.as_f32(),
                     (32, bc::FloatCmpPred::Le) => lhs.as_f32() <= rhs.as_f32(),
                     (32, bc::FloatCmpPred::Gt) => lhs.as_f32() > rhs.as_f32(),
@@ -999,17 +1294,19 @@ fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: Bc
                             let is_constant = global.is_constant;
                             let initial_value_id = match global.initial_value {
                                 None => {
-                                    eprintln!("Gotta run global");
+                                    debug!("Gotta run global");
                                     k1.eval_global_body(global.ast_id, None, None).unwrap();
                                     let value_id = k1.globals.get(id).initial_value.unwrap();
-                                    eprintln!(
-                                        "RAN GLOBAL: {}",
-                                        k1.static_value_to_string(value_id)
-                                    );
+                                    debug!("RAN GLOBAL: {}", k1.static_value_to_string(value_id));
                                     value_id
                                 }
                                 Some(value_id) => value_id,
                             };
+                            debug!(
+                                "shared global is: {}. the `t` of the instr is: {}",
+                                k1.static_value_to_string(initial_value_id),
+                                types::pt_to_string(&k1.types, &t)
+                            );
                             let shared_vm_value =
                                 static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
                             let layout = k1.types.get_pt_layout(&t);
@@ -1082,9 +1379,7 @@ pub fn static_value_to_vm_value(
         return *v;
     };
 
-    // task(vmbc): We need to cache these; treat it more like a reference to a constant in static
-    // space than a stack literal!
-    match k1.static_values.get(static_value_id) {
+    let v = match k1.static_values.get(static_value_id) {
         StaticValue::Unit => Value(0),
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
@@ -1094,58 +1389,22 @@ pub fn static_value_to_vm_value(
             let value = string_id_to_value(k1, *string_id);
             value
         }
-        StaticValue::Zero(type_id) => {
-            let layout = k1.types.get_layout(*type_id);
-            static_zero_value(k1, *type_id, span)
-        }
+        StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
         StaticValue::Struct(static_struct) => {
-            todo!("struct")
-            // let mut values: SmallVec<[Value; 8]> = smallvec![];
-            // // This is bad to do the values then copy them into the right place
-            // // Let's just re-write for this round
-            // let struct_layout = k1.types.get_struct_layout(static_struct.type_id);
-            // let struct_base =
-            //     vm.get_destination_stack(dst_stack).push_layout_uninit(struct_layout.layout);
-            // for (field_index, f) in
-            //     k1.static_values.mem.get_slice(static_struct.fields).iter().enumerate()
-            // {
-            //     let value = static_value_to_vm_value(vm, dst_stack, k1, *f);
-            //     // Handle it right here.
-            //     let field_offset = struct_layout.field_offsets[field_index];
-            //     let field_ptr = unsafe { struct_base.byte_add(field_offset as usize) };
-            //     let field_type_id = k1.static_values.get(f).get_type();
-            //     store_value(field_type, field_ptr, value);
-            //     values.push(value);
-            // }
-            // //let struct_value = vm.get_destination_stack(dst_stack).push_struct_values(
-            // //    &k1.types,
-            // //    static_struct.type_id,
-            // //    &values,
-            // //);
-            // Ok(struct_value)
+            let layout = k1.types.get_layout(static_struct.type_id);
+            let struct_base = k1.vmbc_static_stack.push_layout_uninit(layout);
+
+            store_static_value(k1, struct_base, static_value_id);
+
+            Value::ptr(struct_base.cast_const())
         }
         StaticValue::Enum(e) => {
-            // This is bad to do the payload then copy it into the right place
-            // Let's just re-write for this round
-            // let payload_value = match e.payload {
-            //     None => None,
-            //     Some(static_value_id) => {
-            //         let value = static_value_to_vm_value(vm, dst_stack, k1, static_value_id)?;
-            //         Some(value)
-            //     }
-            // };
-            // let enum_ptr = vm.get_destination_stack(dst_stack).push_enum(
-            //     &k1.types,
-            //     e.variant_type_id,
-            //     payload_value,
-            // );
-            // let type_id = if e.typed_as_enum {
-            //     k1.types.get(e.variant_type_id).expect_enum_variant().enum_type_id
-            // } else {
-            //     e.variant_type_id
-            // };
-            // Ok(Value::Agg { type_id, ptr: enum_ptr })
-            todo!()
+            let layout = k1.types.get_layout(e.variant_type_id);
+            let enum_base = k1.vmbc_static_stack.push_layout_uninit(layout);
+
+            store_static_value(k1, enum_base, static_value_id);
+
+            Value::ptr(enum_base.cast_const())
         }
         StaticValue::LinearContainer(cont) => {
             todo!()
@@ -1183,7 +1442,89 @@ pub fn static_value_to_vm_value(
             //     }
             // }
         }
-    }
+    };
+    k1.vmbc_static_value_lookups.insert(static_value_id, v);
+    v
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
+    match k1.static_values.get(static_value_id) {
+        StaticValue::Unit => store_byte(dst, 0),
+        StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
+        StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
+        StaticValue::Int(iv) => store_typed_int(dst, *iv),
+        StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
+        StaticValue::String(string_id) => {
+            let value = string_id_to_value(k1, *string_id);
+            store_value(&k1.types, k1.types.get_physical_type(STRING_TYPE_ID).unwrap(), dst, value);
+        }
+        StaticValue::Zero(type_id) => {
+            let layout = k1.types.get_layout(*type_id);
+            unsafe { std::ptr::write_bytes(dst, 0, layout.size as usize) };
+        }
+        StaticValue::Struct(static_struct) => {
+            let struct_layout = k1.types.get_struct_layout(static_struct.type_id);
+
+            for (field, field_value_id) in
+                struct_layout.iter().zip(k1.static_values.mem.get_slice(static_struct.fields))
+            {
+                let field_ptr = unsafe { dst.byte_add(field.offset as usize) };
+                store_static_value(k1, field_ptr, *field_value_id);
+            }
+        }
+        StaticValue::Enum(e) => {
+            let variant_agg_id =
+                k1.types.get_physical_type(e.variant_type_id).unwrap().expect_agg();
+            let variant_layout =
+                k1.types.phys_types.get(variant_agg_id).agg_type.expect_enum_variant();
+            let variant_type = k1.types.get(e.variant_type_id).expect_enum_variant();
+
+            store_typed_int(dst, variant_type.tag_value);
+
+            if let Some(payload_value_id) = e.payload {
+                let payload_ptr =
+                    unsafe { dst.byte_add(variant_layout.payload_offset.unwrap() as usize) };
+                store_static_value(k1, payload_ptr, payload_value_id);
+            };
+        }
+        StaticValue::LinearContainer(cont) => {
+            todo!()
+            // let (element_type, _) = k1.types.get_as_container_instance(cont.type_id).unwrap();
+            //
+            // let layout = k1.types.get_layout(element_type);
+            // let view_allocation_layout = layout.array_me(cont.len());
+            //
+            // debug!(
+            //     "Pushing {} bytes for container {}",
+            //     view_allocation_layout.size,
+            //     k1.static_value_to_string(static_value_id)
+            // );
+            // let data_base_mem = vm.static_stack.push_layout_uninit(view_allocation_layout);
+            //
+            // for (index, elem_value_id) in
+            //     k1.static_values.get_slice(cont.elements).iter().enumerate()
+            // {
+            //     let elem_value = static_value_to_vm_value(vm, dst_stack, k1, *elem_value_id)?;
+            //     let elem_dst_ptr = unsafe { data_base_mem.byte_add(index * layout.size as usize) };
+            //     store_value(&k1.types, elem_dst_ptr, elem_value);
+            // }
+            // match cont.kind {
+            //     StaticContainerKind::View => {
+            //         let rust_view = K1ViewLike {
+            //             len: cont.elements.len() as usize,
+            //             data: data_base_mem.cast_const(),
+            //         };
+            //         let view_struct_ptr = vm.get_destination_stack(dst_stack).push_t(rust_view);
+            //
+            //         Ok(Value::Agg { type_id: cont.type_id, ptr: view_struct_ptr })
+            //     }
+            //     StaticContainerKind::Array => {
+            //         Ok(Value::Agg { type_id: cont.type_id, ptr: data_base_mem })
+            //     }
+            // }
+        }
+    };
 }
 
 pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
@@ -1463,17 +1804,25 @@ fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
     ptr
 }
 
+pub fn store_byte(dst: *mut u8, u8: u8) {
+    store_scalar(ScalarType::I8, dst, Value::u8(u8))
+}
+
+pub fn store_typed_int(dst: *mut u8, int: TypedIntValue) {
+    store_scalar(int.get_integer_type().get_scalar_type(), dst, Value::typed_int(int))
+}
+
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
     unsafe {
         match t {
-            ScalarType::I8 => dst.write(value.as_u64() as u8),
-            ScalarType::I16 => (dst as *mut u16).write(value.as_u64() as u16),
-            ScalarType::I32 => (dst as *mut u32).write(value.as_u64() as u32),
-            ScalarType::I64 => (dst as *mut u64).write(value.as_u64()),
-            ScalarType::F32 => (dst as *mut u32).write(value.as_u64() as u32),
-            ScalarType::F64 => (dst as *mut u64).write(value.as_u64()),
-            ScalarType::Pointer => (dst as *mut usize).write(value.as_u64() as usize),
+            ScalarType::I8 => dst.write(value.bits() as u8),
+            ScalarType::I16 => (dst as *mut u16).write(value.bits() as u16),
+            ScalarType::I32 => (dst as *mut u32).write(value.bits() as u32),
+            ScalarType::I64 => (dst as *mut u64).write(value.bits()),
+            ScalarType::F32 => (dst as *mut u32).write(value.bits() as u32),
+            ScalarType::F64 => (dst as *mut u64).write(value.bits()),
+            ScalarType::Pointer => (dst as *mut usize).write(value.bits() as usize),
         }
     }
 }
@@ -1485,10 +1834,15 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
         PhysicalType::Agg(pt_id) => {
             let record = types.phys_types.get(pt_id);
             let src = value.as_ptr();
-            unsafe {
-                core::ptr::copy_nonoverlapping(src, dst, record.layout.size as usize);
-            }
+            memcopy(src, dst, record.layout.size as usize)
         }
+    }
+}
+
+fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
+    // eprintln!("copy from {:?} -> {:?} {size_bytes}", src, dst);
+    unsafe {
+        core::ptr::copy_nonoverlapping(src, dst, size_bytes);
     }
 }
 
@@ -1912,8 +2266,8 @@ pub fn vm_value_to_static_value(
     // We know it is a physical type so can be aggressive with matches
     let static_value_id = match k1.types.get(type_id) {
         Type::Unit => k1.static_values.unit_id(),
-        Type::Char => k1.static_values.add(StaticValue::Char(vm_value.as_u64() as u8)),
-        Type::Bool => k1.static_values.add(StaticValue::Bool(vm_value.as_u64() == 1)),
+        Type::Char => k1.static_values.add(StaticValue::Char(vm_value.bits() as u8)),
+        Type::Bool => k1.static_values.add(StaticValue::Bool(vm_value.bits() == 1)),
         Type::Pointer => {
             let addr = vm_value.as_ptr();
             if addr.is_null() || addr.addr() == 0 {
@@ -2020,11 +2374,8 @@ pub fn vm_value_to_static_value(
             let variant_index = variant.index;
 
             let variant_agg_id = k1.types.get_physical_type(variant_type_id).unwrap().expect_agg();
-            let AggType::EnumVariant(variant_agg) =
-                k1.types.phys_types.get(variant_agg_id).agg_type
-            else {
-                unreachable!()
-            };
+            let variant_agg =
+                k1.types.phys_types.get(variant_agg_id).agg_type.expect_enum_variant();
             let payload = match variant_agg.payload {
                 None => None,
                 Some(payload_pt) => {
@@ -2044,11 +2395,13 @@ pub fn vm_value_to_static_value(
                 payload,
             }))
         }
-        Type::EnumVariant(typed_enum_variant) => todo!(),
-        Type::FunctionPointer(function_pointer_type) => {
+        Type::EnumVariant(_) => {
+            return failf!(span, "Cast the variant to its either type to bake it");
+        }
+        Type::FunctionPointer(_) => {
             return failf!(span, "Cannot bake function pointers");
         }
-        Type::Reference(reference_type) => return failf!(span, "Cannot yet bake pointers"),
+        Type::Reference(_) => return failf!(span, "Cannot yet bake pointers"),
         Type::Lambda(_) | Type::LambdaObject(_) => {
             return failf!(
                 span,
@@ -2067,149 +2420,6 @@ pub fn vm_value_to_static_value(
         | Type::RecursiveReference(_) => unreachable!(),
     };
     Ok(static_value_id)
-    // let v = match vm_value {
-    //     Value::Unit => StaticValue::Unit,
-    //     Value::Bool(b) => StaticValue::Bool(b),
-    //     Value::Char(c) => StaticValue::Char(c),
-    //     Value::Int(typed_integer_value) => StaticValue::Int(typed_integer_value),
-    //     Value::Float(typed_float_value) => StaticValue::Float(typed_float_value),
-    //     Value::Pointer(value) => {
-    //         if value == 0 {
-    //             StaticValue::Zero(POINTER_TYPE_ID)
-    //         } else {
-    //             return failf!(
-    //                 span,
-    //                 "Raw pointer ({:0x}) cannot be converted to a static value; use a Reference or a plain value type instead.",
-    //                 value
-    //             );
-    //         }
-    //     }
-    //     Value::Reference { .. } => {
-    //         // Now this, I can do. Load the value and bake it into the binary
-    //         // This is just a de-reference
-    //         // Needs to become a global.
-    //         // Rely on the VM's code to load it, then make a K1 'global' to hold it?
-    //
-    //         //let _loaded_value = vm::load_value(vm, m, *type_id, *ptr, true, span).unwrap();
-    //         todo!("Introduce StaticValue::Reference");
-    //     }
-    //     Value::Agg { type_id, ptr } => {
-    //         if type_id == STRING_TYPE_ID {
-    //             let box_str = value_to_string_id(k1, vm_value).map_err(|msg| {
-    //                 errf!(span, "Could not convert string to static value: {msg}")
-    //             })?;
-    //             StaticValue::String(box_str)
-    //         } else if k1.types.get_as_view_instance(type_id).is_some() {
-    //             let (view, element_type) = value_as_view(k1, vm_value);
-    //             let mut elements = k1.static_values.mem.new_vec(view.len as u32);
-    //             for index in 0..view.len {
-    //                 let elem_vm = get_view_element(vm, k1, view.data, element_type, index)
-    //                     .unwrap_or_else(|e| {
-    //                         vm_ice!(k1, vm, "Failed to load view element {index}: {}", e)
-    //                     });
-    //                 let elem_static = vm_value_to_static_value(k1, vm, elem_vm, span)?;
-    //                 elements.push(elem_static);
-    //             }
-    //             let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
-    //             StaticValue::LinearContainer(StaticContainer {
-    //                 elements: elements_slice,
-    //                 kind: StaticContainerKind::View,
-    //                 type_id,
-    //             })
-    //         } else if k1.types.get_as_list_instance(type_id).is_some() {
-    //             #[allow(clippy::if_same_then_else)]
-    //             return failf!(
-    //                 span,
-    //                 "{} cannot be converted to static value; convert to a View first",
-    //                 k1.type_id_to_string(type_id)
-    //             );
-    //         } else if k1.types.get_as_buffer_instance(type_id).is_some() {
-    //             return failf!(
-    //                 span,
-    //                 "{} cannot be converted to static value; convert to a View first",
-    //                 k1.type_id_to_string(type_id)
-    //             );
-    //         } else {
-    //             let typ = k1.types.get(type_id);
-    //             match typ {
-    //                 Type::Struct(struct_type) => {
-    //                     let mut field_value_ids =
-    //                         k1.static_values.mem.new_vec(struct_type.fields.len());
-    //                     for index in 0..struct_type.fields.len() {
-    //                         let field_value =
-    //                             load_struct_field(vm, k1, type_id, ptr, index as usize, false)
-    //                                 .unwrap();
-    //                         let field_static_value_id =
-    //                             vm_value_to_static_value(k1, vm, field_value, span)?;
-    //                         field_value_ids.push(field_static_value_id)
-    //                     }
-    //                     StaticValue::Struct(StaticStruct {
-    //                         type_id,
-    //                         fields: k1.static_values.mem.vec_to_mslice(&field_value_ids),
-    //                     })
-    //                 }
-    //                 Type::Enum(enum_type) => {
-    //                     let tag = load_value(vm, k1, enum_type.tag_type, ptr, false)
-    //                         .unwrap()
-    //                         .expect_int();
-    //                     let variant =
-    //                         enum_type.variants.iter().find(|v| v.tag_value == tag).unwrap();
-    //                     let variant_type_id = variant.my_type_id;
-    //                     let variant_index = variant.index;
-    //
-    //                     let payload = match variant.payload {
-    //                         None => None,
-    //                         Some(payload_type) => {
-    //                             let payload_ptr = gep_enum_payload(&k1.types, variant, ptr);
-    //                             let payload_value =
-    //                                 load_value(vm, k1, payload_type, payload_ptr, false).unwrap();
-    //                             let static_value_id =
-    //                                 vm_value_to_static_value(k1, vm, payload_value, span)?;
-    //                             Some(static_value_id)
-    //                         }
-    //                     };
-    //                     StaticValue::Enum(StaticEnum {
-    //                         variant_type_id,
-    //                         variant_index,
-    //                         typed_as_enum: true,
-    //                         payload,
-    //                     })
-    //                 }
-    //                 Type::EnumVariant(_enum_variant) => {
-    //                     todo!("enum variant vm -> static")
-    //                 }
-    //                 Type::Array(array_type) => {
-    //                     let element_type = array_type.element_type;
-    //                     let Some(count) = array_type.concrete_count else {
-    //                         return failf!(
-    //                             span,
-    //                             "Cannot convert array of unknown size to static value"
-    //                         );
-    //                     };
-    //                     let count = count as usize;
-    //                     let mut elements = k1.static_values.mem.new_vec(count as u32);
-    //                     for index in 0..count {
-    //                         let elem_result = get_view_element(vm, k1, ptr, element_type, index);
-    //                         let elem_vm = elem_result.unwrap_or_else(|e| {
-    //                             vm_ice!(k1, vm, "Failed to load view element {index}: {}", e)
-    //                         });
-    //                         let elem_static = vm_value_to_static_value(k1, vm, elem_vm, span)?;
-    //                         elements.push(elem_static);
-    //                     }
-    //                     let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
-    //                     StaticValue::LinearContainer(StaticContainer {
-    //                         elements: elements_slice,
-    //                         kind: StaticContainerKind::Array,
-    //                         type_id,
-    //                     })
-    //                 }
-    //                 _ => vm_crash(k1, vm, "aggregate should be struct or enum or array"),
-    //             }
-    //         }
-    //     }
-    // };
-    // let id = k1.static_values.add(v);
-    // Ok(id)
 }
 
 pub fn value_as_view(view_value: Value) -> k1_types::K1ViewLike {

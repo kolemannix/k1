@@ -41,7 +41,7 @@ pub struct ProgramBytecode {
     pub mem: kmem::Mem<ProgramBytecode>,
     pub instrs: VPool<Inst, InstId>,
     pub sources: VPool<SpanId, InstId>,
-    pub comments: VPool<MStr<ProgramBytecode>, InstId>,
+    pub comments: VPool<BcStr, InstId>,
     /// Compiled bytecode for actual functions
     pub functions: VPool<Option<CompiledUnit>, FunctionId>,
     /// Compiled bytecode for #static exprs and global initializers
@@ -55,6 +55,7 @@ pub struct ProgramBytecode {
     b_loops: FxHashMap<ScopeId, LoopInfo>,
     pub b_units_pending_compile: Vec<CompilableUnit>,
 }
+type BcStr = MStr<ProgramBytecode>;
 
 #[derive(Clone, Copy)]
 pub enum CompilableUnit {
@@ -95,13 +96,13 @@ impl ProgramBytecode {
 
 #[derive(Clone)]
 pub struct Block {
-    pub name: MStr<ProgramBytecode>,
+    pub name: BcStr,
     pub instrs: Vec<InstId>,
 }
 
 #[derive(Clone, Copy)]
 pub struct CompiledBlock {
-    pub name: MStr<ProgramBytecode>,
+    pub name: BcStr,
     pub instrs: MSlice<InstId, ProgramBytecode>,
 }
 
@@ -305,20 +306,30 @@ pub enum Inst {
         v: Value,
         to: ScalarType,
     },
-    FloatToIntUnsigned {
+    Float32ToIntUnsigned {
         v: Value,
         to: ScalarType,
     },
-    FloatToIntSigned {
+    Float64ToIntUnsigned {
+        v: Value,
+        to: ScalarType,
+    },
+    Float32ToIntSigned {
+        v: Value,
+        to: ScalarType,
+    },
+    Float64ToIntSigned {
         v: Value,
         to: ScalarType,
     },
     IntToFloatUnsigned {
         v: Value,
+        from: ScalarType,
         to: ScalarType,
     },
     IntToFloatSigned {
         v: Value,
+        from: ScalarType,
         to: ScalarType,
     },
     PtrToWord {
@@ -499,8 +510,10 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::IntExtS { to, .. } => InstKind::scalar(*to),
         Inst::FloatTrunc { to, .. } => InstKind::scalar(*to),
         Inst::FloatExt { to, .. } => InstKind::scalar(*to),
-        Inst::FloatToIntSigned { to, .. } => InstKind::scalar(*to),
-        Inst::FloatToIntUnsigned { to, .. } => InstKind::scalar(*to),
+        Inst::Float32ToIntUnsigned { to, .. } => InstKind::scalar(*to),
+        Inst::Float32ToIntSigned { to, .. } => InstKind::scalar(*to),
+        Inst::Float64ToIntUnsigned { to, .. } => InstKind::scalar(*to),
+        Inst::Float64ToIntSigned { to, .. } => InstKind::scalar(*to),
         Inst::IntToFloatUnsigned { to, .. } => InstKind::scalar(*to),
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(*to),
         Inst::PtrToWord { .. } => InstKind::scalar(bc.word_sized_int()),
@@ -678,7 +691,7 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
 fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
-            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, true));
             let name = b.k1.bytecode.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
@@ -730,7 +743,8 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                 callee: BcCallee::Builtin(BcBuiltin::Exit),
                 args: exit_args,
             });
-            b.push_inst(Inst::Call { id });
+            let call_comment = b.make_str("expr synthetic exit");
+            b.push_inst(Inst::Call { id }, call_comment);
 
             let compiled_blocks = b.bake_blocks();
             let compiled_expr = CompiledUnit {
@@ -804,28 +818,32 @@ impl<'k1> Builder<'k1> {
         b_blocks[0..block_count as usize].iter()
     }
 
-    fn make_inst(&mut self, inst: Inst) -> InstId {
+    fn make_str(&mut self, s: impl AsRef<str>) -> BcStr {
+        self.k1.bytecode.mem.push_str(s.as_ref())
+    }
+
+    fn make_inst(&mut self, inst: Inst, comment: BcStr) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
         let ids = self.k1.bytecode.sources.add(self.cur_span);
-        let idc = self.k1.bytecode.comments.add(MStr::empty());
+        let idc = self.k1.bytecode.comments.add(comment);
         debug_assert!(id == ids && id == idc);
         id
     }
 
-    fn push_inst_to(&mut self, block: BlockId, inst: Inst) -> InstId {
-        let id = self.make_inst(inst);
+    fn push_inst_to(&mut self, block: BlockId, inst: Inst, comment: BcStr) -> InstId {
+        let id = self.make_inst(inst, comment);
 
         self.k1.bytecode.b_blocks[block as usize].instrs.push(id);
         id
     }
 
-    fn push_alloca(&mut self, pt: PhysicalType) -> InstId {
+    fn push_alloca(&mut self, pt: PhysicalType, comment: BcStr) -> InstId {
         let layout = self.k1.types.get_pt_layout(&pt);
         let index = match self.last_alloca_index {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let inst_id = self.make_inst(Inst::Alloca { t: pt, vm_layout: layout });
+        let inst_id = self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment);
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
         inst_id
     }
@@ -838,8 +856,12 @@ impl<'k1> Builder<'k1> {
         get_value_kind(&self.k1.bytecode, &self.k1.types, value)
     }
 
-    fn push_inst(&mut self, inst: Inst) -> InstId {
-        self.push_inst_to(self.cur_block, inst)
+    fn push_inst(&mut self, inst: Inst, comment: BcStr) -> InstId {
+        self.push_inst_to(self.cur_block, inst, comment)
+    }
+
+    fn push_inst_anon(&mut self, inst: Inst) -> InstId {
+        self.push_inst(inst, MStr::empty())
     }
 
     fn push_struct_offset(
@@ -847,36 +869,35 @@ impl<'k1> Builder<'k1> {
         agg_id: PhysicalTypeId,
         base: Value,
         field_index: u32,
+        comment: BcStr,
     ) -> InstId {
         let Some(offset) = self.k1.types.get_struct_field_offset(agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
-        self.push_inst(Inst::StructOffset {
-            struct_t: agg_id,
-            base,
-            field_index,
-            vm_offset: offset,
-        })
+        self.push_inst(
+            Inst::StructOffset { struct_t: agg_id, base, field_index, vm_offset: offset },
+            comment,
+        )
     }
 
-    fn push_jump(&mut self, block_id: BlockId) -> InstId {
-        self.push_inst(Inst::Jump(block_id))
+    fn push_jump(&mut self, block_id: BlockId, comment: BcStr) -> InstId {
+        self.push_inst(Inst::Jump(block_id), comment)
     }
 
-    fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType) -> InstId {
+    fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType, comment: BcStr) -> InstId {
         let layout = self.k1.types.get_pt_layout(&pt);
-        self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size })
+        self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment)
     }
 
-    fn push_load(&mut self, st: ScalarType, src: Value) -> InstId {
-        self.push_inst(Inst::Load { t: st, src })
+    fn push_load(&mut self, st: ScalarType, src: Value, comment: BcStr) -> InstId {
+        self.push_inst(Inst::Load { t: st, src }, comment)
     }
 
-    fn push_store(&mut self, dst: Value, value: Value) -> InstId {
-        self.push_inst(Inst::Store { dst, value })
+    fn push_store(&mut self, dst: Value, value: Value, comment: BcStr) -> InstId {
+        self.push_inst(Inst::Store { dst, value }, comment)
     }
 
-    fn push_int_value(&mut self, int_value: &TypedIntValue) -> Value {
+    fn push_int_value(&mut self, int_value: &TypedIntValue, comment: BcStr) -> Value {
         match int_value {
             TypedIntValue::U8(i) => Value::Imm32 { t: ScalarType::I8, data: *i as u32 },
             TypedIntValue::U16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
@@ -887,7 +908,7 @@ impl<'k1> Builder<'k1> {
                 if *i <= u32::MAX as u64 {
                     Value::imm32(*i as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)));
+                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)), comment);
                     inst.as_value()
                 }
             }
@@ -898,14 +919,14 @@ impl<'k1> Builder<'k1> {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
                     Value::imm32(*i as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i as u64)));
+                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i as u64)), comment);
                     inst.as_value()
                 }
             }
         }
     }
 
-    fn push_block(&mut self, name: MStr<ProgramBytecode>) -> BlockId {
+    fn push_block(&mut self, name: BcStr) -> BlockId {
         let id = self.block_count;
         // Recycle builder blocks
         match self.k1.bytecode.b_blocks.get_mut(self.block_count as usize) {
@@ -953,7 +974,10 @@ impl<'k1> Builder<'k1> {
 fn store_simple_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Value {
     match dst {
         None => value,
-        Some(dst) => b.push_store(dst, value).as_value(),
+        Some(dst) => {
+            let comment = b.make_str("store to dst");
+            b.push_store(dst, value, comment).as_value()
+        }
     }
 }
 
@@ -1013,7 +1037,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
-            let variable_alloca = b.push_alloca(var_pt_id);
+            let variable_alloca_comment = b.make_str("variable alloca");
+            let variable_alloca = b.push_alloca(var_pt_id, variable_alloca_comment);
 
             // value_ptr means a pointer matching the type of the rhs
             // For a referencing let, the original alloca a ptr
@@ -1023,8 +1048,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     panic!("Expected reference for referencing let");
                 };
                 let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
-                let value_alloca = b.push_alloca(reference_inner_type_pt_id);
-                b.push_store(variable_alloca.as_value(), value_alloca.as_value());
+                let value_alloca_comment = b.make_str("referencing inner alloca");
+                let value_alloca = b.push_alloca(reference_inner_type_pt_id, value_alloca_comment);
+                let store_comment = b.make_str("referencing initializer store");
+                b.push_store(variable_alloca.as_value(), value_alloca.as_value(), store_comment);
                 value_alloca
             } else {
                 variable_alloca
@@ -1086,7 +1113,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
 
             b.goto_block(require_continue_block);
             if req.condition.diverges {
-                b.push_inst(Inst::Unreachable);
+                b.push_inst_anon(Inst::Unreachable);
             }
 
             Ok(Value::UNIT)
@@ -1115,21 +1142,20 @@ fn compile_expr(
             let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
-                None => b.push_alloca(struct_pt).as_value(),
+                None => {
+                    let comment = b.make_str("struct literal");
+                    b.push_alloca(struct_pt, comment).as_value()
+                }
             };
             for (field_index, field) in struct_literal.fields.iter().enumerate() {
                 debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
-                let Some(offset) =
-                    b.k1.types.get_struct_field_offset(struct_agg_id, field_index as u32)
-                else {
-                    b_ice!(b, "Failed getting offset for field")
-                };
-                let struct_offset = b.push_inst(Inst::StructOffset {
-                    struct_t: struct_agg_id,
-                    base: struct_base,
-                    field_index: field_index as u32,
-                    vm_offset: offset,
-                });
+                let field_comment = mformat!(b.k1.bytecode.mem, "struct field {}", field_index);
+                let struct_offset = b.push_struct_offset(
+                    struct_agg_id,
+                    struct_base,
+                    field_index as u32,
+                    field_comment,
+                );
                 compile_expr(b, Some(struct_offset.as_value()), field.expr)?;
             }
             Ok(struct_base)
@@ -1142,12 +1168,13 @@ fn compile_expr(
             else {
                 b_ice!(b, "Failed getting offset for field")
             };
-            let field_ptr = b.push_inst(Inst::StructOffset {
-                struct_t: struct_pt_id,
-                base: struct_base,
-                field_index: field_access.field_index,
-                vm_offset: offset,
-            });
+            let offset_comment = b.make_str("field access ptr");
+            let field_ptr = b.push_struct_offset(
+                struct_pt_id,
+                struct_base,
+                field_access.field_index,
+                offset_comment,
+            );
             let result_type = b.get_physical_type(field_access.result_type);
             let result = build_field_access(
                 b,
@@ -1163,11 +1190,11 @@ fn compile_expr(
             let element_pt = b.get_physical_type(array_get.array_type);
             let index = compile_expr(b, None, array_get.index)?;
 
-            let element_ptr = b.push_inst(Inst::ArrayOffset {
-                element_t: element_pt,
-                base: array_base,
-                element_index: index,
-            });
+            let offset_comment = b.make_str("array get offset");
+            let element_ptr = b.push_inst(
+                Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
+                offset_comment,
+            );
             let result_type = b.get_physical_type(array_get.result_type);
             let result = build_field_access(
                 b,
@@ -1259,7 +1286,10 @@ fn compile_expr(
             let src = compile_expr(b, None, deref.target)?;
             let target_pt = b.get_physical_type(deref.type_id);
             let loaded = match dst {
-                Some(dst) => b.push_copy(dst, src, target_pt).as_value(),
+                Some(dst) => {
+                    let deref_comment = b.make_str("dereference to dst");
+                    b.push_copy(dst, src, target_pt, deref_comment).as_value()
+                }
                 None => load_value(b, target_pt, src, true),
             };
             Ok(loaded)
@@ -1324,9 +1354,8 @@ fn compile_expr(
                             };
                         }
 
-                        IntrinsicOperation::TypeName | IntrinsicOperation::TypeSchema => {
-                            unreachable!("handled as normal call")
-                        }
+                        IntrinsicOperation::TypeName => Some(BcBuiltin::TypeName),
+                        IntrinsicOperation::TypeSchema => Some(BcBuiltin::TypeSchema),
 
                         IntrinsicOperation::BoolNegate => {
                             return {
@@ -1839,14 +1868,16 @@ fn compile_expr(
                 }
                 StaticValue::Int(int) => {
                     let int = *int;
-                    let imm = b.push_int_value(&int);
+                    let comm = b.make_str("static int");
+                    let imm = b.push_int_value(&int, comm);
                     let store = store_simple_if_dst(b, dst, imm);
                     Ok(store)
                 }
                 StaticValue::Float(float) => {
                     let float = *float;
                     //task(bc): Pack small floats
-                    let imm = b.push_inst(Inst::Imm(Imm::Float(float)));
+                    let comm = b.make_str("static float");
+                    let imm = b.push_inst(Inst::Imm(Imm::Float(float)), comm);
                     let store = store_simple_if_dst(b, dst, imm.as_value());
                     Ok(store)
                 }
@@ -1956,14 +1987,23 @@ fn compile_cast(
         | CastType::IntegerUnsignedToFloat
         | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
+            let from = b.get_value_kind(&base).expect_value().unwrap().expect_scalar();
             let to = b.get_physical_type(c.target_type_id).expect_scalar();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { v: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { v: base, to },
-                CastType::FloatToUnsignedInteger => Inst::FloatToIntUnsigned { v: base, to },
-                CastType::FloatToSignedInteger => Inst::FloatToIntSigned { v: base, to },
-                CastType::IntegerUnsignedToFloat => Inst::IntToFloatUnsigned { v: base, to },
-                CastType::IntegerSignedToFloat => Inst::IntToFloatSigned { v: base, to },
+                CastType::FloatToUnsignedInteger => match from {
+                    ScalarType::F32 => Inst::Float32ToIntUnsigned { v: base, to },
+                    ScalarType::F64 => Inst::Float64ToIntUnsigned { v: base, to },
+                    _ => unreachable!(),
+                },
+                CastType::FloatToSignedInteger => match from {
+                    ScalarType::F32 => Inst::Float32ToIntSigned { v: base, to },
+                    ScalarType::F64 => Inst::Float64ToIntSigned { v: base, to },
+                    _ => unreachable!(),
+                },
+                CastType::IntegerUnsignedToFloat => Inst::IntToFloatUnsigned { v: base, from, to },
+                CastType::IntegerSignedToFloat => Inst::IntToFloatSigned { v: base, from, to },
                 _ => unreachable!(),
             };
             let inst = b.push_inst(inst);
@@ -2111,8 +2151,13 @@ fn load_value(b: &mut Builder, pt: PhysicalType, src: Value, make_copy: bool) ->
             if make_copy {
                 let dst = b.push_alloca(pt);
                 let pt_layout = b.k1.types.get_pt_layout(&pt);
-                b.push_inst(Inst::Copy { dst: dst.as_value(), src, t: pt, vm_size: pt_layout.size })
-                    .as_value()
+                b.push_inst(Inst::Copy {
+                    dst: dst.as_value(),
+                    src,
+                    t: pt,
+                    vm_size: pt_layout.size,
+                });
+                dst.as_value()
             } else {
                 src
             }
@@ -2167,8 +2212,8 @@ fn compile_matching_condition(
                 if b.k1.get_expr_type_id(*value) == NEVER_TYPE_ID {
                     return Ok(());
                 }
-                let is_last = index == mc.instrs.len() - 1;
-                let continue_block = if is_last { cons_block } else { b.push_block(MStr::empty()) };
+                let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
+                let continue_block = b.push_block(continue_name);
                 b.push_inst(Inst::JumpIf {
                     cond: cond_value,
                     cons: continue_block,
@@ -2178,6 +2223,7 @@ fn compile_matching_condition(
             }
         }
     }
+    b.push_jump(cons_block);
     Ok(())
 }
 
@@ -2314,12 +2360,67 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                         errors.push("i{inst_id}: int trunc to non-int type".to_string())
                     }
                 }
-                Inst::IntExtU { .. } => (),
-                Inst::IntExtS { .. } => (),
-                Inst::FloatTrunc { .. } => (),
-                Inst::FloatExt { .. } => (),
-                Inst::FloatToIntSigned { .. } => (),
-                Inst::FloatToIntUnsigned { .. } => (),
+                Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
+                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    if !inst_type.is_int() {
+                        errors.push(format!("i{inst_id}: int_ext_u src is not an int"))
+                    }
+                    if !to.is_int() {
+                        errors.push(format!("i{inst_id}: int_ext_u to is not int"))
+                    }
+                }
+                Inst::FloatTrunc { v, to } => {
+                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    if !inst_type
+                        .as_value()
+                        .and_then(|t| t.as_scalar())
+                        .map_or(false, |s| s == ScalarType::F64)
+                    {
+                        errors.push(format!("i{inst_id}: float_trunc src is not f64"))
+                    }
+                    if *to != ScalarType::F32 {
+                        errors.push(format!("i{inst_id}: float_trunc to is not f32"))
+                    }
+                }
+                Inst::FloatExt { v, to } => {
+                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    if !inst_type
+                        .as_value()
+                        .and_then(|t| t.as_scalar())
+                        .map_or(false, |s| s == ScalarType::F32)
+                    {
+                        errors.push(format!("i{inst_id}: float_ext src is not f32"))
+                    }
+                    if *to != ScalarType::F64 {
+                        errors.push(format!("i{inst_id}: float_ext to is not f64"))
+                    }
+                }
+                Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
+                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    if !inst_type
+                        .as_value()
+                        .and_then(|t| t.as_scalar())
+                        .map_or(false, |s| s == ScalarType::F32)
+                    {
+                        errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
+                    }
+                    if !to.is_int() {
+                        errors.push(format!("i{inst_id}: float32_to_int to is not int"))
+                    }
+                }
+                Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
+                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    if !inst_type
+                        .as_value()
+                        .and_then(|t| t.as_scalar())
+                        .map_or(false, |s| s == ScalarType::F64)
+                    {
+                        errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
+                    }
+                    if !to.is_int() {
+                        errors.push(format!("i{inst_id}: float64_to_int to is not int"))
+                    }
+                }
                 Inst::IntToFloatUnsigned { .. } => (),
                 Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { v } => {
@@ -2609,22 +2710,32 @@ pub fn display_inst(
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
         }
-        Inst::FloatToIntUnsigned { v, to } => {
-            write!(w, "ftoint ")?;
+        Inst::Float32ToIntUnsigned { v, to } => {
+            write!(w, "f32toint ")?;
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
         }
-        Inst::FloatToIntSigned { v, to } => {
-            write!(w, "ftoint signed ")?;
+        Inst::Float32ToIntSigned { v, to } => {
+            write!(w, "f32toint signed ")?;
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
         }
-        Inst::IntToFloatUnsigned { v, to } => {
+        Inst::Float64ToIntUnsigned { v, to } => {
+            write!(w, "f64toint ")?;
+            display_scalar_type(w, to)?;
+            write!(w, " {}", v)?;
+        }
+        Inst::Float64ToIntSigned { v, to } => {
+            write!(w, "f64toint signed ")?;
+            display_scalar_type(w, to)?;
+            write!(w, " {}", v)?;
+        }
+        Inst::IntToFloatUnsigned { v, from: _, to } => {
             write!(w, "inttofloat ")?;
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
         }
-        Inst::IntToFloatSigned { v, to } => {
+        Inst::IntToFloatSigned { v, from: _, to } => {
             write!(w, "inttofloat signed ")?;
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
@@ -2699,55 +2810,6 @@ pub fn display_inst_kind(
         InstKind::Value(t) => display_pt(w, types, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
-    }
-}
-
-fn display_pt(
-    w: &mut impl std::fmt::Write,
-    types: &TypePool,
-    t: &PhysicalType,
-) -> std::fmt::Result {
-    match t {
-        PhysicalType::Scalar(st) => write!(w, "{}", st),
-        PhysicalType::Agg(agg) => match &types.phys_types.get(*agg).agg_type {
-            // Important specialization since wrappers are common
-            AggType::Struct1(t1) => {
-                w.write_str("{ ")?;
-                display_pt(w, types, t1)?;
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::EnumVariant(evl) => {
-                write!(w, "{{ tag({})", evl.tag)?;
-                if let Some(payload) = &evl.payload {
-                    write!(w, ", ")?;
-                    display_pt(w, types, payload)?;
-                };
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::Struct { fields } => {
-                w.write_str("{ ")?;
-                for (index, field) in types.mem.get_slice(*fields).iter().enumerate() {
-                    display_pt(w, types, &field.field_t)?;
-                    let last = index == fields.len() as usize - 1;
-                    if !last {
-                        w.write_str(", ")?;
-                    }
-                }
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::Array { len, element_t: t } => {
-                w.write_str("[")?;
-                display_pt(w, types, t)?;
-                write!(w, " x {}]", *len)?;
-                Ok(())
-            }
-            AggType::Opaque { layout } => {
-                write!(w, "opaque {}, align {}", layout.size, layout.align)
-            }
-        },
     }
 }
 
