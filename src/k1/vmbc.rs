@@ -237,7 +237,13 @@ impl Vm {
             };
             let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, inst_id);
             match kind {
-                InstKind::Value(_) => {}
+                InstKind::Value(physical_type) => {
+                    write!(w, "  i{}: ", inst_id).unwrap();
+                    bc::display_inst_kind(w, &k1.types, &kind).unwrap();
+                    write!(w, " ").unwrap();
+                    render_debug_value(w, self, k1, physical_type, value);
+                    writeln!(w).unwrap()
+                }
                 InstKind::Void => {
                     continue;
                 }
@@ -245,11 +251,6 @@ impl Vm {
                     continue;
                 }
             };
-            write!(w, "  i{}: ", inst_id).unwrap();
-            bc::display_inst_kind(w, &k1.types, &kind).unwrap();
-            write!(w, " ").unwrap();
-            render_debug_value(w, self, k1, value);
-            writeln!(w).unwrap()
         }
 
         //write!(w, "\nDATA\n").unwrap();
@@ -1081,7 +1082,6 @@ fn exec_loop(
                 vm.stack.set_cur_inst_value(inst_index, v);
                 ip += 1
             }
-            bc::Inst::BitwiseBin { op, lhs, rhs } => todo!(),
             bc::Inst::IntAdd { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
@@ -1259,6 +1259,60 @@ fn exec_loop(
                 };
 
                 vm.stack.set_cur_inst_value(inst_index, Value(b as u64));
+                ip += 1
+            }
+            bc::Inst::BitAnd { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::BitAnd;
+                let result = casted_uop!(width, bitand, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
+                ip += 1
+            }
+            bc::Inst::BitOr { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::BitOr;
+                let result = casted_uop!(width, bitor, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
+                ip += 1
+            }
+            bc::Inst::BitXor { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::BitXor;
+                let result = casted_uop!(width, bitxor, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
+                ip += 1
+            }
+            bc::Inst::BitShiftLeft { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::Shl;
+                let result = casted_uop!(width, shl, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
+                ip += 1
+            }
+            bc::Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::Shr;
+                let result = casted_uop!(width, shr, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
+                ip += 1
+            }
+            bc::Inst::BitSignedShiftRight { lhs, rhs, width } => {
+                let lhs = resolve_value!(lhs).bits();
+                let rhs = resolve_value!(rhs).bits();
+                use std::ops::Shr;
+                let result = casted_iop!(width, shr, lhs, rhs);
+
+                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
                 ip += 1
             }
         }
@@ -2441,15 +2495,15 @@ pub fn get_view_element(
     load_value(elem_pt, elem_ptr)
 }
 
-fn render_debug_value(w: &mut impl std::fmt::Write, _vm: &Vm, _k1: &TypedProgram, value: Value) {
-    //task(vmbc): Pass type info into here somehow
+fn render_debug_value(
+    w: &mut impl std::fmt::Write,
+    _vm: &Vm,
+    _k1: &TypedProgram,
+    _physical_type: PhysicalType,
+    value: Value,
+) {
+    //task(vmbc): Render these nicely using given type
     write!(w, "{} 0x{:x}", value.0, value.0).unwrap()
-}
-
-fn debug_value_to_string(vm: &mut Vm, k1: &TypedProgram, value: Value) -> String {
-    let mut w = String::new();
-    render_debug_value(&mut w, vm, k1, value);
-    w
 }
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
