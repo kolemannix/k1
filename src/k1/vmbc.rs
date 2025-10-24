@@ -508,7 +508,7 @@ fn exec_loop(
         eprintln!(
             "{}EXEC: {}",
             "  ".repeat(vm.stack.current_frame_index() as usize),
-            bc::inst_to_string(k1, &k1.bytecode, inst_id, true)
+            bc::inst_to_string(k1, &k1.bytecode, inst_id)
         );
 
         macro_rules! builtin_return {
