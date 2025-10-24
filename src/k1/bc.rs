@@ -259,7 +259,6 @@ pub enum Inst {
     /// with the instruction is a completely ABI-agnostic way of providing
     /// the most and best information needed by the 'backend' for generating
     /// ideal code for the return value's placement
-    /// task(bc): Optimize size of Call variant
     Call {
         id: BcCallId,
     },
@@ -410,11 +409,35 @@ pub enum Inst {
         pred: FloatCmpPred,
         width: u8,
     },
-    //task(bc): Break these out into their own instructions
-    BitwiseBin {
-        op: IntrinsicBitwiseBinopKind,
+    BitAnd {
         lhs: Value,
         rhs: Value,
+        width: u8,
+    },
+    BitOr {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    BitXor {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    BitShiftLeft {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    BitUnsignedShiftRight {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
+    },
+    BitSignedShiftRight {
+        lhs: Value,
+        rhs: Value,
+        width: u8,
     },
 }
 
@@ -532,14 +555,12 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::FloatDiv { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatRem { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatCmp { .. } => InstKind::I8,
-        Inst::BitwiseBin { op, lhs, .. } => match op {
-            IntrinsicBitwiseBinopKind::And => get_value_kind(bc, types, lhs),
-            IntrinsicBitwiseBinopKind::Or => get_value_kind(bc, types, lhs),
-            IntrinsicBitwiseBinopKind::Xor => get_value_kind(bc, types, lhs),
-            IntrinsicBitwiseBinopKind::ShiftLeft => get_value_kind(bc, types, lhs),
-            IntrinsicBitwiseBinopKind::SignedShiftRight => get_value_kind(bc, types, lhs),
-            IntrinsicBitwiseBinopKind::UnsignedShiftRight => get_value_kind(bc, types, lhs),
-        },
+        Inst::BitAnd { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitOr { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitXor { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitShiftLeft { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
     }
 }
 
@@ -1396,7 +1417,29 @@ fn compile_expr(
                             return {
                                 let lhs = compile_expr(b, None, call.args[0])?;
                                 let rhs = compile_expr(b, None, call.args[1])?;
-                                let res = b.push_inst_anon(Inst::BitwiseBin { op, lhs, rhs });
+                                let lhs_pt = b.get_value_kind(&lhs).expect_value().unwrap();
+                                let width = b.k1.types.get_pt_layout(&lhs_pt).size_bits() as u8;
+                                let inst = match op {
+                                    IntrinsicBitwiseBinopKind::And => {
+                                        Inst::BitAnd { lhs, rhs, width }
+                                    }
+                                    IntrinsicBitwiseBinopKind::Or => {
+                                        Inst::BitOr { lhs, rhs, width }
+                                    }
+                                    IntrinsicBitwiseBinopKind::Xor => {
+                                        Inst::BitXor { lhs, rhs, width }
+                                    }
+                                    IntrinsicBitwiseBinopKind::ShiftLeft => {
+                                        Inst::BitShiftLeft { lhs, rhs, width }
+                                    }
+                                    IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                                        Inst::BitUnsignedShiftRight { lhs, rhs, width }
+                                    }
+                                    IntrinsicBitwiseBinopKind::SignedShiftRight => {
+                                        Inst::BitSignedShiftRight { lhs, rhs, width }
+                                    }
+                                };
+                                let res = b.push_inst_anon(inst);
                                 let stored = store_simple_if_dst(b, dst, res.as_value());
                                 Ok(stored)
                             };
@@ -2520,7 +2563,12 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 Inst::FloatDiv { .. } => (),
                 Inst::FloatRem { .. } => (),
                 Inst::FloatCmp { .. } => (),
-                Inst::BitwiseBin { .. } => (),
+                Inst::BitAnd { .. } => (),
+                Inst::BitOr { .. } => (),
+                Inst::BitXor { .. } => (),
+                Inst::BitShiftLeft { .. } => (),
+                Inst::BitUnsignedShiftRight { .. } => (),
+                Inst::BitSignedShiftRight { .. } => (),
             }
         }
     }
@@ -2822,9 +2870,6 @@ pub fn display_inst(
         Inst::WordToPtr { v } => {
             write!(w, "inttoptr {}", v)?;
         }
-        Inst::BitwiseBin { op, lhs, rhs } => {
-            write!(w, "{:?} {} {}", op, *lhs, *rhs)?;
-        }
         Inst::IntAdd { lhs, rhs, width } => {
             write!(w, "add i{width} {} {}", *lhs, *rhs)?;
         }
@@ -2866,6 +2911,24 @@ pub fn display_inst(
         }
         Inst::FloatCmp { lhs, rhs, pred, width } => {
             write!(w, "fcmp f{width} {} {} {}", pred, *lhs, *rhs)?;
+        }
+        Inst::BitAnd { lhs, rhs, width } => {
+            write!(w, "and i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::BitOr { lhs, rhs, width } => {
+            write!(w, "or i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::BitXor { lhs, rhs, width } => {
+            write!(w, "xor i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::BitShiftLeft { lhs, rhs, width } => {
+            write!(w, "shl i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
+            write!(w, "lshr i{width} {} {}", *lhs, *rhs)?;
+        }
+        Inst::BitSignedShiftRight { lhs, rhs, width } => {
+            write!(w, "ashr i{width} {} {}", *lhs, *rhs)?;
         }
     };
     Ok(())
