@@ -98,6 +98,9 @@ pub struct TypedAbilityFunctionRef {
 }
 impl_copy_if_small!(16, TypedAbilityFunctionRef);
 
+pub const GLOBAL_ID_IS_STATIC: TypedGlobalId =
+    TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
+
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
 pub const WRITER_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
 pub const WRITE_TEXT_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
@@ -2407,7 +2410,6 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        const EXPECTED_TYPE_COUNT: usize = 131072;
         let types = TypePool::empty(config.target.word_size().bits());
 
         let ast = ParsedProgram::make(program_name, config);
@@ -2452,6 +2454,11 @@ impl TypedProgram {
         eprintln!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
         let word_size = ast.config.target.word_size();
+
+        let mut vmbc_static_stack = vmbc::Stack::make(vm_stack_size, false);
+        let addr = vmbc_static_stack.push_t(true as u8);
+        let mut vmbc_global_constant_lookups = FxHashMap::new();
+        vmbc_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vmbc::Value::ptr(addr));
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
@@ -2510,8 +2517,8 @@ impl TypedProgram {
                 vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
                 vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
-            vmbc_static_stack: vmbc::Stack::make(vm_stack_size),
-            vmbc_global_constant_lookups: FxHashMap::default(),
+            vmbc_static_stack,
+            vmbc_global_constant_lookups,
             vmbc_static_value_lookups: FxHashMap::default(),
 
             a: kmem::Mem::make(),
@@ -5035,17 +5042,17 @@ impl TypedProgram {
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            eprintln!(
-                "compile_all_pending_bytecode {}",
-                self.bytecode.b_units_pending_compile.len()
-            );
+            //eprintln!(
+            //    "compile_all_pending_bytecode {}",
+            //    self.bytecode.b_units_pending_compile.len()
+            //);
             if let Some(unit) = self.bytecode.b_units_pending_compile.pop() {
                 match unit {
                     bc::CompilableUnit::Function(function_id) => {
-                        debug!(
-                            "type-checking on-demand: {}",
-                            self.function_id_to_string(function_id, false)
-                        );
+                        // eprintln!(
+                        //     "type-checking on-demand: {}",
+                        //     self.function_id_to_string(function_id, false)
+                        // );
                         self.eval_function_body(function_id, false)?;
                     }
                     bc::CompilableUnit::Expr(_typed_expr_id) => (),
@@ -5077,6 +5084,8 @@ impl TypedProgram {
         let static_ctx = ctx.static_ctx.unwrap();
 
         let expr = self.eval_expr(parsed_expr, ctx)?;
+        let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
+        let is_debug = expr_metadata.is_debug;
         let span = self.exprs.get(expr).get_span();
         let required_type_id = self.exprs.get(expr).get_type();
         let output_type_id =
@@ -5092,15 +5101,17 @@ impl TypedProgram {
         self.compile_expr_bytecode(expr, input_parameters)?;
         self.compile_all_pending_bytecode()?;
 
-        let my_test = vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters);
-        match my_test {
-            Err(e) => {
-                eprintln!("vm execute returned err:\n{}", e.message)
-            }
-            Ok(v) => {
-                eprintln!("vm execute returned ok:\n{}", self.static_value_to_string(v))
-            }
-        };
+        let vmbc_value_id =
+            vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters, is_debug)
+                .map_err(|mut e| {
+                    let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
+                    e.message = format!(
+                        "Vm Execute failed: {}\nExecution Trace\n{}",
+                        e.message, stack_trace
+                    );
+                    e
+                })?;
+        eprintln!("vmbc returned: {}", self.static_value_to_string(vmbc_value_id));
 
         let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
             |mut e| {
@@ -5117,12 +5128,13 @@ impl TypedProgram {
             }
         }
 
-        let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
+        //let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
 
         if !no_reset {
+            vmbc.reset();
             vm.reset();
         }
-        Ok(VmExecuteResult { type_id: output_type_id, static_value_id })
+        Ok(VmExecuteResult { type_id: output_type_id, static_value_id: vmbc_value_id })
     }
 
     fn execute_static_expr(
@@ -11789,6 +11801,7 @@ impl TypedProgram {
         if specialized_function.body_block.is_some() {
             return Ok(());
         }
+        let is_concrete = specialized_function.is_concrete;
         let specialized_return_type = self.get_function_type(function_id).return_type;
         let specialized_function_type = specialized_function.type_id;
         let specialized_function_scope_id = specialized_function.scope;
@@ -11833,6 +11846,13 @@ impl TypedProgram {
         }
 
         self.get_function_mut(function_id).body_block = Some(typed_body);
+
+        if is_concrete {
+            if let Err(e) = bc::compile_function(self, function_id, false) {
+                return failf!(e.span, "Failed to compile bytecode for function: {}", e.message);
+            }
+        }
+
         Ok(())
     }
 
@@ -12531,27 +12551,29 @@ impl TypedProgram {
             }
         }?;
         let never_payload = payload.is_some_and(|p| self.exprs.get(p).get_type() == NEVER_TYPE_ID);
-        let output_type = if never_payload { NEVER_TYPE_ID } else { variant_type_id };
-
-        let enum_constructor = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            variant_type_id: output_type,
-            variant_index,
-            payload,
-            span,
-        }));
-        let casted_expr = match ctx.expected_type_id.map(|t| self.types.get(t)) {
-            Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
-                debug!(
-                    "enum constructor output type is the variant type: {}",
-                    self.type_id_to_string(variant_type_id)
-                );
-                enum_constructor
-            }
-            _ => {
-                if never_payload {
-                    // No need to cast it anyway
+        if never_payload {
+            // Might as well just codegen the payload expr that wants to exit; we can't put it in
+            // a variant and now all downstream code doesn't have to worry about the 'crash
+            // payload' scenario
+            let never_payload_expr = payload.unwrap();
+            Ok(never_payload_expr)
+        } else {
+            let enum_constructor =
+                self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+                    variant_type_id,
+                    variant_index,
+                    payload,
+                    span,
+                }));
+            let casted_expr = match ctx.expected_type_id.map(|t| self.types.get(t)) {
+                Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
+                    debug!(
+                        "enum constructor output type is the variant type: {}",
+                        self.type_id_to_string(variant_type_id)
+                    );
                     enum_constructor
-                } else {
+                }
+                _ => {
                     debug!(
                         "casted enum constructor to its enum type: {}",
                         self.type_id_to_string(concrete_enum_type)
@@ -12563,10 +12585,9 @@ impl TypedProgram {
                         None,
                     )
                 }
-            }
-        };
-
-        Ok(casted_expr)
+            };
+            Ok(casted_expr)
+        }
     }
 
     fn check_type_constraint(
@@ -14742,6 +14763,10 @@ impl TypedProgram {
         {
             let buffer_generic = self.types.get(BUFFER_TYPE_ID).expect_generic();
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
+            // debug_assert_eq!(
+            //     self.types.get_layout(BUFFER_TYPE_ID),
+            //     Layout::from_rust_type::<vmbc::k1_types::K1ViewLike>()
+            // );
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
                 self.types

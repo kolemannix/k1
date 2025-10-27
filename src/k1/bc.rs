@@ -116,11 +116,13 @@ pub struct CompiledUnit {
     // Subtract this to get sane indices for dense storage
     pub inst_offset: u32,
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
+    pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
 }
 
 #[derive(Clone, Copy)]
 pub enum Imm {
-    I64(u64),
+    U64(u64),
+    I64(i64),
     Float(TypedFloatValue),
 }
 
@@ -151,7 +153,6 @@ pub enum BcBuiltin {
     Exit,
 
     // Implemented by the compile-time interpreter
-    BakeStaticValue,
     CompilerMessage,
 }
 
@@ -188,10 +189,10 @@ impl Value {
     const FALSE: Value = Value::byte(0);
     const TRUE: Value = Value::byte(1);
     const fn byte(u8: u8) -> Value {
-        Value::Imm32 { t: ScalarType::I8, data: u8 as u32 }
+        Value::Imm32 { t: ScalarType::U8, data: u8 as u32 }
     }
-    const fn imm32(u32: u32) -> Value {
-        Value::Imm32 { t: ScalarType::I32, data: u32 }
+    const fn imm32(t: ScalarType, u32: u32) -> Value {
+        Value::Imm32 { t, data: u32 }
     }
 }
 
@@ -219,6 +220,7 @@ pub struct BcCall {
 //task(bc): Get inst to 32 bytes at the most
 pub enum Inst {
     // Data
+    // nocommit(3): Rename Inst::Imm to Inst::Data
     Imm(Imm),
 
     // Memory manipulation
@@ -439,6 +441,12 @@ pub enum Inst {
         rhs: Value,
         width: u8,
     },
+
+    // Metaprogramming / Magic
+    BakeStaticValue {
+        type_id: TypeId,
+        value: Value,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -510,7 +518,8 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
 pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) -> InstKind {
     match bc.instrs.get(inst_id) {
         Inst::Imm(imm) => match imm {
-            Imm::I64(_) => InstKind::U64,
+            Imm::I64(_) => InstKind::I64,
+            Imm::U64(_) => InstKind::U64,
             Imm::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
             Imm::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
         },
@@ -561,6 +570,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::BitShiftLeft { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::I64),
     }
 }
 
@@ -574,9 +584,8 @@ pub enum InstKind {
 impl InstKind {
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const I8: InstKind = Self::scalar(ScalarType::I8);
-    pub const U16: InstKind = Self::scalar(ScalarType::I16);
-    pub const U32: InstKind = Self::scalar(ScalarType::I32);
-    pub const U64: InstKind = Self::scalar(ScalarType::I64);
+    pub const U64: InstKind = Self::scalar(ScalarType::U64);
+    pub const I64: InstKind = Self::scalar(ScalarType::I64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
         InstKind::Value(PhysicalType::Scalar(st))
@@ -589,7 +598,7 @@ impl InstKind {
         matches!(self, InstKind::Value(PhysicalType::Scalar(st)) if st.is_int())
     }
     fn is_byte(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::I8)))
+        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::U8)))
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(PhysicalType::Agg(_)))
@@ -622,6 +631,10 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
+            InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => "u8",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::U16)) => "u16",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => "u32",
+            InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => "u64",
             InstKind::Value(PhysicalType::Scalar(ScalarType::I8)) => "i8",
             InstKind::Value(PhysicalType::Scalar(ScalarType::I16)) => "i16",
             InstKind::Value(PhysicalType::Scalar(ScalarType::I32)) => "i32",
@@ -712,7 +725,7 @@ fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -
 fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
     match unit {
         CompilableUnit::Function(function_id) => {
-            eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, true));
+            debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
             let name = b.k1.bytecode.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
@@ -726,6 +739,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
 
             // Set up parameters
             let param_variables = f.param_variables.clone();
+            let mut params = b.k1.bytecode.mem.new_vec(param_variables.len() as u32);
             for (index, param_variable_id) in param_variables.iter().enumerate() {
                 let v = b.k1.variables.get(*param_variable_id);
                 let t = b.get_physical_type(v.type_id);
@@ -734,7 +748,9 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                     value: Value::FnParam { t, index: index as u32 },
                     indirect: false,
                 });
+                params.push(t);
             }
+            let params_handle = b.k1.bytecode.mem.vec_to_mslice(&params);
 
             compile_block_stmts(b, None, body_block)?;
 
@@ -744,6 +760,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                 expr_ret: None,
                 inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
+                fn_params: params_handle,
             };
             b.reset_compilation_unit();
 
@@ -751,7 +768,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             Ok(())
         }
         CompilableUnit::Expr(typed_expr_id) => {
-            eprintln!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
+            debug!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
             let name = b.k1.bytecode.mem.push_str("expr_");
             b.push_block(name);
 
@@ -772,6 +789,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
                 expr_ret: Some(result),
                 inst_offset: b.inst_offset,
                 blocks: compiled_blocks,
+                fn_params: MSlice::empty(),
             };
             b.reset_compilation_unit();
             b.k1.bytecode.exprs.insert(typed_expr_id, compiled_expr);
@@ -928,20 +946,22 @@ impl<'k1> Builder<'k1> {
             }
             TypedIntValue::U64(i) | TypedIntValue::UWord64(i) => {
                 if *i <= u32::MAX as u64 {
-                    Value::imm32(*i as u32)
+                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)), comment);
+                    let inst = self.push_inst(Inst::Imm(Imm::U64(*i)), comment);
                     inst.as_value()
                 }
             }
             TypedIntValue::I8(i) => Value::byte(*i as u8),
             TypedIntValue::I16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
-            TypedIntValue::I32(i) | TypedIntValue::IWord32(i) => Value::imm32(*i as u32),
+            TypedIntValue::I32(i) | TypedIntValue::IWord32(i) => {
+                Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
+            }
             TypedIntValue::I64(i) | TypedIntValue::IWord64(i) => {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
-                    Value::imm32(*i as u32)
+                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i as u64)), comment);
+                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)), comment);
                     inst.as_value()
                 }
             }
@@ -1186,12 +1206,6 @@ fn compile_expr(
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_base = compile_expr(b, None, field_access.base)?;
             let struct_pt_id = b.get_physical_type(field_access.struct_type).expect_agg();
-            let Some(offset) =
-                b.k1.types.get_struct_field_offset(struct_pt_id, field_access.field_index)
-            else {
-                b_ice!(b, "Failed getting offset for field")
-            };
-            let offset_comment = b.make_str("field access ptr");
             let field_ptr = b.push_struct_offset(
                 struct_pt_id,
                 struct_base,
@@ -1352,7 +1366,19 @@ fn compile_expr(
                         IntrinsicOperation::StaticTypeToValue => unreachable!(),
                         IntrinsicOperation::TypeId => unreachable!(),
 
-                        IntrinsicOperation::BakeStaticValue => Some(BcBuiltin::BakeStaticValue),
+                        IntrinsicOperation::BakeStaticValue => {
+                            return {
+                                // intern fn bakeStaticValue[T](value: T): u64
+                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let _physical_type = b.get_physical_type(type_id);
+
+                                let value = compile_expr(b, None, call.args[0])?;
+                                let bake =
+                                    b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
+                                let stored = store_simple_if_dst(b, dst, bake.as_value());
+                                Ok(stored)
+                            };
+                        }
                         IntrinsicOperation::CompilerMessage => Some(BcBuiltin::CompilerMessage),
                         IntrinsicOperation::Zeroed => {
                             return {
@@ -1806,13 +1832,6 @@ fn compile_expr(
             }
         }
         TypedExpr::EnumConstructor(enumc) => {
-            let enumc_inst_kind = b.type_to_inst_kind(enumc.variant_type_id);
-            if enumc_inst_kind.is_terminator() {
-                let payload = enumc.payload.unwrap();
-                let crash = compile_expr(b, None, payload)?;
-                return Ok(crash);
-            }
-
             let variant_pt = b.get_physical_type(enumc.variant_type_id);
             let enum_base = match dst {
                 Some(dst) => dst,
@@ -1980,11 +1999,15 @@ fn compile_expr(
                     Ok(store)
                 }
                 //task(bc) non-trival static lowerings! Zero can probably be our zero impl?
-                StaticValue::String(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
-                StaticValue::Zero(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
-                StaticValue::Struct(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
-                StaticValue::Enum(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
-                StaticValue::LinearContainer(_) => Ok(Value::StaticValue { t, id: stat.value_id }),
+                StaticValue::String(_)
+                | StaticValue::Zero(_)
+                | StaticValue::Struct(_)
+                | StaticValue::Enum(_)
+                | StaticValue::LinearContainer(_) => {
+                    let value = Value::StaticValue { t, id: stat.value_id };
+                    let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
+                    Ok(stored)
+                }
             }
         }
     }
@@ -2343,14 +2366,18 @@ fn compile_matching_condition(
 
 pub fn zero(t: ScalarType) -> Value {
     match t {
-        ScalarType::I8 => Value::byte(0),
+        ScalarType::U8 => Value::Imm32 { t: ScalarType::U8, data: 0 },
+        ScalarType::U16 => Value::Imm32 { t: ScalarType::U16, data: 0 },
+        ScalarType::U32 => Value::Imm32 { t: ScalarType::U32, data: 0 },
+        ScalarType::U64 => Value::Imm32 { t: ScalarType::U64, data: 0 },
+        ScalarType::I8 => Value::Imm32 { t: ScalarType::I8, data: 0 },
         ScalarType::I16 => Value::Imm32 { t: ScalarType::I16, data: 0 },
         ScalarType::I32 => Value::Imm32 { t: ScalarType::I32, data: 0 },
         ScalarType::I64 => Value::Imm32 { t: ScalarType::I64, data: 0 },
-        ScalarType::F32 => Value::Imm32 { t: ScalarType::I64, data: (0.0f32).to_bits() },
+        ScalarType::F32 => Value::Imm32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
         ScalarType::F64 => {
             // Bit pattern is all zeroes anyway
-            Value::Imm32 { t: ScalarType::I64, data: (0.0f64).to_bits() as u32 }
+            Value::Imm32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
         }
         ScalarType::Pointer => Value::PtrZero,
     }
@@ -2569,6 +2596,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 Inst::BitShiftLeft { .. } => (),
                 Inst::BitUnsignedShiftRight { .. } => (),
                 Inst::BitSignedShiftRight { .. } => (),
+                Inst::BakeStaticValue { .. } => (),
             }
         }
     }
@@ -2689,7 +2717,7 @@ pub fn display_block(
             let span_id = bc.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(*span_id);
             let first_line = lines.lines().next().unwrap_or("");
-            write!(w, "{first_line:20}|")?;
+            write!(w, "|  {first_line:50}|")?;
         }
 
         write!(w, " i{:3} = ", *inst_id)?;
@@ -2930,6 +2958,11 @@ pub fn display_inst(
         Inst::BitSignedShiftRight { lhs, rhs, width } => {
             write!(w, "ashr i{width} {} {}", *lhs, *rhs)?;
         }
+        Inst::BakeStaticValue { type_id, value } => {
+            write!(w, "bake ")?;
+            k1.display_type_id(w, *type_id, false)?;
+            write!(w, " {}", *value)?;
+        }
     };
     Ok(())
 }
@@ -2948,6 +2981,10 @@ pub fn display_inst_kind(
 
 pub fn display_scalar_type(w: &mut impl Write, scalar: &ScalarType) -> std::fmt::Result {
     match scalar {
+        ScalarType::U8 => write!(w, "u8"),
+        ScalarType::U16 => write!(w, "u16"),
+        ScalarType::U32 => write!(w, "u32"),
+        ScalarType::U64 => write!(w, "u64"),
         ScalarType::I8 => write!(w, "i8"),
         ScalarType::I16 => write!(w, "i16"),
         ScalarType::I32 => write!(w, "i32"),
@@ -2966,7 +3003,8 @@ impl std::fmt::Display for ScalarType {
 
 pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
     match imm {
-        Imm::I64(int) => write!(w, "i64 {}", int),
+        Imm::U64(u64) => write!(w, "u64 {}", u64),
+        Imm::I64(i64) => write!(w, "i64 {}", i64),
         Imm::Float(float) => write!(w, "float {}", float),
     }
 }
@@ -2984,99 +3022,7 @@ pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::StaticValue { id, .. } => write!(w, "static{}", id.as_u32()),
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
-        Value::Imm32 { t, data } => write!(w, "{} {}", t, data),
+        Value::Imm32 { t: _, data } => write!(w, "data32({})", data),
         Value::PtrZero => write!(w, "ptr0"),
     }
-}
-
-fn generate_typename_or_schema_function() {
-    // nocommit pull out once working
-    // let type_id_arg = f.param_variables[0];
-    // let is_type_name = f.intrinsic_type == Some(IntrinsicOperation::TypeName);
-    // let return_pt = if is_type_name {
-    //     // typeName returns string
-    //     b.get_physical_type(STRING_TYPE_ID)
-    // } else {
-    //     // typeSchema returns TypeSchema
-    //     b.get_physical_type(b.k1.types.builtins.types_type_schema.unwrap())
-    // };
-    // let entry_block = b.cur_block;
-    //
-    // // nocommit(4) fix this MStr thing when you just want a static string
-    // let else_name = b.k1.bytecode.mem.push_str("miss");
-    // let else_block = b.push_block(else_name);
-    // b.goto_block(else_block);
-    //
-    // // TODO: We should print what happened and call exit properly
-    // b.push_inst(Inst::Unreachable);
-    //
-    // let finish_name = b.k1.bytecode.mem.push_str("finish");
-    // let finish_block = b.push_block(finish_name);
-    //
-    // // Value and block index
-    // let mut cases: Vec<(Value, u32)> = Vec::with_capacity(b.k1.type_schemas.len());
-    // if is_type_name {
-    //     for (type_id, string_value_id) in
-    //         b.k1.type_names
-    //             .iter()
-    //             .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-    //     {
-    //         if b.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
-    //         {
-    //             // Skips abstract types; obviously; but should this be an assertion
-    //             // instead? Does this happen?
-    //             panic!("typename of abstract type happened");
-    //             // continue;
-    //         }
-    //         let arm_block_name =
-    //             b.k1.bytecode.mem.push_str(&format!("arm_type_{}", type_id.as_u32()));
-    //         let arm_block = b.push_block(arm_block_name);
-    //         b.goto_block(arm_block);
-    //         let type_id_inst =
-    //             b.push_inst(Inst::Imm(Imm::I64(type_id.as_u32() as u64)));
-    //         let type_id_value = Value::Inst(type_id_inst);
-    //
-    //         let string_type = b.get_physical_type(STRING_TYPE_ID);
-    //         let global_value =
-    //             Value::StaticValue { t: string_type, id: *string_value_id };
-    //         store_value();
-    //         self.store_k1_value(&return_llvm_type, sret_ptr, value);
-    //         self.builder.build_unconditional_branch(finish_block).unwrap();
-    //         cases.push((type_id_int_value, arm_block));
-    //     }
-    // } else {
-    //     for (type_id, schema_value_id) in self
-    //         .k1
-    //         .type_schemas
-    //         .iter()
-    //         .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-    //     {
-    //         if self
-    //             .k1
-    //             .types
-    //             .get_contained_type_variable_counts(*type_id)
-    //             .is_abstract()
-    //         {
-    //             // No point re-ifying types that don't exist at runtime
-    //             // like type parameters
-    //             continue;
-    //         }
-    //         let my_block =
-    //             self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-    //         self.builder.position_at_end(my_block);
-    //         let type_id_int_value =
-    //             self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-    //
-    //         let value = self.codegen_static_value_as_code(*schema_value_id)?;
-    //         self.store_k1_value(&return_llvm_type, sret_ptr, value);
-    //         self.builder.build_unconditional_branch(finish_block).unwrap();
-    //         cases.push((type_id_int_value, my_block));
-    //     }
-    // }
-    // self.builder.position_at_end(entry_block);
-    // let _switch =
-    //     self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
-    //
-    // self.builder.position_at_end(finish_block);
-    // self.builder.build_return(None).unwrap()
 }

@@ -5,8 +5,6 @@
 mod stack_tests {
 
     use crate::kmem::MSlice;
-    use crate::parse::Ident;
-    use crate::typer::types::{StructType, StructTypeField, U8_TYPE_ID, U32_TYPE_ID};
     use crate::typer::*;
     use crate::vmbc::*;
 
@@ -16,11 +14,12 @@ mod stack_tests {
             expr_ret: None,
             inst_offset: 0,
             blocks: MSlice::empty(),
+            fn_params: MSlice::empty(),
         }
     }
 
     fn test_stack() -> Stack {
-        let mut s = Stack::make(1024 * 1024);
+        let mut s = Stack::make(1024 * 1024, false);
         s.push_new_frame(None, None, fake_unit(), None);
         s
     }
@@ -43,7 +42,7 @@ mod stack_tests {
         assert_eq!(stack.current_offset_bytes(), 3);
         stack.align_to_bytes(4);
         assert_eq!(stack.current_offset_bytes(), 4);
-        assert_eq!(stack.to_bytes(), [1, 2, 3, 0]);
+        assert_eq!(stack.frame_to_bytes(0), [1, 2, 3, 0]);
 
         // Test with already aligned pointer
         let mut stack = test_stack();
@@ -57,7 +56,7 @@ mod stack_tests {
         let mut stack = test_stack();
         let ptr = stack.push_t(42u8);
         assert_eq!(stack.current_offset_bytes(), 1);
-        assert_eq!(stack.to_bytes()[0], 42);
+        assert_eq!(stack.frame_to_bytes(0)[0], 42);
         assert_eq!(ptr.addr(), stack.base_addr());
     }
 
@@ -100,13 +99,13 @@ mod stack_tests {
         // Test basic value types
         stack.push_t(crate::typer::UNIT_BYTE_VALUE);
         assert_eq!(stack.current_offset_bytes(), 1);
-        assert_eq!(stack.to_bytes()[0], crate::typer::UNIT_BYTE_VALUE);
+        assert_eq!(stack.frame_to_bytes(0)[0], crate::typer::UNIT_BYTE_VALUE);
 
         stack.push_t(true);
-        assert_eq!(stack.to_bytes()[1], 1);
+        assert_eq!(stack.frame_to_bytes(0)[1], 1);
 
         stack.push_t(b'A');
-        assert_eq!(stack.to_bytes()[2], b'A');
+        assert_eq!(stack.frame_to_bytes(0)[2], b'A');
 
         let int_ptr = stack.push_t(42u32) as *const i32;
         assert_eq!(stack.current_offset_bytes(), 8);
@@ -116,10 +115,10 @@ mod stack_tests {
         }
 
         assert_eq!(
-            stack.to_bytes(),
+            stack.frame_to_bytes(0),
             &[
                 0, 1, b'A', 0, // 1 byte of alignment padding
-                0, 0, 0, 42 // a little-endian 42u32?
+                42, 0, 0, 0 // a little-endian 42u32?
             ]
         );
     }
@@ -140,20 +139,6 @@ mod stack_tests {
         let read_f64 = unsafe { f64_ptr.read_unaligned() };
         assert_eq!(read_f64, std::f64::consts::PI);
     }
-
-    #[test]
-    fn test_push_raw_copy() {
-        let mut stack = test_stack();
-        let source = [1u8, 2, 3, 4];
-
-        let result_ptr = stack.push_raw_copy(4, 4, source.as_ptr());
-        assert_eq!(stack.current_offset_bytes(), 4);
-        assert_eq!(stack.to_bytes(), [1, 2, 3, 4]);
-        unsafe {
-            let result_slice = std::slice::from_raw_parts(result_ptr, 4);
-            assert_eq!(result_slice, [1, 2, 3, 4])
-        }
-    }
 }
 
 #[cfg(test)]
@@ -169,16 +154,7 @@ mod value_roundtrip_tests {
         ($name:ident, $typ:ty, $int_type:expr, $variant:ident) => {
             #[test]
             fn $name() {
-                for val in [
-                    <$typ>::MIN,
-                    <$typ>::MAX,
-                    -1,
-                    0,
-                    1,
-                    -2,
-                    42,
-                    -42,
-                ] {
+                for val in [<$typ>::MIN, <$typ>::MAX, -1, 0, 1, -2, 42, -42] {
                     let v = Value::$name(val);
                     assert_eq!(v.as_typed_int($int_type), TypedIntValue::$variant(val));
                 }
@@ -261,9 +237,9 @@ mod value_roundtrip_tests {
 
     #[test]
     fn test_bool_roundtrip() {
-        assert_eq!(Value::bool(true).as_bool(), true);
-        assert_eq!(Value::bool(false).as_bool(), false);
-        assert_eq!(Value::TRUE.as_bool(), true);
+        assert!(Value::bool(true).as_bool());
+        assert!(!Value::bool(false).as_bool());
+        assert!(Value::TRUE.as_bool());
     }
 
     #[test]

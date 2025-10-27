@@ -163,6 +163,8 @@ ns Buffer {
   }
 
   fn set[T](self: Buffer[T], index: uword, elem: T): unit {
+    // nocommit
+    let ptr = self.dataPointer();
     let tRef = self.getRef(index);
     tRef <- elem;
   }

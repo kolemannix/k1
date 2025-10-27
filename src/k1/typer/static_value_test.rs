@@ -3,6 +3,8 @@
 
 use crate::typer::*;
 
+const BUILTIN_VALUE_COUNT: usize = 3;
+
 #[test]
 fn test_basic() {
     let mut system = StaticValuePool::make_with_hint(512);
@@ -10,24 +12,24 @@ fn test_basic() {
     let id1 = system.add(StaticValue::Unit);
     let id2 = system.add(StaticValue::Unit);
 
-    assert_eq!(id1, id2, "Identical values should deduplicate");
-    assert_eq!(system.pool.len(), 1, "Should only have one instance");
+    assert_eq!(id1, id2);
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT);
 
     let true1 = system.add(StaticValue::Bool(true));
     let true2 = system.add(StaticValue::Bool(true));
     let false1 = system.add(StaticValue::Bool(false));
     let false2 = system.add(StaticValue::Bool(false));
 
-    assert_eq!(true1, true2, "True values should deduplicate");
-    assert_eq!(false1, false2, "False values should deduplicate");
-    assert_ne!(true1, false1, "True and false should be different");
+    assert_eq!(true1, true2);
+    assert_eq!(false1, false2);
+    assert_ne!(true1, false1);
 
     let a1 = system.add(StaticValue::Char(b'a'));
     let a2 = system.add(StaticValue::Char(b'a'));
     let b1 = system.add(StaticValue::Char(b'b'));
 
-    assert_eq!(a1, a2, "Same char values should deduplicate");
-    assert_ne!(a1, b1, "Different chars should be different");
+    assert_eq!(a1, a2);
+    assert_ne!(a1, b1);
 
     let int1 = system.add(StaticValue::Int(TypedIntValue::I32(42)));
     let int2 = system.add(StaticValue::Int(TypedIntValue::I32(42)));
@@ -41,7 +43,7 @@ fn test_basic() {
     let null1 = system.add(StaticValue::Zero(POINTER_TYPE_ID));
     let null2 = system.add(StaticValue::Zero(POINTER_TYPE_ID));
 
-    assert_eq!(null1, null2, "Null pointers should deduplicate");
+    assert_eq!(null1, null2);
 }
 
 #[test]
@@ -56,7 +58,7 @@ fn test_float() {
     assert_eq!(f1, f2, "Same f32 values should deduplicate");
     assert_ne!(f1, f3, "f32 and f64 should be different");
     assert_ne!(f1, f4, "Different f32 values should be different");
-    assert_eq!(system.pool.len(), 3, "Should have 3 unique float values");
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 3, "Should have 3 unique float values");
 }
 
 const TYPE1: TypeId = TypeId::from_u32(1).unwrap();
@@ -177,6 +179,6 @@ fn test_recurse() {
     assert_eq!(view_val, view_val2, "Deep view values should deduplicate");
     assert_eq!(struct_val1, struct_val2, "Deep struct values should deduplicate");
 
-    // only 4 unique values despite creating 8 (4 twice)
-    assert_eq!(system.pool.len(), 4);
+    // 3 values are builtin
+    assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 4);
 }
