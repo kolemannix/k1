@@ -398,15 +398,6 @@ pub fn compile_program(
         write_program_dump(&p);
     }
 
-    // bytecode testing
-    if let Some(main_id) = p.get_main_function_id() {
-        crate::bc::compile_function(&mut p, main_id, false).unwrap();
-        let bc = &p.bytecode;
-        let mut s = String::new();
-        crate::bc::display_function(&mut s, &p, &bc, main_id, true).unwrap();
-        eprintln!("{s}");
-    };
-
     Ok(p)
 }
 
@@ -456,6 +447,7 @@ pub fn write_executable(
     match target.target_os() {
         TargetOs::MacOs => {
             build_args.push(macos_version_flag.as_ref().unwrap());
+            //build_args.push("-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include");
             build_args.push("-lunwind");
         }
         TargetOs::Linux => {

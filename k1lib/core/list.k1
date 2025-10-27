@@ -83,6 +83,8 @@ ns List {
   }
 
   fn set[T](self: *mut List[T], index: uword, elem: T): unit {
+    // nocommit
+    let ptr = self.buffer.dataPointer();
     self.buffer.set(index, elem);
   }
 

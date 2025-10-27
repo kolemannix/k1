@@ -276,11 +276,19 @@ impl IntegerType {
     }
 
     pub fn get_scalar_type(&self) -> ScalarType {
-        match self.width() {
-            NumericWidth::B8 => ScalarType::I8,
-            NumericWidth::B16 => ScalarType::I16,
-            NumericWidth::B32 => ScalarType::I32,
-            NumericWidth::B64 => ScalarType::I64,
+        match self {
+            IntegerType::U8 => ScalarType::U8,
+            IntegerType::U16 => ScalarType::U16,
+            IntegerType::U32 => ScalarType::U32,
+            IntegerType::U64 => ScalarType::U64,
+            IntegerType::UWord(WordSize::W32) => ScalarType::U32,
+            IntegerType::UWord(WordSize::W64) => ScalarType::U64,
+            IntegerType::I8 => ScalarType::I8,
+            IntegerType::I16 => ScalarType::I16,
+            IntegerType::I32 => ScalarType::I32,
+            IntegerType::I64 => ScalarType::I64,
+            IntegerType::IWord(WordSize::W32) => ScalarType::I32,
+            IntegerType::IWord(WordSize::W64) => ScalarType::I64,
         }
     }
 }
@@ -902,12 +910,14 @@ pub struct TypesConfig {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScalarType {
+    U8,
+    U16,
+    U32,
+    U64,
     I8,
     I16,
     I32,
     I64,
-    // task(bc): Do we even want F32 and F64 as separate scalar types? We already ditched
-    // signedness, I think it might be useless / wrong
     F32,
     F64,
     Pointer,
@@ -915,7 +925,17 @@ pub enum ScalarType {
 
 impl ScalarType {
     pub fn is_int(&self) -> bool {
-        matches!(self, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64)
+        matches!(
+            self,
+            ScalarType::I8
+                | ScalarType::I16
+                | ScalarType::I32
+                | ScalarType::I64
+                | ScalarType::U8
+                | ScalarType::U16
+                | ScalarType::U32
+                | ScalarType::U64
+        )
     }
 }
 
@@ -926,8 +946,6 @@ pub enum PhysicalType {
 }
 
 impl PhysicalType {
-    pub const I8: PhysicalType = PhysicalType::Scalar(ScalarType::I8);
-
     pub fn is_agg(&self) -> bool {
         matches!(self, PhysicalType::Agg(_))
     }
@@ -1717,10 +1735,10 @@ impl TypePool {
 
     pub fn get_scalar_layout(&self, scalar_type: ScalarType) -> Layout {
         match scalar_type {
-            ScalarType::I8 => Layout::from_scalar_bits(8),
-            ScalarType::I16 => Layout::from_scalar_bits(16),
-            ScalarType::I32 => Layout::from_scalar_bits(32),
-            ScalarType::I64 => Layout::from_scalar_bits(64),
+            ScalarType::U8 | ScalarType::I8 => Layout::from_scalar_bits(8),
+            ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
+            ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
+            ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
             ScalarType::F32 => Layout::from_scalar_bits(32),
             ScalarType::F64 => Layout::from_scalar_bits(64),
             ScalarType::Pointer => Layout::from_scalar_bits(self.config.ptr_size_bits),
@@ -1743,9 +1761,8 @@ impl TypePool {
             //task(bc): Eventually, Unit should correspond to Void, not a byte. But only once we can
             //successfully lower it to a zero-sized type everywhere; for example a struct member of
             //type unit
-            Type::Unit | Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::I8)),
+            Type::Unit | Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::U8)),
 
-            // Drops signedness since its now encoded in ops
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
                 Some(PhysicalType::Scalar(st))
