@@ -309,12 +309,13 @@ impl TypedProgram {
             Type::Function(fun) => {
                 w.write_str("\\")?;
                 w.write_str("(")?;
-                for (idx, param) in fun.physical_params.iter().enumerate() {
+                for (idx, param) in self.types.mem.get_slice(fun.physical_params).iter().enumerate()
+                {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
                     }
                     self.display_type_id(w, param.type_id, expand)?;
-                    let last = idx == fun.physical_params.len() - 1;
+                    let last = idx == fun.physical_params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
@@ -727,7 +728,7 @@ impl TypedProgram {
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
                 w.write_str("]")?;
-                for arg in fn_type.logical_params() {
+                for arg in self.types.mem.get_slice(fn_type.logical_params()) {
                     w.write_str(self.ident_str(arg.name))?;
                     w.write_str(": ")?;
                     self.display_type_id(w, arg.type_id, false)?;
@@ -1228,7 +1229,9 @@ impl TypedProgram {
         }
         w.write_char('(')?;
         let function_type = self.types.get(signature.function_type).as_function().unwrap();
-        for (idx, param) in function_type.physical_params.iter().enumerate() {
+        for (idx, param) in
+            self.types.mem.get_slice(function_type.physical_params).iter().enumerate()
+        {
             if idx > 0 {
                 w.write_str(", ")?;
             }

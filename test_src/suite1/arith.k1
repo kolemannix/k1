@@ -56,8 +56,6 @@ fn test(): unit {
   assertEquals(16.show(), "16");
   assertEquals(99.show(), "99");
   assertEquals(101.show(), "101");
-  println("-101: {-101}");
-  println("-1: {-1}");
   assertEquals(-101.show(), "-101");
   assertEquals(-99.show(), "-99");
   assertEquals(-11.show(), "-11");

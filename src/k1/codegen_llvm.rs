@@ -1441,8 +1441,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_type = self.codegen_type(function_type.return_type)?;
         let is_sret = return_type.is_aggregate();
         let mut param_types: Vec<K1LlvmType<'ctx>> =
-            Vec::with_capacity(function_type.physical_params.len() + 1);
-        for p in function_type.physical_params.iter() {
+            Vec::with_capacity(function_type.physical_params.len() as usize + 1);
+        for p in self.k1.types.mem.get_slice(function_type.physical_params).iter() {
             let param_type = self.codegen_type(p.type_id)?;
             param_types.push(param_type)
         }
@@ -3230,9 +3230,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function: &TypedFunction,
         index: usize,
     ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
-        let variable_id = function.param_variables[index];
+        let variable_id = self.k1.a.get_nth(function.param_variables, index);
         let fn_type = self.k1.types.get(function.type_id).expect_function();
-        let param_type = &fn_type.physical_params[index];
+        let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
         let variable_value = self.variable_to_value.get(&variable_id).unwrap();
         let basic_value =
             self.load_variable_value(&self.codegen_type(param_type.type_id)?, *variable_value);
@@ -3661,9 +3661,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let function_type = self.k1.types.get(typed_function.type_id).as_function().unwrap();
 
         let mut param_types: Vec<K1LlvmType<'ctx>> =
-            Vec::with_capacity(function_type.physical_params.len());
+            Vec::with_capacity(function_type.physical_params.len() as usize);
         let mut param_metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
-            Vec::with_capacity(function_type.physical_params.len());
+            Vec::with_capacity(function_type.physical_params.len() as usize);
 
         let llvm_linkage = match typed_function.linkage {
             TyperLinkage::Standard => None,
@@ -3703,7 +3703,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             None
         };
 
-        for param in function_type.physical_params.iter() {
+        for param in self.k1.types.mem.get_slice(function_type.physical_params).iter() {
             let param_type = self.codegen_type(param.type_id)?;
 
             param_metadata_types
@@ -3783,7 +3783,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
-            let variable_id = typed_function.param_variables[i - sret_offset];
+            let variable_id = *self.k1.a.get_nth(typed_function.param_variables, i - sret_offset);
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.k1.ast.idents.get("ret").unwrap(),
@@ -3793,7 +3793,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     span: self.k1.ast.get_span_for_id(typed_function.parsed_id),
                 }
             } else {
-                &function_type.physical_params[i - sret_offset]
+                self.k1.types.mem.get_nth(function_type.physical_params, i - sret_offset)
             };
             let param_type = self.codegen_type(typed_param.type_id)?;
             let param_name = self.k1.ident_str(typed_param.name);
@@ -3834,7 +3834,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
         match typed_function.intrinsic_type {
             Some(intrinsic_type) => {
-                trace!("codegen intrinsic {:?} fn {:?}", intrinsic_type, typed_function);
                 let _terminator_instr = self.codegen_intrinsic_function_body(
                     intrinsic_type,
                     function_id,

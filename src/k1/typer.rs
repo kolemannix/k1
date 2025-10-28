@@ -826,11 +826,11 @@ impl FunctionSignature {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedFunction {
     pub name: Ident,
     pub scope: ScopeId,
-    pub param_variables: EcoVec<VariableId>,
+    pub param_variables: MSlice<VariableId, MemPerm>,
     pub type_params: NamedTypeSlice,
     pub function_type_params: SliceHandle<FunctionTypeParamId>,
     pub body_block: Option<TypedExprId>,
@@ -3344,8 +3344,10 @@ impl TypedProgram {
                         match member_name {
                             "return" => Ok(fun.return_type),
                             _other => {
-                                if let Some(param) = fun
-                                    .logical_params()
+                                if let Some(param) = self
+                                    .types
+                                    .mem
+                                    .get_slice(fun.logical_params())
                                     .iter()
                                     .find(|p| p.name == dot_acc.member_name)
                                 {
@@ -3384,7 +3386,8 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: EcoVec<FnParamType> = EcoVec::with_capacity(fun_type.params.len());
+                let mut params: FixVec<FnParamType, _> =
+                    self.types.mem.new_vec(fun_type.params.len() as u32);
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
@@ -3411,8 +3414,10 @@ impl TypedProgram {
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
+                let params_handle = self.types.mem.vec_to_mslice(&params);
                 let function_type_id = self.types.add_anon(Type::Function(FunctionType {
-                    physical_params: params,
+                    physical_params: params_handle,
+                    is_lambda: false,
                     return_type,
                 }));
                 Ok(function_type_id)
@@ -4065,22 +4070,36 @@ impl TypedProgram {
                 unreachable!("substitute_in_type is not expected to be called on a Generic")
             }
             Type::Function(fun_type) => {
-                let mut new_fun_type = fun_type.clone();
                 let mut any_new = false;
-                let new_return_type =
-                    self.substitute_in_type(fun_type.return_type, substitution_pairs);
-                if new_return_type != new_fun_type.return_type {
+                let is_lambda = fun_type.is_lambda;
+                let old_return_type = fun_type.return_type;
+                let old_params = fun_type.physical_params;
+                let new_return_type = self.substitute_in_type(old_return_type, substitution_pairs);
+                if new_return_type != old_return_type {
                     any_new = true
                 };
-                new_fun_type.return_type = new_return_type;
-                for param in new_fun_type.physical_params.make_mut().iter_mut() {
+                let mut new_params: FixVec<FnParamType, _> = self.tmp.new_vec(old_params.len());
+                for param in self.types.mem.get_slice(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
                         any_new = true;
                     }
-                    param.type_id = new_param_type;
+                    let new_param = FnParamType {
+                        name: param.name,
+                        type_id: new_param_type,
+                        is_context: param.is_context,
+                        is_lambda_env: param.is_lambda_env,
+                        span: param.span,
+                    };
+                    new_params.push(new_param);
                 }
                 if any_new {
+                    let new_params_handle = self.types.mem.push_slice(new_params.as_slice());
+                    let new_fun_type = FunctionType {
+                        physical_params: new_params_handle,
+                        return_type: new_return_type,
+                        is_lambda,
+                    };
                     let new_function_type_id = self.types.add_anon(Type::Function(new_fun_type));
                     new_function_type_id
                 } else {
@@ -4631,16 +4650,21 @@ impl TypedProgram {
                     lambda_type.function_type,
                     lambda_type.parsed_id,
                 );
-                if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
-                    return CheckExprTypeResult::Coerce(
-                        self.exprs.add(TypedExpr::Cast(TypedCast {
-                            cast_type: CastType::LambdaToLambdaObject,
-                            base_expr: expr,
-                            target_type_id: lambda_object_type,
-                            span,
-                        })),
-                        "lam->lamobj".into(),
-                    );
+                match self.check_types(expected, lambda_object_type, scope_id) {
+                    Ok(_) => {
+                        return CheckExprTypeResult::Coerce(
+                            self.exprs.add(TypedExpr::Cast(TypedCast {
+                                cast_type: CastType::LambdaToLambdaObject,
+                                base_expr: expr,
+                                target_type_id: lambda_object_type,
+                                span,
+                            })),
+                            "lam->lamobj".into(),
+                        );
+                    }
+                    Err(msg) => {
+                        eprintln!("coerce: detected lam obj case failed: {msg}");
+                    }
                 }
             }
         }
@@ -4882,7 +4906,13 @@ impl TypedProgram {
                         msg
                     ))
                 } else {
-                    for (p1, p2) in f1.logical_params().iter().zip(f2.logical_params().iter()) {
+                    for (p1, p2) in self
+                        .types
+                        .mem
+                        .get_slice(f1.logical_params())
+                        .iter()
+                        .zip(self.types.mem.get_slice(f2.logical_params()).iter())
+                    {
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
                             return Err(format!(
                                 "Incorrect type for parameter '{}': {}",
@@ -7956,7 +7986,7 @@ impl TypedProgram {
         let lambda_body = lambda.body;
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
-        let mut typed_params = VecDeque::with_capacity(lambda_arguments.len() + 1);
+        let mut typed_params = self.types.mem.new_vec(lambda_arguments.len() as u32 + 1);
         if let Some(t) = ctx.expected_type_id {
             debug!(
                 "lambda expected type is {} {}",
@@ -7996,7 +8026,8 @@ impl TypedProgram {
                             self.ident_str(arg.binding)
                         );
                     };
-                    let Some(expected_ty) = expected_function_type.logical_params().get(index)
+                    let Some(expected_ty) =
+                        self.types.mem.get_nth_opt(expected_function_type.logical_params(), index)
                     else {
                         return failf!(
                             arg.span,
@@ -8007,7 +8038,7 @@ impl TypedProgram {
                     expected_ty.type_id
                 }
             };
-            typed_params.push_back(FnParamType {
+            typed_params.push(FnParamType {
                 name: arg.binding,
                 type_id: arg_type_id,
                 is_context: false,
@@ -8016,7 +8047,8 @@ impl TypedProgram {
             });
         }
 
-        let mut param_variables = EcoVec::with_capacity(typed_params.len());
+        let mut param_variables = self.a.new_vec(lambda_arguments.len() as u32 + 1);
+
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
             let name = typed_arg.name;
@@ -8083,15 +8115,16 @@ impl TypedProgram {
         // NO CAPTURES! Optimize this lambda down into a regular function
         if lambda_info.captured_variables.is_empty() {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
-                physical_params: EcoVec::from_iter(typed_params),
+                physical_params: self.types.mem.vec_to_mslice(&typed_params),
                 return_type,
+                is_lambda: false,
             }));
 
             self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
             let body_function_id = self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
-                param_variables,
+                param_variables: self.a.vec_to_mslice(&param_variables),
                 type_params: SliceHandle::empty(),
                 function_type_params: SliceHandle::empty(),
                 body_block: Some(body_expr_id),
@@ -8106,6 +8139,8 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
+            bc::compile_function(self, body_function_id, false)?;
+
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
             let expr_id = self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
                 function_id: body_function_id,
@@ -8154,7 +8189,7 @@ impl TypedProgram {
             global_id: None,
             flags: VariableFlags::empty(),
         });
-        typed_params.push_front(environment_param);
+        typed_params.insert(0, environment_param);
         param_variables.insert(0, environment_param_variable_id);
 
         let environment_param_access_expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
@@ -8200,14 +8235,15 @@ impl TypedProgram {
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
-            physical_params: EcoVec::from_iter(typed_params),
+            physical_params: self.types.mem.vec_to_mslice(&typed_params),
             return_type,
+            is_lambda: true,
         }));
 
         let body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            param_variables,
+            param_variables: self.a.vec_to_mslice(&param_variables),
             type_params: SliceHandle::empty(),
             function_type_params: SliceHandle::empty(),
             body_block: Some(body_expr_id),
@@ -8222,6 +8258,8 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         });
+        bc::compile_function(self, body_function_id, false)?;
+
         let lambda_type_id = self.types.add_lambda(
             function_type,
             environment_struct,
@@ -10411,6 +10449,7 @@ impl TypedProgram {
         } else {
             let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
             let mut new_function = function.clone();
+
             let empty_env_variable = self.variables.add(Variable {
                 name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
@@ -10419,7 +10458,11 @@ impl TypedProgram {
                 global_id: None,
                 flags: VariableFlags::empty(),
             });
-            new_function.param_variables.insert(0, empty_env_variable);
+            let mut new_variables = self.a.new_vec(new_function.param_variables.len() + 1);
+            new_variables.push(empty_env_variable);
+            new_variables.extend(self.a.get_slice(new_function.param_variables));
+            new_function.param_variables = self.a.vec_to_mslice(&new_variables);
+
             let new_function_type =
                 self.add_lambda_env_to_function_type(new_function.type_id, function_defn_span);
             new_function.type_id = new_function_type;
@@ -10449,21 +10492,30 @@ impl TypedProgram {
         function_type_id: TypeId,
         span: SpanId,
     ) -> TypeId {
-        let mut function_type = self.types.get(function_type_id).as_function().unwrap().clone();
+        let function_type = self.types.get(function_type_id).as_function().unwrap();
+        let return_type = function_type.return_type;
+        let physical_params = function_type.physical_params;
         let empty_env_struct_type = self.types.add_empty_struct();
         let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type, false);
-        function_type.physical_params.insert(
-            0,
-            FnParamType {
-                name: self.ast.idents.b.lambda_env_var_name,
-                type_id: empty_env_struct_ref,
-                is_context: false,
-                is_lambda_env: true,
-                span,
-            },
-        );
+        let mut new_params = self.types.mem.new_vec(physical_params.len() + 1);
+
+        new_params.push(FnParamType {
+            name: self.ast.idents.b.lambda_env_var_name,
+            type_id: empty_env_struct_ref,
+            is_context: false,
+            is_lambda_env: true,
+            span,
+        });
+        new_params.extend(self.types.mem.get_slice(physical_params));
+
+        let new_function_type = FunctionType {
+            physical_params: self.types.mem.vec_to_mslice(&new_params),
+            return_type,
+            is_lambda: true,
+        };
+
         let defn_info = self.types.get_defn_info(function_type_id);
-        self.types.add(Type::Function(function_type), defn_info, None)
+        self.types.add(Type::Function(new_function_type), defn_info, None)
     }
 
     /// After resolving to a particular root AbilityId + function index using just names,
@@ -10486,7 +10538,7 @@ impl TypedProgram {
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
-        if passed_len != ability_fn_type.logical_params().len() {
+        if passed_len != ability_fn_type.logical_params().len() as usize {
             return failf!(
                 call_span,
                 "Mismatching arg count when trying to resolve ability call to {} (this probably doesn't handle context params properly)",
@@ -10546,7 +10598,9 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        for (arg, param) in passed_args.zip(ability_fn_type.logical_params().iter()) {
+        for (arg, param) in
+            passed_args.zip(self.types.mem.get_slice(ability_fn_type.logical_params()))
+        {
             let arg_and_param = match arg {
                 MaybeTypedExpr::Typed(expr) => {
                     let type_id = self.exprs.get(expr).get_type();
@@ -10944,7 +10998,7 @@ impl TypedProgram {
     fn align_call_arguments_with_parameters(
         &mut self,
         fn_call: &ParsedCall,
-        params: &[FnParamType],
+        params: MSlice<FnParamType, TypePool>,
         pre_evaled_params: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
@@ -10957,7 +11011,7 @@ impl TypedProgram {
         let mut final_args: SV8<MaybeTypedExpr> = SmallVec::new();
         let mut final_params: SV8<FnParamType> = SmallVec::new();
         if !explicit_context_args {
-            for context_param in params.iter().filter(|p| p.is_context) {
+            for context_param in self.types.mem.get_slice(params).iter().filter(|p| p.is_context) {
                 let matching_context_variable =
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
@@ -10995,12 +11049,12 @@ impl TypedProgram {
         }
 
         let args_slice = self.ast.p_call_args.get_slice(fn_call.args);
-        let is_lambda =
-            params.first().is_some_and(|p| p.name == self.ast.idents.b.lambda_env_var_name);
-        let params = if is_lambda { &params[1..] } else { params };
-        let explicit_param_count = params.iter().filter(|p| !p.is_context).count();
+        let is_lambda = self.types.mem.get_nth_opt(params, 0).is_some_and(|p| p.is_lambda_env);
+        let params = if is_lambda { params.skip(1) } else { params };
+        let explicit_param_count =
+            self.types.mem.get_slice(params).iter().filter(|p| !p.is_context).count();
         let total_expected =
-            if explicit_context_args { params.len() } else { explicit_param_count };
+            if explicit_context_args { params.len() as usize } else { explicit_param_count };
         let actual_passed_args = args_slice;
         let total_passed = match pre_evaled_params {
             None => actual_passed_args.len(),
@@ -11016,15 +11070,15 @@ impl TypedProgram {
             );
         }
 
-        // If the user opted to pass context params explicitly, then check all params
-        // If the user did not, then just check the non-context params, since the compiler is responsible
-        // for looking up context params
-        let expected_literal_params: &mut dyn Iterator<Item = &FnParamType> =
-            if explicit_context_args {
-                &mut params.iter()
-            } else {
-                &mut params.iter().filter(|p| !p.is_context)
-            };
+        let expected_literal_params = self
+            .types
+            .mem
+            .get_slice(params)
+            .iter()
+            // If the user opted to pass context params explicitly, then check all params
+            // If the user did not, then just check the non-context params, since the compiler is responsible
+            // for looking up context params
+            .filter(|p| explicit_context_args || !p.is_context);
 
         if let Some(pre_evaled_params) = pre_evaled_params {
             for (expr, param) in pre_evaled_params.iter().zip(expected_literal_params) {
@@ -11170,8 +11224,7 @@ impl TypedProgram {
         let is_generic = signature.has_type_params();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
-        // TODO: eliminate this to_vec()
-        let params = &original_function_type.logical_params().to_vec();
+        let params = original_function_type.logical_params();
 
         let (callee, typechecked_arguments, type_args) = match is_generic {
             false => {
@@ -11184,21 +11237,24 @@ impl TypedProgram {
                 )?;
                 let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
                 for (maybe_typed_expr, param) in args_and_params.iter() {
-                    let expr = match *maybe_typed_expr {
+                    let checked_expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => {
-                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
-                        }
-                    };
-                    let checked_expr =
-                        self.check_call_argument(param, expr, ctx.scope_id).map_err(|err| {
-                            errf!(
-                                err.span,
-                                "Invalid call to {}\n    {}",
-                                self.qident_to_string(&fn_call.name),
-                                err.message
+                        MaybeTypedExpr::Parsed(parsed) => self
+                            .eval_expr_with_coercion(
+                                parsed,
+                                ctx.with_expected_type(Some(param.type_id)),
+                                true,
                             )
-                        })?;
+                            .map_err(|err| {
+                                errf!(
+                                    err.span,
+                                    "Invalid call to {}\nInvalid type for parameter '{}': {}",
+                                    self.qident_to_string(&fn_call.name),
+                                    self.ident_str(param.name),
+                                    err.message
+                                )
+                            })?,
+                    };
                     typechecked_args.push(checked_expr);
                 }
                 (callee, typechecked_args, SliceHandle::empty())
@@ -11283,10 +11339,10 @@ impl TypedProgram {
 
                 let specialized_fn_type =
                     self.types.get(specialized_function_type).as_function().unwrap();
-                let specialized_params = specialized_fn_type.physical_params.clone();
+                let specialized_params = specialized_fn_type.physical_params;
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
-                    &specialized_params,
+                    specialized_params,
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
                     false,
@@ -11296,9 +11352,21 @@ impl TypedProgram {
                 for (maybe_typed_expr, param) in args_and_params.iter() {
                     let expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => {
-                            self.eval_expr(parsed, ctx.with_expected_type(Some(param.type_id)))?
-                        }
+                        MaybeTypedExpr::Parsed(parsed) => self
+                            .eval_expr_with_coercion(
+                                parsed,
+                                ctx.with_expected_type(Some(param.type_id)),
+                                true,
+                            )
+                            .map_err(|err| {
+                                errf!(
+                                    err.span,
+                                    "Invalid call to {}\nInvalid type for parameter '{}': {}",
+                                    self.qident_to_string(&fn_call.name),
+                                    self.ident_str(param.name),
+                                    err.message
+                                )
+                            })?,
                     };
 
                     let checked_expr =
@@ -11650,7 +11718,7 @@ impl TypedProgram {
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_function_param_variables = generic_function.param_variables.clone();
+        let generic_function_param_variables = generic_function.param_variables;
         let generic_function_scope = generic_function.scope;
 
         for existing_specialization in &generic_function.child_specializations {
@@ -11710,33 +11778,36 @@ impl TypedProgram {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
-        let param_variables: EcoVec<VariableId> = specialized_function_type
-            .physical_params
+        let mut param_variables: FixVec<VariableId, _> =
+            self.a.new_vec(specialized_function_type.physical_params.len());
+        for (specialized_param_type, generic_param) in self
+            .types
+            .mem
+            .get_slice(specialized_function_type.physical_params)
             .iter()
-            .zip(generic_function_param_variables.iter())
-            .map(|(specialized_param_type, generic_param)| {
-                let name = self.variables.get(*generic_param).name;
-                let mut flags = VariableFlags::empty();
-                flags.set(VariableFlags::Context, specialized_param_type.is_context);
-                let variable_id = self.variables.add(Variable {
-                    type_id: specialized_param_type.type_id,
+            .zip(self.a.get_slice(generic_function_param_variables))
+        {
+            let name = self.variables.get(*generic_param).name;
+            let mut flags = VariableFlags::empty();
+            flags.set(VariableFlags::Context, specialized_param_type.is_context);
+            let variable_id = self.variables.add(Variable {
+                type_id: specialized_param_type.type_id,
+                name,
+                owner_scope: spec_fn_scope,
+                global_id: None,
+                flags,
+            });
+            if specialized_param_type.is_context {
+                self.scopes.add_context_variable(
+                    spec_fn_scope,
                     name,
-                    owner_scope: spec_fn_scope,
-                    global_id: None,
-                    flags,
-                });
-                if specialized_param_type.is_context {
-                    self.scopes.add_context_variable(
-                        spec_fn_scope,
-                        name,
-                        variable_id,
-                        specialized_param_type.type_id,
-                    );
-                }
-                self.scopes.add_variable(spec_fn_scope, name, variable_id);
-                variable_id
-            })
-            .collect();
+                    variable_id,
+                    specialized_param_type.type_id,
+                );
+            }
+            self.scopes.add_variable(spec_fn_scope, name, variable_id);
+            param_variables.push(variable_id)
+        }
         let specialization_info = SpecializationInfo {
             parent_function: generic_function_id,
             type_arguments,
@@ -11753,7 +11824,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: specialized_name_ident,
             scope: spec_fn_scope,
-            param_variables,
+            param_variables: self.a.vec_to_mslice(&param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
@@ -13091,9 +13162,9 @@ impl TypedProgram {
         }
 
         // Process parameters
-        let mut param_types: EcoVec<FnParamType> =
-            EcoVec::with_capacity(parsed_function_params.len());
-        let mut param_variables = EcoVec::with_capacity(parsed_function_params.len());
+        let param_count = parsed_function_context_params.len() + parsed_function_params.len();
+        let mut param_types: FixVec<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
+        let mut param_variables = self_.a.new_vec(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
@@ -13292,19 +13363,23 @@ impl TypedProgram {
             },
         };
 
-        let function_type_id = self_
-            .types
-            .add_anon(Type::Function(FunctionType { physical_params: param_types, return_type }));
+        let param_types_handle = self_.types.mem.vec_to_mslice(&param_types);
+        let function_type_id = self_.types.add_anon(Type::Function(FunctionType {
+            physical_params: param_types_handle,
+            return_type,
+            is_lambda: false,
+        }));
 
         let function_id = self_.functions.next_id();
 
         let type_params_handle = self_.named_types.add_slice_copy(&type_params);
         let function_type_params_handle =
             self_.function_type_params.add_slice_copy(&function_type_params);
+        let param_variables_handle = self_.a.vec_to_mslice(&param_variables);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
-            param_variables,
+            param_variables: param_variables_handle,
             type_params: type_params_handle,
             function_type_params: function_type_params_handle,
             body_block: None,
@@ -15462,7 +15537,7 @@ impl TypedProgram {
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within
 
-                for param in fn_type.logical_params() {
+                for param in self.types.mem.get_slice(fn_type.logical_params()) {
                     self.register_type_metainfo(param.type_id, span);
 
                     let param_name_string_id =

@@ -74,8 +74,29 @@ impl<T, Tag> MSlice<T, Tag> {
         // `offset` should never be touched when count is 0
         Self::make(BOGUS_OFFSET, 0)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
     pub fn len(&self) -> u32 {
         self.count
+    }
+
+    /// Skip this entry, resulting in a handle with a length
+    /// decreased by n, and pointing n elements ahead of where it was.
+    /// Returns an empty handle on an already empty handle
+    pub fn skip(&self, n: usize) -> Self {
+        if n == 0 {
+            return *self;
+        }
+        let new_len = (self.count).saturating_sub(n as u32);
+        if new_len == 0 {
+            Self { offset: self.offset, count: 0, _data: PhantomData, _tag: PhantomData }
+        } else {
+            let new_offset = self.offset.checked_add(n as u32 * size_of::<T>() as u32).unwrap();
+            Self { offset: new_offset, count: new_len, _data: PhantomData, _tag: PhantomData }
+        }
     }
 
     const fn make(offset: NonZeroU32, count: u32) -> Self {
@@ -340,6 +361,14 @@ impl<Tag> Mem<Tag> {
         (ptr, handle.count as usize)
     }
 
+    fn get_slice_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
+        let (ptr, count) = self.get_slice_raw(handle);
+        fuckit! {
+            let src: &[T] = std::slice::from_raw_parts(ptr, count);
+            src
+        }
+    }
+
     pub fn get_slice<T>(&self, handle: MSlice<T, Tag>) -> &'static [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
@@ -375,6 +404,23 @@ impl<Tag> Mem<Tag> {
 
     pub fn get_nth<T>(&self, handle: MSlice<T, Tag>, n: usize) -> &'static T {
         &self.get_slice(handle)[n]
+    }
+
+    pub fn get_nth_opt<T>(&self, handle: MSlice<T, Tag>, n: usize) -> Option<&'static T> {
+        self.get_slice(handle).get(n)
+    }
+
+    pub fn slices_equal_copy<T: Copy + PartialEq + Eq>(
+        &self,
+        h1: MSlice<T, Tag>,
+        h2: MSlice<T, Tag>,
+    ) -> bool {
+        if h1.len() != h2.len() {
+            return false;
+        }
+        let slice1 = self.get_slice_lt(h1);
+        let slice2 = self.get_slice_lt(h2);
+        slice1 == slice2
     }
 
     pub fn bytes_used(&self) -> usize {
@@ -432,6 +478,25 @@ impl<T, Tag> FixVec<T, Tag> {
         }
     }
 
+    // Inserts `val` at index `index`, shifting all elements to the right as needed
+    pub fn insert(&mut self, index: usize, val: T)
+    where
+        T: Copy,
+    {
+        if self.len == self.buf.len() {
+            panic!("FixVec is full {}", self.buf.len());
+        }
+        if index > self.len {
+            panic!("FixVec insert index out of bounds: {} > {}", index, self.len);
+        }
+        unsafe {
+            let slice = &mut *self.buf;
+            slice.copy_within(index..self.len, index + 1);
+            slice[index] = val;
+        }
+        self.len += 1;
+    }
+
     pub fn extend(&mut self, vals: &[T])
     where
         T: Copy,
@@ -443,6 +508,7 @@ impl<T, Tag> FixVec<T, Tag> {
             let dst = &mut (*self.buf)[self.len..self.len + vals.len()];
             dst.copy_from_slice(vals);
         }
+        eprintln!("extending from {} to ({} + {})", self.len, self.len, vals.len());
         self.len += vals.len();
     }
 
@@ -539,6 +605,9 @@ mod test {
         for i in 0..5 {
             assert_eq!(v.as_slice()[i], i + 1);
         }
+
+        v.extend(&[6]);
+        assert_eq!(v.len(), 6);
     }
 
     #[test]
@@ -567,5 +636,17 @@ mod test {
         assert_eq!(h.len(), h2.len());
         assert_eq!(arena.get_slice(h), arena.get_slice(h2));
         assert_ne!(h.offset, h2.offset);
+    }
+
+    #[test]
+    fn insert() {
+        let mut arena = Mem::make_untagged();
+        let mut v = arena.new_vec(5);
+        v.push(1);
+        v.push(2);
+        v.push(4);
+        v.insert(2, 3);
+        assert_eq!(v.len(), 4);
+        assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
     }
 }

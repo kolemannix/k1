@@ -5,13 +5,10 @@ fn test(): unit {
 
   let b = a.push(true);
   let p = a.push({ x: 10, y: 10 });
-  println("{p.x}");
   let s = a.push("Hello, memory");
   assert(s.len() == 13);
   assertEquals(s.*, "Hello, memory");
 
   a.freeAll();
-
-  println("{b.*}");
 
 }

@@ -319,7 +319,7 @@ impl FloatType {
 //     pub span: SpanId,
 // }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct FnParamType {
     // FIXME: Determine if param names are truly 'part' of the function type.
     // For now, keeping them to fix some bugs
@@ -330,23 +330,16 @@ pub struct FnParamType {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FunctionType {
-    pub physical_params: EcoVec<FnParamType>,
+    pub physical_params: MSlice<FnParamType, TypePool>,
     pub return_type: TypeId,
+    pub is_lambda: bool,
 }
 
 impl FunctionType {
-    pub fn logical_params(&self) -> &[FnParamType] {
-        if self.physical_params.is_empty() {
-            &[]
-        } else {
-            if self.physical_params[0].is_lambda_env {
-                &self.physical_params[1..]
-            } else {
-                &self.physical_params[..]
-            }
-        }
+    pub fn logical_params(&self) -> MSlice<FnParamType, TypePool> {
+        if self.is_lambda { self.physical_params.skip(1) } else { self.physical_params }
     }
 }
 
@@ -509,9 +502,10 @@ impl TypePool {
                 if f1.return_type == f2.return_type
                     && f1.physical_params.len() == f2.physical_params.len()
                 {
-                    f1.physical_params
+                    self.mem
+                        .get_slice(f1.physical_params)
                         .iter()
-                        .zip(f2.physical_params.iter())
+                        .zip(self.mem.get_slice(f2.physical_params))
                         .all(|(p1, p2)| p1.type_id == p2.type_id)
                 } else {
                     false
@@ -600,7 +594,7 @@ impl TypePool {
             }
             Type::Function(fun) => {
                 fun.return_type.hash(state);
-                for param in &fun.physical_params {
+                for param in self.mem.get_slice(fun.physical_params) {
                     param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
@@ -1687,7 +1681,7 @@ impl TypePool {
             Type::Generic(_gen) => EMPTY,
             Type::Function(fun) => {
                 let mut result = EMPTY;
-                for param in fun.physical_params.iter() {
+                for param in self.mem.get_slice(fun.physical_params).iter() {
                     result = result.add(self.count_type_variables(param.type_id))
                 }
                 result = result.add(self.count_type_variables(fun.return_type));

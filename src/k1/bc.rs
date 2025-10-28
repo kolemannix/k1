@@ -738,9 +738,9 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             let body_block = *body_block;
 
             // Set up parameters
-            let param_variables = f.param_variables.clone();
+            let param_variables = f.param_variables;
             let mut params = b.k1.bytecode.mem.new_vec(param_variables.len() as u32);
-            for (index, param_variable_id) in param_variables.iter().enumerate() {
+            for (index, param_variable_id) in b.k1.a.get_slice(param_variables).iter().enumerate() {
                 let v = b.k1.variables.get(*param_variable_id);
                 let t = b.get_physical_type(v.type_id);
                 b.k1.bytecode.b_variables.push(BuilderVariable {
@@ -959,7 +959,7 @@ impl<'k1> Builder<'k1> {
             }
             TypedIntValue::I64(i) | TypedIntValue::IWord64(i) => {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
-                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
+                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as i32 as u32)
                 } else {
                     let inst = self.push_inst(Inst::Imm(Imm::I64(*i)), comment);
                     inst.as_value()
@@ -1679,8 +1679,6 @@ fn compile_expr(
         TypedExpr::LogicalAnd(and) => {
             let rhs_check_name = mformat!(b.k1.bytecode.mem, "and_rhs__{}", expr.as_u32());
             let rhs_check = b.push_block(rhs_check_name);
-            let short_circuit_name = mformat!(b.k1.bytecode.mem, "and_short__{}", expr.as_u32());
-            let short_circuit = b.push_block(short_circuit_name);
             let final_block_name = mformat!(b.k1.bytecode.mem, "and_end__{}", expr.as_u32());
             let final_block = b.push_block(final_block_name);
 
@@ -1689,7 +1687,7 @@ fn compile_expr(
             let start_block = b.cur_block;
             let lhs = compile_expr(b, None, and.lhs)?;
             b.push_inst(
-                Inst::JumpIf { cond: lhs, cons: rhs_check, alt: short_circuit },
+                Inst::JumpIf { cond: lhs, cons: rhs_check, alt: final_block },
                 "logical and",
             );
             incomings.push(CameFromCase { from: start_block, value: Value::FALSE });
@@ -1806,14 +1804,15 @@ fn compile_expr(
 
             b.goto_block(loop_end_block);
             if let Some(break_alloca) = break_value {
-                let loaded = load_value(
+                let stored = load_or_copy(
                     b,
                     break_pt_id,
+                    dst,
                     break_alloca.as_value(),
                     false,
-                    "collect break result",
+                    "fulfill loop break dst",
                 );
-                Ok(loaded)
+                Ok(stored)
             } else {
                 Ok(Value::UNIT)
             }
@@ -1864,12 +1863,14 @@ fn compile_expr(
 
             // Load straight from the enum base, dont bother with a struct gep
             // task(bc): Copy if dst
-            match dst {
-                None => Ok(b
-                    .push_load(tag_scalar.expect_scalar(), enum_base, "get enum tag")
-                    .as_value()),
-                Some(dst) => Ok(b.push_copy(dst, enum_base, tag_scalar, "get enum tag").as_value()),
-            }
+            Ok(load_or_copy(
+                b,
+                tag_scalar,
+                dst,
+                enum_base,
+                false,
+                "get enum tag, load or copy to dst",
+            ))
         }
         TypedExpr::EnumGetPayload(e_get_payload) => {
             let enum_variant_base = compile_expr(b, None, e_get_payload.enum_variant_expr)?;
@@ -1926,13 +1927,7 @@ fn compile_expr(
         TypedExpr::Lambda(lam_expr) => {
             let l = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
             let env_struct = l.environment_struct;
-            match dst {
-                Some(dst) => compile_expr(b, Some(dst), env_struct),
-                None => {
-                    let env = compile_expr(b, None, env_struct)?;
-                    Ok(env)
-                }
-            }
+            compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
@@ -2732,9 +2727,9 @@ pub fn display_block(
     Ok(())
 }
 
-pub fn inst_to_string(k1: &TypedProgram, bc: &ProgramBytecode, inst_id: InstId) -> String {
+pub fn inst_to_string(k1: &TypedProgram, inst_id: InstId) -> String {
     let mut s = String::new();
-    display_inst(&mut s, k1, bc, inst_id).unwrap();
+    display_inst(&mut s, k1, &k1.bytecode, inst_id).unwrap();
     s
 }
 

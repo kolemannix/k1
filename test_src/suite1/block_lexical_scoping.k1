@@ -5,5 +5,9 @@ fn test(): unit {
     { let foo = 100 };
     assert(foo == 100);
   });
-  assert(result is .Some(msg) and msg.startsWith("Variable 'foo' is not defined"))
+  println("{result}");
+  assert(
+    result is .Some(msg) 
+    and msg.startsWith("Invalid call to assert\nInvalid type for parameter 'value': Variable 'foo' is not defined")
+  )
 }
