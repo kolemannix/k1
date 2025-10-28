@@ -11,8 +11,8 @@ deftype Json = either
 fn test(): unit {
   let size = core/types/sizeOf[Json]();
   let align = core/types/alignOf[Json]();
-  println("Size of Json: {size}");
-  println("Align of Json: {align}");
+  assertEquals(size, 32);
+  assertEquals(align, 8);
 
   let obj: Json = .JsStr("hello");
   let null: Json = .JsNull;

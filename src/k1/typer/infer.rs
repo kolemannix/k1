@@ -1054,8 +1054,12 @@ impl TypedProgram {
                 if passed_fn.logical_params().len() == slot_fn.logical_params().len() {
                     let passed_fn = passed_fn.clone();
                     let slot_fn = slot_fn.clone();
-                    for (passed_param, slot_param) in
-                        passed_fn.logical_params().iter().zip(slot_fn.logical_params().iter())
+                    for (passed_param, slot_param) in self
+                        .types
+                        .mem
+                        .get_slice(passed_fn.logical_params())
+                        .iter()
+                        .zip(self.types.mem.get_slice(slot_fn.logical_params()))
                     {
                         self.unify_and_find_substitutions_rec(
                             passed_param.type_id,

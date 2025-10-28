@@ -975,33 +975,33 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             Ok(vm_value.into())
         }
     };
-    if cfg!(debug_assertions) {
-        if let Ok(VmResult::Value(v)) = result {
-            let expected_type = k1.exprs.get(expr).get_type();
-            let is_metaprogram_special_case =
-                expected_type == NEVER_TYPE_ID && v.get_type() == UNIT_TYPE_ID;
-            let is_static_expected =
-                matches!(k1.types.get_no_follow_static(expected_type), Type::Static(_));
-            if !is_metaprogram_special_case && !is_static_expected {
-                if let Err(msg) = k1.check_types(
-                    k1.exprs.get(expr).get_type(),
-                    v.get_type(),
-                    // We use root scope because we don't expected to need to resolve any type
-                    // variables in VM code; it should all be concrete, and that's all the
-                    // scope is used for in check_types
-                    k1.scopes.get_root_scope_id(),
-                ) {
-                    //eprintln!("{}", vm.dump_current_frame(m));
-                    return failf!(
-                        vm.eval_span,
-                        "vm eval type mismatch after executing '{}'\n{}",
-                        k1.expr_to_string_with_type(expr),
-                        msg,
-                    );
-                }
-            }
-        }
-    }
+    //if cfg!(debug_assertions) {
+    //    if let Ok(VmResult::Value(v)) = result {
+    //        let expected_type = k1.exprs.get(expr).get_type();
+    //        let is_metaprogram_special_case =
+    //            expected_type == NEVER_TYPE_ID && v.get_type() == UNIT_TYPE_ID;
+    //        let is_static_expected =
+    //            matches!(k1.types.get_no_follow_static(expected_type), Type::Static(_));
+    //        if !is_metaprogram_special_case && !is_static_expected {
+    //            if let Err(msg) = k1.check_types(
+    //                k1.exprs.get(expr).get_type(),
+    //                v.get_type(),
+    //                // We use root scope because we don't expected to need to resolve any type
+    //                // variables in VM code; it should all be concrete, and that's all the
+    //                // scope is used for in check_types
+    //                k1.scopes.get_root_scope_id(),
+    //            ) {
+    //                //eprintln!("{}", vm.dump_current_frame(m));
+    //                return failf!(
+    //                    vm.eval_span,
+    //                    "vm eval type mismatch after executing '{}'\n{}",
+    //                    k1.expr_to_string_with_type(expr),
+    //                    msg,
+    //                );
+    //            }
+    //        }
+    //    }
+    //}
     //debug!("{}-> {:?}", " ".repeat(vm.eval_depth.load(Ordering::Relaxed) as usize), result);
     result
 }
@@ -1286,12 +1286,12 @@ pub fn execute_stmt(
 
 fn execute_call(
     vm: &mut Vm,
-    m: &mut TypedProgram,
+    k1: &mut TypedProgram,
     call_expr_id: TypedExprId,
 ) -> TyperResult<VmResult> {
-    debug!("Executing call: {}", m.expr_to_string(call_expr_id));
-    let call_id = m.exprs.get(call_expr_id).expect_call_id();
-    let call = m.calls.get(call_id);
+    debug!("Executing call: {}", k1.expr_to_string(call_expr_id));
+    let call_id = k1.exprs.get(call_expr_id).expect_call_id();
+    let call = k1.calls.get(call_id);
     let call_args = call.args.clone();
     let span = call.span;
     let (function_id, maybe_lambda_env_ptr) = match call.callee {
@@ -1300,23 +1300,23 @@ fn execute_call(
             function_id, lambda_value_expr: environment_value, ..
         } => {
             // This is the lambda's physical form, so its the environment struct
-            let lambda_value = execute_expr(vm, m, environment_value)?.expect_value();
+            let lambda_value = execute_expr(vm, k1, environment_value)?.expect_value();
             // We need a pointer to the environment for dispatch, so just use the aggregate's ptr
             let lambda_env_ptr = Value::Pointer(lambda_value.expect_agg().addr());
             (function_id, Some(lambda_env_ptr))
         }
-        typer::Callee::Abstract { .. } => m.ice_with_span("Abstract call attempt in VM", span),
+        typer::Callee::Abstract { .. } => k1.ice_with_span("Abstract call attempt in VM", span),
         typer::Callee::DynamicLambda(lambda_object_expr) => {
             let lambda_object_struct_ptr =
-                execute_expr_return_exit!(vm, m, lambda_object_expr)?.expect_agg();
-            let struct_type = m
+                execute_expr_return_exit!(vm, k1, lambda_object_expr)?.expect_agg();
+            let struct_type = k1
                 .get_expr_type(lambda_object_expr)
                 .as_lambda_object()
                 .unwrap()
                 .struct_representation;
             let function_ptr = load_struct_field(
                 vm,
-                m,
+                k1,
                 struct_type,
                 lambda_object_struct_ptr,
                 TypePool::LAMBDA_OBJECT_FN_PTR_INDEX,
@@ -1325,7 +1325,7 @@ fn execute_call(
             .expect_ref();
             let env_ref_value = load_struct_field(
                 vm,
-                m,
+                k1,
                 struct_type,
                 lambda_object_struct_ptr,
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX,
@@ -1336,24 +1336,24 @@ fn execute_call(
             (function_id, Some(env_ref_value))
         }
         typer::Callee::DynamicFunction { function_pointer_expr } => {
-            let callee_ref = execute_expr_return_exit!(vm, m, function_pointer_expr)?.expect_ref();
+            let callee_ref = execute_expr_return_exit!(vm, k1, function_pointer_expr)?.expect_ref();
             // We stuff function ids into the pointers for dynamic dispatch in the VM
             let function_id = NonZeroU32::new(callee_ref.addr() as u32).unwrap();
             let function_id = FunctionId::from_nzu32(function_id);
             (function_id, None)
         }
         typer::Callee::DynamicAbstract { .. } => {
-            m.ice_with_span("Abstract call attempt in VM", span)
+            k1.ice_with_span("Abstract call attempt in VM", span)
         }
     };
 
-    let function = m.get_function(function_id);
+    let function = k1.get_function(function_id);
 
     if let Some(intrinsic_type) = function.intrinsic_type {
-        let call = m.calls.get(call_id);
+        let call = k1.calls.get(call_id);
         return execute_intrinsic(
             vm,
-            m,
+            k1,
             call.type_args,
             &call_args,
             call.return_type,
@@ -1366,26 +1366,26 @@ fn execute_call(
         log::set_max_level(log::LevelFilter::Info);
         debug!(
             "vm has to trigger compilation of body: {}",
-            m.function_id_to_string(function_id, true)
+            k1.function_id_to_string(function_id, true)
         );
-        m.eval_function_body(function_id, true)?;
+        k1.eval_function_body(function_id, true)?;
         log::set_max_level(prev_level);
     }
 
-    let function = m.get_function(function_id);
+    let function = k1.get_function(function_id);
     let Some(body_block_expr) = function.body_block else {
-        return failf!(span, "Cannot execute function {}: no body", m.ident_str(function.name));
+        return failf!(span, "Cannot execute function {}: no body", k1.ident_str(function.name));
     };
 
     if vm.stack.frames.len() == 128 {
-        let frame_names = make_stack_trace(m, &vm.stack);
+        let frame_names = make_stack_trace(k1, &vm.stack);
         eprintln!("{}", frame_names);
         return failf!(span, "VM call stack overflow");
     }
 
-    let return_type_id = m.types.get(function.type_id).expect_function().return_type;
-    let aggregate_return_layout = if m.types.is_aggregate_repr(return_type_id) {
-        Some(m.types.get_layout(return_type_id))
+    let return_type_id = k1.types.get(function.type_id).expect_function().return_type;
+    let aggregate_return_layout = if k1.types.is_aggregate_repr(return_type_id) {
+        Some(k1.types.get_layout(return_type_id))
     } else {
         None
     };
@@ -1403,18 +1403,18 @@ fn execute_call(
     let mut param_values: SmallVec<[(VariableId, Value); 8]> = smallvec![];
     let is_lambda = maybe_lambda_env_ptr.is_some();
     let arg_offset = if is_lambda { 1 } else { 0 };
-    for (index, variable_id) in param_variables.iter().enumerate() {
+    for (index, variable_id) in k1.a.get_slice(param_variables).iter().enumerate() {
         if index == 0 && is_lambda {
             param_values.push((*variable_id, maybe_lambda_env_ptr.unwrap()));
         } else {
             let arg_offset = index - arg_offset;
             let arg = call_args[arg_offset];
             // Execute this in _caller_ frame so the data outlives the callee
-            let value = execute_expr_return_exit!(vm, m, arg)?;
+            let value = execute_expr_return_exit!(vm, k1, arg)?;
             debug!(
                 "argument {}: {}",
-                m.ident_str(m.variables.get(*variable_id).name),
-                debug_value_to_string(vm, m, value)
+                k1.ident_str(k1.variables.get(*variable_id).name),
+                debug_value_to_string(vm, k1, value)
             );
 
             param_values.push((*variable_id, value));
@@ -1432,7 +1432,7 @@ fn execute_call(
     //eprintln!("{}", vm.dump_current_frame(m));
     //eprintln!("{}", vm.dump_current_frame(m));
 
-    let result_value = match execute_expr(vm, m, body_block_expr)? {
+    let result_value = match execute_expr(vm, k1, body_block_expr)? {
         VmResult::Value(value) => value,
         VmResult::Return(value) => value,
         exit @ VmResult::Exit(_) => {

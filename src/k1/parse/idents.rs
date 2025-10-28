@@ -12,7 +12,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Ident(string_interner::symbol::SymbolU32);
 
-#[cfg(test)]
 impl Ident {
     pub fn forged() -> Ident {
         Ident(string_interner::symbol::SymbolU32::try_from_usize(1).unwrap())

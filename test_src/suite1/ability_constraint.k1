@@ -5,9 +5,8 @@ ns ability_constraint {
   }
   
   fn add[T](a: T, b: T): i32 where T: Num, T: Show {
-    println(a.show());
-    println("+");
-    println(b.show());
+    a.show();
+    b.show();
     a.num() + b.num()
   }
   

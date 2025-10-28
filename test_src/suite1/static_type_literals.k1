@@ -8,7 +8,6 @@ fn test(): unit {
 
   let hello: "hello!" = #static {
     let* bytes = [104: u8];
-    println("Hello, world!");
     bytes.push(101);
     bytes.push(108);
     bytes.push(108);

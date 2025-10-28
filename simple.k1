@@ -1,15 +1,12 @@
-fn foo(): string { "asdf" }
-
-let PS: View[{ x: int, y: int }] = #static {
-  [{ x: 1, y: 2 }, { x: 3, y: 4}]
-};
-
-#static  {
-  for p in PS do {
-    println("{itIndex}: {p.x}, {p.y}");
-  }
-}
-
 fn main(): i32 {
+  #static {
+    let x: int = loop {
+      let inner: int = if true {
+        break(3)
+      } else 4
+      
+    };
+    assertEquals(x, 3);
+  };
   0
 }

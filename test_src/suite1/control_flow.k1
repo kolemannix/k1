@@ -43,14 +43,20 @@ fn loopBreak(): unit {
     } else 4
     
   };
-  assert(x == 3)
+  assertEquals(x, 3)
+
+  //nocommit
+  //let y: string = loop {
+  //  break("asdf")
+  //};
+  //assertEquals(y, "asdf")
 }
 
 fn loopNested(): unit {
   let result = loop {
     break(loop { break(10) })
   };
-  assert(result == 10)
+  assertEquals(result, 10)
 }
 
 fn loopFalse(): unit {

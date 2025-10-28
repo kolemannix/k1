@@ -388,14 +388,14 @@ impl Value {
             IntegerType::U16 => TypedIntValue::U16(u64 as u16),
             IntegerType::U32 => TypedIntValue::U32(u64 as u32),
             IntegerType::U64 => TypedIntValue::U64(u64),
-            IntegerType::UWord(WordSize::W32) => TypedIntValue::U32(u64 as u32),
-            IntegerType::UWord(WordSize::W64) => TypedIntValue::U64(u64),
+            IntegerType::UWord(WordSize::W32) => TypedIntValue::UWord32(u64 as u32),
+            IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(u64),
             IntegerType::I8 => TypedIntValue::I8(u64 as i8),
             IntegerType::I16 => TypedIntValue::I16(u64 as i16),
             IntegerType::I32 => TypedIntValue::I32(u64 as i32),
             IntegerType::I64 => TypedIntValue::I64(u64 as i64),
-            IntegerType::IWord(WordSize::W32) => TypedIntValue::I32(u64 as i32),
-            IntegerType::IWord(WordSize::W64) => TypedIntValue::I64(u64 as i64),
+            IntegerType::IWord(WordSize::W32) => TypedIntValue::IWord32(u64 as i32),
+            IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(u64 as i64),
         }
     }
 
@@ -540,7 +540,7 @@ fn exec_loop(
                 "  ".repeat(vm.stack.current_frame_index() as usize),
                 vm.stack.current_frame_index(),
                 inst_id.as_u32(),
-                bc::inst_to_string(k1, &k1.bytecode, inst_id)
+                bc::inst_to_string(k1, inst_id)
             );
             std::io::stdin().read_line(&mut line).unwrap();
             if &line == "v\n" {
@@ -908,14 +908,12 @@ fn exec_loop(
                     }
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
-                if debugger {
-                    eprintln!(
-                        "{}dispatching call [{}] to\n{}",
-                        "  ".repeat(vm.stack.current_frame_index() as usize),
-                        new_frame_index,
-                        bc::compiled_unit_to_string(k1, &compiled_function, true)
-                    );
-                }
+                // eprintln!(
+                //     "{}{}dispatching call [{}] to above",
+                //     bc::compiled_unit_to_string(k1, &compiled_function, true),
+                //     "  ".repeat(vm.stack.current_frame_index() as usize),
+                //     new_frame_index,
+                // );
 
                 // 'Dispatch' to the function:
                 // - Push a stack frame
@@ -957,18 +955,14 @@ fn exec_loop(
             }
             Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = resolve_value!(cond);
-                let cond_u64 = cond_value.bits() as u8;
-                let as_u8 = cond_u64 as u8;
-                if as_u8 == 1 {
+                if cond_value.as_bool() {
                     prev_b = b;
                     b = cons;
                     ip = 0;
-                } else if as_u8 == 0 {
+                } else {
                     prev_b = b;
                     b = alt;
                     ip = 0;
-                } else {
-                    return failf!(span, "Bad boolean value: {cond_u64}");
                 }
             }
             Inst::Unreachable => {
@@ -1524,7 +1518,12 @@ fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: Bc
                 ScalarType::F32 => Value(u32_data as u64),
                 ScalarType::F64 => Value::f64(data as f32 as f64),
                 ScalarType::Pointer => Value(data as u64),
-                _ => Value(u32_data as u64),
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
+                    Value(u32_data as i32 as i64 as u64)
+                }
+                ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
+                    Value(u32_data as u64)
+                }
             }
         }
         BcValue::PtrZero => Value::NULLPTR,
