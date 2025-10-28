@@ -997,6 +997,14 @@ pub enum AggType {
 
 impl AggType {
     #[track_caller]
+    pub fn expect_array(&self) -> (PhysicalType, u32) {
+        match self {
+            AggType::Array { element_t, len } => (*element_t, *len),
+            _ => panic!("Expected array agg type"),
+        }
+    }
+
+    #[track_caller]
     pub fn expect_enum_variant(&self) -> &EnumVariantLayout {
         match self {
             AggType::EnumVariant(ev) => ev,
@@ -1005,7 +1013,6 @@ impl AggType {
     }
 }
 
-nz_u32_id!(AggLayoutId);
 nz_u32_id!(PhysicalTypeId);
 pub struct PhysicalTypeRecord {
     pub agg_type: AggType,

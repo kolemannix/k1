@@ -64,7 +64,7 @@ fn thunksTest(): unit {
   ];
 
   runThings(thunks);
-  println("counter is {counter.*}");
+  assertEquals(counter.*, 3);
 }
 
 fn test(): unit {

@@ -33,7 +33,6 @@ fn testArray(): unit {
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
   let a: *mut Array[u8, 10] = List/copyToArray(ls, 10);
-  let* w = List/empty[char]();
   for core/IntRange/upTo(a.len() as iword) do {
     if it % 2 == 0 { a.getRef(it as uword) <- 1 };
   };
@@ -50,7 +49,6 @@ fn testArray(): unit {
 fn test(): unit {
   assertEquals(types/sizeOf[Thing](), 9216);
 
-  testArray();
   testArray();
 
   testLiterals();

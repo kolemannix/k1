@@ -582,6 +582,7 @@ pub enum InstKind {
 }
 
 impl InstKind {
+    pub const UNIT: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const I8: InstKind = Self::scalar(ScalarType::I8);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
@@ -1224,7 +1225,9 @@ fn compile_expr(
         }
         TypedExpr::ArrayGetElement(array_get) => {
             let array_base = compile_expr(b, None, array_get.base)?;
-            let element_pt = b.get_physical_type(array_get.array_type);
+            let array_agg_id = b.get_physical_type(array_get.array_type).expect_agg();
+            let (element_pt, _len) =
+                b.k1.types.phys_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;
 
             let element_ptr = b.push_inst(
@@ -1400,7 +1403,7 @@ fn compile_expr(
                                             b.k1.bytecode.mem.push_slice(&[dst, zero_u8, count]);
                                         let memset_call = BcCall {
                                             dst: None,
-                                            ret_inst_kind: InstKind::Void,
+                                            ret_inst_kind: InstKind::UNIT,
                                             callee: BcCallee::Builtin(BcBuiltin::MemSet),
                                             args: memset_args,
                                         };
