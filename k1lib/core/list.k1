@@ -79,12 +79,13 @@ ns List {
     if index >= self.len {
       crash("List index out of bounds: {index} >= {self.len}")
     };
-    self.buffer.getRef[T](index)
+    self.buffer.getRefUnchecked[T](index)
   }
 
   fn set[T](self: *mut List[T], index: uword, elem: T): unit {
-    // nocommit
-    let ptr = self.buffer.dataPointer();
+    if index >= self.len {
+      crash("List index out of bounds: {index} >= {self.len}")
+    };
     self.buffer.set(index, elem);
   }
 
@@ -213,11 +214,14 @@ ns List {
   }
 
   fn swap[T](self: *mut List[T], indexA: uword, indexB: uword): unit {
-    let aRef = self.getRef(indexA);
-    let bRef = self.getRef(indexB);
-    let bValue = bRef.*;
-    bRef <- aRef.*;
-    aRef <- bValue;
+    if indexA == indexB { return() };
+    if indexA >= self.len {
+      crash("List index out of bounds: {indexA} >= {self.len}")
+    };
+    if indexA >= self.len {
+      crash("List index out of bounds: {indexB} >= {self.len}")
+    };
+    self.buffer*.swap[T](indexA, indexB);
   }
 
   fn sort[T](input: *mut List[T]): unit where T: Comparable {

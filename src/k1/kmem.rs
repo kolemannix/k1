@@ -508,7 +508,6 @@ impl<T, Tag> FixVec<T, Tag> {
             let dst = &mut (*self.buf)[self.len..self.len + vals.len()];
             dst.copy_from_slice(vals);
         }
-        eprintln!("extending from {} to ({} + {})", self.len, self.len, vals.len());
         self.len += vals.len();
     }
 

@@ -11,7 +11,6 @@
 // it's fully populated
 ns Buffer {
 
-
   fn bufferSizeBytes[T](count: uword): uword {
     count * core/types/sizeOfStride[T]()
   }
@@ -159,12 +158,10 @@ ns Buffer {
     if index >= self.len {
       crash("index out of bounds: {index} >= {self.len}")
     };
-    self.dataPointer().refAtIndex[T](index)
+    self.getRefUnchecked[T](index)
   }
 
   fn set[T](self: Buffer[T], index: uword, elem: T): unit {
-    // nocommit
-    let ptr = self.dataPointer();
     let tRef = self.getRef(index);
     tRef <- elem;
   }
@@ -240,6 +237,7 @@ ns Buffer {
   }
 
   fn swap[T](self: *mut Buffer[T], indexA: uword, indexB: uword): unit {
+    if indexA == indexB { return() };
     let aRef = self.*.getRef(indexA);
     let bRef = self.*.getRef(indexB);
     let bValue = bRef.*;

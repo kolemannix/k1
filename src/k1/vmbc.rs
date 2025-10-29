@@ -465,14 +465,15 @@ pub fn execute_compiled_unit(
     _input_parameters: &[(VariableId, StaticValueId)],
     debugger: bool,
 ) -> TyperResult<StaticValueId> {
+    let start = k1.timing.clock.raw();
     let span = k1.exprs.get(expr_id).get_span();
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
-    eprintln!(
-        "[vmbc] Executing {}\n{}",
-        k1.expr_to_string(expr_id),
-        bc::compiled_unit_to_string(k1, &unit, true)
-    );
+    //eprintln!(
+    //    "[vmbc] Executing {}\n{}",
+    //    k1.expr_to_string(expr_id),
+    //    bc::compiled_unit_to_string(k1, &unit, true)
+    //);
 
     match unit.unit {
         CompilableUnit::Function(_function_id) => {
@@ -493,10 +494,13 @@ pub fn execute_compiled_unit(
 
     let (exit_code, exit_value) = exec_loop(k1, vm, unit, debugger)?;
 
+    let end = k1.timing.clock.raw();
+    k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
+
     match exit_value {
         None => {
             if exit_code != 0 {
-                failf!(span, "Static Execution Failed with code: {}", exit_code)
+                failf!(span, "Static execution exited with code: {}", exit_code)
             } else {
                 Ok(k1.static_values.unit_id())
             }
@@ -519,7 +523,27 @@ fn exec_loop(
     let mut b: u32 = 0;
     let mut ip: u32 = 0;
     let mut exit_value: Option<Value> = None;
+    let mut instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
     let mut span;
+
+    macro_rules! goto_unit {
+        ($gt_unit: expr, $gt_block: expr, $gt_ip: expr) => {{
+            unit = $gt_unit;
+            b = $gt_block;
+            instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
+            ip = $gt_ip;
+        }};
+    }
+
+    macro_rules! jump {
+        ($gt_block: expr) => {{
+            prev_b = b;
+            b = $gt_block;
+            instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
+            ip = 0;
+        }};
+    }
+
     macro_rules! resolve_value {
         ($v:expr) => {
             resolve_value(k1, vm, unit.inst_offset, $v)
@@ -529,7 +553,6 @@ fn exec_loop(
     let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
-        let instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
         span = *k1.bytecode.sources.get(inst_id);
         let inst_index = inst_to_index(inst_id, unit.inst_offset);
@@ -598,7 +621,7 @@ fn exec_loop(
                 let dst_ptr = dst_value.as_ptr();
                 let src_ptr = src_value.as_ptr();
 
-                memcopy(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
+                memmove(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
                 ip += 1
             }
             Inst::StructOffset { base, vm_offset, .. } => {
@@ -925,9 +948,7 @@ fn exec_loop(
                     ret_info,
                 );
 
-                unit = compiled_function;
-                b = 0;
-                ip = 0;
+                goto_unit!(compiled_function, 0, 0);
             }
             Inst::Ret(bc_value) => {
                 let cur_frame = vm.stack.current_frame_index();
@@ -944,25 +965,17 @@ fn exec_loop(
 
                 let _popped = vm.stack.pop_frame();
 
-                unit = vm.stack.current_frame().unit;
-                b = ret_info.block;
-                ip = ret_info.ip;
+                goto_unit!(vm.stack.current_frame().unit, ret_info.block, ret_info.ip);
             }
             Inst::Jump(block_index) => {
-                prev_b = b;
-                b = block_index;
-                ip = 0;
+                jump!(block_index);
             }
             Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = resolve_value!(cond);
                 if cond_value.as_bool() {
-                    prev_b = b;
-                    b = cons;
-                    ip = 0;
+                    jump!(cons);
                 } else {
-                    prev_b = b;
-                    b = alt;
-                    ip = 0;
+                    jump!(alt);
                 }
             }
             Inst::Unreachable => {
@@ -1771,13 +1784,18 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
         PhysicalType::Agg(pt_id) => {
             let record = types.phys_types.get(pt_id);
             let src = value.as_ptr();
-            memcopy(src, dst, record.layout.size as usize)
+            memmove(src, dst, record.layout.size as usize)
         }
     }
 }
 
+fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
+    unsafe {
+        core::ptr::copy(src, dst, size_bytes);
+    }
+}
+
 fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
-    // eprintln!("copy from {:?} -> {:?} {size_bytes}", src, dst);
     unsafe {
         core::ptr::copy_nonoverlapping(src, dst, size_bytes);
     }
@@ -2219,7 +2237,7 @@ pub fn vm_value_to_static_value(
     vm_value: Value,
     span: SpanId,
 ) -> TyperResult<StaticValueId> {
-    eprintln!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
+    debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
     let Some(_pt) = k1.types.get_physical_type(type_id) else {
         return failf!(span, "Not a phyical type: {}", k1.type_id_to_string(type_id));
     };
