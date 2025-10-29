@@ -5131,40 +5131,35 @@ impl TypedProgram {
         self.compile_expr_bytecode(expr, input_parameters)?;
         self.compile_all_pending_bytecode()?;
 
-        let vmbc_value_id =
+        let static_value_id =
             vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters, is_debug)
                 .map_err(|mut e| {
                     let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
-                    e.message = format!(
-                        "Vm Execute failed: {}\nExecution Trace\n{}",
-                        e.message, stack_trace
-                    );
+                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                     e
                 })?;
-        eprintln!("vmbc returned: {}", self.static_value_to_string(vmbc_value_id));
 
-        let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
-            |mut e| {
-                let stack_trace = vm::make_stack_trace(self, &vm.stack);
-                e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                e
-            },
-        )?;
+        // let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
+        //     |mut e| {
+        //         let stack_trace = vm::make_stack_trace(self, &vm.stack);
+        //         e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+        //         e
+        //     },
+        // )?;
+        // let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
 
-        if cfg!(debug_assertions) {
-            if let Err(msg) = self.check_types(required_type_id, vm_value.get_type(), ctx.scope_id)
-            {
-                return failf!(span, "static value type mismatch: {msg}");
-            }
-        }
-
-        //let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
+        // if cfg!(debug_assertions) {
+        //     if let Err(msg) = self.check_types(required_type_id, vm_value.get_type(), ctx.scope_id)
+        //     {
+        //         return failf!(span, "static value type mismatch: {msg}");
+        //     }
+        // }
 
         if !no_reset {
             vmbc.reset();
             vm.reset();
         }
-        Ok(VmExecuteResult { type_id: output_type_id, static_value_id: vmbc_value_id })
+        Ok(VmExecuteResult { type_id: output_type_id, static_value_id })
     }
 
     fn execute_static_expr(
@@ -5181,7 +5176,7 @@ impl TypedProgram {
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
-                        eprintln!(
+                        debug!(
                             "Had to make a new alt VM at {}:{}",
                             source.filename,
                             location.line_number()
@@ -5190,8 +5185,8 @@ impl TypedProgram {
                         new_vm
                     }
                     Some(alt_vm) => {
-                        eprintln!(
-                            "We have PLENTY of VMs! at {}:{}",
+                        debug!(
+                            "Serving up nested VM at {}:{}",
                             source.filename,
                             location.line_number()
                         );
@@ -5209,7 +5204,7 @@ impl TypedProgram {
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
-                        eprintln!(
+                        debug!(
                             "Had to make a new alt VM at {}:{}",
                             source.filename,
                             location.line_number()
@@ -5218,8 +5213,8 @@ impl TypedProgram {
                         new_vm
                     }
                     Some(alt_vm) => {
-                        eprintln!(
-                            "Recycling alt vm at {}:{}",
+                        debug!(
+                            "Serving up nested at {}:{}",
                             source.filename,
                             location.line_number()
                         );
@@ -5242,7 +5237,7 @@ impl TypedProgram {
             *self.vm = Some(vm);
             *self.vmbc = Some(vmbc);
         } else {
-            eprintln!("Restoring alt VM to pool");
+            debug!("Restoring alt VM to pool");
             self.alt_vms.push(vm);
             self.alt_vmbcs.push(vmbc);
         }
@@ -10470,6 +10465,8 @@ impl TypedProgram {
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let new_function_id = self.add_function(new_function);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
+            bc::compile_function(self, new_function_id, false)
+                .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
             new_function_id
         };
         let dyn_function = self.get_function(dyn_function_id);

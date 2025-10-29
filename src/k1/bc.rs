@@ -774,15 +774,21 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             b.push_block(name);
 
             let result = compile_expr(b, None, typed_expr_id)?;
-            let exit_args =
-                b.k1.bytecode.mem.push_slice(&[Value::Imm32 { t: ScalarType::I32, data: 0 }]);
-            let id = b.k1.bytecode.calls.add(BcCall {
-                dst: None,
-                ret_inst_kind: InstKind::Terminator,
-                callee: BcCallee::Builtin(BcBuiltin::Exit),
-                args: exit_args,
-            });
-            b.push_inst(Inst::Call { id }, "expr synthetic exit");
+
+            // nocommit(2): Adding this exit isn't good enough; what if the expr branches to many blocks
+            // perhaps we should just compile
+            // these in 'terminating' mode like function blocks
+            if b.k1.get_expr_type_id(typed_expr_id) != NEVER_TYPE_ID {
+                let exit_args =
+                    b.k1.bytecode.mem.push_slice(&[Value::Imm32 { t: ScalarType::I32, data: 0 }]);
+                let id = b.k1.bytecode.calls.add(BcCall {
+                    dst: None,
+                    ret_inst_kind: InstKind::Terminator,
+                    callee: BcCallee::Builtin(BcBuiltin::Exit),
+                    args: exit_args,
+                });
+                b.push_inst(Inst::Call { id }, "expr synthetic exit");
+            }
 
             let compiled_blocks = b.bake_blocks();
             let compiled_expr = CompiledUnit {
@@ -1555,7 +1561,16 @@ fn compile_expr(
                             .b_units_pending_compile
                             .push(CompilableUnit::Function(*function_id))
                     }
-                    _ => {}
+                    Some(unit) => {
+                        // TODO: Inline!
+                        let mut total = 0;
+                        for block in b.k1.bytecode.mem.get_slice(unit.blocks) {
+                            total += block.instrs.len()
+                        }
+                        if total < 50 {
+                            //eprintln!("Would inline call")
+                        }
+                    }
                 }
             }
             let return_inst_kind: InstKind = b.type_to_inst_kind(return_type);
@@ -2603,7 +2618,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
         Err(TyperError {
             span,
             message: format!(
-                "Bytecode Unit {} failed validation\n{}",
+                "Bytecode Unit '{}' failed validation\n{}",
                 writestr!(display_unit_name, k1, unit.unit),
                 error_string
             ),
