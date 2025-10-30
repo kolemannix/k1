@@ -69,7 +69,7 @@ pub struct BcModuleConfig {
 
 impl ProgramBytecode {
     pub fn make(instr_count_hint: usize, word_size: WordSize) -> Self {
-        let function_count_hint = instr_count_hint / 128;
+        let function_count_hint = instr_count_hint / 32;
         ProgramBytecode {
             mem: kmem::Mem::make(),
             instrs: VPool::make_with_hint("bytecode_soa_instrs", instr_count_hint),
@@ -232,6 +232,7 @@ pub enum Inst {
     Store {
         dst: Value,
         value: Value,
+        t: ScalarType,
     },
     Load {
         t: ScalarType,
@@ -952,7 +953,8 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_store(&mut self, dst: Value, value: Value, comment: &str) -> InstId {
-        self.push_inst(Inst::Store { dst, value }, comment)
+        let t = self.get_value_kind(&value).expect_value().unwrap().expect_scalar();
+        self.push_inst(Inst::Store { dst, value, t }, comment)
     }
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: &str) -> Value {
@@ -2779,10 +2781,9 @@ pub fn display_inst(
             display_pt(w, &k1.types, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
-        Inst::Store { dst, value } => {
-            let inst_kind = get_value_kind(bc, &k1.types, value);
+        Inst::Store { dst, value, t } => {
             write!(w, "store to {}, ", *dst,)?;
-            display_inst_kind(w, &k1.types, &inst_kind)?;
+            display_scalar_type(w, t)?;
             write!(w, " {}", *value)?;
         }
         Inst::Load { t, src } => {

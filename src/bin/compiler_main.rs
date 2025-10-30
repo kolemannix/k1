@@ -14,16 +14,17 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> anyhow::Result<ExitCode> {
-    let compiler_thread = std::thread::Builder::new()
-        .stack_size(k1::STACK_SIZE)
-        .name("compiler".to_string())
-        .spawn(run)
-        .unwrap();
-
-    match compiler_thread.join() {
-        Ok(result) => result,
-        Err(_) => Ok(ExitCode::FAILURE),
-    }
+    run()
+    // let compiler_thread = std::thread::Builder::new()
+    //     .stack_size(k1::STACK_SIZE)
+    //     .name("compiler".to_string())
+    //     .spawn(run)
+    //     .unwrap();
+    //
+    // match compiler_thread.join() {
+    //     Ok(result) => result,
+    //     Err(_) => Ok(ExitCode::FAILURE),
+    // }
 }
 
 fn run() -> anyhow::Result<ExitCode> {
@@ -49,7 +50,6 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     };
     let program_name = program.program_name();
-    info!("done waiting on compile thread");
     if matches!(args.command, Command::Check { .. }) {
         // Note: I wouldn't mind switching back to exit for the faster
         // exit, but this was hiding a memory bug that causes the lsp
