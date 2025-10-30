@@ -75,6 +75,12 @@ impl<T, Tag> MSlice<T, Tag> {
         Self::make(BOGUS_OFFSET, 0)
     }
 
+    #[cfg(test)]
+    pub fn forged(offset: u32, count: u32) -> Self {
+        let offset = NonZeroU32::new(offset).expect("Cannot forge MSlice with zero offset");
+        Self::make(offset, count)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

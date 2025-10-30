@@ -1027,7 +1027,7 @@ fn execute_variable_expr(
                 let is_referencing = global.is_referencing;
                 let global_value = match global.initial_value {
                     None => {
-                        m.eval_global_body(global.ast_id, None, None)?;
+                        m.eval_global_body(global.ast_id)?;
                         m.globals.get(global_id).initial_value.unwrap()
                     }
                     Some(value_id) => value_id,

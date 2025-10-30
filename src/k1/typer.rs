@@ -2455,7 +2455,7 @@ impl TypedProgram {
 
         let word_size = ast.config.target.word_size();
 
-        let mut vmbc_static_stack = vmbc::Stack::make(vm_stack_size, false);
+        let mut vmbc_static_stack = vmbc::Stack::make(vm_stack_size);
         let addr = vmbc_static_stack.push_t(true as u8);
         let mut vmbc_global_constant_lookups = FxHashMap::new();
         vmbc_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vmbc::Value::ptr(addr));
@@ -2510,9 +2510,13 @@ impl TypedProgram {
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
                 vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
             vmbc: Box::new(Some(vmbc::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vmbcs: vec![
+                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
                 vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
                 vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
                 vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
@@ -5116,7 +5120,6 @@ impl TypedProgram {
         let expr = self.eval_expr(parsed_expr, ctx)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
-        let span = self.exprs.get(expr).get_span();
         let required_type_id = self.exprs.get(expr).get_type();
         let output_type_id =
             if static_ctx.is_metaprogram { STRING_TYPE_ID } else { required_type_id };
@@ -5131,13 +5134,14 @@ impl TypedProgram {
         self.compile_expr_bytecode(expr, input_parameters)?;
         self.compile_all_pending_bytecode()?;
 
-        let static_value_id =
-            vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters, is_debug)
-                .map_err(|mut e| {
+        let execution_result =
+            vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters, is_debug).map_err(
+                |mut e| {
                     let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
                     e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                     e
-                })?;
+                },
+            );
 
         // let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
         //     |mut e| {
@@ -5159,6 +5163,9 @@ impl TypedProgram {
             vmbc.reset();
             vm.reset();
         }
+
+        let static_value_id = execution_result?;
+
         Ok(VmExecuteResult { type_id: output_type_id, static_value_id })
     }
 
@@ -5176,7 +5183,7 @@ impl TypedProgram {
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
-                        debug!(
+                        eprintln!(
                             "Had to make a new alt VM at {}:{}",
                             source.filename,
                             location.line_number()
@@ -5204,7 +5211,7 @@ impl TypedProgram {
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
-                        debug!(
+                        eprintln!(
                             "Had to make a new alt VM at {}:{}",
                             source.filename,
                             location.line_number()
@@ -5315,12 +5322,7 @@ impl TypedProgram {
         Ok(variable_id)
     }
 
-    pub fn eval_global_body(
-        &mut self,
-        parsed_global_id: ParsedGlobalId,
-        vm_to_use: Option<&mut vm::Vm>,
-        vmbc_to_use: Option<&mut vmbc::Vm>,
-    ) -> TyperResult<()> {
+    pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> TyperResult<()> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
             // This means we failed to compile the definition; or we have a bug!
@@ -5355,20 +5357,7 @@ impl TypedProgram {
             global_defn_name: Some(global_name),
             flags: EvalExprFlags::empty(),
         };
-        let vm_result = match vm_to_use {
-            None => self.execute_static_expr(value_expr_id, ctx, false, &[]),
-            Some(vm) => {
-                let no_reset = true;
-                self.execute_static_expr_with_vm(
-                    vm,
-                    vmbc_to_use.unwrap(),
-                    value_expr_id,
-                    ctx,
-                    no_reset,
-                    &[],
-                )
-            }
-        }?;
+        let vm_result = self.execute_static_expr(value_expr_id, ctx, false, &[])?;
 
         if let Err(msg) = self.check_types(
             type_to_check,
@@ -14059,7 +14048,7 @@ impl TypedProgram {
                 self.compile_ns_body(namespace, skip_defns);
             }
             ParsedId::Global(global_id) => {
-                if let Err(e) = self.eval_global_body(global_id, None, None) {
+                if let Err(e) = self.eval_global_body(global_id) {
                     self.report_error(e)
                 };
             }

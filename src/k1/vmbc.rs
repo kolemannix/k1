@@ -171,7 +171,6 @@ pub struct Vm {
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
-    eval_depth: AtomicU64,
     eval_span: SpanId,
 }
 
@@ -183,19 +182,16 @@ impl Vm {
         self.stack.reset();
         self.globals.clear();
 
-        self.eval_depth.store(0, Ordering::Relaxed);
         self.eval_span = SpanId::NONE;
     }
 
     pub fn make(stack_size_bytes: usize, static_size_bytes: usize) -> Self {
-        let stack = Stack::make(stack_size_bytes, true);
-        let static_stack = Stack::make(static_size_bytes, false);
+        let stack = Stack::make(stack_size_bytes);
+        let static_stack = Stack::make(static_size_bytes);
         Self {
-            // nocommit(4): Pass in upper bound on globals from the AST
             globals: FxHashMap::with_capacity(8192),
             static_stack,
             stack,
-            eval_depth: AtomicU64::new(0),
             eval_span: SpanId::NONE,
         }
     }
@@ -227,8 +223,9 @@ impl Vm {
         use std::fmt::Write;
         let mut s = String::new();
         let w = &mut s;
-        let frame = self.stack.frames[frame_index as usize];
-        writeln!(w, "Frame [{frame_index}] {}", k1.ident_str_opt(frame.debug_name)).unwrap();
+        let frame = &self.stack.frames[frame_index as usize];
+        writeln!(w, "Frame [{frame_index}] ").unwrap();
+        bc::display_unit_name(w, k1, frame.unit).unwrap();
         writeln!(w, "Base:  {:?}", frame.base_ptr).unwrap();
         if let Some(ret_info) = frame.ret_info {
             write!(w, "ret ").unwrap();
@@ -237,45 +234,41 @@ impl Vm {
                     write!(w, " [{frame_index}] reg {inst_index}").unwrap()
                 }
                 RetPlace::Addr { addr } => {
-                    render_debug_value(w, self, k1, ret_info.t, Value::ptr(addr.cast_const()));
+                    render_debug_value(w, self, k1, ret_info.t, Value::ptr(addr.cast_const()))
+                        .unwrap();
                 }
             }
             writeln!(w, "").unwrap();
         }
-        match frame.unit.unit {
-            CompilableUnit::Function(_function_id) => {
-                for (i, pt) in k1.bytecode.mem.get_slice(frame.unit.fn_params).iter().enumerate() {
-                    writeln!(w, "Param {i}: ").unwrap();
-                    let value = self.stack.get_param_value(frame_index, i as u32);
-                    render_debug_value(w, self, k1, *pt, value);
-                }
-            }
-            _ => {}
+        let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
+        for (i, pt) in k1.bytecode.mem.get_slice(unit.fn_params).iter().enumerate() {
+            writeln!(w, "Param {i}: ").unwrap();
+            let value = self.stack.get_param_value(frame_index, i as u32);
+            render_debug_value(w, self, k1, *pt, value);
         }
         writeln!(w, "Locals").unwrap();
-        for block in k1.bytecode.mem.get_slice(frame.unit.blocks) {
+        for block in k1.bytecode.mem.get_slice(unit.blocks) {
             for inst_id in k1.bytecode.mem.get_slice(block.instrs) {
-                let inst_index = inst_to_index(*inst_id, frame.unit.inst_offset);
-                if let Some(local) = self.stack.get_frame_inst_value(frame.index, inst_index) {
-                    let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, *inst_id);
-                    match kind {
-                        InstKind::Value(physical_type) => {
-                            write!(w, "  i{}: ", inst_id).unwrap();
-                            write!(w, " ").unwrap();
-                            let type_to_use = match k1.bytecode.instrs.get(*inst_id) {
-                                Inst::Alloca { t, .. } => *t,
-                                _ => physical_type,
-                            };
-                            render_debug_value(w, self, k1, type_to_use, local).unwrap();
-                            writeln!(w).unwrap()
-                        }
-                        InstKind::Void => {
-                            continue;
-                        }
-                        InstKind::Terminator => {
-                            continue;
-                        }
-                    };
+                let inst_index = inst_to_index(*inst_id, unit.inst_offset);
+                let local = self.stack.get_inst_value(frame.index, inst_index);
+                let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, *inst_id);
+                match kind {
+                    InstKind::Value(physical_type) => {
+                        write!(w, "  i{}: ", inst_id).unwrap();
+                        write!(w, " ").unwrap();
+                        let type_to_use = match k1.bytecode.instrs.get(*inst_id) {
+                            Inst::Alloca { t, .. } => *t,
+                            _ => physical_type,
+                        };
+                        render_debug_value(w, self, k1, type_to_use, local).unwrap();
+                        writeln!(w).unwrap()
+                    }
+                    InstKind::Void => {
+                        continue;
+                    }
+                    InstKind::Terminator => {
+                        continue;
+                    }
                 };
             }
         }
@@ -467,6 +460,7 @@ pub fn execute_compiled_unit(
 ) -> TyperResult<StaticValueId> {
     let start = k1.timing.clock.raw();
     let span = k1.exprs.get(expr_id).get_span();
+    vm.eval_span = span;
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
     //eprintln!(
@@ -484,12 +478,17 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_frame = vm.stack.push_new_frame(None, Some(span), unit, None);
-    let top_frame_index = top_frame.index;
+    vm.stack.push_new_frame(Some(span), &unit, None);
+    let top_frame_index = vm.stack.current_frame_index();
+    if top_frame_index != 0 {
+        eprintln!("{}", make_stack_trace(k1, &vm.stack));
+        vm_crash(k1, vm, "hey there's already a stack.");
+    }
+    debug_assert_eq!(top_frame_index, 0);
 
     for (param_index, arg) in args.iter().enumerate() {
         let value = static_value_to_vm_value(k1, *arg, span);
-        vm.stack.param_values[top_frame_index as usize][param_index] = value;
+        vm.stack.set_param_value(top_frame_index, param_index as u32, value);
     }
 
     let (exit_code, exit_value) = exec_loop(k1, vm, unit, debugger)?;
@@ -516,21 +515,23 @@ pub fn execute_compiled_unit(
 fn exec_loop(
     k1: &mut TypedProgram,
     vm: &mut Vm,
-    mut unit: CompiledUnit,
+    original_unit: CompiledUnit,
     debugger: bool,
 ) -> TyperResult<(i32, Option<Value>)> {
     let mut prev_b: u32 = 0;
     let mut b: u32 = 0;
     let mut ip: u32 = 0;
     let mut exit_value: Option<Value> = None;
-    let mut instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
-    let mut span;
+    let mut blocks = original_unit.blocks;
+    let mut inst_offset = original_unit.inst_offset;
+    let mut instrs = k1.bytecode.mem.get_nth(original_unit.blocks, b as usize).instrs;
 
     macro_rules! goto_unit {
-        ($gt_unit: expr, $gt_block: expr, $gt_ip: expr) => {{
-            unit = $gt_unit;
+        ($gt_blocks: expr, $inst_offset: expr, $gt_block: expr, $gt_ip: expr) => {{
+            blocks = $gt_blocks;
             b = $gt_block;
-            instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
+            instrs = k1.bytecode.mem.get_nth(blocks, b as usize).instrs;
+            inst_offset = $inst_offset;
             ip = $gt_ip;
         }};
     }
@@ -539,14 +540,14 @@ fn exec_loop(
         ($gt_block: expr) => {{
             prev_b = b;
             b = $gt_block;
-            instrs = k1.bytecode.mem.get_nth(unit.blocks, b as usize).instrs;
+            instrs = k1.bytecode.mem.get_nth(blocks, b as usize).instrs;
             ip = 0;
         }};
     }
 
     macro_rules! resolve_value {
         ($v:expr) => {
-            resolve_value(k1, vm, unit.inst_offset, $v)
+            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)
         };
     }
 
@@ -554,8 +555,8 @@ fn exec_loop(
     let exit_code = 'exec: loop {
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
-        span = *k1.bytecode.sources.get(inst_id);
-        let inst_index = inst_to_index(inst_id, unit.inst_offset);
+        vm.eval_span = *k1.bytecode.sources.get(inst_id);
+        let inst_index = inst_to_index(inst_id, inst_offset);
 
         if debugger {
             eprintln!(
@@ -574,11 +575,11 @@ fn exec_loop(
 
         // ~Decode~ Execute
         match *k1.bytecode.instrs.get(inst_id) {
-            Inst::Imm(imm) => {
+            Inst::Data(imm) => {
                 let value = match imm {
-                    bc::Imm::U64(v) => Value::u64(v),
-                    bc::Imm::I64(v) => Value::i64(v),
-                    bc::Imm::Float(fv) => match fv {
+                    bc::DataInst::U64(v) => Value::u64(v),
+                    bc::DataInst::I64(v) => Value::i64(v),
+                    bc::DataInst::Float(fv) => match fv {
                         TypedFloatValue::F32(f32) => Value::f32(f32),
                         TypedFloatValue::F64(f64) => Value::f64(f64),
                     },
@@ -701,7 +702,7 @@ fn exec_loop(
                                 )
                             };
                             let schema_vm_value =
-                                static_value_to_vm_value(k1, *schema_static_value_id, span);
+                                static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
                             builtin_return!(schema_vm_value);
                         }
                         bc::BcBuiltin::TypeName => {
@@ -713,7 +714,7 @@ fn exec_loop(
                             let name_value_id = *k1.type_names.get(&type_id).unwrap();
 
                             let name_string_value =
-                                static_value_to_vm_value(k1, name_value_id, span);
+                                static_value_to_vm_value(k1, name_value_id, vm.eval_span);
                             builtin_return!(name_string_value);
                         }
                         bc::BcBuiltin::Allocate | bc::BcBuiltin::AllocateZeroed => {
@@ -832,7 +833,7 @@ fn exec_loop(
                             let exit_code =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
                             if exit_code == 0 {
-                                if let Some(expr_ret) = unit.expr_ret {
+                                if let Some(expr_ret) = original_unit.expr_ret {
                                     exit_value = Some(resolve_value!(expr_ret));
                                 }
                             }
@@ -899,31 +900,51 @@ fn exec_loop(
                         function_id
                     }
                 };
-                let fn_name = k1.functions.get(dispatch_function_id).name;
-                let inst_span = *k1.bytecode.sources.get(inst_id);
                 let Some(compiled_function) = k1.bytecode.functions.get(dispatch_function_id)
                 else {
                     return failf!(
-                        span,
+                        vm.eval_span,
                         "Call to uncompiled function: {}. ({} are pending)",
                         k1.function_id_to_string(dispatch_function_id, false),
                         k1.bytecode.b_units_pending_compile.len()
                     );
                 };
-                let compiled_function = *compiled_function;
-                let frame_index = vm.stack.current_frame_index();
-                let new_frame_index = frame_index + 1;
+                let caller_frame_index = vm.stack.current_frame_index();
+                let caller_inst_offset = inst_offset;
+                let called_blocks = compiled_function.blocks;
+                let called_inst_offset = compiled_function.inst_offset;
+                let new_frame_index = caller_frame_index + 1;
+
+                eprintln!(
+                    "{}{}dispatching call [{}] to above",
+                    bc::compiled_unit_to_string(
+                        k1,
+                        CompilableUnit::Function(dispatch_function_id),
+                        true
+                    ),
+                    "  ".repeat(vm.stack.current_frame_index() as usize),
+                    new_frame_index,
+                );
+
+                // - Push a stack frame
+                vm.stack.push_new_frame(Some(vm.eval_span), compiled_function, ret_info);
+                debug_assert_eq!(new_frame_index, vm.stack.current_frame_index());
 
                 // Prepare the function's arguments
                 for (index, arg) in k1.bytecode.mem.get_slice(call.args).iter().enumerate() {
                     // Note: These need to execute before we push, in case they access this stack's
-                    // params, or instrs by index
-                    let vm_value = resolve_value!(*arg);
-                    // task(vmbc): Slight optimization to avoid extra accessing the param vec for this frame repeatedly
+                    // params or instrs by index, which is basically always! The other option would
+                    // be parameterizing 'resolve_value' by stack frame
+                    eprintln!(
+                        "I am frame {} and pushed {}; resolving inside {} with offset {}",
+                        caller_frame_index, new_frame_index, caller_frame_index, caller_inst_offset
+                    );
+                    let vm_value =
+                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg);
                     if debugger {
                         eprintln!(
                             "{}call [{}] param p{} := {}",
-                            "  ".repeat(vm.stack.current_frame_index() as usize),
+                            "  ".repeat(caller_frame_index as usize),
                             new_frame_index,
                             index,
                             vm_value
@@ -931,30 +952,14 @@ fn exec_loop(
                     }
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
-                // eprintln!(
-                //     "{}{}dispatching call [{}] to above",
-                //     bc::compiled_unit_to_string(k1, &compiled_function, true),
-                //     "  ".repeat(vm.stack.current_frame_index() as usize),
-                //     new_frame_index,
-                // );
 
-                // 'Dispatch' to the function:
-                // - Push a stack frame
                 // - Set 'pc' (which is blocks + b + i)
-                let _frame = vm.stack.push_new_frame(
-                    Some(fn_name),
-                    Some(inst_span),
-                    compiled_function,
-                    ret_info,
-                );
-
-                goto_unit!(compiled_function, 0, 0);
+                goto_unit!(called_blocks, called_inst_offset, 0, 0);
             }
             Inst::Ret(bc_value) => {
-                let cur_frame = vm.stack.current_frame_index();
-                let cur_frame = &vm.stack.frames[cur_frame as usize];
+                let cur_frame = vm.stack.current_frame();
                 let Some(ret_info) = cur_frame.ret_info else {
-                    return failf!(span, "Return from 'never' function");
+                    return failf!(vm.eval_span, "Return from 'never' function");
                 };
 
                 let returned_value = resolve_value!(bc_value);
@@ -965,7 +970,8 @@ fn exec_loop(
 
                 let _popped = vm.stack.pop_frame();
 
-                goto_unit!(vm.stack.current_frame().unit, ret_info.block, ret_info.ip);
+                let current = vm.stack.current_frame();
+                goto_unit!(current.blocks, current.inst_offset, ret_info.block, ret_info.ip);
             }
             Inst::Jump(block_index) => {
                 jump!(block_index);
@@ -979,7 +985,7 @@ fn exec_loop(
                 }
             }
             Inst::Unreachable => {
-                return failf!(span, "Reached unreachable instruction");
+                return failf!(vm.eval_span, "Reached unreachable instruction");
             }
             Inst::CameFrom { t: _, incomings } => {
                 debug_assert!(incomings.len() > 0);
@@ -1234,7 +1240,7 @@ fn exec_loop(
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
-                    return failf!(span, "Division by zero");
+                    return failf!(vm.eval_span, "Division by zero");
                 }
                 use std::ops::Div;
                 let result = casted_uop!(width, div, lhs, rhs);
@@ -1246,7 +1252,7 @@ fn exec_loop(
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
-                    return failf!(span, "Division by zero");
+                    return failf!(vm.eval_span, "Division by zero");
                 }
                 use std::ops::Div;
                 let result = casted_iop!(width, div, lhs, rhs);
@@ -1258,7 +1264,7 @@ fn exec_loop(
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
-                    return failf!(span, "Division by zero");
+                    return failf!(vm.eval_span, "Division by zero");
                 }
                 use std::ops::Rem;
                 let result = casted_uop!(width, rem, lhs, rhs);
@@ -1270,7 +1276,7 @@ fn exec_loop(
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 if rhs == 0 {
-                    return failf!(span, "Division by zero");
+                    return failf!(vm.eval_span, "Division by zero");
                 }
                 use std::ops::Rem;
                 let result = casted_iop!(width, rem, lhs, rhs);
@@ -1442,7 +1448,7 @@ fn exec_loop(
             Inst::BakeStaticValue { type_id, value } => {
                 // intern fn bakeStaticValue[T](value: T): u64
                 let value_value = resolve_value!(value);
-                let value_id = vm_value_to_static_value(k1, type_id, value_value, span)?;
+                let value_id = vm_value_to_static_value(k1, type_id, value_value, vm.eval_span)?;
 
                 let value_id_u64 = value_id.as_u32() as u64;
 
@@ -1455,14 +1461,18 @@ fn exec_loop(
 }
 
 #[inline(always)]
-fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: BcValue) -> Value {
+fn resolve_value(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    frame_index: u32,
+    inst_offset: u32,
+    value: BcValue,
+) -> Value {
     match value {
         BcValue::Inst(inst_id) => {
+            eprintln!("resolving inst_id {} using offset {}", inst_id.as_u32(), inst_offset);
             let inst_index = inst_to_index(inst_id, inst_offset);
-            let v = vm
-                .stack
-                .get_cur_inst_value(inst_index)
-                .unwrap_or_else(|| vm_ice!(k1, vm, "missing inst: {}", inst_id));
+            let v = vm.stack.get_inst_value(frame_index, inst_index);
             v
         }
         BcValue::Global { t, id } => {
@@ -1482,7 +1492,7 @@ fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: Bc
                             let is_constant = global.is_constant;
                             let initial_value_id = match global.initial_value {
                                 None => {
-                                    k1.eval_global_body(global.ast_id, None, None).unwrap();
+                                    k1.eval_global_body(global.ast_id).unwrap();
                                     let value_id = k1.globals.get(id).initial_value.unwrap();
                                     value_id
                                 }
@@ -1521,7 +1531,7 @@ fn resolve_value(k1: &mut TypedProgram, vm: &mut Vm, inst_offset: u32, value: Bc
         }
         BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
         BcValue::FnParam { t: _, index } => {
-            let value = vm.stack.get_param_value(vm.stack.current_frame_index(), index);
+            let value = vm.stack.get_param_value(frame_index, index);
             // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
             value
         }
@@ -1836,10 +1846,6 @@ pub struct Stack {
     allocation: MmapMut,
     base_ptr: *const u8,
     frames: Vec<StackFrame>,
-    // Indexed by stack frame index, then inst id
-    inst_values: Vec<Vec<Value>>,
-    // Indexed by stack frame index, then function parameter index
-    param_values: Vec<Vec<Value>>,
     cursor: *const u8,
 }
 
@@ -1852,68 +1858,81 @@ enum RetPlace {
 #[derive(Clone, Copy)]
 pub struct RetInfo {
     t: PhysicalType,
-    // Where the return value does. Either a register or an address
+    // Where the return value goes. Either a register or an address
     place: RetPlace,
     ip: u32,
     block: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct StackFrame {
-    #[allow(unused)]
     index: u32,
     base_ptr: *const u8,
-    debug_name: Option<Ident>,
+    inst_slice: *mut [Value],
     call_span: Option<SpanId>,
-    unit: CompiledUnit,
+    param_count: u32,
+    blocks: MSlice<bc::CompiledBlock, bc::ProgramBytecode>,
+    inst_offset: u32,
+    unit: CompilableUnit,
     ret_info: Option<RetInfo>,
 }
 
 impl StackFrame {
-    pub fn make(
+    fn make(
         index: u32,
         base_ptr: *const u8,
-        debug_name: Option<Ident>,
         call_span: Option<SpanId>,
-        owner: CompiledUnit,
+        owner: &CompiledUnit,
         ret_info: Option<RetInfo>,
     ) -> StackFrame {
-        StackFrame { index, base_ptr, debug_name, call_span, unit: owner, ret_info }
+        let base =
+            unsafe { base_ptr.byte_add(owner.fn_params.len() as usize * size_of::<Value>()) };
+        let inst_slice =
+            core::ptr::slice_from_raw_parts_mut(base as *mut Value, owner.inst_count as usize);
+
+        // Frames must be 8-byte aligned
+        debug_assert!((base_ptr as *const Value).is_aligned());
+
+        StackFrame {
+            index,
+            base_ptr,
+            inst_slice,
+            call_span,
+            unit: owner.unit,
+            param_count: owner.fn_params.len(),
+            blocks: owner.blocks,
+            inst_offset: owner.inst_offset,
+            ret_info,
+        }
+    }
+    fn param_slice<'ret>(&self) -> &'ret mut [Value] {
+        unsafe {
+            core::slice::from_raw_parts_mut(self.base_ptr as *mut Value, self.param_count as usize)
+        }
     }
 }
 
 impl Stack {
-    pub fn make(size: usize, set_up_registers: bool) -> Stack {
-        debug!("make stack {size}");
+    pub fn make(size: usize) -> Stack {
         let mut mmap_options = MmapOptions::new();
-        let mmap_mut = mmap_options.len(size).map_anon().unwrap();
-        let base_ptr = (*mmap_mut).as_ptr();
-        let frames_cap = if size == 0 { 0 } else { 512 };
-        let values_cap = 1024;
-        let params_cap = 256;
+        let allocation = mmap_options.len(size).map_anon().unwrap();
+        let base_ptr = (*allocation).as_ptr();
 
-        let mut inst_values = Vec::new();
-        let mut param_values = Vec::new();
-
-        if set_up_registers {
-            inst_values.reserve(frames_cap);
-            param_values.reserve(frames_cap);
-            let init_value = if cfg!(debug_assertions) { Value(0xCD) } else { Value(0) };
-            let empty_values = vec![init_value; values_cap];
-            let empty_params = vec![init_value; params_cap];
-            for _ in 0..frames_cap {
-                inst_values.push(empty_values.clone());
-                param_values.push(empty_params.clone())
-            }
-        }
+        allocation.advise(memmap2::Advice::Sequential).unwrap();
+        let expected_values_needed = 10000;
+        allocation
+            .advise_range(
+                memmap2::Advice::WillNeed,
+                0,
+                expected_values_needed * std::mem::size_of::<Value>(),
+            )
+            .unwrap();
 
         Self {
             // Calls libc::munmap(ptr, len as libc::size_t) on Drop
-            allocation: mmap_mut,
+            allocation,
             base_ptr,
-            frames: Vec::with_capacity(frames_cap),
-            inst_values,
-            param_values,
+            frames: Vec::with_capacity(512),
             cursor: base_ptr,
         }
     }
@@ -1930,50 +1949,39 @@ impl Stack {
         self.frames.clear();
     }
 
+    /// Frame Layout:
+    /// base_ptr: 0
+    /// `param_count` x 64-bit function param Values
+    /// `inst_count`  x 64-bit Values
+    /// Allocas
     fn push_new_frame(
         &mut self,
-        name: Option<Ident>,
         call_span: Option<SpanId>,
-        owner: CompiledUnit,
+        owner: &CompiledUnit,
         ret_info: Option<RetInfo>,
-    ) -> StackFrame {
+    ) {
         let index = self.frames.len() as u32;
+        self.align_to_bytes(8);
         let base_ptr = self.cursor;
-        let frame = StackFrame::make(index, base_ptr, name, call_span, owner, ret_info);
-        self.push_frame(frame)
-    }
 
-    fn push_frame(&mut self, frame: StackFrame) -> StackFrame {
+        let frame = StackFrame::make(index, base_ptr, call_span, owner, ret_info);
         if self.frames.len() == 512 {
-            panic!("vmbc Stack overflow: exceeded maximum call stack depth of 512 frames");
+            eprintln!("vm stack > 512");
         }
+        let registers_size =
+            size_of::<Value>() * (frame.inst_slice.len() + frame.param_count as usize);
+        let registers_align = align_of::<Value>();
+        let registers_layout =
+            Layout { size: registers_size as u32, align: registers_align as u32 };
+        debug_assert_eq!(registers_align, 8);
         self.frames.push(frame);
-        *self.frames.last().unwrap()
+        self.push_layout_uninit(registers_layout);
     }
 
     fn pop_frame(&mut self) -> StackFrame {
         let f = self.frames.pop().unwrap();
-        #[cfg(debug_assertions)]
-        {
-            self.reset_registers(f.index);
-            self.reset_params(f.index);
-        }
         self.cursor = f.base_ptr;
         f
-    }
-
-    fn reset_registers(&mut self, frame_index: u32) {
-        let frame_values = &mut self.inst_values[frame_index as usize];
-        for v in frame_values.iter_mut() {
-            *v = if cfg!(debug_assertions) { Value(0xCD) } else { Value(0) };
-        }
-    }
-
-    fn reset_params(&mut self, frame_index: u32) {
-        let frame_params = &mut self.param_values[frame_index as usize];
-        for v in frame_params.iter_mut() {
-            *v = if cfg!(debug_assertions) { Value(0xCD) } else { Value(0) };
-        }
     }
 
     /// Returns the frame index
@@ -2003,17 +2011,14 @@ impl Stack {
         self.frames.last().unwrap()
     }
 
-    fn param_values_for_frame(&self, frame_index: u32) -> &Vec<Value> {
-        &self.param_values[frame_index as usize]
+    fn param_values_for_frame(&self, frame_index: u32) -> &mut [Value] {
+        let f = &self.frames[frame_index as usize];
+        f.param_slice()
     }
 
-    fn param_values_for_frame_mut(&mut self, frame_index: u32) -> &mut Vec<Value> {
-        &mut self.param_values[frame_index as usize]
-    }
-
-    fn set_param_value(&mut self, frame_index: u32, param_index: u32, value: Value) {
-        let vs = self.param_values_for_frame_mut(frame_index);
-        vs[param_index as usize] = value;
+    fn inst_values_for_frame<'ret>(&self, frame_index: u32) -> &'ret mut [Value] {
+        let f = &self.frames[frame_index as usize];
+        unsafe { &mut *f.inst_slice }
     }
 
     fn get_param_value(&self, frame_index: u32, param_index: u32) -> Value {
@@ -2021,28 +2026,27 @@ impl Stack {
         vs[param_index as usize]
     }
 
+    fn set_param_value(&mut self, frame_index: u32, param_index: u32, value: Value) {
+        let vs = self.param_values_for_frame(frame_index);
+        vs[param_index as usize] = value;
+    }
+
+    pub fn get_inst_value(&self, frame_index: u32, inst_index: u32) -> Value {
+        let inst_values = self.inst_values_for_frame(frame_index);
+        inst_values[inst_index as usize]
+    }
+
     pub fn set_inst_value(&mut self, frame_index: u32, inst_index: u32, value: Value) {
-        // match self.inst_values.get_mut(frame_index as usize) {
-        //     None => self.inst_values.push(vec![Value(0); 64]),
-        //     Some(_) => (),
-        // };
-        let frame_values = &mut self.inst_values[frame_index as usize];
-        match frame_values.get_mut(inst_index as usize) {
-            None => frame_values.push(value),
-            Some(r) => *r = value,
-        }
+        let inst_values = self.inst_values_for_frame(frame_index);
+        inst_values[inst_index as usize] = value;
     }
 
     pub fn set_cur_inst_value(&mut self, inst_index: u32, value: Value) {
         self.set_inst_value(self.current_frame_index(), inst_index, value)
     }
 
-    pub fn get_cur_inst_value(&mut self, inst_index: u32) -> Option<Value> {
-        self.get_frame_inst_value(self.current_frame_index(), inst_index)
-    }
-
-    pub fn get_frame_inst_value(&self, frame_index: u32, inst_index: u32) -> Option<Value> {
-        self.inst_values[frame_index as usize].get(inst_index as usize).copied()
+    pub fn get_cur_inst_value(&self, inst_index: u32) -> Value {
+        self.get_inst_value(self.current_frame_index(), inst_index)
     }
 
     #[inline]
@@ -2532,8 +2536,9 @@ unsafe fn slice_from_raw_parts_checked<'a, T>(
 pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
     use std::fmt::Write;
     let mut s = String::new();
-    stack.frames.iter().for_each(|f| {
-        write!(&mut s, "[{:02}] {:32}", f.index, k1.ident_str_opt(f.debug_name)).unwrap();
+    for f in stack.frames.iter() {
+        write!(&mut s, "[{:02}] ", f.index).unwrap();
+        bc::display_unit_name(&mut s, k1, f.unit).unwrap();
         match f.call_span {
             None => {}
             Some(span) => {
@@ -2542,7 +2547,7 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
             }
         };
         writeln!(&mut s).unwrap();
-    });
+    }
     s
 }
 
