@@ -1,43 +1,15 @@
-fn testArray(): unit {
-  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
-  let ls: List[u8] = List/filledIn(size = 10, value = 3);
-  for ls do {
-    println("LIST {itIndex}: {it}");
+fn climb(): int {
+  let i = 0;
+  while i < 100_000_000 {
+    i := i + 1;
   };
-  let b = ls.asBuffer();
-  for b do {
-    println("B {itIndex}: {it}");
-  };
-  let bc = b.cloned();
-  println("B {b.data as Pointer} BC {bc.data as Pointer}");
-  for bc do {
-    println("BC {itIndex}: {it}");
-  };
-  let base = bc.dataPointer();
-  println("base {base}");
-
-  let a: *mut Array[u8, 10] = {
-    base as *mut Array[u8, 10]
-  };
-  println("abase {a.getBase() as Pointer}");
-  println("alen {a.len()}");
-  for core/IntRange/upTo(a.len() as iword) do {
-    println("ARR1 {itIndex}: {a.get(it as uword)}");
-  };
-  for core/IntRange/upTo(a.len() as iword) do {
-    if it % 2 == 0 { a.getRef(it as uword) <- 1 };
-  };
-  for core/IntRange/upTo(a.len() as iword) do {
-    println("ARR2 {itIndex}: {a.get(it as uword)}");
-    if it % 2 == 0 {
-      assertEquals(a.get(it as uword), 1);
-    } else {
-      assertEquals(a.get(it as uword), 3);
-    }
-  };
-
+  i
 }
+
+// #static println("sup")
+#static climb()
+
 fn main(): i32 {
-  #static testArray();
+  //fib(1000);
   0
 }

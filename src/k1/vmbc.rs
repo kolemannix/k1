@@ -594,14 +594,9 @@ fn exec_loop(
                 vm.stack.set_cur_inst_value(inst_index, Value::ptr(ptr));
                 ip += 1
             }
-            Inst::Store { dst, value } => {
+            Inst::Store { dst, value, t } => {
                 let dst = resolve_value!(dst);
 
-                let t = bc::get_value_kind(&k1.bytecode, &k1.types, &value)
-                    .expect_value()
-                    .unwrap()
-                    .as_scalar()
-                    .unwrap();
                 let vm_value = resolve_value!(value);
                 store_scalar(t, dst.as_ptr().cast_mut(), vm_value);
 
@@ -915,16 +910,16 @@ fn exec_loop(
                 let called_inst_offset = compiled_function.inst_offset;
                 let new_frame_index = caller_frame_index + 1;
 
-                eprintln!(
-                    "{}{}dispatching call [{}] to above",
-                    bc::compiled_unit_to_string(
-                        k1,
-                        CompilableUnit::Function(dispatch_function_id),
-                        true
-                    ),
-                    "  ".repeat(vm.stack.current_frame_index() as usize),
-                    new_frame_index,
-                );
+                // eprintln!(
+                //     "{}{}dispatching call [{}] to above",
+                //     bc::compiled_unit_to_string(
+                //         k1,
+                //         CompilableUnit::Function(dispatch_function_id),
+                //         true
+                //     ),
+                //     "  ".repeat(vm.stack.current_frame_index() as usize),
+                //     new_frame_index,
+                // );
 
                 // - Push a stack frame
                 vm.stack.push_new_frame(Some(vm.eval_span), compiled_function, ret_info);
@@ -935,10 +930,6 @@ fn exec_loop(
                     // Note: These need to execute before we push, in case they access this stack's
                     // params or instrs by index, which is basically always! The other option would
                     // be parameterizing 'resolve_value' by stack frame
-                    eprintln!(
-                        "I am frame {} and pushed {}; resolving inside {} with offset {}",
-                        caller_frame_index, new_frame_index, caller_frame_index, caller_inst_offset
-                    );
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg);
                     if debugger {
@@ -1470,7 +1461,6 @@ fn resolve_value(
 ) -> Value {
     match value {
         BcValue::Inst(inst_id) => {
-            eprintln!("resolving inst_id {} using offset {}", inst_id.as_u32(), inst_offset);
             let inst_index = inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_index);
             v

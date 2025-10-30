@@ -1421,7 +1421,6 @@ static_assert_size!(TypedExpr, 56);
 #[derive(Clone)]
 pub enum TypedExpr {
     StaticValue(StaticConstantExpr),
-    // nocommit: Remove all of these constant exprs in favor of just Static/ConstantExpr
     Struct(StructLiteral),
     StructFieldAccess(FieldAccess),
     ArrayGetElement(ArrayGetElement),
@@ -2528,7 +2527,7 @@ impl TypedProgram {
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: bc::ProgramBytecode::make(16384, word_size),
+            bytecode: bc::ProgramBytecode::make(32768, word_size),
 
             timing: Timing {
                 clock,
@@ -14806,6 +14805,8 @@ impl TypedProgram {
 
         self.tmp.print_usage("tmp end");
         self.a.print_usage("mem end");
+        self.types.mem.print_usage("types end");
+        self.bytecode.mem.print_usage("bytecode end");
 
         Ok(())
     }
