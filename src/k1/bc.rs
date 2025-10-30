@@ -115,12 +115,15 @@ pub struct CompiledUnit {
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
     pub inst_offset: u32,
+    // The number of instructions in this unit; used to reserve N 'registers' in our register buffer
+    pub inst_count: u32,
+
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
     pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
 }
 
 #[derive(Clone, Copy)]
-pub enum Imm {
+pub enum DataInst {
     U64(u64),
     I64(i64),
     Float(TypedFloatValue),
@@ -219,9 +222,7 @@ pub struct BcCall {
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
 //task(bc): Get inst to 32 bytes at the most
 pub enum Inst {
-    // Data
-    // nocommit(3): Rename Inst::Imm to Inst::Data
-    Imm(Imm),
+    Data(DataInst),
 
     // Memory manipulation
     Alloca {
@@ -517,11 +518,11 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
 
 pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) -> InstKind {
     match bc.instrs.get(inst_id) {
-        Inst::Imm(imm) => match imm {
-            Imm::I64(_) => InstKind::I64,
-            Imm::U64(_) => InstKind::U64,
-            Imm::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
-            Imm::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
+        Inst::Data(imm) => match imm {
+            DataInst::I64(_) => InstKind::I64,
+            DataInst::U64(_) => InstKind::U64,
+            DataInst::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
+            DataInst::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
         },
         Inst::Alloca { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
@@ -730,6 +731,7 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             let name = b.k1.bytecode.mem.push_str("entry");
             b.push_block(name);
             let f = b.k1.get_function(function_id);
+            let is_debug = f.compiler_debug;
             let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
             b.cur_span = fn_span;
 
@@ -756,16 +758,23 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             compile_block_stmts(b, None, body_block)?;
 
             let compiled_blocks = b.bake_blocks();
+            let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset;
             let function = CompiledUnit {
                 unit: CompilableUnit::Function(function_id),
                 expr_ret: None,
                 inst_offset: b.inst_offset,
+                inst_count,
                 blocks: compiled_blocks,
                 fn_params: params_handle,
             };
             b.reset_compilation_unit();
 
             *b.k1.bytecode.functions.get_mut(function_id) = Some(function);
+
+            if is_debug {
+                let s = compiled_unit_to_string(b.k1, unit, true);
+                eprintln!("{s}");
+            }
             Ok(())
         }
         CompilableUnit::Expr(typed_expr_id) => {
@@ -791,10 +800,12 @@ fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
             }
 
             let compiled_blocks = b.bake_blocks();
+            let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset;
             let compiled_expr = CompiledUnit {
                 unit: CompilableUnit::Expr(typed_expr_id),
                 expr_ret: Some(result),
                 inst_offset: b.inst_offset,
+                inst_count,
                 blocks: compiled_blocks,
                 fn_params: MSlice::empty(),
             };
@@ -955,7 +966,7 @@ impl<'k1> Builder<'k1> {
                 if *i <= u32::MAX as u64 {
                     Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::U64(*i)), comment);
+                    let inst = self.push_inst(Inst::Data(DataInst::U64(*i)), comment);
                     inst.as_value()
                 }
             }
@@ -968,7 +979,7 @@ impl<'k1> Builder<'k1> {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
                     Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as i32 as u32)
                 } else {
-                    let inst = self.push_inst(Inst::Imm(Imm::I64(*i)), comment);
+                    let inst = self.push_inst(Inst::Data(DataInst::I64(*i)), comment);
                     inst.as_value()
                 }
             }
@@ -2007,7 +2018,7 @@ fn compile_expr(
                 StaticValue::Float(float) => {
                     let float = *float;
                     //task(bc): Pack small floats
-                    let imm = b.push_inst(Inst::Imm(Imm::Float(float)), "static float");
+                    let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
                     let store = store_simple_if_dst(b, dst, imm.as_value());
                     Ok(store)
                 }
@@ -2396,14 +2407,14 @@ pub fn zero(t: ScalarType) -> Value {
     }
 }
 
-fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnit) -> Option<CompiledUnit> {
+pub fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnit) -> Option<CompiledUnit> {
     match unit {
         CompilableUnit::Function(function_id) => bc.functions.get(function_id).as_ref().copied(),
         CompilableUnit::Expr(typed_expr_id) => bc.exprs.get(&typed_expr_id).copied(),
     }
 }
 
-fn get_unit_span(k1: &TypedProgram, unit: CompilableUnit) -> SpanId {
+pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnit) -> SpanId {
     match unit {
         CompilableUnit::Function(function_id) => k1.get_function_span(function_id),
         CompilableUnit::Expr(typed_expr_id) => k1.exprs.get(typed_expr_id).get_span(),
@@ -2432,7 +2443,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
             }
 
             match inst {
-                Inst::Imm(_imm) => (),
+                Inst::Data(_imm) => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
                     let dst_type = get_value_kind(bc, &k1.types, dst);
@@ -2633,11 +2644,12 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
 
 pub fn compiled_unit_to_string(
     k1: &TypedProgram,
-    unit: &CompiledUnit,
+    unit: CompilableUnit,
     show_source: bool,
 ) -> String {
     let mut s = String::new();
-    display_unit(&mut s, k1, unit, show_source).unwrap();
+    let unit = get_compiled_unit(&k1.bytecode, unit).unwrap();
+    display_unit(&mut s, k1, &unit, show_source).unwrap();
     s
 }
 
@@ -2676,7 +2688,7 @@ pub fn display_unit(
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
         }
     };
-    write!(w, " (offset={}", unit.inst_offset)?;
+    write!(w, " (offset={}, inst count={}", unit.inst_offset, unit.inst_count)?;
     if let Some(ret) = unit.expr_ret {
         writeln!(w, " (ret={})", ret)?;
     } else {
@@ -2758,7 +2770,7 @@ pub fn display_inst(
     inst_id: InstId,
 ) -> std::fmt::Result {
     match bc.instrs.get(inst_id) {
-        Inst::Imm(imm) => {
+        Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
         }
@@ -3014,11 +3026,11 @@ impl std::fmt::Display for ScalarType {
     }
 }
 
-pub fn display_imm(w: &mut impl Write, imm: &Imm) -> std::fmt::Result {
+pub fn display_imm(w: &mut impl Write, imm: &DataInst) -> std::fmt::Result {
     match imm {
-        Imm::U64(u64) => write!(w, "u64 {}", u64),
-        Imm::I64(i64) => write!(w, "i64 {}", i64),
-        Imm::Float(float) => write!(w, "float {}", float),
+        DataInst::U64(u64) => write!(w, "u64 {}", u64),
+        DataInst::I64(i64) => write!(w, "i64 {}", i64),
+        DataInst::Float(float) => write!(w, "float {}", float),
     }
 }
 

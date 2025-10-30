@@ -13,14 +13,15 @@ mod stack_tests {
             unit: CompilableUnit::Function(FunctionId::PENDING),
             expr_ret: None,
             inst_offset: 0,
+            inst_count: 0,
             blocks: MSlice::empty(),
             fn_params: MSlice::empty(),
         }
     }
 
     fn test_stack() -> Stack {
-        let mut s = Stack::make(1024 * 1024, false);
-        s.push_new_frame(None, None, fake_unit(), None);
+        let mut s = Stack::make(1024 * 1024);
+        s.push_new_frame(None, fake_unit(), None);
         s
     }
 
@@ -77,7 +78,9 @@ mod stack_tests {
         let mut stack = test_stack();
         let _ = stack.push_t(10u64);
         let _ = stack.push_t(10u64);
-        let f = stack.push_new_frame(None, None, fake_unit(), None);
+        stack.push_new_frame(None, fake_unit(), None);
+        let f = stack.current_frame();
+        let f_base_ptr = f.base_ptr;
         assert_eq!(stack.current_offset_bytes(), 16);
         assert_eq!(f.index, 1);
         assert_eq!(f.base_ptr, unsafe { stack.base_ptr().byte_add(16) });
@@ -89,7 +92,7 @@ mod stack_tests {
         stack.pop_frame();
         assert_eq!(stack.frames.len(), 1);
         assert_eq!(stack.current_offset_bytes(), 16);
-        assert_eq!(stack.cursor, f.base_ptr);
+        assert_eq!(stack.cursor, f_base_ptr);
     }
 
     #[test]
@@ -138,6 +141,33 @@ mod stack_tests {
         assert!(f64_ptr.is_aligned());
         let read_f64 = unsafe { f64_ptr.read_unaligned() };
         assert_eq!(read_f64, std::f64::consts::PI);
+    }
+
+    #[test]
+    fn test_params_and_instrs() {
+        let mut stack = test_stack();
+        let mut unit = fake_unit();
+        unit.inst_count = 42;
+        unit.fn_params = MSlice::forged(1, 10);
+        stack.push_new_frame(None, unit, None);
+        let frame_space_for_registers = stack.cursor.addr() - stack.current_frame().base_ptr.addr();
+        assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
+        let x_addr = stack.push_t(b'X');
+        stack.set_param_value(1, 0, Value(23));
+        stack.set_param_value(1, 9, Value(24));
+
+        stack.set_inst_value(1, 41, Value(41));
+        stack.set_inst_value(1, 1, Value(1));
+        stack.set_inst_value(1, 2, Value(2));
+
+        assert_eq!(stack.get_param_value(1, 0).bits(), Value(23).bits());
+        assert_eq!(stack.get_param_value(1, 9).bits(), Value(24).bits());
+
+        assert_eq!(stack.get_inst_value(1, 41).bits(), Value(41).bits());
+        assert_eq!(stack.get_inst_value(1, 1).bits(), Value(1).bits());
+        assert_eq!(stack.get_inst_value(1, 2).bits(), Value(2).bits());
+
+        assert_eq!(unsafe { *x_addr }, b'X');
     }
 }
 
