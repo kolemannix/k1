@@ -10,18 +10,19 @@ mod stack_tests {
 
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
-            unit: CompilableUnit::Function(FunctionId::PENDING),
+            unit_id: CompilableUnitId::Function(FunctionId::PENDING),
             expr_ret: None,
             inst_offset: 0,
             inst_count: 0,
             blocks: MSlice::empty(),
             fn_params: MSlice::empty(),
+            is_debug: false,
         }
     }
 
     fn test_stack() -> Stack {
         let mut s = Stack::make(1024 * 1024);
-        s.push_new_frame(None, fake_unit(), None);
+        s.push_new_frame(None, &fake_unit(), None);
         s
     }
 
@@ -78,7 +79,7 @@ mod stack_tests {
         let mut stack = test_stack();
         let _ = stack.push_t(10u64);
         let _ = stack.push_t(10u64);
-        stack.push_new_frame(None, fake_unit(), None);
+        stack.push_new_frame(None, &fake_unit(), None);
         let f = stack.current_frame();
         let f_base_ptr = f.base_ptr;
         assert_eq!(stack.current_offset_bytes(), 16);
@@ -149,7 +150,7 @@ mod stack_tests {
         let mut unit = fake_unit();
         unit.inst_count = 42;
         unit.fn_params = MSlice::forged(1, 10);
-        stack.push_new_frame(None, unit, None);
+        stack.push_new_frame(None, &unit, None);
         let frame_space_for_registers = stack.cursor.addr() - stack.current_frame().base_ptr.addr();
         assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
         let x_addr = stack.push_t(b'X');

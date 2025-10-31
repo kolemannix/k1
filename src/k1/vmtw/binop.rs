@@ -3,7 +3,7 @@
 
 use crate::typer::{IntrinsicArithOpOp as Op, TypedFloatValue, TypedIntValue};
 
-use crate::vm::Value;
+use crate::vmtw::Value;
 
 // NOTE: Always wraps, for signed and unsigned.
 pub fn execute_arith_op(lhs: Value, rhs: Value, op: Op) -> Value {

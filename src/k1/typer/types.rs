@@ -898,10 +898,6 @@ pub struct BuiltinTypes {
     pub types_int_value: Option<TypeId>,
 }
 
-pub struct TypesConfig {
-    pub ptr_size_bits: u32,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScalarType {
     U8,
@@ -930,6 +926,30 @@ impl ScalarType {
                 | ScalarType::U32
                 | ScalarType::U64
         )
+    }
+
+    pub fn get_layout(&self) -> Layout {
+        match self {
+            ScalarType::U8 | ScalarType::I8 => Layout::from_scalar_bits(8),
+            ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
+            ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
+            ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
+            ScalarType::F32 => Layout::from_scalar_bits(32),
+            ScalarType::F64 => Layout::from_scalar_bits(64),
+            ScalarType::Pointer => Layout::from_scalar_bits(64),
+        }
+    }
+
+    pub fn width(&self) -> NumericWidth {
+        match self {
+            ScalarType::U8 | ScalarType::I8 => NumericWidth::B8,
+            ScalarType::U16 | ScalarType::I16 => NumericWidth::B16,
+            ScalarType::U32 | ScalarType::I32 => NumericWidth::B32,
+            ScalarType::U64 | ScalarType::I64 => NumericWidth::B64,
+            ScalarType::F32 => NumericWidth::B32,
+            ScalarType::F64 => NumericWidth::B64,
+            ScalarType::Pointer => NumericWidth::B64,
+        }
     }
 }
 
@@ -1047,12 +1067,10 @@ pub struct TypePool {
     pub phys_types: VPool<PhysicalTypeRecord, PhysicalTypeId>,
 
     pub mem: kmem::Mem<TypePool>,
-
-    pub config: TypesConfig,
 }
 
 impl TypePool {
-    pub fn empty(ptr_size_bits: u32) -> TypePool {
+    pub fn empty() -> TypePool {
         const EXPECTED_TYPE_COUNT: usize = 65536;
         TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
@@ -1081,14 +1099,12 @@ impl TypePool {
             phys_types: VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2),
 
             mem: kmem::Mem::make(),
-
-            config: TypesConfig { ptr_size_bits },
         }
     }
 
     #[cfg(test)]
     pub fn with_builtin_types() -> TypePool {
-        let mut this = TypePool::empty(64);
+        let mut this = TypePool::empty();
         this.add_anon(Type::Integer(IntegerType::U8));
         this.add_anon(Type::Integer(IntegerType::U16));
         this.add_anon(Type::Integer(IntegerType::U32));
@@ -1195,7 +1211,7 @@ impl TypePool {
         //
         //  ... Basically, this is just union layout rules, I now understand 2 years later
         let tag_scalar = self.get_physical_type(e.tag_type).unwrap().expect_scalar();
-        let tag_layout = self.get_scalar_layout(tag_scalar);
+        let tag_layout = tag_scalar.get_layout();
         let mut max_variant_align = tag_layout.align;
         let mut max_variant_size = tag_layout.size;
         for v in e.variants.make_mut().iter_mut() {
@@ -1734,27 +1750,11 @@ impl TypePool {
         }
     }
 
-    pub fn get_scalar_layout(&self, scalar_type: ScalarType) -> Layout {
-        match scalar_type {
-            ScalarType::U8 | ScalarType::I8 => Layout::from_scalar_bits(8),
-            ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
-            ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
-            ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
-            ScalarType::F32 => Layout::from_scalar_bits(32),
-            ScalarType::F64 => Layout::from_scalar_bits(64),
-            ScalarType::Pointer => Layout::from_scalar_bits(self.config.ptr_size_bits),
-        }
-    }
-
     pub fn get_pt_layout(&self, pt: &PhysicalType) -> Layout {
         match pt {
-            PhysicalType::Scalar(s) => self.get_scalar_layout(*s),
+            PhysicalType::Scalar(s) => s.get_layout(),
             PhysicalType::Agg(agg_id) => self.phys_types.get(*agg_id).layout,
         }
-    }
-
-    pub fn word_size_bits(&self) -> u32 {
-        self.config.ptr_size_bits
     }
 
     pub fn compile_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {

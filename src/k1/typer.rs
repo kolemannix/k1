@@ -58,7 +58,7 @@ use crate::parse::{
     ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
-use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vm};
+use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vmtw};
 
 #[cfg(test)]
 mod layout_test;
@@ -1240,6 +1240,7 @@ pub enum IntegerCastDirection {
     Extend,
     Truncate,
     NoOp,
+    SignChange,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1773,7 +1774,7 @@ impl Namespaces {
         self.namespaces.add(namespace)
     }
 
-    pub fn iter(&self) -> std::slice::Iter<Namespace> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Namespace> {
         self.namespaces.iter()
     }
 
@@ -2357,14 +2358,14 @@ pub struct TypedProgram {
 
     // Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
-    pub vm: Box<Option<vm::Vm>>,
+    pub vm_treewalk: Box<Option<vmtw::Vm>>,
     // Used to execute static code if it is first encountered
     // while excuting the surrounding code statically
     // It should be run in its own environment; as it should
     // not see any of the values from its calling environment, just
     // like how comptime code can't see runtime values. Each level
     // of static execution has the same relationship with its outer caller
-    pub alt_vms: Vec<vm::Vm>,
+    pub alt_vmtws: Vec<vmtw::Vm>,
 
     // nocommit(4) can we consolidate this stuff into 1 struct :/
     pub vmbc: Box<Option<vmbc::Vm>>,
@@ -2409,7 +2410,7 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let types = TypePool::empty(config.target.word_size().bits());
+        let types = TypePool::empty();
 
         let ast = ParsedProgram::make(program_name, config);
         let root_ident = ast.idents.b.root_module_name;
@@ -2504,13 +2505,13 @@ impl TypedProgram {
             function_type_params: VPool::make_with_hint("function_type_params", 8192),
             patterns: TypedPatternPool::make(),
             pattern_ctors,
-            vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
-            alt_vms: vec![
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+            vm_treewalk: Box::new(Some(vmtw::Vm::make(vm_stack_size, vm_static_stack_size))),
+            alt_vmtws: vec![
+                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
+                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
             vmbc: Box::new(Some(vmbc::Vm::make(vm_stack_size, vm_static_stack_size))),
             alt_vmbcs: vec![
@@ -5060,36 +5061,14 @@ impl TypedProgram {
         }
     }
 
-    fn compile_expr_bytecode(
-        &mut self,
-        expr: TypedExprId,
-        input_parameters: &[(VariableId, StaticValueId)],
-    ) -> TyperResult<()> {
-        match bc::compile_top_level_expr(self, expr, input_parameters, false) {
-            Err(e) => return failf!(self.exprs.get(expr).get_span(), "bc failed: {}", e),
-            Ok(_) => {}
-        };
-
-        Ok(())
-    }
-
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            //eprintln!(
-            //    "compile_all_pending_bytecode {}",
-            //    self.bytecode.b_units_pending_compile.len()
-            //);
-            if let Some(unit) = self.bytecode.b_units_pending_compile.pop() {
-                match unit {
-                    bc::CompilableUnit::Function(function_id) => {
-                        // eprintln!(
-                        //     "type-checking on-demand: {}",
-                        //     self.function_id_to_string(function_id, false)
-                        // );
-                        self.eval_function_body(function_id, false)?;
-                    }
-                    bc::CompilableUnit::Expr(_typed_expr_id) => (),
-                }
+            eprintln!(
+                "compile_all_pending_bytecode {}",
+                self.bytecode.b_units_pending_compile.len()
+            );
+            if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
+                self.eval_function_body(function_id, false)?;
             } else {
                 break;
             }
@@ -5101,7 +5080,7 @@ impl TypedProgram {
     /// from an existing static execution already
     fn execute_static_expr_with_vm(
         &mut self,
-        vm: &mut vm::Vm,
+        vm: &mut vmtw::Vm,
         vmbc: &mut vmbc::Vm,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
@@ -5130,17 +5109,15 @@ impl TypedProgram {
             });
         }
 
-        self.compile_expr_bytecode(expr, input_parameters)?;
+        bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_bytecode()?;
 
-        let execution_result =
-            vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters, is_debug).map_err(
-                |mut e| {
-                    let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
-                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                    e
-                },
-            );
+        let execution_result = vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters)
+            .map_err(|mut e| {
+                let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
+                e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                e
+            });
 
         // let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
         //     |mut e| {
@@ -5175,10 +5152,10 @@ impl TypedProgram {
         no_reset: bool,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
-        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
+        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm_treewalk) {
             None => {
                 let span = self.ast.get_expr_span(parsed_expr);
-                let maybe_alt = self.alt_vms.pop();
+                let maybe_alt = self.alt_vmtws.pop();
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
@@ -5187,7 +5164,7 @@ impl TypedProgram {
                             source.filename,
                             location.line_number()
                         );
-                        let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+                        let new_vm = vmtw::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
                         new_vm
                     }
                     Some(alt_vm) => {
@@ -5240,11 +5217,11 @@ impl TypedProgram {
             input_parameters,
         );
         if !used_alt {
-            *self.vm = Some(vm);
+            *self.vm_treewalk = Some(vm);
             *self.vmbc = Some(vmbc);
         } else {
             debug!("Restoring alt VM to pool");
-            self.alt_vms.push(vm);
+            self.alt_vmtws.push(vm);
             self.alt_vmbcs.push(vmbc);
         }
         res
@@ -5671,7 +5648,7 @@ impl TypedProgram {
         impl_handle: AbilityImplHandle,
         parameter_requirements: &[Option<TypeId>],
         scope_id: ScopeId,
-    ) -> Result<(), Cow<str>> {
+    ) -> Result<(), Cow<'_, str>> {
         if impl_handle.base_ability_id != target_base_ability_id {
             return Err(Cow::Borrowed(""));
         }
@@ -8122,7 +8099,7 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
-            bc::compile_function(self, body_function_id, false)?;
+            bc::compile_function(self, body_function_id)?;
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
             let expr_id = self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
@@ -8241,7 +8218,7 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         });
-        bc::compile_function(self, body_function_id, false)?;
+        bc::compile_function(self, body_function_id)?;
 
         let lambda_type_id = self.types.add_lambda(
             function_type,
@@ -10453,7 +10430,7 @@ impl TypedProgram {
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let new_function_id = self.add_function(new_function);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
-            bc::compile_function(self, new_function_id, false)
+            bc::compile_function(self, new_function_id)
                 .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
             new_function_id
         };
@@ -11370,18 +11347,29 @@ impl TypedProgram {
             }
         };
 
-        let call_return_type = if typechecked_arguments
-            .iter()
-            .any(|arg| self.exprs.get(*arg).get_type() == NEVER_TYPE_ID)
-        {
-            NEVER_TYPE_ID
-        } else {
-            self.types
-                .get(self.get_callee_function_type(&callee))
-                .as_function()
-                .unwrap()
-                .return_type
-        };
+        // If any arguments definitely crash, we aren't calling the function at all.
+        // So let's not generate a `Call`, but rather just the arguments expressions that should be
+        // evaluated. This simplifies later compiler stages to not have to carve out special cases
+        // for divergent expressions
+        for (index, arg) in typechecked_arguments.iter().enumerate() {
+            if self.exprs.get(*arg).get_type() == NEVER_TYPE_ID {
+                let exprs_so_far = &typechecked_arguments[0..=index];
+                // We'll make a block with N expression statements
+                let mut b = self.synth_block(ctx.scope_id, span);
+                for e in exprs_so_far {
+                    let e_type_id = self.exprs.get(*e).get_type();
+                    self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
+                }
+                return Ok(self.exprs.add(TypedExpr::Block(b)));
+            }
+        }
+
+        let call_return_type = self
+            .types
+            .get(self.get_callee_function_type(&callee))
+            .as_function()
+            .unwrap()
+            .return_type;
 
         let call = Call {
             callee,
@@ -11904,7 +11892,7 @@ impl TypedProgram {
         self.get_function_mut(function_id).body_block = Some(typed_body);
 
         if is_concrete {
-            if let Err(e) = bc::compile_function(self, function_id, false) {
+            if let Err(e) = bc::compile_function(self, function_id) {
                 return failf!(e.span, "Failed to compile bytecode for function: {}", e.message);
             }
         }
@@ -12029,16 +12017,11 @@ impl TypedProgram {
                 };
                 let value_expr = match parsed_let.value {
                     None => None,
-                    Some(value) => Some(
-                        self.eval_expr_with_coercion(
-                            value,
-                            ctx.with_expected_type(expected_rhs_type),
-                            true,
-                        )
-                        .map_err(|e| {
-                            errf!(parsed_let.span, "Local variable type mismatch: {}", e.message)
-                        })?,
-                    ),
+                    Some(value) => Some(self.eval_expr_with_coercion(
+                        value,
+                        ctx.with_expected_type(expected_rhs_type),
+                        true,
+                    )?),
                 };
                 let actual_type = match value_expr {
                     None => None,
@@ -13487,7 +13470,7 @@ impl TypedProgram {
 
             // Compile bytecode
             if is_concrete {
-                if let Err(e) = bc::compile_function(self, declaration_id, false) {
+                if let Err(e) = bc::compile_function(self, declaration_id) {
                     return failf!(
                         e.span,
                         "Failed to compile bytecode for function: {}",
@@ -15519,7 +15502,7 @@ impl TypedProgram {
                     self.types.get_as_view_instance(function_params_view_type_id).unwrap();
 
                 let mut params_value_ids =
-                    self.static_values.mem.new_vec(fn_type.logical_params().len() as u32);
+                    self.static_values.mem.new_vec(fn_type.logical_params().len());
                 // Skipping lambda environment parameters;
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within

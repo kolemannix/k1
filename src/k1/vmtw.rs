@@ -48,9 +48,6 @@ macro_rules! vm_ice {
     };
 }
 
-#[cfg(test)]
-mod vm_test;
-
 mod binop;
 
 /// Bit-for-bit mappings of K1 types

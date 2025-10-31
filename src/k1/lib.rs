@@ -13,14 +13,16 @@ pub mod parse;
 mod pool;
 mod strings;
 pub mod typer;
-pub mod vm;
 pub mod vmbc;
+pub mod vmtw;
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;
 pub const GIGABYTE: usize = MEGABYTE * 1024;
 
 pub const STACK_SIZE: usize = 10 * MEGABYTE;
+// I have spoken
+pub const WORD_SIZE_BITS: usize = 64;
 
 pub type SV2<T> = SmallVec<[T; 2]>;
 pub type SV4<T> = SmallVec<[T; 4]>;
