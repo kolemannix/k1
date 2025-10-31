@@ -517,7 +517,9 @@ impl TypePool {
             (Type::Lambda(c1), Type::Lambda(c2)) => {
                 // The function type is key here so that we _dont_ equate 'inference artifact' lambdas
                 // with real ones: '0 -> '1 vs int -> bool
-                c1.function_type == c2.function_type && c1.parsed_id == c2.parsed_id
+                c1.function_id == c2.function_id
+                    && c1.function_type == c2.function_type
+                    && c1.parsed_id == c2.parsed_id
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             (Type::Static(stat1), Type::Static(stat2)) => stat1.value_id == stat2.value_id,
@@ -604,7 +606,8 @@ impl TypePool {
             Type::FunctionPointer(fp) => fp.function_type_id.hash(state),
             Type::Lambda(c) => {
                 c.parsed_id.hash(state);
-                c.function_type.hash(state)
+                c.function_type.hash(state);
+                c.function_id.hash(state);
             }
             Type::Float(ft) => {
                 ft.size().bits().hash(state);

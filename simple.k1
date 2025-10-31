@@ -1,15 +1,12 @@
-fn climb(): int {
-  let i = 0;
-  while i < 100_000_000 {
-    i := i + 1;
-  };
-  i
+fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
+  f(i) + g(i)
 }
 
-// #static println("sup")
-#static climb()
-
 fn main(): i32 {
-  //fib(1000);
+  #static {
+    let* c1 = { x: 3 };
+    let c2 = 2;
+    someFnParam2(5, \x. x + 1 + c1.x, \y. y + 2 + c2)
+  };
   0
 }

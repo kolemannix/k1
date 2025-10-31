@@ -86,42 +86,6 @@ impl TypedProgram {
                 .types
                 .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
 
-            // This was an experiment in instantiating the type to something that preserved
-            // structure for statically constrained type params to guide inference better, and
-            // recover info via a constraint. The core idea worked, unfortunately it was
-            // ill-conceived in that it produced scenarios that were impossible to solve correctly
-            // let is_static = self_
-            //     .types
-            //     .get(param.type_id)
-            //     .as_type_parameter()
-            //     .unwrap()
-            //     .static_constraint
-            //     .is_some();
-            // let instantiated_param = if is_static {
-            // If the type parameter is of the following format: [T: static string](t: T)
-            // The instantiation set should be T -> '0, constrain '0 -> static['1]
-            // And we refer to th
-
-            // let type_hole_2 = self_.types.add_anon(Type::InferenceHole(InferenceHoleType {
-            //     index: idx as u32 + type_hole_offset + 100,
-            // })); // '2
-            // type_hole_offset += 1;
-            // let static_wrapper = self_.types.add_static_type(type_hole_2, None);
-            // eprintln!(
-            //     "Adding constraint for extra hole: {}",
-            //     self_.pretty_print_type_substitutions(
-            //         &[spair! { type_hole => static_wrapper }],
-            //         ", "
-            //     )
-            // );
-            // self_.ictx_mut().constraints.push(spair! { type_hole => static_wrapper });
-            // static_wrapper // static['1]
-            //     type_hole
-            // } else {
-            //     type_hole
-            // };
-            // let instantiated_param = type_hole;
-            //instantiation_set.push(spair! { param.type_id() => instantiated_param });
             self_.ictx_mut().inference_vars.push(type_hole);
             params_to_holes.push(spair! { param.type_id() => type_hole });
         }
@@ -595,7 +559,7 @@ impl TypedProgram {
         type_args: NamedTypeSlice,
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
-    ) -> TyperResult<NamedTypeSlice> {
+    ) -> TyperResult<(NamedTypeSlice, SV8<TypedExprId>)> {
         // Ok here's what we need for function params. We need to know just the _kind_ of function that
         // was passed: ref, lambda, or lambda obj, and we need to specialize the function shape on
         // the other type params, as in: some (T -> T) -> some (int -> int), THEN just create
@@ -605,7 +569,8 @@ impl TypedProgram {
         // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
         //
         // This method is risk-free in terms of 'leaking' inference types out
-        let mut function_type_args: SmallVec<[NameAndType; 8]> = SmallVec::new();
+        let mut function_type_args: SV8<NameAndType> = SmallVec::new();
+        let mut function_type_arg_values: SV8<TypedExprId> = SmallVec::new();
         if !original_function_sig.function_type_params.is_empty() {
             let subst_pairs: SmallVec<[_; 8]> = self
                 .named_types
@@ -630,9 +595,9 @@ impl TypedProgram {
                 );
 
                 enum PhysicalPassedFunction {
-                    Lambda(TypeId),
-                    FunctionPointer,
-                    LambdaObject(TypeId),
+                    Lambda(TypedExprId, TypeId),
+                    FunctionPointer(TypedExprId),
+                    LambdaObject(TypedExprId, TypeId),
                 }
                 let physical_passed_function = match corresponding_arg {
                     MaybeTypedExpr::Typed(_) => {
@@ -640,7 +605,10 @@ impl TypedProgram {
                     }
                     MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
                         ParsedExpr::Lambda(_lam) => {
-                            debug!("substituting type for an ftp lambda so that it can infer");
+                            debug!(
+                                "substituting type for an ftp lambda so that it can infer (is_inf={})",
+                                ctx.is_inference()
+                            );
                             let substituted_param_type =
                                 self.substitute_in_type(function_type_param.type_id, &subst_pairs);
                             let the_lambda = self.eval_expr(
@@ -652,23 +620,23 @@ impl TypedProgram {
                                 "Using a Lambda as an ftp: {}",
                                 self.type_id_to_string(lambda_type)
                             );
-                            PhysicalPassedFunction::Lambda(lambda_type)
+                            PhysicalPassedFunction::Lambda(the_lambda, lambda_type)
                         }
                         _other => {
-                            let t = self.eval_expr(p, ctx.with_no_expected_type())?;
-                            let type_id = self.exprs.get(t).get_type();
+                            let expr = self.eval_expr(p, ctx.with_no_expected_type())?;
+                            let type_id = self.exprs.get(expr).get_type();
                             match self.types.get(type_id) {
-                                Type::Lambda(_) => PhysicalPassedFunction::Lambda(type_id),
+                                Type::Lambda(_) => PhysicalPassedFunction::Lambda(expr, type_id),
                                 Type::LambdaObject(_) => {
                                     debug!("Using a LambdaObject as an ftp");
-                                    PhysicalPassedFunction::LambdaObject(type_id)
+                                    PhysicalPassedFunction::LambdaObject(expr, type_id)
                                 }
                                 Type::FunctionPointer(_) => {
                                     debug!("Using a FunctionPointer as an ftp");
-                                    PhysicalPassedFunction::FunctionPointer
+                                    PhysicalPassedFunction::FunctionPointer(expr)
                                 }
                                 _ => {
-                                    let span = self.exprs.get(t).get_span();
+                                    let span = self.exprs.get(expr).get_span();
                                     return failf!(
                                         span,
                                         "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
@@ -680,12 +648,12 @@ impl TypedProgram {
                         }
                     },
                 };
-                let final_parameter_type = match physical_passed_function {
-                    PhysicalPassedFunction::Lambda(lambda) => {
+                let (final_type, final_value) = match physical_passed_function {
+                    PhysicalPassedFunction::Lambda(value, lambda_type) => {
                         // Can use as-is since we rebuilt this lambda already
-                        lambda
+                        (lambda_type, value)
                     }
-                    PhysicalPassedFunction::FunctionPointer => {
+                    PhysicalPassedFunction::FunctionPointer(expr) => {
                         let ftp = self
                             .types
                             .get(function_type_param.type_id)
@@ -694,19 +662,20 @@ impl TypedProgram {
                         let original_param_function_type = ftp.function_type;
                         let substituted_function_type =
                             self.substitute_in_type(original_param_function_type, &subst_pairs);
-                        self.types.add_function_pointer_type(substituted_function_type)
+                        let fp_type =
+                            self.types.add_function_pointer_type(substituted_function_type);
+                        (fp_type, expr)
                     }
-                    PhysicalPassedFunction::LambdaObject(lambda_object_type) => {
+                    PhysicalPassedFunction::LambdaObject(expr, lambda_object_type) => {
                         // Replace the function type
                         let substituted_lambda_object_type =
                             self.substitute_in_type(lambda_object_type, &subst_pairs);
-                        substituted_lambda_object_type
+                        (substituted_lambda_object_type, expr)
                     }
                 };
-                function_type_args.push(NameAndType {
-                    name: function_type_param.name,
-                    type_id: final_parameter_type,
-                });
+                function_type_arg_values.push(final_value);
+                function_type_args
+                    .push(NameAndType { name: function_type_param.name, type_id: final_type });
             }
         }
         if !function_type_args.is_empty() {
@@ -716,7 +685,7 @@ impl TypedProgram {
             );
         }
         let function_type_args_handle = self.named_types.add_slice_copy(&function_type_args);
-        Ok(function_type_args_handle)
+        Ok((function_type_args_handle, function_type_arg_values))
     }
 
     fn add_substitution(&mut self, pair: TypeSubstitutionPair) {

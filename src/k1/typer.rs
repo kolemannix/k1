@@ -5063,10 +5063,11 @@ impl TypedProgram {
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            eprintln!(
-                "compile_all_pending_bytecode {}",
-                self.bytecode.b_units_pending_compile.len()
-            );
+            //nocommit look into compile_all_pending_bytecode calls
+            // eprintln!(
+            //     "compile_all_pending_bytecode {}",
+            //     self.bytecode.b_units_pending_compile.len()
+            // );
             if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
                 self.eval_function_body(function_id, false)?;
             } else {
@@ -5095,6 +5096,8 @@ impl TypedProgram {
         }
         let static_ctx = ctx.static_ctx.unwrap();
 
+        // nocommit(1): We need to mask access from inside a static to outside variables!
+        //              Currently we just fail in bytecode gen with "missing variable"
         let expr = self.eval_expr(parsed_expr, ctx)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
@@ -7103,7 +7106,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let expr = self.eval_expr(expr_id, ctx)?;
         match ctx.expected_type_id {
-            None => self.eval_expr(expr_id, ctx),
+            None => Ok(expr),
             Some(expected_type) => {
                 match self.check_and_coerce_expr(expected_type, expr, ctx.scope_id) {
                     Ok(expr) => Ok(expr),
@@ -8099,7 +8102,16 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
-            bc::compile_function(self, body_function_id)?;
+            let is_concrete = self.functions.get(body_function_id).is_concrete;
+            if is_concrete && !ctx.is_inference() {
+                bc::compile_function(self, body_function_id)?;
+            } else {
+                debug!(
+                    "Not compiling lowered lambda {} due to {is_concrete} {}",
+                    self.ident_str(name),
+                    ctx.is_inference()
+                );
+            }
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
             let expr_id = self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
@@ -8215,10 +8227,20 @@ impl TypedProgram {
             type_id: function_type,
             compiler_debug: false,
             kind: TypedFunctionKind::Lambda,
+            // Set by add_function
             is_concrete: false,
             dyn_fn_id: None,
         });
-        bc::compile_function(self, body_function_id)?;
+        let is_concrete = self.functions.get(body_function_id).is_concrete;
+        if is_concrete && !ctx.is_inference() {
+            bc::compile_function(self, body_function_id)?;
+        } else {
+            debug!(
+                "Not compiling lambda {} due to {is_concrete} {}",
+                self.ident_str(name),
+                ctx.is_inference()
+            );
+        }
 
         let lambda_type_id = self.types.add_lambda(
             function_type,
@@ -8228,6 +8250,12 @@ impl TypedProgram {
             expr_id.into(),
         );
         self.scopes.set_scope_owner_id(lambda_scope_id, ScopeOwnerId::Lambda(lambda_type_id));
+        debug!(
+            "end eval_lambda {} with is_inference {}. Function id is: {}",
+            lambda_type_id.as_u32(),
+            ctx.is_inference(),
+            body_function_id
+        );
         Ok(self.exprs.add(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
     }
 
@@ -11255,12 +11283,13 @@ impl TypedProgram {
                     )?,
                 };
 
-                let function_type_args = self.determine_function_type_args_for_call(
-                    signature,
-                    type_args,
-                    &original_args_and_params,
-                    ctx,
-                )?;
+                let (function_type_args, function_type_arg_values) = self
+                    .determine_function_type_args_for_call(
+                        signature,
+                        type_args,
+                        &original_args_and_params,
+                        ctx,
+                    )?;
 
                 let specialized_function_type =
                     self.substitute_in_function_signature(type_args, function_type_args, signature);
@@ -11269,7 +11298,7 @@ impl TypedProgram {
                     .get_contained_type_variable_counts(specialized_function_type)
                     .is_abstract();
 
-                let final_callee = if is_abstract {
+                let final_callee = if is_abstract || ctx.is_inference() {
                     Callee::Abstract {
                         function_sig: FunctionSignature::make_no_generics(
                             signature.name,
@@ -11310,37 +11339,49 @@ impl TypedProgram {
                     false,
                 )?;
 
+                // We've finished inference and all types are known; we now compile all the expressions
+                // again to generate code with no holes and fully concrete types.
                 let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
-                for (maybe_typed_expr, param) in args_and_params.iter() {
-                    let expr = match *maybe_typed_expr {
-                        MaybeTypedExpr::Typed(typed) => typed,
-                        MaybeTypedExpr::Parsed(parsed) => self
-                            .eval_expr_with_coercion(
-                                parsed,
-                                ctx.with_expected_type(Some(param.type_id)),
-                                true,
-                            )
-                            .map_err(|err| {
-                                errf!(
-                                    err.span,
-                                    "Invalid call to {}\nInvalid type for parameter '{}': {}",
-                                    self.qident_to_string(&fn_call.name),
-                                    self.ident_str(param.name),
-                                    err.message
-                                )
-                            })?,
-                    };
 
-                    let checked_expr =
-                        self.check_call_argument(param, expr, ctx.scope_id).map_err(|err| {
-                            errf!(
-                                err.span,
-                                "Invalid call to {}\n    {}",
-                                self.qident_to_string(&fn_call.name),
-                                err.message
-                            )
-                        })?;
-                    typechecked_args.push(checked_expr);
+                // We can skip re-evaluating everything if we're just here to learn the return
+                // types, at least I hope...
+                if !ctx.is_inference() {
+                    for (param_index, (maybe_typed_expr, param)) in
+                        args_and_params.iter().enumerate()
+                    {
+                        // Is this parameter a function type parameter? If so, we already have the
+                        // typechecked value expression
+                        let matching_ftp_index = self
+                            .function_type_params
+                            .get_slice(signature.function_type_params)
+                            .iter()
+                            .position(|ftp| ftp.value_param_index as usize == param_index);
+                        let expr = match matching_ftp_index {
+                        Some(ftp_index) => {
+                            let value = function_type_arg_values[ftp_index];
+                            value
+                        }
+                        None => match *maybe_typed_expr {
+                            MaybeTypedExpr::Typed(typed) => typed,
+                            MaybeTypedExpr::Parsed(parsed) => self
+                                .eval_expr_with_coercion(
+                                    parsed,
+                                    ctx.with_expected_type(Some(param.type_id)),
+                                    true,
+                                )
+                                .map_err(|err| {
+                                    errf!(
+                                        err.span,
+                                        "Invalid call to {}\nInvalid type for parameter '{}': {}",
+                                        self.qident_to_string(&fn_call.name),
+                                        self.ident_str(param.name),
+                                        err.message
+                                    )
+                                })?,
+                        },
+                    };
+                        typechecked_args.push(expr);
+                    }
                 }
 
                 (final_callee, typechecked_args, type_args)

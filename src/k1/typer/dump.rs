@@ -330,7 +330,7 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Lambda(lam) => {
-                write!(w, "lambda#{}(", lam.parsed_id)?;
+                write!(w, "lambda_{}(", type_id)?;
                 self.display_type_id(w, lam.function_type, expand)?;
                 w.write_str(")")?;
                 Ok(())
