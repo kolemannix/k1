@@ -1,4 +1,5 @@
 use crate::compiler::WordSize;
+use crate::parse::NumericWidth;
 // Copyright (c) 2025 knix
 // All rights reserved.
 //
@@ -18,7 +19,7 @@ use crate::{
     pool::VPool,
     typer::{types::*, *},
 };
-use crate::{failf, mformat, writestr};
+use crate::{failf, mformat};
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use itertools::Itertools;
@@ -53,12 +54,12 @@ pub struct ProgramBytecode {
     b_blocks: Vec<Block>,
     b_variables: Vec<BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
-    pub b_units_pending_compile: Vec<CompilableUnit>,
+    pub b_units_pending_compile: Vec<FunctionId>,
 }
 type BcStr = MStr<ProgramBytecode>;
 
 #[derive(Clone, Copy)]
-pub enum CompilableUnit {
+pub enum CompilableUnitId {
     Function(FunctionId),
     Expr(TypedExprId),
 }
@@ -87,10 +88,7 @@ impl ProgramBytecode {
     }
 
     fn word_sized_int(&self) -> ScalarType {
-        match self.module_config.word_size {
-            WordSize::W32 => ScalarType::I32,
-            WordSize::W64 => ScalarType::I64,
-        }
+        ScalarType::U64
     }
 }
 
@@ -108,7 +106,7 @@ pub struct CompiledBlock {
 
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
-    pub unit: CompilableUnit,
+    pub unit_id: CompilableUnitId,
     /// If a compiled expression, the 'return' value is here.
     pub expr_ret: Option<Value>,
     // The offset of the first instruction id
@@ -120,6 +118,7 @@ pub struct CompiledUnit {
 
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
     pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
+    pub is_debug: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -506,7 +505,7 @@ impl std::fmt::Display for FloatCmpPred {
 pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> InstKind {
     match value {
         Value::Inst(inst_id) => get_inst_kind(bc, types, *inst_id),
-        Value::Global { t, id: _ } => InstKind::PTR,
+        Value::Global { t: _, id: _ } => InstKind::PTR,
         Value::StaticValue { t, id: _ } => InstKind::Value(*t),
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
@@ -520,8 +519,8 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
 pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) -> InstKind {
     match bc.instrs.get(inst_id) {
         Inst::Data(imm) => match imm {
-            DataInst::I64(_) => InstKind::I64,
-            DataInst::U64(_) => InstKind::U64,
+            DataInst::I64(_) => InstKind::scalar(ScalarType::I64),
+            DataInst::U64(_) => InstKind::scalar(ScalarType::U64),
             DataInst::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
             DataInst::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
         },
@@ -537,7 +536,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Unreachable => InstKind::Terminator,
         Inst::CameFrom { t, .. } => InstKind::Value(*t),
         Inst::Ret(_) => InstKind::Terminator,
-        Inst::BoolNegate { .. } => InstKind::I8,
+        Inst::BoolNegate { .. } => InstKind::BOOL,
         Inst::BitNot { v } => get_value_kind(bc, types, v),
         Inst::IntTrunc { to, .. } => InstKind::scalar(*to),
         Inst::IntExtU { to, .. } => InstKind::scalar(*to),
@@ -559,20 +558,20 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::IntDivSigned { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::IntRemUnsigned { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::IntRemSigned { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntCmp { .. } => InstKind::I8,
+        Inst::IntCmp { .. } => InstKind::BOOL,
         Inst::FloatAdd { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatSub { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatMul { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatDiv { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::FloatRem { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::FloatCmp { .. } => InstKind::I8,
+        Inst::FloatCmp { .. } => InstKind::BOOL,
         Inst::BitAnd { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitOr { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitXor { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitShiftLeft { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
         Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::I64),
+        Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::U64),
     }
 }
 
@@ -585,10 +584,9 @@ pub enum InstKind {
 
 impl InstKind {
     pub const UNIT: InstKind = Self::scalar(ScalarType::U8);
+    pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
-    pub const I8: InstKind = Self::scalar(ScalarType::I8);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
-    pub const I64: InstKind = Self::scalar(ScalarType::I64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
         InstKind::Value(PhysicalType::Scalar(st))
@@ -652,18 +650,52 @@ impl InstKind {
     }
 }
 
-impl Inst {}
-
-pub fn compile_function(
-    k1: &mut TypedProgram,
-    function_id: FunctionId,
-    compile_deps: bool,
-) -> TyperResult<()> {
+pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
-    let mut builder = Builder::new(k1);
+    let mut b = Builder::new(k1);
 
-    compile_unit_rec(&mut builder, CompilableUnit::Function(function_id), compile_deps)?;
+    debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+    let name = b.k1.bytecode.mem.push_str("entry");
+    b.push_block(name);
+    let f = b.k1.get_function(function_id);
+    let is_debug = f.compiler_debug;
+    let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
+    b.cur_span = fn_span;
+
+    let Some(body_block) = &f.body_block else {
+        return failf!(fn_span, "Function has no body to compile");
+    };
+    let body_block = *body_block;
+
+    // Set up parameters
+    let param_variables = f.param_variables;
+    let mut params = b.k1.bytecode.mem.new_vec(param_variables.len());
+    for (index, param_variable_id) in b.k1.a.get_slice(param_variables).iter().enumerate() {
+        let v = b.k1.variables.get(*param_variable_id);
+        let t = b.get_physical_type(v.type_id);
+        b.k1.bytecode.b_variables.push(BuilderVariable {
+            id: *param_variable_id,
+            value: Value::FnParam { t, index: index as u32 },
+            indirect: false,
+        });
+        params.push(t);
+    }
+    let params_handle = b.k1.bytecode.mem.vec_to_mslice(&params);
+
+    compile_block_stmts(&mut b, None, body_block)?;
+
+    let unit_id = CompilableUnitId::Function(function_id);
+    let unit = finalize_unit(&mut b, unit_id, params_handle, None, is_debug);
+
+    *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
+
+    if is_debug {
+        let s = compiled_unit_to_string(b.k1, unit_id, true);
+        eprintln!("{s}");
+    }
+
+    validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_bytecode_nanos += elapsed;
@@ -674,7 +706,7 @@ pub fn compile_top_level_expr(
     k1: &mut TypedProgram,
     expr: TypedExprId,
     input_parameters: &[(VariableId, StaticValueId)],
-    compile_deps: bool,
+    is_debug: bool,
 ) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
@@ -689,132 +721,65 @@ pub fn compile_top_level_expr(
             indirect: false,
         })
     }
-    compile_unit_rec(&mut b, CompilableUnit::Expr(expr), compile_deps)?;
 
-    let validated = validate_unit(k1, CompilableUnit::Expr(expr));
-    if let Err(e) = validated {
-        eprintln!(
-            "{}\n{}",
-            e.message,
-            writestr!(display_unit, k1, k1.bytecode.exprs.get(&expr).unwrap(), true)
-        );
-        return Err(e);
+    debug!("Compiling expr {}", b.k1.expr_to_string(expr));
+    let name = b.k1.bytecode.mem.push_str("expr_");
+    b.push_block(name);
+
+    let result = compile_expr(&mut b, None, expr)?;
+
+    // nocommit(2): Adding this exit isn't good enough; what if the expr branches to many blocks
+    // perhaps we should just compile
+    // these in 'terminating' mode like function blocks
+    if b.k1.get_expr_type_id(expr) != NEVER_TYPE_ID {
+        let exit_args =
+            b.k1.bytecode.mem.push_slice(&[Value::Imm32 { t: ScalarType::I32, data: 0 }]);
+        let id = b.k1.bytecode.calls.add(BcCall {
+            dst: None,
+            ret_inst_kind: InstKind::Terminator,
+            callee: BcCallee::Builtin(BcBuiltin::Exit),
+            args: exit_args,
+        });
+        b.push_inst(Inst::Call { id }, "expr synthetic exit");
     }
+
+    let compiled_expr = finalize_unit(
+        &mut b,
+        CompilableUnitId::Expr(expr),
+        MSlice::empty(),
+        Some(result),
+        is_debug,
+    );
+
+    b.k1.bytecode.exprs.insert(expr, compiled_expr);
+
+    validate_unit(k1, CompilableUnitId::Expr(expr))?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_bytecode_nanos += elapsed;
     Ok(())
 }
 
-fn compile_unit_rec(b: &mut Builder, unit: CompilableUnit, compile_deps: bool) -> TyperResult<()> {
-    let mut unit = Some(unit);
-    loop {
-        if unit.is_none() {
-            if compile_deps {
-                unit = b.k1.bytecode.b_units_pending_compile.pop();
-            }
-        }
-
-        match unit {
-            None => return Ok(()),
-            Some(u) => {
-                compile_unit(b, u)?;
-                unit = None;
-            }
-        }
-    }
-}
-
-fn compile_unit(b: &mut Builder, unit: CompilableUnit) -> TyperResult<()> {
-    match unit {
-        CompilableUnit::Function(function_id) => {
-            debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
-            let name = b.k1.bytecode.mem.push_str("entry");
-            b.push_block(name);
-            let f = b.k1.get_function(function_id);
-            let is_debug = f.compiler_debug;
-            let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
-            b.cur_span = fn_span;
-
-            let Some(body_block) = &f.body_block else {
-                return failf!(fn_span, "Function has no body to compile");
-            };
-            let body_block = *body_block;
-
-            // Set up parameters
-            let param_variables = f.param_variables;
-            let mut params = b.k1.bytecode.mem.new_vec(param_variables.len() as u32);
-            for (index, param_variable_id) in b.k1.a.get_slice(param_variables).iter().enumerate() {
-                let v = b.k1.variables.get(*param_variable_id);
-                let t = b.get_physical_type(v.type_id);
-                b.k1.bytecode.b_variables.push(BuilderVariable {
-                    id: *param_variable_id,
-                    value: Value::FnParam { t, index: index as u32 },
-                    indirect: false,
-                });
-                params.push(t);
-            }
-            let params_handle = b.k1.bytecode.mem.vec_to_mslice(&params);
-
-            compile_block_stmts(b, None, body_block)?;
-
-            let compiled_blocks = b.bake_blocks();
-            let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset;
-            let function = CompiledUnit {
-                unit: CompilableUnit::Function(function_id),
-                expr_ret: None,
-                inst_offset: b.inst_offset,
-                inst_count,
-                blocks: compiled_blocks,
-                fn_params: params_handle,
-            };
-            b.reset_compilation_unit();
-
-            *b.k1.bytecode.functions.get_mut(function_id) = Some(function);
-
-            if is_debug {
-                let s = compiled_unit_to_string(b.k1, unit, true);
-                eprintln!("{s}");
-            }
-            Ok(())
-        }
-        CompilableUnit::Expr(typed_expr_id) => {
-            debug!("Compiling expr {}", b.k1.expr_to_string(typed_expr_id));
-            let name = b.k1.bytecode.mem.push_str("expr_");
-            b.push_block(name);
-
-            let result = compile_expr(b, None, typed_expr_id)?;
-
-            // nocommit(2): Adding this exit isn't good enough; what if the expr branches to many blocks
-            // perhaps we should just compile
-            // these in 'terminating' mode like function blocks
-            if b.k1.get_expr_type_id(typed_expr_id) != NEVER_TYPE_ID {
-                let exit_args =
-                    b.k1.bytecode.mem.push_slice(&[Value::Imm32 { t: ScalarType::I32, data: 0 }]);
-                let id = b.k1.bytecode.calls.add(BcCall {
-                    dst: None,
-                    ret_inst_kind: InstKind::Terminator,
-                    callee: BcCallee::Builtin(BcBuiltin::Exit),
-                    args: exit_args,
-                });
-                b.push_inst(Inst::Call { id }, "expr synthetic exit");
-            }
-
-            let compiled_blocks = b.bake_blocks();
-            let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset;
-            let compiled_expr = CompiledUnit {
-                unit: CompilableUnit::Expr(typed_expr_id),
-                expr_ret: Some(result),
-                inst_offset: b.inst_offset,
-                inst_count,
-                blocks: compiled_blocks,
-                fn_params: MSlice::empty(),
-            };
-            b.reset_compilation_unit();
-            b.k1.bytecode.exprs.insert(typed_expr_id, compiled_expr);
-            Ok(())
-        }
-    }
+fn finalize_unit(
+    b: &mut Builder,
+    unit_id: CompilableUnitId,
+    fn_params: MSlice<PhysicalType, ProgramBytecode>,
+    expr_ret: Option<Value>,
+    is_debug: bool,
+) -> CompiledUnit {
+    let compiled_blocks = b.bake_blocks();
+    let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset + 1;
+    let unit = CompiledUnit {
+        unit_id,
+        expr_ret,
+        inst_offset: b.inst_offset,
+        inst_count,
+        blocks: compiled_blocks,
+        fn_params,
+        is_debug,
+    };
+    b.reset_compilation_unit();
+    unit
 }
 
 struct BuilderVariable {
@@ -841,7 +806,7 @@ pub struct Builder<'k1> {
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram) -> Self {
-        let inst_offset = k1.bytecode.instrs.len() as u32;
+        let inst_offset = k1.bytecode.instrs.len() as u32 + 1;
         Self {
             inst_offset,
             k1,
@@ -959,10 +924,10 @@ impl<'k1> Builder<'k1> {
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: &str) -> Value {
         match int_value {
-            TypedIntValue::U8(i) => Value::Imm32 { t: ScalarType::I8, data: *i as u32 },
-            TypedIntValue::U16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
+            TypedIntValue::U8(i) => Value::Imm32 { t: ScalarType::U8, data: *i as u32 },
+            TypedIntValue::U16(i) => Value::Imm32 { t: ScalarType::U16, data: *i as u32 },
             TypedIntValue::U32(i) | TypedIntValue::UWord32(i) => {
-                Value::Imm32 { t: ScalarType::I32, data: *i }
+                Value::Imm32 { t: ScalarType::U32, data: *i }
             }
             TypedIntValue::U64(i) | TypedIntValue::UWord64(i) => {
                 if *i <= u32::MAX as u64 {
@@ -1415,7 +1380,7 @@ fn compile_expr(
                                         let zero_u8 = Value::byte(0);
                                         // intern fn set(dst: Pointer, value: u8, count: uword): unit
                                         let count = Value::Imm32 {
-                                            t: ScalarType::I8,
+                                            t: ScalarType::U8,
                                             data: pt_layout.size,
                                         };
                                         let memset_args =
@@ -1569,13 +1534,9 @@ fn compile_expr(
             };
             if let BcCallee::Direct(function_id) = &callee {
                 match b.k1.bytecode.functions.get(*function_id) {
-                    None => {
-                        b.k1.bytecode
-                            .b_units_pending_compile
-                            .push(CompilableUnit::Function(*function_id))
-                    }
+                    None => b.k1.bytecode.b_units_pending_compile.push(*function_id),
                     Some(unit) => {
-                        // TODO: Inline!
+                        // TODO: Function inlining!
                         let mut total = 0;
                         for block in b.k1.bytecode.mem.get_slice(unit.blocks) {
                             total += block.instrs.len()
@@ -1715,14 +1676,13 @@ fn compile_expr(
 
             let mut incomings = b.k1.bytecode.mem.new_vec(2);
 
-            let start_block = b.cur_block;
             let lhs = compile_expr(b, None, and.lhs)?;
+            let lhs_end_block = b.cur_block;
             b.push_inst(
                 Inst::JumpIf { cond: lhs, cons: rhs_check, alt: final_block },
                 "logical and",
             );
-            incomings.push(CameFromCase { from: start_block, value: Value::FALSE });
-            b.push_jump(final_block, "short circuit true");
+            incomings.push(CameFromCase { from: lhs_end_block, value: Value::FALSE });
 
             b.goto_block(rhs_check);
             let rhs = compile_expr(b, None, and.rhs)?;
@@ -1734,7 +1694,7 @@ fn compile_expr(
             let incomings_handle = b.k1.bytecode.mem.vec_to_mslice(&incomings);
             let result_came_from = b.push_inst(
                 Inst::CameFrom {
-                    t: PhysicalType::Scalar(ScalarType::I8),
+                    t: PhysicalType::Scalar(ScalarType::U8),
                     incomings: incomings_handle,
                 },
                 "logical and result",
@@ -1769,7 +1729,7 @@ fn compile_expr(
             let result_came_from = b
                 .push_inst(
                     Inst::CameFrom {
-                        t: PhysicalType::Scalar(ScalarType::I8),
+                        t: PhysicalType::Scalar(ScalarType::U8),
                         incomings: incomings_handle,
                     },
                     "logical or result",
@@ -2091,6 +2051,13 @@ fn compile_cast(
             let base_noop = compile_expr(b, dst, c.base_expr)?;
             Ok(base_noop)
         }
+        CastType::IntegerCast(IntegerCastDirection::SignChange) => {
+            // Treating this as a noop for now but it does mean that
+            // we have a slightly incorrectly typed instr here,
+            // but it should not lead to any incorrect instructions
+            let base_noop = compile_expr(b, dst, c.base_expr)?;
+            Ok(base_noop)
+        }
         CastType::IntegerCast(IntegerCastDirection::Extend)
         | CastType::IntegerCast(IntegerCastDirection::Truncate)
         | CastType::IntegerExtendFromChar => {
@@ -2409,27 +2376,27 @@ pub fn zero(t: ScalarType) -> Value {
     }
 }
 
-pub fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnit) -> Option<CompiledUnit> {
+pub fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnitId) -> Option<CompiledUnit> {
     match unit {
-        CompilableUnit::Function(function_id) => bc.functions.get(function_id).as_ref().copied(),
-        CompilableUnit::Expr(typed_expr_id) => bc.exprs.get(&typed_expr_id).copied(),
+        CompilableUnitId::Function(function_id) => bc.functions.get(function_id).as_ref().copied(),
+        CompilableUnitId::Expr(typed_expr_id) => bc.exprs.get(&typed_expr_id).copied(),
     }
 }
 
-pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnit) -> SpanId {
+pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnitId) -> SpanId {
     match unit {
-        CompilableUnit::Function(function_id) => k1.get_function_span(function_id),
-        CompilableUnit::Expr(typed_expr_id) => k1.exprs.get(typed_expr_id).get_span(),
+        CompilableUnitId::Function(function_id) => k1.get_function_span(function_id),
+        CompilableUnitId::Expr(typed_expr_id) => k1.exprs.get(typed_expr_id).get_span(),
     }
 }
 
 ////////////////////////////// Validation //////////////////////////////
 
-pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()> {
+pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResult<()> {
     let mut errors = Vec::new();
     let bc = &k1.bytecode;
-    let span = get_unit_span(k1, unit);
-    let Some(unit) = get_compiled_unit(&k1.bytecode, unit) else {
+    let span = get_unit_span(k1, unit_id);
+    let Some(unit) = get_compiled_unit(&k1.bytecode, unit_id) else {
         return failf!(span, "Not compiled");
     };
     for (block_index, block) in bc.mem.get_slice(unit.blocks).iter().enumerate() {
@@ -2482,8 +2449,8 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                         errors.push(format!("i{inst_id}: array_offset base is not a ptr"))
                     }
 
-                    if index_type.as_value().and_then(|t| t.as_scalar())
-                        != Some(bc.word_sized_int())
+                    if index_type.as_value().and_then(|t| t.as_scalar()).map(|st| st.width())
+                        != Some(NumericWidth::B64)
                     {
                         errors.push(format!(
                             "i{inst_id}: array_offset index type is not word-sized int",
@@ -2538,10 +2505,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 }
                 Inst::FloatTrunc { v, to } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type
-                        .as_value()
-                        .and_then(|t| t.as_scalar())
-                        .map_or(false, |s| s == ScalarType::F64)
+                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float_trunc src is not f64"))
                     }
@@ -2551,10 +2515,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 }
                 Inst::FloatExt { v, to } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type
-                        .as_value()
-                        .and_then(|t| t.as_scalar())
-                        .map_or(false, |s| s == ScalarType::F32)
+                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float_ext src is not f32"))
                     }
@@ -2564,10 +2525,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 }
                 Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type
-                        .as_value()
-                        .and_then(|t| t.as_scalar())
-                        .map_or(false, |s| s == ScalarType::F32)
+                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
                     }
@@ -2577,10 +2535,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
                 }
                 Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type
-                        .as_value()
-                        .and_then(|t| t.as_scalar())
-                        .map_or(false, |s| s == ScalarType::F64)
+                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
                     }
@@ -2631,8 +2586,8 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
         Err(TyperError {
             span,
             message: format!(
-                "Bytecode Unit '{}' failed validation\n{}",
-                writestr!(display_unit_name, k1, unit.unit),
+                "Bytecode Unit failed validation\n{}\n{}",
+                compiled_unit_to_string(k1, unit_id, true),
                 error_string
             ),
             level: ErrorLevel::Error,
@@ -2646,7 +2601,7 @@ pub fn validate_unit(k1: &TypedProgram, unit: CompilableUnit) -> TyperResult<()>
 
 pub fn compiled_unit_to_string(
     k1: &TypedProgram,
-    unit: CompilableUnit,
+    unit: CompilableUnitId,
     show_source: bool,
 ) -> String {
     let mut s = String::new();
@@ -2658,14 +2613,14 @@ pub fn compiled_unit_to_string(
 pub fn display_unit_name(
     w: &mut impl Write,
     k1: &TypedProgram,
-    unit: CompilableUnit,
+    unit: CompilableUnitId,
 ) -> std::fmt::Result {
     match unit {
-        CompilableUnit::Function(function_id) => {
+        CompilableUnitId::Function(function_id) => {
             let function = k1.functions.get(function_id);
             k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), "/", true);
         }
-        CompilableUnit::Expr(typed_expr_id) => {
+        CompilableUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get(typed_expr_id).get_span();
             let (source, line) = k1.get_span_location(expr_span);
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
@@ -2680,11 +2635,11 @@ pub fn display_unit(
     unit: &CompiledUnit,
     show_source: bool,
 ) -> std::fmt::Result {
-    match unit.unit {
-        CompilableUnit::Function(function_id) => {
+    match unit.unit_id {
+        CompilableUnitId::Function(function_id) => {
             k1.write_ident(w, k1.functions.get(function_id).name)?;
         }
-        CompilableUnit::Expr(typed_expr_id) => {
+        CompilableUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get(typed_expr_id).get_span();
             let (source, line) = k1.get_span_location(expr_span);
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;

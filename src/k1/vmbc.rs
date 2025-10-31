@@ -1,17 +1,11 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use std::{
-    fmt::write,
-    io::stderr,
-    num::NonZeroU32,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::num::NonZeroU32;
 
 use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use itertools::Itertools;
 use log::debug;
 use memmap2::{MmapMut, MmapOptions};
 
@@ -19,7 +13,9 @@ use memmap2::{MmapMut, MmapOptions};
 mod vm_test;
 
 use crate::{
-    bc::{self, BcCallee, CompilableUnit, CompiledUnit, Inst, InstId, InstKind, Value as BcValue},
+    bc::{
+        self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
+    },
     compiler::WordSize,
     errf, failf, ice_span,
     kmem::MSlice,
@@ -30,8 +26,8 @@ use crate::{
         StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
         TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
         types::{
-            self, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType,
-            STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
+            self, ContainerKind, FloatType, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
+            PhysicalType, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
         },
     },
 };
@@ -238,13 +234,13 @@ impl Vm {
                         .unwrap();
                 }
             }
-            writeln!(w, "").unwrap();
+            writeln!(w).unwrap();
         }
         let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
         for (i, pt) in k1.bytecode.mem.get_slice(unit.fn_params).iter().enumerate() {
             writeln!(w, "Param {i}: ").unwrap();
             let value = self.stack.get_param_value(frame_index, i as u32);
-            render_debug_value(w, self, k1, *pt, value);
+            render_debug_value(w, self, k1, *pt, value).unwrap();
         }
         writeln!(w, "Locals").unwrap();
         for block in k1.bytecode.mem.get_slice(unit.blocks) {
@@ -456,34 +452,27 @@ pub fn execute_compiled_unit(
     args: &[StaticValueId],
     // These should have gotten compiled to StaticValue instructions
     _input_parameters: &[(VariableId, StaticValueId)],
-    debugger: bool,
 ) -> TyperResult<StaticValueId> {
     let start = k1.timing.clock.raw();
     let span = k1.exprs.get(expr_id).get_span();
     vm.eval_span = span;
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
-    //eprintln!(
-    //    "[vmbc] Executing {}\n{}",
-    //    k1.expr_to_string(expr_id),
-    //    bc::compiled_unit_to_string(k1, &unit, true)
-    //);
+    if unit.is_debug {
+        eprintln!("[vmbc] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    }
 
-    match unit.unit {
-        CompilableUnit::Function(_function_id) => {
+    match unit.unit_id {
+        CompilableUnitId::Function(_function_id) => {
             return failf!(span, "Cannot execute function from top");
         }
-        CompilableUnit::Expr(_) => {
+        CompilableUnitId::Expr(_) => {
             // Executing an expr. Execution will just end at some point, and
             // we'll just decode the last value we got I suppose
         }
     };
     vm.stack.push_new_frame(Some(span), &unit, None);
     let top_frame_index = vm.stack.current_frame_index();
-    if top_frame_index != 0 {
-        eprintln!("{}", make_stack_trace(k1, &vm.stack));
-        vm_crash(k1, vm, "hey there's already a stack.");
-    }
     debug_assert_eq!(top_frame_index, 0);
 
     for (param_index, arg) in args.iter().enumerate() {
@@ -491,7 +480,7 @@ pub fn execute_compiled_unit(
         vm.stack.set_param_value(top_frame_index, param_index as u32, value);
     }
 
-    let (exit_code, exit_value) = exec_loop(k1, vm, unit, debugger)?;
+    let (exit_code, exit_value) = exec_loop(k1, vm, unit)?;
 
     let end = k1.timing.clock.raw();
     k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
@@ -506,8 +495,12 @@ pub fn execute_compiled_unit(
         }
         Some(expr_value) => {
             let expr_type_id = k1.get_expr_type_id(expr_id);
-            let baked_value = vm_value_to_static_value(k1, expr_type_id, expr_value, span)?;
-            Ok(baked_value)
+            if expr_type_id == NEVER_TYPE_ID {
+                Ok(k1.static_values.unit_id())
+            } else {
+                let baked_value = vm_value_to_static_value(k1, expr_type_id, expr_value, span)?;
+                Ok(baked_value)
+            }
         }
     }
 }
@@ -516,7 +509,6 @@ fn exec_loop(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     original_unit: CompiledUnit,
-    debugger: bool,
 ) -> TyperResult<(i32, Option<Value>)> {
     let mut prev_b: u32 = 0;
     let mut b: u32 = 0;
@@ -551,27 +543,26 @@ fn exec_loop(
         };
     }
 
-    let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
         vm.eval_span = *k1.bytecode.sources.get(inst_id);
         let inst_index = inst_to_index(inst_id, inst_offset);
 
-        if debugger {
-            eprintln!(
-                "{}[{}] i{} {}",
-                "  ".repeat(vm.stack.current_frame_index() as usize),
-                vm.stack.current_frame_index(),
-                inst_id.as_u32(),
-                bc::inst_to_string(k1, inst_id)
-            );
-            std::io::stdin().read_line(&mut line).unwrap();
-            if &line == "v\n" {
-                vm.dump_current_frame(k1);
-            }
-            line.clear()
-        }
+        // if debugger {
+        //     eprintln!(
+        //         "{}[{}] i{} {}",
+        //         "  ".repeat(vm.stack.current_frame_index() as usize),
+        //         vm.stack.current_frame_index(),
+        //         inst_id.as_u32(),
+        //         bc::inst_to_string(k1, inst_id)
+        //     );
+        //     std::io::stdin().read_line(&mut line).unwrap();
+        //     if &line == "v\n" {
+        //         vm.dump_current_frame(k1);
+        //     }
+        //     line.clear()
+        // }
 
         // ~Decode~ Execute
         match *k1.bytecode.instrs.get(inst_id) {
@@ -932,15 +923,7 @@ fn exec_loop(
                     // be parameterizing 'resolve_value' by stack frame
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg);
-                    if debugger {
-                        eprintln!(
-                            "{}call [{}] param p{} := {}",
-                            "  ".repeat(caller_frame_index as usize),
-                            new_frame_index,
-                            index,
-                            vm_value
-                        );
-                    }
+
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
 
@@ -979,7 +962,7 @@ fn exec_loop(
                 return failf!(vm.eval_span, "Reached unreachable instruction");
             }
             Inst::CameFrom { t: _, incomings } => {
-                debug_assert!(incomings.len() > 0);
+                debug_assert!(!incomings.is_empty());
                 let mut value: core::mem::MaybeUninit<BcValue> = core::mem::MaybeUninit::uninit();
                 'case: for case in k1.bytecode.mem.get_slice(incomings) {
                     if case.from == prev_b {
@@ -1112,35 +1095,35 @@ fn exec_loop(
             Inst::IntToFloatUnsigned { v, from, to } => {
                 let int_value = resolve_value!(v);
                 let result = match (from, to) {
-                    (ScalarType::I8, ScalarType::F32) => {
+                    (ScalarType::U8, ScalarType::F32) => {
                         let i = int_value.bits() as u8;
                         Value::f32(i as f32)
                     }
-                    (ScalarType::I16, ScalarType::F32) => {
+                    (ScalarType::U16, ScalarType::F32) => {
                         let i = int_value.bits() as u16;
                         Value::f32(i as f32)
                     }
-                    (ScalarType::I32, ScalarType::F32) => {
+                    (ScalarType::U32, ScalarType::F32) => {
                         let i = int_value.bits() as u32;
                         Value::f32(i as f32)
                     }
-                    (ScalarType::I64, ScalarType::F32) => {
+                    (ScalarType::U64, ScalarType::F32) => {
                         let i = int_value.bits() as u64;
                         Value::f32(i as f32)
                     }
-                    (ScalarType::I8, ScalarType::F64) => {
+                    (ScalarType::U8, ScalarType::F64) => {
                         let i = int_value.bits() as u8;
                         Value::f64(i as f64)
                     }
-                    (ScalarType::I16, ScalarType::F64) => {
+                    (ScalarType::U16, ScalarType::F64) => {
                         let i = int_value.bits() as u16;
                         Value::f64(i as f64)
                     }
-                    (ScalarType::I32, ScalarType::F64) => {
+                    (ScalarType::U32, ScalarType::F64) => {
                         let i = int_value.bits() as u32;
                         Value::f64(i as f64)
                     }
-                    (ScalarType::I64, ScalarType::F64) => {
+                    (ScalarType::U64, ScalarType::F64) => {
                         let i = int_value.bits() as u64;
                         Value::f64(i as f64)
                     }
@@ -1863,7 +1846,7 @@ pub struct StackFrame {
     param_count: u32,
     blocks: MSlice<bc::CompiledBlock, bc::ProgramBytecode>,
     inst_offset: u32,
-    unit: CompilableUnit,
+    unit: CompilableUnitId,
     ret_info: Option<RetInfo>,
 }
 
@@ -1888,7 +1871,7 @@ impl StackFrame {
             base_ptr,
             inst_slice,
             call_span,
-            unit: owner.unit,
+            unit: owner.unit_id,
             param_count: owner.fn_params.len(),
             blocks: owner.blocks,
             inst_offset: owner.inst_offset,
@@ -1989,10 +1972,12 @@ impl Stack {
         self.frames.len() as u32 - 1
     }
 
+    #[allow(unused)]
     fn caller_frame_index(&self) -> u32 {
         self.frames.len() as u32 - 2
     }
 
+    #[allow(unused)]
     fn caller_frame(&self) -> &StackFrame {
         self.frames.get(self.caller_frame_index() as usize).unwrap()
     }
@@ -2233,7 +2218,11 @@ pub fn vm_value_to_static_value(
 ) -> TyperResult<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
     let Some(_pt) = k1.types.get_physical_type(type_id) else {
-        return failf!(span, "Not a phyical type: {}", k1.type_id_to_string(type_id));
+        return failf!(
+            span,
+            "Not a physical type, cannot bake to static: {}",
+            k1.type_id_to_string(type_id)
+        );
     };
     // We know it is a physical type so can be aggressive with matches
     let static_value_id = match k1.types.get(type_id) {
@@ -2458,6 +2447,7 @@ fn render_debug_value(
     Ok(())
 }
 
+#[allow(unused)]
 fn debug_value_to_string(vm: &Vm, k1: &TypedProgram, pt: PhysicalType, value: Value) -> String {
     let mut s = String::new();
     render_debug_value(&mut s, vm, k1, pt, value).unwrap();

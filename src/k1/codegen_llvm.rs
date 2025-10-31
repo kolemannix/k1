@@ -517,7 +517,6 @@ struct DebugContext<'ctx> {
     #[allow(unused)]
     scopes: FxHashMap<ScopeId, DIScope<'ctx>>,
     strip_debug: bool,
-    word_size: WordSize,
 }
 
 impl<'ctx> DebugContext<'ctx> {
@@ -549,8 +548,8 @@ impl<'ctx> DebugContext<'ctx> {
             .create_pointer_type(
                 name,
                 pointee,
-                self.word_size.bits() as u64,
-                self.word_size.bits(),
+                crate::WORD_SIZE_BITS as u64,
+                crate::WORD_SIZE_BITS as u32,
                 AddressSpace::default(),
             )
             .as_type()
@@ -680,7 +679,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             debug_stack: Vec::new(),
             scopes: FxHashMap::new(),
             strip_debug: !debug,
-            word_size: module.ast.config.target.word_size(),
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
@@ -2587,6 +2585,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | CastType::ReferenceToMut
             | CastType::ReferenceUnMut
             | CastType::IntegerCast(IntegerCastDirection::NoOp)
+            | CastType::IntegerCast(IntegerCastDirection::SignChange)
             | CastType::Integer8ToChar
             | CastType::StaticErase => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;

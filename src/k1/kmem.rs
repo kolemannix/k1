@@ -511,18 +511,18 @@ impl<T, Tag> FixVec<T, Tag> {
             panic!("FixVec is full {} + {} > {}", self.len, vals.len(), self.buf.len());
         }
         unsafe {
-            let dst = &mut (*self.buf)[self.len..self.len + vals.len()];
+            let dst = &mut (&mut (*self.buf))[self.len..self.len + vals.len()];
             dst.copy_from_slice(vals);
         }
         self.len += vals.len();
     }
 
     pub fn as_slice(&self) -> &[T] {
-        unsafe { &(*self.buf)[..self.len] }
+        unsafe { &(&(*self.buf))[..self.len] }
     }
 
     pub fn as_slice_mut(&mut self) -> &mut [T] {
-        unsafe { &mut (*self.buf)[..self.len] }
+        unsafe { &mut (&mut (*self.buf))[..self.len] }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
