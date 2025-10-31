@@ -1107,7 +1107,13 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
                         b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
                     };
-                    let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
+                    let Some(builder_variable) = b.get_variable(v.variable_id) else {
+                        let variable = b.k1.variables.get(v.variable_id);
+                        b.k1.ice_with_span(
+                            format!("missing variable: {}", b.k1.ident_str(variable.name)),
+                            ass.span,
+                        );
+                    };
                     if !builder_variable.indirect {
                         b.k1.ice_with_span(
                             "Expect an indirect variable for value assignment",
@@ -1304,7 +1310,11 @@ fn compile_expr(
                                 .map(|bv| format!("{} {}", bv.id, bv.value))
                                 .join("\n")
                         );
-                        b.k1.ice_with_span("Missing variable", variable_expr.span)
+                        let variable = b.k1.variables.get(variable_expr.variable_id);
+                        b.k1.ice_with_span(
+                            format!("Missing variable: {}", b.k1.ident_str(variable.name)),
+                            variable_expr.span,
+                        )
                     };
                     let var_type_pt_id = b.get_physical_type(variable_expr.type_id);
                     let var_value = var.value;

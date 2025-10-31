@@ -10,8 +10,8 @@ fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T
 ns iter {
 
   fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): ?T {
-    for i in iterable do {
-      if pred(i) return(.Some(i))
+    for iterable do {
+      if pred(it) return(.Some(it))
     };
     .None
   }
