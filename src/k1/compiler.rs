@@ -447,7 +447,8 @@ pub fn write_executable(
     match target.target_os() {
         TargetOs::MacOs => {
             build_args.push(macos_version_flag.as_ref().unwrap());
-            //build_args.push("-I/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include");
+            build_args.push("--sysroot");
+            build_args.push("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
             build_args.push("-lunwind");
         }
         TargetOs::Linux => {
