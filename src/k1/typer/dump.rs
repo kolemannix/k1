@@ -160,9 +160,9 @@ impl TypedProgram {
         expand: bool,
     ) -> std::fmt::Result {
         w.write_str("[")?;
-        for (index, t) in self.types.type_slices.get_slice(spec_info.type_args).iter().enumerate() {
+        for (index, t) in self.types.mem.get_slice(spec_info.type_args).iter().enumerate() {
             self.display_type_id(w, *t, expand)?;
-            let last = index == spec_info.type_args.len() - 1;
+            let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
                 w.write_str(", ")?;
             }
@@ -1132,7 +1132,7 @@ impl TypedProgram {
     }
 
     pub fn pretty_print_type_slice(&self, type_slice: TypeIdSlice, sep: &str) -> String {
-        self.pretty_print_types(self.types.type_slices.get_slice(type_slice), sep)
+        self.pretty_print_types(self.types.mem.get_slice(type_slice), sep)
     }
 
     pub fn pretty_print_type_substitutions(

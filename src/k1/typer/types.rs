@@ -28,7 +28,7 @@ pub struct StructLayout {
     pub field_offsets: SV8<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
     pub type_args: TypeIdSlice,
@@ -1056,16 +1056,13 @@ pub struct TypePool {
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
-    pub specializations: FxHashMap<(TypeId, TypeIdSlice), TypeId>,
+    pub specializations: FxHashMap<TypeId, Vec<(TypeIdSlice, TypeId)>>,
 
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
     pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
 
     pub builtins: BuiltinTypes,
-
-    // nocommit: deprecated; merge with new `mem`
-    pub type_slices: VPool<TypeId, TypeSliceId>,
 
     pub phys_types: VPool<PhysicalTypeRecord, PhysicalTypeId>,
 
@@ -1096,8 +1093,6 @@ impl TypePool {
             ast_ability_mapping: FxHashMap::default(),
 
             builtins: BuiltinTypes::default(),
-
-            type_slices: VPool::make_with_hint("type_slices", EXPECTED_TYPE_COUNT),
 
             phys_types: VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2),
 
@@ -2018,7 +2013,7 @@ impl TypePool {
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == LIST_TYPE_ID {
-                Some(ListType { element_type: *self.type_slices.get_nth(spec_info.type_args, 0) })
+                Some(ListType { element_type: *self.mem.get_nth(spec_info.type_args, 0) })
             } else {
                 None
             }
@@ -2028,7 +2023,7 @@ impl TypePool {
     pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == BUFFER_TYPE_ID {
-                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
+                Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
@@ -2038,7 +2033,7 @@ impl TypePool {
     pub fn get_as_view_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == VIEW_TYPE_ID {
-                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
+                Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
@@ -2048,11 +2043,11 @@ impl TypePool {
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
             if info.generic_parent == LIST_TYPE_ID {
-                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::List))
+                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
             } else if info.generic_parent == BUFFER_TYPE_ID {
-                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::Buffer))
+                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
             } else if info.generic_parent == VIEW_TYPE_ID {
-                Some((*self.type_slices.get_nth(info.type_args, 0), ContainerKind::View))
+                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::View))
             } else {
                 None
             }
@@ -2066,28 +2061,31 @@ impl TypePool {
     pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == OPTIONAL_TYPE_ID {
-                Some(*self.type_slices.get_nth(spec_info.type_args, 0))
+                Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
             }
         })
     }
 
-    pub fn get_specialization(
-        &self,
-        base: TypeId,
-        args: SliceHandle<TypeSliceId>,
-    ) -> Option<TypeId> {
-        self.specializations.get(&(base, args)).copied()
+    pub fn get_specialization(&self, base: TypeId, args: TypeIdSlice) -> Option<TypeId> {
+        if let Some(specializations) = self.specializations.get(&base) {
+            for candidate in specializations {
+                if self.mem.slices_equal_copy(candidate.0, args) {
+                    return Some(candidate.1);
+                }
+            }
+        }
+        None
     }
 
-    pub fn insert_specialization(
-        &mut self,
-        base: TypeId,
-        args: SliceHandle<TypeSliceId>,
-        specialized: TypeId,
-    ) {
-        self.specializations.insert((base, args), specialized);
+    pub fn insert_specialization(&mut self, base: TypeId, args: TypeIdSlice, specialized: TypeId) {
+        match self.specializations.entry(base) {
+            Entry::Occupied(mut o) => o.get_mut().push((args, specialized)),
+            Entry::Vacant(v) => {
+                v.insert(vec![(args, specialized)]);
+            }
+        }
     }
 }
 

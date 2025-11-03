@@ -46,15 +46,6 @@ ns meta {
     if fields.isEmpty() { crash("Input struct must have at least one field") };
 
     let code = CodeBuilder/new();
-    // nocommit tidy it back up
-    println("{fields.len()}");
-    println("{fields.get(0).name} {fields.get(0).typeId}");
-    println("{fields.get(1).name}");
-    println("{fields.get(2).name}");
-    code.line("\n// {fields.get(0).name}");
-    code.line("// {fields.get(1).name}");
-    code.line("// {fields.get(2).name}");
-    for f in fields do { code.line("// f{itIndex}: {f.name}") };
     code.line("deftype {name} = {{");
     for f in fields do {
       code.line("  ARR_{f.name}: List[typeFromId({f.typeId})],");
