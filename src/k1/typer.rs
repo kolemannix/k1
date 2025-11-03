@@ -927,7 +927,7 @@ pub type NamedTypeSlice = SliceHandle<NameAndTypeId>;
 
 nz_u32_id!(TypeSliceId);
 
-pub type TypeIdSlice = SliceHandle<TypeSliceId>;
+pub type TypeIdSlice = MSlice<TypeId, TypePool>;
 
 impl HasName for &NameAndType {
     fn name(&self) -> Ident {
@@ -3113,7 +3113,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Optional(opt) => {
                 let inner_ty = self.eval_type_expr_ext(opt.base, scope_id, context.descended())?;
-                let type_args = self.types.type_slices.add_slice_copy(&[inner_ty]);
+                let type_args = self.types.mem.push_slice(&[inner_ty]);
                 let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, type_args);
                 Ok(optional_type)
             }
@@ -6878,11 +6878,7 @@ impl TypedProgram {
                 let expr_id = self.add_static_constant_expr(value_id, span);
                 Ok(expr_id)
             }
-            ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => {
-                // nocommit(3): Store cached Ids for all the most common static values like bool,
-                // unit, int(0), int(1), et.al.
-                Ok(self.synth_bool(*b, *span))
-            }
+            ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => Ok(self.synth_bool(*b, *span)),
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
                 let static_value_id = self.static_values.add_string(*string_id);
                 let is_typed_as_static = ctx.is_inference();
@@ -11343,8 +11339,7 @@ impl TypedProgram {
                 // again to generate code with no holes and fully concrete types.
                 let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
 
-                // We can skip re-evaluating everything if we're just here to learn the return
-                // types, at least I hope...
+                // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
                     for (param_index, (maybe_typed_expr, param)) in
                         args_and_params.iter().enumerate()
