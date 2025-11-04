@@ -5230,6 +5230,20 @@ impl TypedProgram {
         res
     }
 
+    fn execute_static_condition(&mut self, cond: Option<ParsedExprId>, scope_id: ScopeId) -> bool {
+        if let Some(condition_expr) = cond {
+            match self.execute_static_bool(condition_expr, EvalExprContext::make(scope_id)) {
+                Err(e) => {
+                    self.report_error(e);
+                    false
+                }
+                Ok(b) => b,
+            }
+        } else {
+            true
+        }
+    }
+
     fn execute_static_bool(
         &mut self,
         cond: ParsedExprId,
@@ -9220,18 +9234,11 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        // We just proceed as if it yielded 'true' in the generic case
         let condition_bool = match ctx.is_generic_pass() {
             false => self.execute_static_bool(if_expr.cond, ctx)?,
+            // We just proceed as if it yielded 'true' in the generic case
             true => true,
         };
-
-        // Should we still compile both expressions; I think all the code should get typechecked
-        // even if the path isn't taken? Or does this prevent important use-cases like
-        // platform-dependent code?
-        //let cons_expr = self.eval_expr(if_expr.cons, ctx)?;
-        //let alt_expr =
-        //    if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
 
         let expr = if condition_bool {
             let cons_expr = self.eval_expr(if_expr.cons, ctx)?;
@@ -13037,12 +13044,10 @@ impl TypedProgram {
         let companion_type_id = namespace.companion_type_id;
         let parsed_function = self.ast.get_function(parsed_function_id).clone();
         let is_debug = parsed_function.compiler_debug;
-        if let Some(condition_expr) = parsed_function.condition {
-            let condition_value =
-                self.execute_static_bool(condition_expr, EvalExprContext::make(parent_scope_id))?;
-            if !condition_value {
-                return Ok(None);
-            }
+        let should_compile =
+            self.execute_static_condition(parsed_function.condition, parent_scope_id);
+        if !should_compile {
+            return Ok(None);
         }
         if is_debug {
             self.push_debug_level();
@@ -14100,19 +14105,8 @@ impl TypedProgram {
                 // For value programs, we want to run them in the body phase
                 // so that they have access to as much code as possible
                 if !is_metaprogram {
-                    let should_compile = if let Some(condition_expr) = s.condition_if_definition {
-                        match self
-                            .execute_static_bool(condition_expr, EvalExprContext::make(scope_id))
-                        {
-                            Err(e) => {
-                                self.report_error(e);
-                                false
-                            }
-                            Ok(b) => b,
-                        }
-                    } else {
-                        true
-                    };
+                    let should_compile =
+                        self.execute_static_condition(s.condition_if_definition, scope_id);
 
                     if should_compile {
                         let static_ctx =
@@ -14545,20 +14539,8 @@ impl TypedProgram {
                     }
                     debug_assert!(s.is_definition);
 
-                    let should_compile = if let Some(condition_expr) = s.condition_if_definition {
-                        match self.execute_static_bool(
-                            condition_expr,
-                            EvalExprContext::make(namespace_scope_id),
-                        ) {
-                            Err(e) => {
-                                self.report_error(e);
-                                false
-                            }
-                            Ok(b) => b,
-                        }
-                    } else {
-                        true
-                    };
+                    let should_compile = self
+                        .execute_static_condition(s.condition_if_definition, namespace_scope_id);
 
                     if !should_compile {
                         continue;
@@ -14568,10 +14550,9 @@ impl TypedProgram {
                     // We simply run the program, getting a string,
                     // parse it as definitions, then we load those definitions
                     // injecting them into the AST, as if they appeared right here.
-                    // We ensure to handle namespaces right now, as this is the phase that
+                    // If it is a namespace, we ensure we handle it right now, as this is the phase that
                     // they should be handled. Everything else will get handled naturally
                     // as we iterate over the namespace's definitions in the future phases
-
                     let static_ctx = StaticExecContext {
                         is_metaprogram,
                         expected_return_type: Some(I32_TYPE_ID),
@@ -14599,17 +14580,12 @@ impl TypedProgram {
                     // We'll add them to the AST definitions later so that further
                     // passes can find them
                     for &d in newly_parsed_defns.iter() {
-                        match d {
-                            ParsedId::Namespace(ns) => {
-                                if let Err(e) = self.declare_namespace_recursive(
-                                    ns,
-                                    namespace_scope_id,
-                                    skip_defns,
-                                ) {
-                                    self.report_error(e)
-                                };
-                            }
-                            _ => {}
+                        if let ParsedId::Namespace(ns) = d {
+                            if let Err(e) =
+                                self.declare_namespace_recursive(ns, namespace_scope_id, skip_defns)
+                            {
+                                self.report_error(e)
+                            };
                         }
                     }
                     // We want to insert a given #meta's definitions right
