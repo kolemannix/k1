@@ -2916,6 +2916,17 @@ impl TypedProgram {
                     Ok(None) => None,
                     Err(msg) => return failf!(type_param.span, "{}", msg),
                 };
+            let mut ability_constraints = smallvec![];
+            for parsed_constraint in type_param.constraints.iter() {
+                match parsed_constraint {
+                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
+                        let ability_sig =
+                            self.eval_ability_expr(*ability_expr, false, defn_scope_id)?;
+                        ability_constraints.push(ability_sig);
+                    }
+                    ParsedTypeConstraintExpr::Static(_) => {}
+                };
+            }
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
@@ -2923,7 +2934,7 @@ impl TypedProgram {
                     scope_id: defn_scope_id,
                     span: type_param.span,
                 },
-                smallvec![],
+                ability_constraints,
             );
             type_params.push(NameAndType { name: type_param.name, type_id: type_variable_id });
             let added = self
@@ -3711,6 +3722,7 @@ impl TypedProgram {
         };
 
         let ty_app_name = &ty_app.name;
+        let ty_app_span = ty_app.span;
         match self.scopes.find_type_namespaced(
             scope_id,
             ty_app_name,
@@ -3738,28 +3750,54 @@ impl TypedProgram {
                     Type::Generic(g) => {
                         if ty_app.args.len() != g.params.len() {
                             return failf!(
-                                ty_app.span,
+                                ty_app_span,
                                 "Type {} expects {} type arguments, got {}",
                                 self.qident_to_string(&ty_app.name),
                                 g.params.len(),
                                 ty_app.args.len()
                             );
                         }
+                        let g_params = g.params;
                         let mut type_arguments = self.tmp.new_vec(ty_app.args.len() as u32);
-                        for parsed_arg in self.ast.p_type_args.copy_slice_sv8(ty_app.args) {
+                        let mut subst_pairs: FixVec<TypeSubstitutionPair, MemTmp> =
+                            self.tmp.new_vec(ty_app.args.len() as u32);
+                        for (param, parsed_arg) in self
+                            .named_types
+                            .copy_slice_sv4(g_params)
+                            .iter()
+                            .zip(self.ast.p_type_args.copy_slice_sv8(ty_app.args))
+                        {
                             let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                                 return failf!(
                                     parsed_arg.span,
                                     "Wildcard _ type not accepted here"
                                 );
                             };
-                            let param_type_id = self.eval_type_expr_ext(
+                            let arg_type_id = self.eval_type_expr_ext(
                                 parsed_arg_expr,
                                 scope_id,
                                 context.descended(),
                             )?;
-                            type_arguments.push(param_type_id);
+                            subst_pairs.push(spair! { param.type_id => arg_type_id });
+                            type_arguments.push(arg_type_id);
                         }
+                        // Repeat the loop, this time checking constraints
+                        for (param, arg_type) in self
+                            .named_types
+                            .copy_slice_sv4(g_params)
+                            .iter()
+                            .zip(type_arguments.as_slice())
+                        {
+                            self.check_type_constraints(
+                                param.name,
+                                param.type_id,
+                                *arg_type,
+                                subst_pairs.as_slice(),
+                                scope_id,
+                                ty_app_span,
+                            )?;
+                        }
+
                         let type_arguments_slice = self.types.mem.pushn(&type_arguments);
                         Ok(self.instantiate_generic_type(type_id, type_arguments_slice))
                     }
@@ -5049,11 +5087,13 @@ impl TypedProgram {
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            //nocommit look into compile_all_pending_bytecode calls
-            // eprintln!(
+            // debug!(
             //     "compile_all_pending_bytecode {}",
             //     self.bytecode.b_units_pending_compile.len()
             // );
+            // for p in &self.bytecode.b_units_pending_compile {
+            //     debug!("PENDING: {}", self.function_id_to_string(*p, false));
+            // }
             if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
                 self.eval_function_body(function_id, false)?;
             } else {

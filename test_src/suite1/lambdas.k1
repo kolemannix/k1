@@ -98,11 +98,13 @@ fn test(): unit {
     | filter(\x. x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
 
-  let x = 10;
+  let* x = 10;
   // Coerce lambdas to lambda objects
-  simpleDyn(\() println("Thunk! {x}"));
+  simpleDyn(\() {"Thunk! {x.*}"; x <- 11 });
+  assertEquals(x.*, 11);
   // Coerce function refs to lambda objects
-  simpleDyn(\() println("Thunk!"));
+  simpleDyn(\() {"Thunk!"; x <- 12 });
+  assertEquals(x.*, 12);
 
   thunksTest();
 
