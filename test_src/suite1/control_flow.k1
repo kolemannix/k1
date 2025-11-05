@@ -37,19 +37,20 @@ fn returnFromIf(): int {
 }
 
 fn loopBreak(): unit {
+  // Break with scalar
   let x: int = loop {
     let inner: int = if true {
       break(3)
     } else 4
     
   };
-  assertEquals(x, 3)
+  assertEquals(x, 3);
 
-  //nocommit
-  //let y: string = loop {
-  //  break("asdf")
-  //};
-  //assertEquals(y, "asdf")
+  // Break with aggregate
+  let y: string = loop {
+    break("asdf")
+  };
+  assertEquals(y, "asdf")
 }
 
 fn loopNested(): unit {

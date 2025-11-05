@@ -17,6 +17,7 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Context location params are not being propagated
 - [x] Test and fix named arguments
 - [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
+       -> Originally did the wrong way, plumbing special cases. Instead now we just only generate the crashy expr
 - [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
       - Probably one test for failing compilation and one passing one for each major language area
 - [x] Add simple int range in stdlib
@@ -25,44 +26,53 @@ New tagline? "C with typeclasses and tagged unions"
 - [x] Support boolean operators in compile time expressions
 - [x] Change FieldAccess semantics to work on struct references, and copy only the field out
       This saves copying the entire aggregate first with a Dereference instruction
-- [ ] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
-      This is basically an interpreter; what we have now with the vm solves this problem a bit
-      But not entirely because it only checks the code that runs!
-- [ ] Represent payload-less `either` types as ints not structs
-- [ ] Support explicit type args in AnonEnumConstructor syntax 
-- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 - [x] ThreadLocal globals
 - [x] LLVM Codegen callstack is too deep due to codegen_function_or_get
 - [x] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
+- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
+- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
+- [-] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
+      This is basically an interpreter; what we have now with the vm solves this problem a bit
+      But not entirely because it only checks the code that runs!
+
+More optimal final programs
+- [ ] Represent payload-less `either` types as ints not structs
 - [ ] Compile switches with no patterns or guards to LLVM switch
+
+- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
+
+Ideas
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
 - [ ] c"" string literals that are of type Pointer (what about interpolation?)
 - [ ] Make demo readme / site
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-- [ ] Support ability constraints on generics
-- [ ] Make statics ZSTs instead of sharing a repr with their inner type
-- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
-      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
-- [ ] implement iterator for Array
-- [ ] Do safe integer coercions automatically
 - [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
-      either(u32, set|tagset|bitfield)?
+      either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
   - [ ] First-class data-oriented design features for struct/enum setups?
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
       'shared' chunks vs union chunk, AoS or AoSoA by default...
-- [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
+
+Syntax/elegance
+- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
+
+Simple but missing
+- [ ] Support ability constraints on generics
+- [ ] Support explicit type args in AnonEnumConstructor syntax 
+- [ ] implement iterator for Array
+- [ ] Do safe integer coercions automatically
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
+
+- [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
 
 # From dogfood round
 - [x] Introduce an "uninitialized" specifier, similar to `zeroed()`
 - [x] Add 'zeroed()' static value special case for efficiency?
-- [ ] provide a way to specify if globals are comptime available or just runtime globals?
+- [x] provide a way to specify if globals are comptime available or just runtime globals?
       I accidentally wrapped a global defn in #static...
 
 # Bugs
@@ -70,16 +80,17 @@ New tagline? "C with typeclasses and tagged unions"
 - [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
 - [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
+
 ## Project: Actual modules, library vs binary compile, allow linker options
 - [ ] Separate modules
   - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
   - [x] Add entire modules from TypedProgram
   - [x] Module manifests somewhere
   - [x] Library vs Binary
+  - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
   - [ ] Dependencies: local module
   - [ ] Dependencies: git url
   - [ ] Linker options
-  - [ ] Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)
   - [ ] serialize typedprogram (for 'incremental', really just cached, compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
@@ -88,10 +99,11 @@ New tagline? "C with typeclasses and tagged unions"
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
 - [x] Try to compile a function to bytecode
-- [ ] 
+- [x] Draw the rest of the owl (done)
 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
-- [ ] Real layouts, in a mem pool, to save roundtripping and increase locality
+- [-] Real layouts, in a mem pool, to save roundtripping and increase locality
+        -> Kinda done, we now re-use the values in a global 'static stack'
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
@@ -102,7 +114,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Static Improvements
 - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
-- [ ] VM "PermSpace" for caching converted static values in their VM representation
+- [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] 'Type predicate' functions as type bounds

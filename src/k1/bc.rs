@@ -21,7 +21,7 @@ use crate::{
 };
 use crate::{failf, mformat};
 use ahash::HashMapExt;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use itertools::Itertools;
 use log::debug;
 use smallvec::smallvec;
@@ -1518,7 +1518,11 @@ fn compile_expr(
             };
             if let BcCallee::Direct(function_id) = &callee {
                 match b.k1.bytecode.functions.get(*function_id) {
-                    None => b.k1.bytecode.b_units_pending_compile.push(*function_id),
+                    None => {
+                        if !b.k1.bytecode.b_units_pending_compile.contains(function_id) {
+                            b.k1.bytecode.b_units_pending_compile.push(*function_id);
+                        }
+                    }
                     Some(unit) => {
                         // TODO: Function inlining!
                         let mut total = 0;
@@ -2124,11 +2128,13 @@ fn compile_cast(
             // But, all lambda objects must be the same size. It seems maybe we should
             // heap-allocate the environments, but in k1 that would mean using the current
             // allocator, or requiring one.
+            // So I think I need to finalize a bit more what the 'current allocator' means, then
+            // can update this to put it there. Likely an arena push
             let obj_struct_type = b.get_physical_type(b.k1.types.builtins.dyn_lambda_obj.unwrap());
 
             // Now we need a pointer to the environment
-            // nocommit(3): dyn lambda durability: Change to arena.push_struct call. This feels like
-            //           code that might be able to live in typer.k1
+            // dyn lambda durability: Change to arena.push_struct call. This feels like
+            //           code that might be able to live in typer.rs
             let lambda_env_ptr = b.push_alloca(lambda_env_type, "lambda env storage").as_value();
 
             // Produces just the lambda's environment as a value. We don't need the function

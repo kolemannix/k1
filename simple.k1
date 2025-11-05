@@ -1,12 +1,1 @@
-fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
-  f(i) + g(i)
-}
-
-fn main(): i32 {
-  #static {
-    let* c1 = { x: 3 };
-    let c2 = 2;
-    someFnParam2(5, \x. x + 1 + c1.x, \y. y + 2 + c2)
-  };
-  0
-}
+fn main(): i32 { 0 }

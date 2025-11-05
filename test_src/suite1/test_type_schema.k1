@@ -77,9 +77,7 @@ ns type_schema {
       and size == .Some(5)
       else crash("");
 
-    println(printStructShape[Point3[u8]]());
-    println(printStructShape[TypeSchema.Struct.value]());
-    println(printStructShape[TypeSchema.Either]());
+    assertEquals(printStructShape[Point3[u8]](), "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *\(int) -> bool = isZero.toRef();
     let incr2: *\int -> int = ( \(x) x + 2 );
