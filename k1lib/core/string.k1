@@ -142,6 +142,23 @@ ns string {
     else                               { ptr: self.appendChar('\0').dataPointer(), len: self.len() }
   }
 
+  fn wrapCString(cString: Pointer): string {
+    let i = 0: uword;
+    loop {
+      let c = cString.refAtIndex[char](i);
+      if c.* == '\0' {
+        break();
+      } else {
+        i := i + 1;
+      }
+    };
+    let buffer = Buffer/fromRawPointerAndCount[char](
+      count = i,
+      pointer = cString
+    );
+    wrapBuffer(buffer)
+  }
+
   fn fromCString(cString: Pointer): string {
     let* chars = List/empty[char]();
     let i = 0: uword;

@@ -1,0 +1,50 @@
+let TYPE_INT: uword = 0;
+let TYPE_STR: uword = 1;
+let TYPE_BOOL: uword = 2;
+let TYPE_LIST: uword = 3;
+
+deftype ObjCommon = { rc: u32, line: u32 }
+ns ObjCommon {
+  let empty: ObjCommon = { rc: 0, line: 0 };
+}
+
+deftype TfObj = either(u32)
+  Int   ({ common: ObjCommon, i: i64 }),
+  Str   ({ common: ObjCommon, value: string }),
+  Bool  ({ common: ObjCommon, b: bool }),
+  List  ({ common: ObjCommon, elems: List[*mut TfObj], len: uword }),
+  Symbol({ common: ObjCommon, name: string })
+
+deftype Parser = { input: string, cursor: uword }
+
+deftype Ctx = { stack: List[TfObj] }
+
+use mem/new
+fn mkStr(value: string): *TfObj { new(.Str({ common: ObjCommon/empty, value })) }
+fn mkSym(name: string): *TfObj { new(.Symbol({ common: ObjCommon/empty, name })) }
+fn mkInt(i: i64): *TfObj { new(.Int({ common: ObjCommon/empty, i })) }
+fn mkBool(b: bool): *TfObj { new(.Bool({ common: ObjCommon/empty, b })) }
+fn mkList(): *TfObj { 
+  new(.List({ common: ObjCommon/empty, elems: List/empty(), len: 0 }))
+}
+
+fn compile(programText: string): *TfObj {
+  println("compiling {programText}");  
+  crash("todo")
+}
+
+fn main(argc: u32, argv: Pointer): i32 {
+  let context alloc: mem/AllocMode = { kind: .SystemHeap };
+
+  let args: View[string] = core/sys/parseMainArgs(argc, argv);
+  if args.len() != 2 {
+    eprintln("Usage: {args.get(0)} <fname>");
+    return(1);
+  };
+  let programTextPath = args.get(1);
+  let programText = core/files/readToString(programTextPath);
+
+  let program = compile(programTextPath);
+
+  0
+}
