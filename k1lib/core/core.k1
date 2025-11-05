@@ -139,7 +139,7 @@ ns sys {
       pointer = args
     );
     let strings = for cstr in buf yield {
-      string/fromCString(cstr)
+      string/wrapCString(cstr)
     };
     strings.asView()
   }
@@ -167,6 +167,9 @@ ns files {
     let filenameCString = path.toCString();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
+    if file.isNull() {
+      crash("fopen failed: `{path}`");
+    };
     libc/files/fseek(file, 0, libc/files/SEEK_END);
     let fileSizeBytes = libc/files/ftell(file) as uword;
     let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
