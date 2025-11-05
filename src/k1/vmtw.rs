@@ -1092,7 +1092,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Struct(static_struct) => {
             let mut values: SmallVec<[Value; 8]> = smallvec![];
-            for f in k1.static_values.mem.get_slice(static_struct.fields).iter() {
+            for f in k1.static_values.mem.getn(static_struct.fields).iter() {
                 let value = static_value_to_vm_value(vm, dst_stack, k1, *f)?;
                 values.push(value);
             }
@@ -1400,7 +1400,7 @@ fn execute_call(
     let mut param_values: SmallVec<[(VariableId, Value); 8]> = smallvec![];
     let is_lambda = maybe_lambda_env_ptr.is_some();
     let arg_offset = if is_lambda { 1 } else { 0 };
-    for (index, variable_id) in k1.a.get_slice(param_variables).iter().enumerate() {
+    for (index, variable_id) in k1.a.getn(param_variables).iter().enumerate() {
         if index == 0 && is_lambda {
             param_values.push((*variable_id, maybe_lambda_env_ptr.unwrap()));
         } else {
@@ -2695,7 +2695,7 @@ fn render_debug_value(w: &mut impl std::fmt::Write, vm: &mut Vm, k1: &TypedProgr
                     } else {
                         w.write_str("{ ").unwrap();
                         for (field_index, f) in
-                            k1.types.mem.get_slice(struct_type.fields).iter().enumerate()
+                            k1.types.mem.getn(struct_type.fields).iter().enumerate()
                         {
                             write!(w, "{}: ", k1.ident_str(f.name)).unwrap();
                             match load_struct_field(vm, k1, type_id, ptr, field_index, true) {

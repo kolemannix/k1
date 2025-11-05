@@ -152,7 +152,7 @@ impl DepHash<StaticValuePool> for StaticValue {
             StaticValue::Struct(s) => {
                 s.type_id.hash(state);
                 s.fields.len().hash(state);
-                for &field_id in d.mem.get_slice(s.fields).iter() {
+                for &field_id in d.mem.getn(s.fields).iter() {
                     field_id.hash(state);
                 }
             }
@@ -167,7 +167,7 @@ impl DepHash<StaticValuePool> for StaticValue {
             StaticValue::LinearContainer(v) => {
                 v.type_id.hash(state);
                 v.elements.len().hash(state);
-                for &element_id in d.mem.get_slice(v.elements).iter() {
+                for &element_id in d.mem.getn(v.elements).iter() {
                     element_id.hash(state);
                 }
             }
@@ -188,7 +188,7 @@ impl DepEq<StaticValuePool> for StaticValue {
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
                 a.type_id == b.type_id
                     && a.fields.len() == b.fields.len()
-                    && pool.mem.get_slice(a.fields) == pool.mem.get_slice(b.fields)
+                    && pool.mem.getn(a.fields) == pool.mem.getn(b.fields)
             }
             (StaticValue::Enum(a), StaticValue::Enum(b)) => {
                 a.variant_type_id == b.variant_type_id
@@ -203,7 +203,7 @@ impl DepEq<StaticValuePool> for StaticValue {
             (StaticValue::LinearContainer(a), StaticValue::LinearContainer(b)) => {
                 a.type_id == b.type_id
                     && a.elements.len() == b.elements.len()
-                    && pool.mem.get_slice(a.elements) == pool.mem.get_slice(b.elements)
+                    && pool.mem.getn(a.elements) == pool.mem.getn(b.elements)
             }
             _ => false,
         }
@@ -287,7 +287,7 @@ impl StaticValuePool {
         type_id: TypeId,
         fields: &[StaticValueId],
     ) -> StaticValueId {
-        let slice = self.mem.push_slice(fields);
+        let slice = self.mem.pushn(fields);
         self.add(StaticValue::Struct(StaticStruct { type_id, fields: slice }))
     }
 
@@ -332,7 +332,7 @@ impl StaticValuePool {
     }
 
     pub fn get_slice(&self, slice_handle: StaticValueSlice) -> &[StaticValueId] {
-        self.mem.get_slice(slice_handle)
+        self.mem.getn(slice_handle)
     }
 
     pub fn iter_with_ids(&self) -> impl Iterator<Item = (StaticValueId, &StaticValue)> {

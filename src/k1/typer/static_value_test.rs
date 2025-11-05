@@ -126,13 +126,13 @@ fn test_view() {
     let elem2 = system.add(StaticValue::Int(TypedIntValue::I32(2)));
     let elem3 = system.add(StaticValue::Int(TypedIntValue::I32(1)));
 
-    let view1_items = system.mem.push_slice(&[elem1, elem2]);
+    let view1_items = system.mem.pushn(&[elem1, elem2]);
     let view1 = system.add_view(TYPE1, view1_items);
 
-    let view2_items = system.mem.push_slice(&[elem3, elem2]);
+    let view2_items = system.mem.pushn(&[elem3, elem2]);
     let view2 = system.add_view(TYPE1, view2_items);
 
-    let view3_items = system.mem.push_slice(&[elem2, elem1]);
+    let view3_items = system.mem.pushn(&[elem2, elem1]);
     let view3 = system.add_view(TYPE1, view3_items);
 
     assert_eq!(elem1, elem3, "Elements should deduplicate first");
@@ -154,7 +154,7 @@ fn test_recurse() {
         payload: Some(int_val),
     }));
 
-    let view_items = system.mem.push_slice(&[enum_val, enum_val]);
+    let view_items = system.mem.pushn(&[enum_val, enum_val]);
     let view_val = system.add_view(TYPE2, view_items);
 
     let struct_val1 = system.add_struct_from_slice(TYPE3, &[view_val]);
@@ -169,7 +169,7 @@ fn test_recurse() {
         payload: Some(int_val2),
     }));
 
-    let view2_items = system.mem.push_slice(&[enum_val2, enum_val2]);
+    let view2_items = system.mem.pushn(&[enum_val2, enum_val2]);
     let view_val2 = system.add_view(TYPE2, view2_items);
 
     let struct_val2 = system.add_struct_from_slice(TYPE3, &[view_val2]);

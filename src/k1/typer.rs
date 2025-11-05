@@ -11,7 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::{bc, vmbc};
+use crate::{bc, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -636,7 +636,7 @@ impl TypedPatternPool {
     }
 
     pub fn get_slice<T>(&self, slice: MSlice<T, TypedPatternPool>) -> &'static [T] {
-        self.mem.get_slice(slice)
+        self.mem.getn(slice)
     }
 
     pub fn add(&mut self, pattern: TypedPattern) -> TypedPatternId {
@@ -644,7 +644,7 @@ impl TypedPatternPool {
     }
 
     pub fn add_pattern_slice(&mut self, data: &[TypedPatternId]) -> TypedPatternSlice {
-        self.mem.push_slice(data)
+        self.mem.pushn(data)
     }
 
     pub fn get_pattern_bindings(
@@ -676,7 +676,7 @@ impl TypedPatternPool {
                 }
             }
             TypedPattern::Struct(struct_pattern) => {
-                for field_pattern in self.mem.get_slice(struct_pattern.fields).iter() {
+                for field_pattern in self.mem.getn(struct_pattern.fields).iter() {
                     self.get_pattern_bindings_rec(field_pattern.pattern, bindings)
                 }
             }
@@ -700,7 +700,7 @@ impl TypedPatternPool {
                 .as_ref()
                 .is_some_and(|p| self.pattern_has_innumerable_literal(*p)),
             TypedPattern::Struct(typed_struct_pattern) => {
-                self.mem.get_slice(typed_struct_pattern.fields).iter().any(|field_pattern| {
+                self.mem.getn(typed_struct_pattern.fields).iter().any(|field_pattern| {
                     self.pattern_has_innumerable_literal(field_pattern.pattern)
                 })
             }
@@ -2356,25 +2356,23 @@ pub struct TypedProgram {
     pub patterns: TypedPatternPool,
     pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
 
-    // Can execute code statically; primary VM; gets 'rented out'
+    // `vm`: Can execute code statically; primary VM; gets 'rented out'
     // from the TypedProgram to avoid borrow bullshit
-    pub vm_treewalk: Box<Option<vmtw::Vm>>,
+    pub vm: Box<Option<vm::Vm>>,
+
     // Used to execute static code if it is first encountered
-    // while excuting the surrounding code statically
+    // while executing the surrounding code statically
     // It should be run in its own environment; as it should
     // not see any of the values from its calling environment, just
     // like how comptime code can't see runtime values. Each level
     // of static execution has the same relationship with its outer caller
-    pub alt_vmtws: Vec<vmtw::Vm>,
+    pub vm_alts: Vec<vm::Vm>,
 
-    // nocommit(4) can we consolidate this stuff into 1 struct :/
-    pub vmbc: Box<Option<vmbc::Vm>>,
-    pub alt_vmbcs: Vec<vmbc::Vm>,
     // For every static value, once evaluated, we store its runtime representation
-    // here; the data lives in static_stack
-    pub vmbc_static_stack: vmbc::Stack,
-    pub vmbc_global_constant_lookups: FxHashMap<TypedGlobalId, vmbc::Value>,
-    pub vmbc_static_value_lookups: FxHashMap<StaticValueId, vmbc::Value>,
+    // here; the data lives in vm_static_stack
+    pub vm_static_stack: vm::Stack,
+    pub vm_global_constant_lookups: FxHashMap<TypedGlobalId, vm::Value>,
+    pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
 
     /// Perm arena space
     pub a: kmem::Mem<MemPerm>,
@@ -2455,10 +2453,10 @@ impl TypedProgram {
 
         let word_size = ast.config.target.word_size();
 
-        let mut vmbc_static_stack = vmbc::Stack::make(vm_stack_size);
-        let addr = vmbc_static_stack.push_t(true as u8);
-        let mut vmbc_global_constant_lookups = FxHashMap::new();
-        vmbc_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vmbc::Value::ptr(addr));
+        let mut vm_static_stack = vm::Stack::make(vm_stack_size);
+        let addr = vm_static_stack.push_t(true as u8);
+        let mut vm_global_constant_lookups = FxHashMap::new();
+        vm_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vm::Value::ptr(addr));
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
@@ -2505,25 +2503,17 @@ impl TypedProgram {
             function_type_params: VPool::make_with_hint("function_type_params", 8192),
             patterns: TypedPatternPool::make(),
             pattern_ctors,
-            vm_treewalk: Box::new(Some(vmtw::Vm::make(vm_stack_size, vm_static_stack_size))),
-            alt_vmtws: vec![
-                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmtw::Vm::make(vm_stack_size, vm_static_stack_size),
+            vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
+            vm_alts: vec![
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(vm_stack_size, vm_static_stack_size),
             ],
-            vmbc: Box::new(Some(vmbc::Vm::make(vm_stack_size, vm_static_stack_size))),
-            alt_vmbcs: vec![
-                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
-                vmbc::Vm::make(vm_stack_size, vm_static_stack_size),
-            ],
-            vmbc_static_stack,
-            vmbc_global_constant_lookups,
-            vmbc_static_value_lookups: FxHashMap::default(),
+            vm_static_stack,
+            vm_global_constant_lookups,
+            vm_static_value_lookups: FxHashMap::default(),
 
             a: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
@@ -3113,7 +3103,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Optional(opt) => {
                 let inner_ty = self.eval_type_expr_ext(opt.base, scope_id, context.descended())?;
-                let type_args = self.types.mem.push_slice(&[inner_ty]);
+                let type_args = self.types.mem.pushn(&[inner_ty]);
                 let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, type_args);
                 Ok(optional_type)
             }
@@ -3285,10 +3275,8 @@ impl TypedProgram {
                         .iter()
                         .position(|tp| tp.name == dot_acc.member_name)
                     {
-                        let actual_type = self
-                            .types
-                            .type_slices
-                            .get_nth(spec_info.type_args, matching_type_var_pos);
+                        let actual_type =
+                            self.types.mem.get_nth(spec_info.type_args, matching_type_var_pos);
                         return Ok(*actual_type);
                     }
                 }
@@ -3351,7 +3339,7 @@ impl TypedProgram {
                                 if let Some(param) = self
                                     .types
                                     .mem
-                                    .get_slice(fun.logical_params())
+                                    .getn(fun.logical_params())
                                     .iter()
                                     .find(|p| p.name == dot_acc.member_name)
                                 {
@@ -3634,8 +3622,8 @@ impl TypedProgram {
 
                 let mut combined_fields =
                     self.types.mem.new_vec(struct1.fields.len() + struct2.fields.len());
-                combined_fields.extend(self.types.mem.get_slice(struct1.fields));
-                for field in self.types.mem.get_slice(struct2.fields).iter() {
+                combined_fields.extend(self.types.mem.getn(struct1.fields));
+                for field in self.types.mem.getn(struct2.fields).iter() {
                     let collision = combined_fields.iter().find(|f| f.name == field.name);
                     if let Some(collision) = collision {
                         if collision.type_id != field.type_id {
@@ -3687,15 +3675,15 @@ impl TypedProgram {
                     .get(arg2)
                     .as_struct()
                     .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
-                let struct2_fields = self.types.mem.get_slice(struct2.fields);
+                let struct2_fields = self.types.mem.getn(struct2.fields);
                 let new_fields = self
                     .types
                     .mem
-                    .get_slice(struct1.fields)
+                    .getn(struct1.fields)
                     .iter()
                     .filter(|f| !struct2_fields.iter().any(|sf| sf.name == f.name))
                     .cloned();
-                let new_fields = self.types.mem.push_slice_iter(new_fields);
+                let new_fields = self.types.mem.pushn_iter(new_fields);
 
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
@@ -3772,8 +3760,7 @@ impl TypedProgram {
                             )?;
                             type_arguments.push(param_type_id);
                         }
-                        let type_arguments_slice =
-                            self.types.type_slices.add_slice_copy(&type_arguments);
+                        let type_arguments_slice = self.types.mem.pushn(&type_arguments);
                         Ok(self.instantiate_generic_type(type_id, type_arguments_slice))
                     }
                     _other => Ok(self.get_type_id_resolved(type_id, scope_id)),
@@ -3812,8 +3799,8 @@ impl TypedProgram {
                     self.type_id_to_string(existing),
                     self.name_of_type(generic_type),
                     self.types
-                        .type_slices
-                        .get_slice(type_arguments)
+                        .mem
+                        .getn(type_arguments)
                         .iter()
                         .map(|p| self.type_id_to_string(*p))
                         .collect::<Vec<_>>(),
@@ -3821,7 +3808,7 @@ impl TypedProgram {
                 existing
             }
             None => {
-                debug_assert!(gen_type.params.len() == type_arguments.len());
+                debug_assert!(gen_type.params.len() == type_arguments.len() as usize);
                 let defn_info = self.types.get_defn_info(generic_type).unwrap();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
@@ -3829,7 +3816,7 @@ impl TypedProgram {
                     .named_types
                     .get_slice(gen_type.params)
                     .iter()
-                    .zip(self.types.type_slices.get_slice(type_arguments))
+                    .zip(self.types.mem.getn(type_arguments))
                     .map(|(type_param, passed_type_arg)| TypeSubstitutionPair {
                         from: type_param.type_id,
                         to: *passed_type_arg,
@@ -3942,11 +3929,11 @@ impl TypedProgram {
             // Opt[T] -> Opt[char]
             let generic_parent = spec_info.generic_parent;
             let mut new_type_args = self.tmp.new_vec(spec_info.type_args.len() as u32);
-            for prev_arg in self.types.type_slices.copy_slice_sv4(spec_info.type_args) {
+            for prev_arg in self.types.mem.getn_sv4(spec_info.type_args) {
                 let new_type = self.substitute_in_type(prev_arg, substitution_pairs);
                 new_type_args.push(new_type);
             }
-            let new_type_args_slice = self.types.type_slices.add_slice_copy(&new_type_args);
+            let new_type_args_slice = self.types.mem.pushn(&new_type_args);
             return self.instantiate_generic_type(generic_parent, new_type_args_slice);
         };
 
@@ -3965,8 +3952,8 @@ impl TypedProgram {
             | Type::Pointer
             | Type::Never => type_id,
             Type::Struct(struc) => {
-                let new_fields_handle = self.types.mem.dup_slice(struc.fields);
-                let new_fields = self.types.mem.get_slice_mut(new_fields_handle);
+                let new_fields_handle = self.types.mem.dupn(struc.fields);
+                let new_fields = self.types.mem.getn_mut(new_fields_handle);
                 let mut any_change = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
@@ -3984,8 +3971,8 @@ impl TypedProgram {
                             generic_parent: parent,
                             type_args: self
                                 .types
-                                .type_slices
-                                .add_slice_from_iter(substitution_pairs.iter().map(|p| p.to)),
+                                .mem
+                                .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
 
@@ -4021,8 +4008,8 @@ impl TypedProgram {
                             generic_parent: parent,
                             type_args: self
                                 .types
-                                .type_slices
-                                .add_slice_from_iter(substitution_pairs.iter().map(|p| p.to)),
+                                .mem
+                                .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
                     let new_enum = TypedEnum {
@@ -4083,7 +4070,7 @@ impl TypedProgram {
                     any_new = true
                 };
                 let mut new_params: FixVec<FnParamType, _> = self.tmp.new_vec(old_params.len());
-                for param in self.types.mem.get_slice(old_params) {
+                for param in self.types.mem.getn(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
                         any_new = true;
@@ -4098,7 +4085,7 @@ impl TypedProgram {
                     new_params.push(new_param);
                 }
                 if any_new {
-                    let new_params_handle = self.types.mem.push_slice(new_params.as_slice());
+                    let new_params_handle = self.types.mem.pushn(new_params.as_slice());
                     let new_fun_type = FunctionType {
                         physical_params: new_params_handle,
                         return_type: new_return_type,
@@ -4254,13 +4241,12 @@ impl TypedProgram {
                 global_defn_name: None,
                 flags: EvalExprFlags::empty(),
             },
-            false,
             &[],
         )?;
 
         match self.static_values.get(manifest_result.static_value_id) {
             StaticValue::Struct(value) => {
-                let value_fields = self.static_values.mem.get_slice(value.fields);
+                let value_fields = self.static_values.mem.getn(value.fields);
                 let kind = self.static_values.get(value_fields[0]).as_enum().unwrap();
                 let kind = match kind.variant_index {
                     0 => ModuleKind::Library,
@@ -4547,9 +4533,9 @@ impl TypedProgram {
         for (expected_field, actual_field) in self
             .types
             .mem
-            .get_slice(expected.fields)
+            .getn(expected.fields)
             .iter()
-            .zip(self.types.mem.get_slice(actual.fields).iter())
+            .zip(self.types.mem.getn(actual.fields).iter())
         {
             trace!("typechecking struct field {:?}", expected_field);
             if actual_field.name != expected_field.name {
@@ -4796,10 +4782,10 @@ impl TypedProgram {
             return if spec1.generic_parent == spec2.generic_parent {
                 for (index, (exp_param, act_param)) in self
                     .types
-                    .type_slices
-                    .copy_slice_sv4(spec1.type_args)
+                    .mem
+                    .getn_sv4(spec1.type_args)
                     .iter()
-                    .zip(self.types.type_slices.copy_slice_sv4(spec2.type_args).iter())
+                    .zip(self.types.mem.getn_sv4(spec2.type_args).iter())
                     .enumerate()
                 {
                     debug!(
@@ -4913,9 +4899,9 @@ impl TypedProgram {
                     for (p1, p2) in self
                         .types
                         .mem
-                        .get_slice(f1.logical_params())
+                        .getn(f1.logical_params())
                         .iter()
-                        .zip(self.types.mem.get_slice(f2.logical_params()).iter())
+                        .zip(self.types.mem.getn(f2.logical_params()).iter())
                     {
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
                             return Err(format!(
@@ -5077,15 +5063,11 @@ impl TypedProgram {
         Ok(())
     }
 
-    /// no_reset: Do not wipe the VM on completion; this is passed when the global is evaluated
-    /// from an existing static execution already
     fn execute_static_expr_with_vm(
         &mut self,
-        vm: &mut vmtw::Vm,
-        vmbc: &mut vmbc::Vm,
+        vm: &mut vm::Vm,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
-        no_reset: bool,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
         if ctx.is_inference() {
@@ -5098,7 +5080,10 @@ impl TypedProgram {
 
         // nocommit(1): We need to mask access from inside a static to outside variables!
         //              Currently we just fail in bytecode gen with "missing variable"
-        let expr = self.eval_expr(parsed_expr, ctx)?;
+        let parsed_expr_as_block =
+            self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
+        let typed_block = self.eval_block(&parsed_expr_as_block, ctx, true)?;
+        let expr = self.exprs.add(TypedExpr::Block(typed_block));
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
         let required_type_id = self.exprs.get(expr).get_type();
@@ -5115,33 +5100,14 @@ impl TypedProgram {
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_bytecode()?;
 
-        let execution_result = vmbc::execute_compiled_unit(self, vmbc, expr, &[], input_parameters)
+        let execution_result = vm::execute_compiled_unit(self, vm, expr, &[], input_parameters)
             .map_err(|mut e| {
-                let stack_trace = vmbc::make_stack_trace(self, &vmbc.stack);
+                let stack_trace = vm::make_stack_trace(self, &vm.stack);
                 e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                 e
             });
 
-        // let vm_value = vm::execute_single_expr_with_vm(self, expr, vm, input_parameters).map_err(
-        //     |mut e| {
-        //         let stack_trace = vm::make_stack_trace(self, &vm.stack);
-        //         e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-        //         e
-        //     },
-        // )?;
-        // let static_value_id = vm::vm_value_to_static_value(self, vm, vm_value, span)?;
-
-        // if cfg!(debug_assertions) {
-        //     if let Err(msg) = self.check_types(required_type_id, vm_value.get_type(), ctx.scope_id)
-        //     {
-        //         return failf!(span, "static value type mismatch: {msg}");
-        //     }
-        // }
-
-        if !no_reset {
-            vmbc.reset();
-            vm.reset();
-        }
+        vm.reset();
 
         let static_value_id = execution_result?;
 
@@ -5152,13 +5118,12 @@ impl TypedProgram {
         &mut self,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
-        no_reset: bool,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<VmExecuteResult> {
-        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm_treewalk) {
+        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let span = self.ast.get_expr_span(parsed_expr);
-                let maybe_alt = self.alt_vmtws.pop();
+                let maybe_alt = self.vm_alts.pop();
                 let (source, location) = self.get_span_location(span);
                 let alt_vm = match maybe_alt {
                     None => {
@@ -5167,35 +5132,7 @@ impl TypedProgram {
                             source.filename,
                             location.line_number()
                         );
-                        let new_vm = vmtw::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
-                        new_vm
-                    }
-                    Some(alt_vm) => {
-                        debug!(
-                            "Serving up nested VM at {}:{}",
-                            source.filename,
-                            location.line_number()
-                        );
-                        alt_vm
-                    }
-                };
-                (alt_vm, true)
-            }
-            Some(vm) => (vm, false),
-        };
-        let (mut vmbc, _used_alt) = match *std::mem::take(&mut self.vmbc) {
-            None => {
-                let span = self.ast.get_expr_span(parsed_expr);
-                let maybe_alt = self.alt_vmbcs.pop();
-                let (source, location) = self.get_span_location(span);
-                let alt_vm = match maybe_alt {
-                    None => {
-                        eprintln!(
-                            "Had to make a new alt VM at {}:{}",
-                            source.filename,
-                            location.line_number()
-                        );
-                        let new_vm = vmbc::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+                        let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
                         new_vm
                     }
                     Some(alt_vm) => {
@@ -5211,21 +5148,12 @@ impl TypedProgram {
             }
             Some(vm) => (vm, false),
         };
-        let res = self.execute_static_expr_with_vm(
-            &mut vm,
-            &mut vmbc,
-            parsed_expr,
-            ctx,
-            no_reset,
-            input_parameters,
-        );
+        let res = self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, input_parameters);
         if !used_alt {
-            *self.vm_treewalk = Some(vm);
-            *self.vmbc = Some(vmbc);
+            *self.vm = Some(vm);
         } else {
             debug!("Restoring alt VM to pool");
-            self.alt_vmtws.push(vm);
-            self.alt_vmbcs.push(vmbc);
+            self.vm_alts.push(vm);
         }
         res
     }
@@ -5255,7 +5183,6 @@ impl TypedProgram {
                 is_metaprogram: false,
                 expected_return_type: Some(BOOL_TYPE_ID),
             })),
-            false,
             &[],
         )?;
         let StaticValue::Bool(condition_bool) =
@@ -5350,7 +5277,7 @@ impl TypedProgram {
             global_defn_name: Some(global_name),
             flags: EvalExprFlags::empty(),
         };
-        let vm_result = self.execute_static_expr(value_expr_id, ctx, false, &[])?;
+        let vm_result = self.execute_static_expr(value_expr_id, ctx, &[])?;
 
         if let Err(msg) = self.check_types(
             type_to_check,
@@ -5988,7 +5915,7 @@ impl TypedProgram {
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_impl_function in self.a.get_slice(blanket_impl.functions) {
+        for blanket_impl_function in self.a.getn(blanket_impl.functions) {
             // If the functions are abstract, just the type ids
             // If concrete do the declaration thing
             //
@@ -7318,7 +7245,11 @@ impl TypedProgram {
         let base_expr = stat.base_expr;
 
         // We don't execute statics during the generic pass, since there's no point
-        // since we don't know the real types or values
+        // 1. we don't know the real types of generics, thus values of things like schemas, etc
+        // 2. There's not really a use-case for it, metaprograms always want to generate
+        //    real code
+        //
+        // So we just return the expected type, or a unit
         debug!(
             "eval_static_expr ctx.is_generic_pass={}",
             ctx.flags.contains(EvalExprFlags::GenericPass)
@@ -7412,7 +7343,6 @@ impl TypedProgram {
                     expected_return_type: expected_type_for_execution,
                 },
             )),
-            false,
             &static_parameters,
         )?;
 
@@ -7632,7 +7562,7 @@ impl TypedProgram {
         > = SmallVec::with_capacity(field_count as usize);
 
         let struct_span = ast_struct.span;
-        for expected_field in self.types.mem.get_slice(expected_struct.fields).iter() {
+        for expected_field in self.types.mem.getn(expected_struct.fields).iter() {
             let Some(passed_field) =
                 &ast_struct.fields.iter().find(|f| f.name == expected_field.name)
             else {
@@ -7669,9 +7599,8 @@ impl TypedProgram {
             EcoVec::with_capacity(field_count as usize);
         let mut field_types: FixVec<StructTypeField, TypePool> =
             self.types.mem.new_vec(field_count);
-        for ((passed_expr, passed_field, _), expected_field) in passed_fields_aligned
-            .iter()
-            .zip(self.types.mem.get_slice(expected_struct.fields).iter())
+        for ((passed_expr, passed_field, _), expected_field) in
+            passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
             let expr = self
                 .eval_expr_with_coercion(
@@ -7720,7 +7649,7 @@ impl TypedProgram {
                     self.ictx_push();
                     let mut subst_pairs = self.tmp.new_vec(generic_fields.len());
                     for (value, generic_field) in
-                        field_types.iter().zip(self.types.mem.get_slice(generic_fields).iter())
+                        field_types.iter().zip(self.types.mem.getn(generic_fields).iter())
                     {
                         subst_pairs.push(InferenceInputPair {
                             param_type: generic_field.type_id,
@@ -7741,7 +7670,7 @@ impl TypedProgram {
                         "I reverse-engineered these: {}",
                         self.pretty_print_named_type_slice(solutions, ", ")
                     );
-                    gi.type_args = self.types.type_slices.add_slice_from_iter(
+                    gi.type_args = self.types.mem.pushn_iter(
                         self.named_types.get_slice(solutions).iter().map(|s| s.type_id),
                     );
                     Some(gi)
@@ -8037,19 +7966,8 @@ impl TypedProgram {
         }
 
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
-        let ast_body_block = match self.ast.exprs.get(lambda_body) {
-            ParsedExpr::Block(b) => b.clone(),
-            other_expr => {
-                let block = parse::ParsedBlock {
-                    span: other_expr.get_span(),
-                    kind: ParsedBlockKind::FunctionBody,
-                    stmts: eco_vec![
-                        self.ast.stmts.add(parse::ParsedStmt::LoneExpression(lambda_body))
-                    ],
-                };
-                block
-            }
-        };
+        let ast_body_block =
+            self.ensure_parsed_expr_to_block(lambda_body, ParsedBlockKind::FunctionBody);
         let body = self.eval_block(
             &ast_body_block,
             ctx.with_scope(lambda_scope_id).with_expected_type(expected_return_type),
@@ -8267,6 +8185,24 @@ impl TypedProgram {
             body_function_id
         );
         Ok(self.exprs.add(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
+    }
+
+    fn ensure_parsed_expr_to_block(
+        &mut self,
+        body: ParsedExprId,
+        kind: ParsedBlockKind,
+    ) -> ParsedBlock {
+        match self.ast.exprs.get(body) {
+            ParsedExpr::Block(b) => b.clone(),
+            other_expr => {
+                let block = parse::ParsedBlock {
+                    span: other_expr.get_span(),
+                    kind,
+                    stmts: eco_vec![self.ast.stmts.add(parse::ParsedStmt::LoneExpression(body))],
+                };
+                block
+            }
+        }
     }
 
     fn eval_match_expr(
@@ -9055,8 +8991,7 @@ impl TypedProgram {
         let resulting_type = if is_do_block {
             UNIT_TYPE_ID
         } else {
-            let result_type_slice =
-                self.types.type_slices.add_slice_copy(&[body_block_result_type]);
+            let result_type_slice = self.types.mem.pushn(&[body_block_result_type]);
             self.instantiate_generic_type(LIST_TYPE_ID, result_type_slice)
         };
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
@@ -10451,7 +10386,7 @@ impl TypedProgram {
             });
             let mut new_variables = self.a.new_vec(new_function.param_variables.len() + 1);
             new_variables.push(empty_env_variable);
-            new_variables.extend(self.a.get_slice(new_function.param_variables));
+            new_variables.extend(self.a.getn(new_function.param_variables));
             new_function.param_variables = self.a.vec_to_mslice(&new_variables);
 
             let new_function_type =
@@ -10499,7 +10434,7 @@ impl TypedProgram {
             is_lambda_env: true,
             span,
         });
-        new_params.extend(self.types.mem.get_slice(physical_params));
+        new_params.extend(self.types.mem.getn(physical_params));
 
         let new_function_type = FunctionType {
             physical_params: self.types.mem.vec_to_mslice(&new_params),
@@ -10591,9 +10526,7 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        for (arg, param) in
-            passed_args.zip(self.types.mem.get_slice(ability_fn_type.logical_params()))
-        {
+        for (arg, param) in passed_args.zip(self.types.mem.getn(ability_fn_type.logical_params())) {
             let arg_and_param = match arg {
                 MaybeTypedExpr::Typed(expr) => {
                     let type_id = self.exprs.get(expr).get_type();
@@ -10899,7 +10832,7 @@ impl TypedProgram {
                                         .named_types
                                         .get_slice(g_params)
                                         .iter()
-                                        .zip(self.types.type_slices.get_slice(spec_info.type_args))
+                                        .zip(self.types.mem.getn(spec_info.type_args))
                                         .map(|(g_param, expected_specialized_type)| NameAndType {
                                             name: g_param.name,
                                             type_id: *expected_specialized_type,
@@ -10968,7 +10901,7 @@ impl TypedProgram {
                 self.named_types.add_slice_copy(&passed_params)
             };
 
-            let passed_type_ids = self.types.type_slices.add_slice_from_iter(
+            let passed_type_ids = self.types.mem.pushn_iter(
                 self.named_types
                     .get_slice(solved_or_passed_type_params)
                     .iter()
@@ -11004,7 +10937,7 @@ impl TypedProgram {
         let mut final_args: SV8<MaybeTypedExpr> = SmallVec::new();
         let mut final_params: SV8<FnParamType> = SmallVec::new();
         if !explicit_context_args {
-            for context_param in self.types.mem.get_slice(params).iter().filter(|p| p.is_context) {
+            for context_param in self.types.mem.getn(params).iter().filter(|p| p.is_context) {
                 let matching_context_variable =
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
@@ -11045,7 +10978,7 @@ impl TypedProgram {
         let is_lambda = self.types.mem.get_nth_opt(params, 0).is_some_and(|p| p.is_lambda_env);
         let params = if is_lambda { params.skip(1) } else { params };
         let explicit_param_count =
-            self.types.mem.get_slice(params).iter().filter(|p| !p.is_context).count();
+            self.types.mem.getn(params).iter().filter(|p| !p.is_context).count();
         let total_expected =
             if explicit_context_args { params.len() as usize } else { explicit_param_count };
         let actual_passed_args = args_slice;
@@ -11066,7 +10999,7 @@ impl TypedProgram {
         let expected_literal_params = self
             .types
             .mem
-            .get_slice(params)
+            .getn(params)
             .iter()
             // If the user opted to pass context params explicitly, then check all params
             // If the user did not, then just check the non-context params, since the compiler is responsible
@@ -11799,9 +11732,9 @@ impl TypedProgram {
         for (specialized_param_type, generic_param) in self
             .types
             .mem
-            .get_slice(specialized_function_type.physical_params)
+            .getn(specialized_function_type.physical_params)
             .iter()
-            .zip(self.a.get_slice(generic_function_param_variables))
+            .zip(self.a.getn(generic_function_param_variables))
         {
             let name = self.variables.get(*generic_param).name;
             let mut flags = VariableFlags::empty();
@@ -14042,7 +13975,7 @@ impl TypedProgram {
         };
         let ability_impl = self.ability_impls.get(ability_impl_id);
 
-        for impl_fn in self.a.get_slice(ability_impl.functions).iter() {
+        for impl_fn in self.a.getn(ability_impl.functions).iter() {
             let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
@@ -14741,7 +14674,7 @@ impl TypedProgram {
         }
 
         if module_id == MODULE_ID_CORE {
-            let fields = self.types.mem.push_slice(&[
+            let fields = self.types.mem.pushn(&[
                 StructTypeField { name: self.ast.idents.b.env, type_id: POINTER_TYPE_ID },
                 StructTypeField { name: self.ast.idents.b.fn_ptr, type_id: POINTER_TYPE_ID },
             ]);
@@ -14822,13 +14755,13 @@ impl TypedProgram {
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
             // debug_assert_eq!(
             //     self.types.get_layout(BUFFER_TYPE_ID),
-            //     Layout::from_rust_type::<vmbc::k1_types::K1ViewLike>()
+            //     Layout::from_rust_type::<vm::k1_types::K1ViewLike>()
             // );
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
                 self.types
                     .mem
-                    .get_slice(buffer_struct.fields)
+                    .getn(buffer_struct.fields)
                     .iter()
                     .map(|f| self.ident_str(f.name))
                     .collect::<SV2<_>>()[..]
@@ -14846,7 +14779,7 @@ impl TypedProgram {
             debug_assert!(
                 self.types
                     .mem
-                    .get_slice(list_struct.fields)
+                    .getn(list_struct.fields)
                     .iter()
                     .map(|f| self.ident_str(f.name))
                     .collect::<SV2<_>>()[..]
@@ -14985,7 +14918,7 @@ impl TypedProgram {
             Type::Struct(struc) => {
                 debug_assert!(type_id != STRING_TYPE_ID);
                 let field_count = struc.fields.len();
-                for (index, field) in self.types.mem.get_slice(struc.fields).iter().enumerate() {
+                for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
                     let prev_len = dst.len();
                     self.generate_constructors_for_type(
                         field.type_id,
@@ -15307,7 +15240,7 @@ impl TypedProgram {
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: FixVec<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_vec(struct_type.fields.len());
-                for (index, f) in self.types.mem.get_slice(struct_type.fields).iter().enumerate() {
+                for (index, f) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
                     let name_string_value_id = self.static_values.add_string(name_string_id);
 
@@ -15320,7 +15253,7 @@ impl TypedProgram {
                     let offset_value_id = self
                         .static_values
                         .add(StaticValue::Int(TypedIntValue::UWord64(offset_u32 as u64)));
-                    let field_struct_fields = self.static_values.mem.push_slice(&[
+                    let field_struct_fields = self.static_values.mem.pushn(&[
                         // name: string
                         name_string_value_id,
                         // typeId: u64
@@ -15519,7 +15452,7 @@ impl TypedProgram {
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within
 
-                for param in self.types.mem.get_slice(fn_type.logical_params()) {
+                for param in self.types.mem.getn(fn_type.logical_params()) {
                     self.register_type_metainfo(param.type_id, span);
 
                     let param_name_string_id =
