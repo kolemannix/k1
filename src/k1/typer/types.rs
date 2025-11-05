@@ -69,7 +69,7 @@ impl StructType {
         m: &kmem::Mem<TypePool>,
         field_name: Ident,
     ) -> Option<(usize, &StructTypeField)> {
-        m.get_slice(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
+        m.getn(self.fields).iter().enumerate().find(|(_, field)| field.name == field_name)
     }
 }
 
@@ -452,9 +452,7 @@ impl TypePool {
                 if s1.fields.len() != s2.fields.len() {
                     return false;
                 }
-                for (f1, f2) in
-                    self.mem.get_slice(s1.fields).iter().zip(self.mem.get_slice(s2.fields))
-                {
+                for (f1, f2) in self.mem.getn(s1.fields).iter().zip(self.mem.getn(s2.fields)) {
                     let mismatch = f1.name != f2.name || f1.type_id != f2.type_id;
                     if mismatch {
                         return false;
@@ -503,9 +501,9 @@ impl TypePool {
                     && f1.physical_params.len() == f2.physical_params.len()
                 {
                     self.mem
-                        .get_slice(f1.physical_params)
+                        .getn(f1.physical_params)
                         .iter()
-                        .zip(self.mem.get_slice(f2.physical_params))
+                        .zip(self.mem.getn(f2.physical_params))
                         .all(|(p1, p2)| p1.type_id == p2.type_id)
                 } else {
                     false
@@ -553,7 +551,7 @@ impl TypePool {
             Type::Struct(s) => {
                 defn.hash(state);
                 s.fields.len().hash(state);
-                for f in self.mem.get_slice(s.fields) {
+                for f in self.mem.getn(s.fields) {
                     f.name.hash(state);
                     f.type_id.hash(state);
                 }
@@ -596,7 +594,7 @@ impl TypePool {
             }
             Type::Function(fun) => {
                 fun.return_type.hash(state);
-                for param in self.mem.get_slice(fun.physical_params) {
+                for param in self.mem.getn(fun.physical_params) {
                     param.name.hash(state);
                     param.is_context.hash(state);
                     param.is_lambda_env.hash(state);
@@ -1572,7 +1570,7 @@ impl TypePool {
         parsed_id: ParsedId,
     ) -> TypeId {
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
-        let fields = self.mem.push_slice(&[
+        let fields = self.mem.pushn(&[
             StructTypeField { name: identifiers.b.fn_ptr, type_id: fn_ptr_type },
             StructTypeField { name: identifiers.b.env_ptr, type_id: POINTER_TYPE_ID },
         ]);
@@ -1674,7 +1672,7 @@ impl TypePool {
             Type::Pointer => EMPTY,
             Type::Struct(struc) => {
                 let mut result = EMPTY;
-                for field in self.mem.get_slice(struc.fields).iter() {
+                for field in self.mem.getn(struc.fields).iter() {
                     result = result.add(self.count_type_variables(field.type_id))
                 }
                 result
@@ -1702,7 +1700,7 @@ impl TypePool {
             Type::Generic(_gen) => EMPTY,
             Type::Function(fun) => {
                 let mut result = EMPTY;
-                for param in self.mem.get_slice(fun.physical_params).iter() {
+                for param in self.mem.getn(fun.physical_params).iter() {
                     result = result.add(self.count_type_variables(param.type_id))
                 }
                 result = result.add(self.count_type_variables(fun.return_type));
@@ -1809,7 +1807,7 @@ impl TypePool {
                     let mut fields = self.mem.new_vec(s.fields.len());
                     let mut layout = Layout::ZERO;
                     let mut not_physical = false;
-                    for field in self.mem.get_slice(s_fields) {
+                    for field in self.mem.getn(s_fields) {
                         if not_physical {
                             continue;
                         }
@@ -1926,7 +1924,7 @@ impl TypePool {
         let struct_agg_id = self.get_physical_type(struct_type_id).unwrap().expect_agg();
         match self.phys_types.get(struct_agg_id).agg_type {
             AggType::Struct1(t) => smallvec![StructField { offset: 0, field_t: t }],
-            AggType::Struct { fields } => self.mem.get_slice_sv4(fields),
+            AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::EnumVariant(evl) => {
                 let tag_field = StructField { offset: 0, field_t: PhysicalType::Scalar(evl.tag) };
                 match evl.payload {
@@ -2124,7 +2122,7 @@ pub fn display_pt(
             }
             AggType::Struct { fields } => {
                 w.write_str("{ ")?;
-                for (index, field) in types.mem.get_slice(*fields).iter().enumerate() {
+                for (index, field) in types.mem.getn(*fields).iter().enumerate() {
                     display_pt(w, types, &field.field_t)?;
                     let last = index == fields.len() as usize - 1;
                     if !last {

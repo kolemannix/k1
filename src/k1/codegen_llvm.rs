@@ -1035,7 +1035,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let mut field_di_types: Vec<StructDebugMember> =
                     Vec::with_capacity(field_count as usize);
                 let name = self.codegen_type_name(type_id, self.k1.types.get_defn_info(type_id));
-                for field in self.k1.types.mem.get_slice(struc.fields) {
+                for field in self.k1.types.mem.getn(struc.fields) {
                     let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
                     let debug_type = if buffer_element_type.is_some()
                         && field.name == self.k1.ast.idents.b.data
@@ -1440,7 +1440,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let is_sret = return_type.is_aggregate();
         let mut param_types: Vec<K1LlvmType<'ctx>> =
             Vec::with_capacity(function_type.physical_params.len() as usize + 1);
-        for p in self.k1.types.mem.get_slice(function_type.physical_params).iter() {
+        for p in self.k1.types.mem.getn(function_type.physical_params).iter() {
             let param_type = self.codegen_type(p.type_id)?;
             param_types.push(param_type)
         }
@@ -3702,7 +3702,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             None
         };
 
-        for param in self.k1.types.mem.get_slice(function_type.physical_params).iter() {
+        for param in self.k1.types.mem.getn(function_type.physical_params).iter() {
             let param_type = self.codegen_type(param.type_id)?;
 
             param_metadata_types

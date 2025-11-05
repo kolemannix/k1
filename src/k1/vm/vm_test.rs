@@ -6,12 +6,12 @@ mod stack_tests {
 
     use crate::kmem::MSlice;
     use crate::typer::*;
-    use crate::vmbc::*;
+    use crate::vm::*;
 
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
-            expr_ret: None,
+            expr_ret_kind: None,
             inst_offset: 0,
             inst_count: 0,
             blocks: MSlice::empty(),
@@ -178,7 +178,7 @@ mod value_tests {}
 #[cfg(test)]
 mod value_roundtrip_tests {
     use crate::typer::types::IntegerType;
-    use crate::vmbc::*;
+    use crate::vm::*;
 
     // Helper macro to test integer roundtrips
     macro_rules! test_int {

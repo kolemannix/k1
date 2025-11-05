@@ -140,7 +140,7 @@ impl<'a, Tag> std::fmt::Write for MemWriter<'a, Tag> {
         #[cfg(debug_assertions)]
         let start = self.mem.cursor;
 
-        let bytes = self.mem.push_slice_raw(s.as_bytes());
+        let bytes = self.mem.pushn_raw(s.as_bytes());
         #[cfg(debug_assertions)]
         {
             let bytes_start = bytes.as_ptr();
@@ -268,7 +268,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    fn push_slice_raw<T: Copy>(&mut self, ts: &[T]) -> &mut [T] {
+    fn pushn_raw<T: Copy>(&mut self, ts: &[T]) -> &mut [T] {
         unsafe {
             let dst = self.push_slice_uninit::<T>(ts.len());
 
@@ -278,7 +278,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn push_slice_iter<T: Clone>(&mut self, iter: impl Iterator<Item = T>) -> MSlice<T, Tag> {
+    pub fn pushn_iter<T: Clone>(&mut self, iter: impl Iterator<Item = T>) -> MSlice<T, Tag> {
         let mut count = 0;
         let mut first = None;
         for t in iter {
@@ -295,16 +295,16 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn push_slice<T: Copy>(&mut self, ts: &[T]) -> MSlice<T, Tag> {
-        let slice = self.push_slice_raw(ts);
+    pub fn pushn<T: Copy>(&mut self, ts: &[T]) -> MSlice<T, Tag> {
+        let slice = self.pushn_raw(ts);
         let ptr = slice.as_ptr();
         MSlice::make(self.ptr_to_offset(ptr), ts.len() as u32)
     }
 
-    pub fn dup_slice<T: Copy>(&mut self, h: MSlice<T, Tag>) -> MSlice<T, Tag> {
+    pub fn dupn<T: Copy>(&mut self, h: MSlice<T, Tag>) -> MSlice<T, Tag> {
         let (ptr, count) = self.get_slice_raw(h);
         let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
-        self.push_slice(slice)
+        self.pushn(slice)
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
@@ -316,12 +316,12 @@ impl<Tag> Mem<Tag> {
     }
 
     pub fn get_str(&self, s: MStr<Tag>) -> &str {
-        let bytes = self.get_slice(s.0);
+        let bytes = self.getn(s.0);
         unsafe { str::from_utf8_unchecked(bytes) }
     }
 
     pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr<Tag> {
-        let bytes = self.push_slice_raw(s.as_ref().as_bytes());
+        let bytes = self.pushn_raw(s.as_ref().as_bytes());
         let bytes_ptr = bytes.as_ptr();
         let len = bytes.len() as u32;
         MStr(MSlice::make(self.ptr_to_offset(bytes_ptr), len))
@@ -367,7 +367,7 @@ impl<Tag> Mem<Tag> {
         (ptr, handle.count as usize)
     }
 
-    fn get_slice_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
+    fn getn_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
             let src: &[T] = std::slice::from_raw_parts(ptr, count);
@@ -375,7 +375,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn get_slice<T>(&self, handle: MSlice<T, Tag>) -> &'static [T] {
+    pub fn getn<T>(&self, handle: MSlice<T, Tag>) -> &'static [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
             let src: &[T] = std::slice::from_raw_parts(ptr, count);
@@ -383,7 +383,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn get_slice_sv<T: Copy, const N: usize>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; N]>
+    pub fn getn_sv<T: Copy, const N: usize>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; N]>
     where
         [T; N]: smallvec::Array<Item = T>,
     {
@@ -392,15 +392,15 @@ impl<Tag> Mem<Tag> {
         SmallVec::from_slice(slice)
     }
 
-    pub fn get_slice_sv4<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 4]> {
-        self.get_slice_sv(handle)
+    pub fn getn_sv4<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 4]> {
+        self.getn_sv(handle)
     }
 
-    pub fn get_slice_sv8<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 8]> {
-        self.get_slice_sv(handle)
+    pub fn getn_sv8<T: Copy>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; 8]> {
+        self.getn_sv(handle)
     }
 
-    pub fn get_slice_mut<T>(&self, handle: MSlice<T, Tag>) -> &'static mut [T] {
+    pub fn getn_mut<T>(&self, handle: MSlice<T, Tag>) -> &'static mut [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
             let src: &mut [T] = std::slice::from_raw_parts_mut(ptr.cast_mut(), count);
@@ -409,11 +409,11 @@ impl<Tag> Mem<Tag> {
     }
 
     pub fn get_nth<T>(&self, handle: MSlice<T, Tag>, n: usize) -> &'static T {
-        &self.get_slice(handle)[n]
+        &self.getn(handle)[n]
     }
 
     pub fn get_nth_opt<T>(&self, handle: MSlice<T, Tag>, n: usize) -> Option<&'static T> {
-        self.get_slice(handle).get(n)
+        self.getn(handle).get(n)
     }
 
     pub fn slices_equal_copy<T: Copy + PartialEq + Eq>(
@@ -424,8 +424,8 @@ impl<Tag> Mem<Tag> {
         if h1.len() != h2.len() {
             return false;
         }
-        let slice1 = self.get_slice_lt(h1);
-        let slice2 = self.get_slice_lt(h2);
+        let slice1 = self.getn_lt(h1);
+        let slice2 = self.getn_lt(h2);
         slice1 == slice2
     }
 
@@ -568,22 +568,22 @@ mod test {
         let value2 = *arena.get(handle2);
         assert_eq!(value2, 43);
 
-        let h3 = arena.push_slice(&[1, 2, 3, 4]);
+        let h3 = arena.pushn(&[1, 2, 3, 4]);
         assert_eq!(h3.len(), 4);
 
-        assert_eq!(arena.get_slice(h3), &[1, 2, 3, 4]);
+        assert_eq!(arena.getn(h3), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn push_slice_iter() {
         let mut arena = Mem::make_untagged();
-        let h = arena.push_slice_iter((0..10).map(|x| x * 10));
+        let h = arena.pushn_iter((0..10).map(|x| x * 10));
         assert_eq!(h.len(), 10);
-        assert_eq!(arena.get_slice(h), &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert_eq!(arena.getn(h), &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
 
-        let empty_h = arena.push_slice_iter(std::iter::empty::<u32>());
+        let empty_h = arena.pushn_iter(std::iter::empty::<u32>());
         assert_eq!(empty_h.len(), 0);
-        assert_eq!(arena.get_slice(empty_h), &[]);
+        assert_eq!(arena.getn(empty_h), &[]);
     }
 
     #[test]
@@ -636,10 +636,10 @@ mod test {
     #[test]
     fn dup_slice() {
         let mut arena = Mem::make_untagged();
-        let h = arena.push_slice(&[1, 2, 3, 4, 5]);
-        let h2 = arena.dup_slice(h);
+        let h = arena.pushn(&[1, 2, 3, 4, 5]);
+        let h2 = arena.dupn(h);
         assert_eq!(h.len(), h2.len());
-        assert_eq!(arena.get_slice(h), arena.get_slice(h2));
+        assert_eq!(arena.getn(h), arena.getn(h2));
         assert_ne!(h.offset, h2.offset);
     }
 

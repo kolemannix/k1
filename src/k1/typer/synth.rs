@@ -106,7 +106,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
-        let args = self.types.type_slices.add_slice_copy(&[inner_type]);
+        let args = self.types.mem.pushn(&[inner_type]);
         self.instantiate_generic_type(OPTIONAL_TYPE_ID, args)
     }
 

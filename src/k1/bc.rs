@@ -107,8 +107,8 @@ pub struct CompiledBlock {
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
     pub unit_id: CompilableUnitId,
-    /// If a compiled expression, the 'return' value is here.
-    pub expr_ret: Option<Value>,
+    /// If a compiled expression, the returned type.
+    pub expr_ret_kind: Option<PhysicalType>,
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
@@ -671,7 +671,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     // Set up parameters
     let param_variables = f.param_variables;
     let mut params = b.k1.bytecode.mem.new_vec(param_variables.len());
-    for (index, param_variable_id) in b.k1.a.get_slice(param_variables).iter().enumerate() {
+    for (index, param_variable_id) in b.k1.a.getn(param_variables).iter().enumerate() {
         let v = b.k1.variables.get(*param_variable_id);
         let t = b.get_physical_type(v.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
@@ -726,30 +726,14 @@ pub fn compile_top_level_expr(
     let name = b.k1.bytecode.mem.push_str("expr_");
     b.push_block(name);
 
-    let result = compile_expr(&mut b, None, expr)?;
-
-    // nocommit(2): Adding this exit isn't good enough; what if the expr branches to many blocks
-    // perhaps we should just compile
-    // these in 'terminating' mode like function blocks
-    if b.k1.get_expr_type_id(expr) != NEVER_TYPE_ID {
-        let exit_args =
-            b.k1.bytecode.mem.push_slice(&[Value::Imm32 { t: ScalarType::I32, data: 0 }]);
-        let id = b.k1.bytecode.calls.add(BcCall {
-            dst: None,
-            ret_inst_kind: InstKind::Terminator,
-            callee: BcCallee::Builtin(BcBuiltin::Exit),
-            args: exit_args,
-        });
-        b.push_inst(Inst::Call { id }, "expr synthetic exit");
-    }
-
-    let compiled_expr = finalize_unit(
-        &mut b,
-        CompilableUnitId::Expr(expr),
-        MSlice::empty(),
-        Some(result),
-        is_debug,
-    );
+    let _result = compile_expr(&mut b, None, expr)?;
+    let return_pt = match b.type_to_inst_kind(b.k1.exprs.get(expr).get_type()) {
+        InstKind::Value(pt) => Some(pt),
+        InstKind::Void => None,
+        InstKind::Terminator => None,
+    };
+    let compiled_expr =
+        finalize_unit(&mut b, CompilableUnitId::Expr(expr), MSlice::empty(), return_pt, is_debug);
 
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
@@ -764,14 +748,14 @@ fn finalize_unit(
     b: &mut Builder,
     unit_id: CompilableUnitId,
     fn_params: MSlice<PhysicalType, ProgramBytecode>,
-    expr_ret: Option<Value>,
+    expr_ret_kind: Option<PhysicalType>,
     is_debug: bool,
 ) -> CompiledUnit {
     let compiled_blocks = b.bake_blocks();
     let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset + 1;
     let unit = CompiledUnit {
         unit_id,
-        expr_ret,
+        expr_ret_kind,
         inst_offset: b.inst_offset,
         inst_count,
         blocks: compiled_blocks,
@@ -829,7 +813,7 @@ impl<'k1> Builder<'k1> {
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
         let mut blocks = self.k1.bytecode.mem.new_vec(self.k1.bytecode.b_blocks.len() as u32);
         for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
-            let instrs = self.k1.bytecode.mem.push_slice(&b.instrs);
+            let instrs = self.k1.bytecode.mem.pushn(&b.instrs);
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
@@ -1107,13 +1091,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
                         b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
                     };
-                    let Some(builder_variable) = b.get_variable(v.variable_id) else {
-                        let variable = b.k1.variables.get(v.variable_id);
-                        b.k1.ice_with_span(
-                            format!("missing variable: {}", b.k1.ident_str(variable.name)),
-                            ass.span,
-                        );
-                    };
+                    let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
                     if !builder_variable.indirect {
                         b.k1.ice_with_span(
                             "Expect an indirect variable for value assignment",
@@ -1310,11 +1288,7 @@ fn compile_expr(
                                 .map(|bv| format!("{} {}", bv.id, bv.value))
                                 .join("\n")
                         );
-                        let variable = b.k1.variables.get(variable_expr.variable_id);
-                        b.k1.ice_with_span(
-                            format!("Missing variable: {}", b.k1.ident_str(variable.name)),
-                            variable_expr.span,
-                        )
+                        b.k1.ice_with_span("Missing variable", variable_expr.span)
                     };
                     let var_type_pt_id = b.get_physical_type(variable_expr.type_id);
                     let var_value = var.value;
@@ -1394,7 +1368,7 @@ fn compile_expr(
                                             data: pt_layout.size,
                                         };
                                         let memset_args =
-                                            b.k1.bytecode.mem.push_slice(&[dst, zero_u8, count]);
+                                            b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
                                         let memset_call = BcCall {
                                             dst: None,
                                             ret_inst_kind: InstKind::UNIT,
@@ -1548,7 +1522,7 @@ fn compile_expr(
                     Some(unit) => {
                         // TODO: Function inlining!
                         let mut total = 0;
-                        for block in b.k1.bytecode.mem.get_slice(unit.blocks) {
+                        for block in b.k1.bytecode.mem.getn(unit.blocks) {
                             total += block.instrs.len()
                         }
                         if total < 50 {
@@ -1660,7 +1634,7 @@ fn compile_expr(
                     Ok(inst.as_value())
                 }
                 Some(came_from) => {
-                    let real_incomings = b.k1.bytecode.mem.push_slice(&incomings);
+                    let real_incomings = b.k1.bytecode.mem.pushn(&incomings);
                     let Inst::CameFrom { incomings: i, .. } =
                         b.k1.bytecode.instrs.get_mut(came_from)
                     else {
@@ -2409,8 +2383,8 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
     let Some(unit) = get_compiled_unit(&k1.bytecode, unit_id) else {
         return failf!(span, "Not compiled");
     };
-    for (block_index, block) in bc.mem.get_slice(unit.blocks).iter().enumerate() {
-        for (index, inst_id) in bc.mem.get_slice(block.instrs).iter().enumerate() {
+    for (block_index, block) in bc.mem.getn(unit.blocks).iter().enumerate() {
+        for (index, inst_id) in bc.mem.getn(block.instrs).iter().enumerate() {
             let is_last = index as u32 == block.instrs.len() - 1;
             let inst = bc.instrs.get(*inst_id);
             let inst_kind = get_inst_kind(bc, &k1.types, *inst_id);
@@ -2655,13 +2629,8 @@ pub fn display_unit(
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
         }
     };
-    write!(w, " (offset={}, inst count={}", unit.inst_offset, unit.inst_count)?;
-    if let Some(ret) = unit.expr_ret {
-        writeln!(w, " (ret={})", ret)?;
-    } else {
-        writeln!(w, ")")?;
-    }
-    for (index, _block) in k1.bytecode.mem.get_slice(unit.blocks).iter().enumerate() {
+    writeln!(w, " (offset={}, inst count={})", unit.inst_offset, unit.inst_count)?;
+    for (index, _block) in k1.bytecode.mem.getn(unit.blocks).iter().enumerate() {
         let id = index as BlockId;
         display_block(w, k1, &k1.bytecode, unit, id, show_source)?;
     }
@@ -2704,7 +2673,7 @@ pub fn display_block(
         w.write_str(bc.mem.get_str(block.name))?;
     }
     writeln!(w)?;
-    for inst_id in bc.mem.get_slice(block.instrs).iter() {
+    for inst_id in bc.mem.getn(block.instrs).iter() {
         if show_source {
             let span_id = bc.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(*span_id);
@@ -2789,7 +2758,7 @@ pub fn display_inst(
                 }
             };
             w.write_str("(")?;
-            for (index, arg) in bc.mem.get_slice(call.args).iter().enumerate() {
+            for (index, arg) in bc.mem.getn(call.args).iter().enumerate() {
                 write!(w, "{}", *arg)?;
                 let last = index == call.args.len() as usize - 1;
                 if !last {
@@ -2811,7 +2780,7 @@ pub fn display_inst(
             write!(w, "comefrom ")?;
             display_pt(w, &k1.types, t)?;
             write!(w, " [")?;
-            for (i, incoming) in bc.mem.get_slice(*incomings).iter().enumerate() {
+            for (i, incoming) in bc.mem.getn(*incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }

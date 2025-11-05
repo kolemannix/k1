@@ -13,7 +13,7 @@ pub mod parse;
 mod pool;
 mod strings;
 pub mod typer;
-pub mod vmbc;
+pub mod vm;
 pub mod vmtw;
 
 pub const KILOBYTE: usize = 1024;

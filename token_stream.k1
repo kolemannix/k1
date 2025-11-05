@@ -1,0 +1,18 @@
+// fn parse_delimited()
+macro fn mlist(parse: meta/Parser) {
+  loop {
+    require tokens.expect_expr() is .Ok(e) else { crash("expr")};
+    let n = tokens.next();
+    switch n.kind {
+      .Comma -> {},
+      .END -> break
+    }
+  };
+
+}
+
+fn main(): i32 {
+  ADD(1,2);
+  //fib(1000);
+  0
+}

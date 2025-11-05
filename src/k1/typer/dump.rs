@@ -160,7 +160,7 @@ impl TypedProgram {
         expand: bool,
     ) -> std::fmt::Result {
         w.write_str("[")?;
-        for (index, t) in self.types.mem.get_slice(spec_info.type_args).iter().enumerate() {
+        for (index, t) in self.types.mem.getn(spec_info.type_args).iter().enumerate() {
             self.display_type_id(w, *t, expand)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
@@ -310,8 +310,7 @@ impl TypedProgram {
             Type::Function(fun) => {
                 w.write_str("\\")?;
                 w.write_str("(")?;
-                for (idx, param) in self.types.mem.get_slice(fun.physical_params).iter().enumerate()
-                {
+                for (idx, param) in self.types.mem.getn(fun.physical_params).iter().enumerate() {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
                     }
@@ -393,7 +392,7 @@ impl TypedProgram {
         expand: bool,
     ) -> std::fmt::Result {
         writ.write_str("{ ")?;
-        for (index, field) in self.types.mem.get_slice(struc.fields).iter().enumerate() {
+        for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
             if index > 0 {
                 writ.write_str(", ")?;
             }
@@ -729,7 +728,7 @@ impl TypedProgram {
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
                 w.write_str("]")?;
-                for arg in self.types.mem.get_slice(fn_type.logical_params()) {
+                for arg in self.types.mem.getn(fn_type.logical_params()) {
                     w.write_str(self.ident_str(arg.name))?;
                     w.write_str(": ")?;
                     self.display_type_id(w, arg.type_id, false)?;
@@ -803,7 +802,7 @@ impl TypedProgram {
                     .static_values
                     .get_slice(static_struct.fields)
                     .iter()
-                    .zip(self.types.mem.get_slice(fields).iter())
+                    .zip(self.types.mem.getn(fields).iter())
                     .enumerate()
                 {
                     if idx > 0 {
@@ -1095,7 +1094,7 @@ impl TypedProgram {
         self.display_type_id(w, i.self_type_id, false)?;
         if display_functions {
             w.write_str(" {\n")?;
-            for ability_impl_fn in self.a.get_slice(i.functions) {
+            for ability_impl_fn in self.a.getn(i.functions) {
                 w.write_str("\t\t")?;
                 match *ability_impl_fn {
                     AbilityImplFunction::FunctionId(ability_impl_fn) => {
@@ -1132,7 +1131,7 @@ impl TypedProgram {
     }
 
     pub fn pretty_print_type_slice(&self, type_slice: TypeIdSlice, sep: &str) -> String {
-        self.pretty_print_types(self.types.mem.get_slice(type_slice), sep)
+        self.pretty_print_types(self.types.mem.getn(type_slice), sep)
     }
 
     pub fn pretty_print_type_substitutions(
@@ -1230,9 +1229,7 @@ impl TypedProgram {
         }
         w.write_char('(')?;
         let function_type = self.types.get(signature.function_type).as_function().unwrap();
-        for (idx, param) in
-            self.types.mem.get_slice(function_type.physical_params).iter().enumerate()
-        {
+        for (idx, param) in self.types.mem.getn(function_type.physical_params).iter().enumerate() {
             if idx > 0 {
                 w.write_str(", ")?;
             }

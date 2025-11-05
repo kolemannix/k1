@@ -899,10 +899,10 @@ impl TypedProgram {
                 // We can directly 'solve' every appearance of a type param here
                 for (passed_type, arg_slot) in self
                     .types
-                    .type_slices
-                    .copy_slice_sv4(passed_info.type_args)
+                    .mem
+                    .getn_sv4(passed_info.type_args)
                     .iter()
-                    .zip(self.types.type_slices.copy_slice_sv4(arg_info.type_args).iter())
+                    .zip(self.types.mem.getn_sv4(arg_info.type_args).iter())
                 {
                     self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
                 }
@@ -966,7 +966,7 @@ impl TypedProgram {
                 if passed_fields.len() != fields.len() {
                     return TypeUnificationResult::NonMatching("field count");
                 }
-                for (idx, field) in self.types.mem.get_slice(fields).iter().enumerate() {
+                for (idx, field) in self.types.mem.getn(fields).iter().enumerate() {
                     let passed_field = self.types.mem.get_nth(passed_fields, idx);
                     if field.name != passed_field.name {
                         return TypeUnificationResult::NonMatching("field names");
@@ -1026,9 +1026,9 @@ impl TypedProgram {
                     for (passed_param, slot_param) in self
                         .types
                         .mem
-                        .get_slice(passed_fn.logical_params())
+                        .getn(passed_fn.logical_params())
                         .iter()
-                        .zip(self.types.mem.get_slice(slot_fn.logical_params()))
+                        .zip(self.types.mem.getn(slot_fn.logical_params()))
                     {
                         self.unify_and_find_substitutions_rec(
                             passed_param.type_id,
