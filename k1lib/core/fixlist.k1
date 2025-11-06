@@ -1,27 +1,37 @@
-deftype FixList[T, N: static uword] = { used: uword, inner: Array[T, N] }
+// Represents a 'pushable' contiguous collection of Ts, with a fixed capacity,
+// and inline storage. 
+//  
+// For example, A FixList[byte, 10] is 14 bytes long, and looks like:
+// +----+----------+
+// |used|10 items  |
+// +----+----------+
+// 0    4
+deftype FixList[T, N: static uword] = { used: u32, data: Array[T, N] }
 ns FixList {
-  fn capacity[T, N: static uword](self: FixList[T, N]): uword { self.inner.len() }
-  fn len[T, N: static uword](self: FixList[T, N]): uword { self.used }
+  fn capacity[T, N: static uword](self: FixList[T, N]): uword { self.data.len() }
+  fn len[T, N: static uword](self: FixList[T, N]): uword { self.used as uword }
 
   fn clear[T, N: static uword](self: *mut FixList[T, N]): unit {
-    #if k1/DEBUG self.inner*.memset(0xCD);
+    #if k1/DEBUG self.data*.memset(0xCD);
     self.used* <- 0
   }
 
   fn push[T, N: static uword](self: *mut FixList[T, N], value: T): unit {
-    if self.used < self.capacity() {
-      self.inner*.set(self.used, value);
-      self.used* <- self.used + 1;
+    let used: uword = self.len();
+    if used < self.capacity() {
+      self.data*.set(used, value);
+      self.used* <- used as u32 + 1;
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
-      crash("{typename} cannot fulfill push. {self.used + 1} > {self.capacity()}")
+      crash("{typename} cannot fulfill push. {used + 1} > {self.capacity()}")
     }
   }
 
   fn tryPush[T, N: static uword](self: *mut FixList[T, N], value: T): Result[unit, unit] {
-    if self.used < self.capacity() {
-      self.inner*.set(self.used, value);
-      self.used* <- self.used + 1;
+    let used: uword = self.len();
+    if used < self.capacity() {
+      self.data*.set(used, value);
+      self.used* <- used as u32 + 1;
       .Ok(())
     } else {
       .Err(())
@@ -29,15 +39,15 @@ ns FixList {
   }
 
   fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, string] {
-    let needed = self.used + values.len();
+    let needed = self.len() + values.len();
     if needed < self.capacity() {
-      let dstSlice = self.inner*.asBuffer().slice(start = self.used, end = needed);
+      let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
       Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
-      self.used* <- needed;
+      self.used* <- needed as u32;
       .Ok(())
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
-      .Err("{typename} cannot fulfill push. {self.used + 1} > {self.capacity()}")
+      .Err("{typename} cannot fulfill push. {needed} (needed) > {self.capacity()}")
     }
   }
 
@@ -46,7 +56,7 @@ ns FixList {
   }
 
   fn asView[T, N: static uword](self: *FixList[T, N]): View[T] {
-    self.inner*.asView().slice(0, self.used)
+    self.data*.asView().slice(0, self.len())
   }
 
 }

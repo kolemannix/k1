@@ -17,9 +17,10 @@ fn run(input: *mut iword): Pointer {
   input as Pointer
 }
 
-fn main(): i32 {
+// nocommit move to test_suite
+fn testTls(): i32 {
   myvar <- 1000;
-  let* arena = Arena/new(1);
+  let* arena = Arena/default();
   let input = arena.push(42);
   let output = arena.pushUninit[*int]();
 

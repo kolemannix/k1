@@ -1,13 +1,14 @@
 ns static_literals;
 fn test(): unit {
-  let a: 1 = 1;
+  // nocommit missing type literal check?
+  let a: 5 = 1;
   let a: -3 = -3;
   let c: 'c' = 'c';
   let pi: 3.14 = 3.14;
   let hello: "hello" = "hello";
 
   let hello: "hello!" = #static {
-    let* bytes = [104: u8];
+    let* bytes = [104u8];
     bytes.push(101);
     bytes.push(108);
     bytes.push(108);

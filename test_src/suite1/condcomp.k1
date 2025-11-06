@@ -11,11 +11,13 @@ fn test(): unit {
   assertEquals(k1/OS, "macos");
   assertEquals(k1/TEST, false);
 
+  let trip = false;
   #if MY_VALUE_NEG {
     crash("does not happen")
   } else {
-    println("hello from MY_VALUE_NEG={MY_VALUE_NEG}")
+    trip := true;
   };
+  assert(trip);
 
   let comptimeCheck = #if false "foo" else "bar";
   assert(comptimeCheck == "bar");
