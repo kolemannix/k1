@@ -11,6 +11,34 @@ ns mem {
     free:    *(\(Pointer, uword, uword) -> unit),
   }
 
+  fn virtualAlloc(size: uword): Pointer {
+    // Workaround for not having implemented virtual alloc in the VM yet.
+    if k1/IS_STATIC { alloc(size, 8) } else {
+      let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
+      let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
+      let addr = posix/mmap(
+        addr = Pointer/NULL,
+        len = size,
+        prot = rw,
+        flags = privateAnon,
+        fd = -1,
+        offset = 0
+      );
+      if addr == (posix/MAP_FAILED as Pointer) crash("mmap failed");
+      // todo Advise sequential
+      // posix/madvise();
+      addr
+    }
+  }
+
+  fn virtualRelease(base: Pointer, len: uword): unit {
+    if k1/IS_STATIC { free(base, len, 8) } else {
+      let result = posix/munmap(base, len);
+      if result == -1 crash("munmap of ptr {base} x {len} failed");
+      ()
+    }
+  }
+
   deftype AllocMode = {
     kind: (either
       Current,
@@ -78,10 +106,10 @@ ns mem {
         zalloc(size, align)
       },
       .Bump(bump) -> {
-        bump.pushRaw(size, align)
+        bump.pushLayout(size, align)
       },
       .TempBump -> {
-        mem/getTempArena().pushRaw(size, align)
+        mem/getTempArena().pushLayout(size, align)
       },
       .Gc -> {
         crash("Gc is unimplemented; plan to support w/ bdwgc")
@@ -155,21 +183,16 @@ ns mem {
   }
 
   // Initialize on first get() is perfect
-  fn initTempArena(maxMb: uint): unit {
+  fn initTempArena(): unit {
     if not _k1_tempArena.basePtr.isNull() {
       crash("Arena already initialized")
     };
-    let a = Arena/new(initialMb = maxMb);
+    let a = Arena/default();
     _k1_tempArena <- a;
   }
 
-  // TODO: Figure out when temp aliasing occurs, and avoid that
-  // ideally without requiring people to pass an array in
   fn getTempArena(): *mut Arena {
-    if _k1_tempArena.basePtr.isNull() {
-      // TODO: Make it growable internally;
-      initTempArena(maxMb = 10)
-    };
+    if _k1_tempArena.basePtr.isNull() { initTempArena() };
     _k1_tempArena
   }
 

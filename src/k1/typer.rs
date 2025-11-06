@@ -399,6 +399,8 @@ pub enum PatternCtor {
     /// think of a good name means we shouldn't, probably
     TypeVariable,
     FunctionPointer,
+    /// In the future, we should do real array patterns since length is statically known
+    Array,
     Reference(PatternCtorId),
     Struct {
         fields: SV4<(Ident, PatternCtorId)>,
@@ -7852,25 +7854,29 @@ impl TypedProgram {
             );
             self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
             for part in interpolated_string.parts.into_iter() {
-                let print_expr = match part {
+                match part {
                     parse::InterpolatedStringPart::String(string_id) => {
-                        let string_expr = self.synth_string_literal(string_id, span);
-                        self.synth_printto_call(
-                            string_expr,
-                            string_builder_var.variable_expr,
-                            block_ctx,
-                        )?
+                        let rust_str = self.ast.strings.get_string(string_id);
+                        if !rust_str.is_empty() {
+                            let string_expr = self.synth_string_literal(string_id, span);
+                            let print_literal_call = self.synth_printto_call(
+                                string_expr,
+                                string_builder_var.variable_expr,
+                                block_ctx,
+                            )?;
+                            self.add_expr_id_to_block(&mut block, print_literal_call);
+                        }
                     }
                     parse::InterpolatedStringPart::Expr(expr_id) => {
                         let typed_expr_to_stringify = self.eval_expr(expr_id, block_ctx)?;
-                        self.synth_printto_call(
+                        let print_expr_call = self.synth_printto_call(
                             typed_expr_to_stringify,
                             string_builder_var.variable_expr,
                             ctx,
-                        )?
+                        )?;
+                        self.add_expr_id_to_block(&mut block, print_expr_call);
                     }
                 };
-                self.add_expr_id_to_block(&mut block, print_expr);
             }
             let sb_deref = self.synth_dereference(string_builder_var.variable_expr);
             let build_call = self.synth_typed_call_typed_args(
@@ -10337,9 +10343,19 @@ impl TypedProgram {
             self.types.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
         {
             let companion_scope = self.get_namespace_scope(companion_ns);
+            debug!(
+                "functions in companion scope: {:?}",
+                companion_scope
+                    .functions
+                    .values()
+                    .map(|f| self.ident_str(self.functions.get(*f).name).to_string())
+                    .join(", ")
+            );
             if let Some(method_id) = companion_scope.find_function(fn_name) {
                 return Ok(Either::Right(Callee::make_static(method_id)));
             }
+        } else {
+            debug!("companion scope not found for call to {}", self.ident_str(fn_name))
         };
 
         let Some(abilities_for_function) = self.function_name_to_ability.get(&fn_name) else {
@@ -10680,6 +10696,12 @@ impl TypedProgram {
         fn_call: &ParsedCall,
         ctx: EvalExprContext,
     ) -> TyperResult<Option<TypedExprId>> {
+        let fn_name = self.ident_str(fn_call.name.name);
+        let preconditions =
+            fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1;
+        if !preconditions {
+            return Ok(None);
+        }
         let (e, is_reference) = match self.get_expr_type(base_expr) {
             Type::Reference(r) => {
                 if let Type::Enum(e) = self.types.get(r.inner_type) {
@@ -10691,67 +10713,56 @@ impl TypedProgram {
             Type::Enum(e) => (e, false),
             _ => return Ok(None),
         };
-        let fn_name = self.ident_str(fn_call.name.name);
         let base_expr_type = self.exprs.get(base_expr).get_type();
-        if fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1 {
-            let span = fn_call.span;
-            let variants = e.variants.clone();
-            let mut s = std::mem::take(&mut self.buffers.name_builder);
-            let Some(variant) = variants.iter().find(|v| {
-                s.push_str("as");
-                let name = self.ident_str(v.name);
-                let name_capitalized = strings::capitalize_first(name);
-                s.push_str(&name_capitalized);
+        let span = fn_call.span;
+        let variants = e.variants.clone();
+        let mut s = std::mem::take(&mut self.buffers.name_builder);
+        let Some(variant) = variants.iter().find(|v| {
+            s.push_str("as");
+            let name = self.ident_str(v.name);
+            let name_capitalized = strings::capitalize_first(name);
+            s.push_str(&name_capitalized);
 
-                let fn_name = self.ident_str(fn_call.name.name);
-                let is_match = fn_name == s;
-                s.clear();
-                is_match
-            }) else {
-                self.buffers.name_builder = s;
-                return failf!(
-                    span,
-                    "Method '{}' does not exist on type '{}'",
-                    self.ident_str(fn_call.name.name),
-                    self.type_id_to_string(base_expr_type)
-                );
-            };
+            let fn_name = self.ident_str(fn_call.name.name);
+            let is_match = fn_name == s;
+            s.clear();
+            is_match
+        }) else {
             self.buffers.name_builder = s;
-            let variant_type_id = variant.my_type_id;
-            let variant_index = variant.index;
-            let resulting_type_id = if is_reference {
-                let ref_type = self.types.get(base_expr_type).expect_reference();
-                self.types.add_reference_type(variant_type_id, ref_type.mutable)
-            } else {
-                variant_type_id
-            };
-            let condition =
-                self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
-            let cast_type =
-                if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
-            let cast_expr = self.exprs.add(TypedExpr::Cast(TypedCast {
-                cast_type,
-                base_expr,
-                target_type_id: resulting_type_id,
-                span,
-            }));
-            let (consequent, consequent_type_id) =
+            return Ok(None);
+        };
+        self.buffers.name_builder = s;
+        let variant_type_id = variant.my_type_id;
+        let variant_index = variant.index;
+        let resulting_type_id = if is_reference {
+            let ref_type = self.types.get(base_expr_type).expect_reference();
+            self.types.add_reference_type(variant_type_id, ref_type.mutable)
+        } else {
+            variant_type_id
+        };
+        let condition = self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
+        let cast_type =
+            if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
+        let cast_expr = self.exprs.add(TypedExpr::Cast(TypedCast {
+            cast_type,
+            base_expr,
+            target_type_id: resulting_type_id,
+            span,
+        }));
+        let (consequent, consequent_type_id) =
                 // base_expr is the enum type, or a reference to it
                 // resulting_type_id is the variant, or a reference to it
                 self.synth_optional_some(cast_expr);
-            let alternate = self.synth_optional_none(resulting_type_id, span);
+        let alternate = self.synth_optional_none(resulting_type_id, span);
 
-            Ok(Some(self.synth_if_else(
-                MSlice::empty(),
-                consequent_type_id,
-                condition,
-                consequent,
-                alternate,
-                span,
-            )))
-        } else {
-            Ok(None)
-        }
+        Ok(Some(self.synth_if_else(
+            MSlice::empty(),
+            consequent_type_id,
+            condition,
+            consequent,
+            alternate,
+            span,
+        )))
     }
 
     fn handle_enum_constructor(
@@ -14929,6 +14940,7 @@ impl TypedProgram {
                         self.pattern_ctors.add(PatternCtor::Reference(pointee_pattern_id.ctor));
                 }
             }
+            Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
             Type::Enum(enum_type) => {
                 for v in enum_type.variants.clone().iter() {
                     match v.payload.as_ref() {

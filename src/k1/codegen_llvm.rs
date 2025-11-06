@@ -3313,7 +3313,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             IntrinsicOperation::MemSet => {
                 // intern fn set(dst: Pointer, value: u8, count: uword): unit
-                todo!("vm memset")
+                let dst_arg = self.load_function_argument(function, 0)?;
+                let value_arg = self.load_function_argument(function, 1)?;
+                let count_arg = self.load_function_argument(function, 2)?;
+                let _not_actually_a_ret_ptr = self
+                    .builder
+                    .build_memset(
+                        dst_arg.into_pointer_value(),
+                        1,
+                        value_arg.into_int_value(),
+                        count_arg.into_int_value(),
+                    )
+                    .unwrap();
+                let result = self.builtin_types.unit_basic();
+                self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::MemEquals => {
                 // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool

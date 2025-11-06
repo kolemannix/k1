@@ -1,1 +1,177 @@
-fn main(): i32 { 0 }
+use core/FixList
+deftype SpillList[T, N: static uword] = either Inline(FixList[T, N]), Spilled(List[T])
+ns SpillList {
+
+  fn new[T, N: static uword](): SpillList[T, N] {
+    .Inline(zeroed[FixList[T, N]]())
+  }
+
+  // Retains allocated memory, if we've already spilled, intended for re-use
+  fn clear[T, N: static uword](self: *mut SpillList[T, N]): unit {
+    switch self {
+      .Inline(fixlist)* -> fixlist.clear(),
+      .Spilled(list)* -> list.clear()
+    }
+  }
+
+  fn len[T, N: static uword](self: SpillList[T, N]): uword {
+    switch self {
+      .Inline(fixlist) -> fixlist.used,
+      .Spilled(list) -> list.len,
+    }
+  }
+
+  fn asView[T, N: static uword](self: *SpillList[T, N]): View[T] {
+    switch self {
+      .Spilled(list)* -> list.asView(),
+      .Inline(fixlist)* -> fixlist.asView()
+    }
+  }
+
+  fn _spill[T, N: static uword](fixlist: *mut FixList[T, N]): List[T] {
+    let* list = List/withCapacity[T](fixlist.used * 2);
+
+    let srcBuffer = fixlist.inner*.asBuffer();
+    list.appendBuffer(srcBuffer);
+    eprintln("Spilled to a list of cap {list.cap()}");
+    //eprintln("Items: {list.*}");
+
+    list.*
+  }
+
+  fn push[T, N: static uword](self: *mut SpillList[T, N], t: T): unit {
+    switch self {
+      .Spilled(list)* -> { list.push(t) },
+      .Inline(fixlist)* -> {
+        if fixlist.tryPush(t) is .Ok(_) ()
+        else {
+          let* list = _spill(fixlist);
+  
+          list.push(t);
+  
+          self <- .Spilled(list.*)
+        }
+      }
+    }
+  }
+
+  fn pushN[T, N: static uword](self: *mut SpillList[T, N], ts: View[T]): unit {
+    switch self {
+      .Spilled(list)* -> { list.appendView(ts) },
+      .Inline(fixlist)* -> {
+        if fixlist.tryPushN(ts) is .Ok(_) ()
+        else {
+          // Correctness: The only error case is the out of capacity one
+          let* list = _spill(fixlist);
+  
+          list.appendView(ts);
+  
+          self <- .Spilled(list.*)
+        }
+      }
+    }
+  }
+
+  fn pushString[N: static uword](self: *mut SpillList[u8, N], s: string): unit {
+    self.pushN[u8, N](s.viewBytes())
+  }
+
+}
+
+impl[T, N: static uword] Print for SpillList[T, N] {
+  fn printTo[W: Writer](self: Self, w: W): unit {
+     switch self {
+       .Inline(fix) -> {
+         w.writeString("inline ");
+       },
+       .Spilled(list) -> {
+         w.writeString("spilled ");
+       }
+     };
+     self.len().printTo(w);
+  }
+}
+
+impl[N: static uword] Writer for *mut SpillList[u8, N] {
+  fn writeByte(self: Self, b: u8): unit {
+    self.push(b)
+  }
+  fn writeBytes(self: Self, b: View[u8]): unit {
+    self.pushN(b)
+  }
+}
+
+deftype StringBuilder = { list: SpillList[u8, 64uword] }
+ns StringBuilder {
+  fn new(): StringBuilder {
+    { list: SpillList/new() }
+  }
+  fn build(self: *mut StringBuilder): string {
+    let l: *mut SpillList[u8, 64uword] = self.list*;
+    let s = string/fromBytes(self.list*.asView().cloned());
+    l.clear();
+    s
+  }
+  fn buildIn(self: *mut StringBuilder, arena: *mut core/Arena): string {
+    let l: *mut SpillList[u8, 64uword] = self.list*;
+    let tempS = string/fromBytes(self.list*.asView());
+    let s = arena.pushString(tempS);
+    l.clear();
+    s
+  }
+  fn buildTmp(self: *mut StringBuilder): string { self.buildIn(mem/getTempArena()) }
+}
+
+impl Writer for *mut StringBuilder {
+  fn writeByte(self: Self, b: u8): unit {
+    self.list*.push(b)
+  }
+  fn writeBytes(self: Self, b: View[u8]): unit {
+    self.list*.pushN(b)
+  }
+}
+
+
+fn testFixList(): unit {
+  // nocommit commit all this good stuff to core or std or test
+  let* fl: *mut FixList[int, 4uword] = zeroed();
+  assertEquals(fl.len(), 0);
+  fl.push(40);
+  assertEquals(fl.len(), 1);
+  fl.push(41);
+  fl.push(42);
+  fl.push(43);
+
+  fl.clear();
+  assertEquals(fl.len(), 0);
+
+}
+
+fn main(): i32 { 
+   let tmp = mem/getTempArena();
+   println("Size of StringBuilder: {types/sizeOf[StringBuilder]()}");
+
+   testFixList();
+   let* sb = StringBuilder/new();
+   for IntRange/upTo(128) do {
+     if it % 2 == 0 sb.writeChar('a')
+     else sb.writeChar('b');
+   };
+   let s = sb.buildIn(tmp);
+   assertEquals(s.len(), 128);
+   assertEquals(s.get(0), 'a');
+   assertEquals(s.get(127), 'b');
+   //{
+   //  let* (sb_2404: *mut List[char]) = withCapacity__char_1(7uword);
+   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
+   //  Print_iword_3_printTo__*mut List[char]_1(1iword, sb_2404);
+   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
+   //  Print_iword_3_printTo__*mut List[char]_1(2iword, sb_2404);
+   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
+   //  Print_iword_3_printTo__*mut List[char]_1(3iword, sb_2404);
+   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
+   //  wrapList(sb_2404.*)
+   //}: string;
+  "{1} {2} {3}";
+  0
+}

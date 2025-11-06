@@ -11,10 +11,9 @@
 // than just a growing buffer
 deftype StringBuilder = { charList: *mut List[char] }
 ns StringBuilder {
-  deftype alias Part = StringBuilder.charList.value.T
 
   fn withCapacity(cap: uword): StringBuilder {
-    let charList = mem/new(List/withCapacity[Part](cap));
+    let charList = mem/new(List/withCapacity[char](cap));
     { charList: charList }
   }
 
@@ -26,11 +25,7 @@ ns StringBuilder {
     self.charList.push(c)
   }
   fn putString(self: StringBuilder, s: string): unit {
-    // TODO(stdlib): Need an appendBufferCopy, or similarly
-    // to solve for the 'copy' vs 'non-copy' problem
-    self.charList.appendView(
-      s.view()
-    )
+    self.charList.appendView(s.view())
   }
   fn putByte(self: StringBuilder, b: byte): unit {
     self.charList.push(b as char)
@@ -43,14 +38,8 @@ ns StringBuilder {
 }
 
 impl Writer for StringBuilder {
-  fn writeChar(self: Self, value: char): unit {
-    self.putChar(value)
-  }
   fn writeByte(self: Self, value: u8): unit {
     self.putByte(value)
-  }
-  fn writeString(self: Self, value: string): unit {
-    self.putString(value)
   }
   fn writeBytes(self: Self, bytes: View[byte]): unit {
     self.putString(string/fromBytes(bytes))

@@ -55,6 +55,8 @@ Ideas
       'shared' chunks vs union chunk, AoS or AoSoA by default...
 
 Syntax/elegance
+- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+ - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for i64`
