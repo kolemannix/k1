@@ -26,7 +26,7 @@ ns Buffer {
     { len: 0, data: Pointer/NULL as *mut T }
   }
 
-  fn fromRawPointerAndCount[T](count: uword, pointer: Pointer): Buffer[T] {
+  fn fromRawPointerAndCount[T](pointer: Pointer, count: uword): Buffer[T] {
     { len: count, data: pointer as *mut T }
   }
 
@@ -111,14 +111,14 @@ ns Buffer {
       self <- { len: newCount, data: newPtr as *mut T }
     } else {
       let newBuffer = _allocate[T](newCount);
-      _copyFrom[T](self, newBuffer, self.len);
+      copyFrom[T](src = self, dst = newBuffer);
       self <- newBuffer
     }
   }
 
   fn _enlargedCloneIn[T](context alloc: mem/AllocMode)(self: Buffer[T], newCount: uword): Buffer[T] {
     let newBuffer = _allocateIn[T](newCount);
-    _copyFrom[T](self, newBuffer, self.len);
+    copyFrom[T](src = self, dst = newBuffer);
     newBuffer
   }
 
@@ -126,15 +126,12 @@ ns Buffer {
     _enlargedCloneIn[T](context mem/AllocMode/CURRENT)(self, newCount)
   }
 
-  fn _copyFrom[T](source: Buffer[T], dest: Buffer[T], count: uword): unit {
-    if count > source.len {
-      crash("Buffer copy source index out of bounds: {count}")
+  fn copyFrom[T](src: Buffer[T], dst: Buffer[T]): unit {
+    if src.len > dst.len {
+      crash("Buffer copy dest index out of bounds: {src.len} > {dst.len}")
     };
-    if count > dest.len {
-      crash("Buffer copy dest index out of bounds: {count}")
-    };
-    let numBytes = bufferSizeBytes[T](count);
-    mem/copy(dst = dest.dataPointer(), src = source.dataPointer(), count = numBytes);
+    let numBytes = bufferSizeBytes[T](src.len);
+    mem/copy(dst = dst.dataPointer(), src = src.dataPointer(), count = src.len);
     ()
   }
 
@@ -164,6 +161,14 @@ ns Buffer {
   fn set[T](self: Buffer[T], index: uword, elem: T): unit {
     let tRef = self.getRef(index);
     tRef <- elem;
+  }
+
+  fn memset[T](self: Buffer[T], value: u8): unit {
+    mem/set(
+      dst = self.dataPointer(),
+      value = value,
+      count = self.len
+    );
   }
 
   fn get[T](self: Buffer[T], index: uword): T {
@@ -228,10 +233,9 @@ ns Buffer {
 
   fn concat[T](self: Buffer[T], other: Buffer[T]): Buffer[T] {
     let new = self._enlargedClone[T](self.len + other.len);
-    _copyFrom(
-      source = other, 
-      dest = new.slice(self.len, self.len + other.len), 
-      count = other.len
+    copyFrom(
+      src = other, 
+      dst = new.slice(self.len, self.len + other.len), 
     );
     new
   }
@@ -258,7 +262,7 @@ ns Buffer {
     );
   }
 
-  fn toByteBuffer(self: Buffer[char]): Buffer[byte] {
+  fn asByteBuffer(self: Buffer[char]): Buffer[byte] {
     Buffer/fromRawPointerAndCount[byte](
       count = self.len,
       pointer = self.dataPointer()

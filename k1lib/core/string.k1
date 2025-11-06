@@ -15,7 +15,7 @@ ns string {
   }
 
   fn viewBytes(self: string): View[byte] {
-    self.view().toByteView()
+    self.view().asByteView()
   }
 
   fn clone(self: string): string {

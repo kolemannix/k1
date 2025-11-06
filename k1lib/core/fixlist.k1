@@ -1,0 +1,52 @@
+deftype FixList[T, N: static uword] = { used: uword, inner: Array[T, N] }
+ns FixList {
+  fn capacity[T, N: static uword](self: FixList[T, N]): uword { self.inner.len() }
+  fn len[T, N: static uword](self: FixList[T, N]): uword { self.used }
+
+  fn clear[T, N: static uword](self: *mut FixList[T, N]): unit {
+    #if k1/DEBUG self.inner*.memset(0xCD);
+    self.used* <- 0
+  }
+
+  fn push[T, N: static uword](self: *mut FixList[T, N], value: T): unit {
+    if self.used < self.capacity() {
+      self.inner*.set(self.used, value);
+      self.used* <- self.used + 1;
+    } else {
+      let typename = types/getTypeName[typeOf(self).value]();
+      crash("{typename} cannot fulfill push. {self.used + 1} > {self.capacity()}")
+    }
+  }
+
+  fn tryPush[T, N: static uword](self: *mut FixList[T, N], value: T): Result[unit, unit] {
+    if self.used < self.capacity() {
+      self.inner*.set(self.used, value);
+      self.used* <- self.used + 1;
+      .Ok(())
+    } else {
+      .Err(())
+    }
+  }
+
+  fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, string] {
+    let needed = self.used + values.len();
+    if needed < self.capacity() {
+      let dstSlice = self.inner*.asBuffer().slice(start = self.used, end = needed);
+      Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
+      self.used* <- needed;
+      .Ok(())
+    } else {
+      let typename = types/getTypeName[typeOf(self).value]();
+      .Err("{typename} cannot fulfill push. {self.used + 1} > {self.capacity()}")
+    }
+  }
+
+  fn pushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): unit {
+    self.tryPushN[T, N](values).unwrap()
+  }
+
+  fn asView[T, N: static uword](self: *FixList[T, N]): View[T] {
+    self.inner*.asView().slice(0, self.used)
+  }
+
+}

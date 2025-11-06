@@ -89,18 +89,9 @@ ns io {
   let STDERR: OutStream = { fileNo: posix/STDERR };
 
   impl Writer for OutStream {
-    fn writeChar(self: Self, value: char): unit {
-      let* valueRef: *char = value;
-      posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
-      ()
-    }
     fn writeByte(self: Self, value: u8): unit {
       let* valueRef: *u8 = value;
       posix/write(fileNo = self.fileNo, data = valueRef as Pointer, count = 1);
-      ()
-    }
-    fn writeString(self: Self, s: string): unit {
-      posix/write(fileNo = self.fileNo, data = s.view().dataPointer(), count = s.len());
       ()
     }
     fn writeBytes(self: Self, bytes: View[byte]): unit {
@@ -254,7 +245,7 @@ fn formatUInt[W: Writer](context w: W)(value: uword, base: uword): unit {
 
     digits.reverse();
 
-    w.writeBytes(digits.asView().toByteView());
+    w.writeBytes(digits.asView().asByteView());
 
     ()
   }

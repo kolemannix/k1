@@ -11,6 +11,7 @@ deftype Arena = {
   maxAddr: uword
 }
 ns Arena {
+  let kb: uword = 1024;
   let mb: uword = 1048576;
   let gb: uword = 1073741824;
 
@@ -18,36 +19,42 @@ ns Arena {
     self.maxAddr - (self.basePtr as uword)
   }
 
-  // Aligns 'base' to the next available value that is aligned with `align`
-  // TODO(optimize): alignTo: Learn from Rust's 'align_offset' impl
-  fn alignTo(baseAddress: uword, alignBytes: uword): uword {
-    let mask = alignBytes - 1;
-    let sum = baseAddress + mask;
-    let aligned = Bitwise/bitAnd(sum, Bitwise/bitNot(mask));
-    #if k1/DEBUG if aligned != baseAddress {
-      println("Aligned {baseAddress} to {aligned}!")
-    };
-    aligned
+  fn usedBytes(self: Arena): uword {
+    self.curAddr - (self.basePtr as uword)
   }
 
-  fn new(initialMb: uword): Arena {
-    let capacity = initialMb * mb;
-    // We zero the memory because we don't make arenas that often
-    // so it's worth it
-    let basePtr = mem/allocZeroed(
-      size = capacity,
-      align = 8
-    );
-    if basePtr.isNull() crash("calloc for Arena failed");
+  fn _virtual(usageHintMb: uword): Pointer {
+    let basePtr: Pointer = mem/virtualAlloc(gb);
+    #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
+    basePtr
+  }
+
+  fn default(): Arena {
+    let basePtr: Pointer = if k1/IS_STATIC mem/alloc(size = 10 * mb, align = 8) else _virtual(usageHintMb = 10);
     {
       basePtr: basePtr,
       curAddr: basePtr as uword,
-      maxAddr: basePtr as uword + capacity
+      maxAddr: basePtr.addBytes(gb) as uword
     }
   }
 
-  fn pushRaw(self: *mut Arena, size: uword, align: uword): Pointer {
-    let dataStart = alignTo(self.curAddr, align);
+  fn release(self: *mut Arena): unit {
+    mem/virtualRelease(self.basePtr, self.regionSizeBytes())
+  }
+
+  fn reset(self: *mut Arena, clear: bool): unit {
+    let usedBytes = self.usedBytes();
+    println("[arena] Resetting {usedBytes / kb}KiB");
+    self.curAddr* <- (self.basePtr as uword);
+
+    if clear {
+      println("mem/set {self.basePtr} 0 {usedBytes}");
+      mem/set(dst = self.basePtr, value = 0, count = usedBytes);
+    }
+  }
+
+  fn pushLayout(self: *mut Arena, size: uword, align: uword): Pointer {
+    let dataStart = Pointer/alignAddr(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
@@ -58,21 +65,30 @@ ns Arena {
   }
 
   fn pushUninit[T](self: *mut Arena): *mut T {
-    let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
+    let dataStart = self.pushLayout(sizeOf[T](), alignOf[T]());
     dataStart as *mut T
   }
 
   fn push[T](self: *mut Arena, t: T): *mut T {
-    let dataStart = self.pushRaw(sizeOf[T](), alignOf[T]());
+    let dataStart = self.pushLayout(sizeOf[T](), alignOf[T]());
 
     let ref: *mut T = dataStart.rw();
     ref <- t;
     ref
   }
 
-  fn freeAll(self: *mut Arena): unit {
-    let size = self.regionSizeBytes();
-    println("[arena] Freeing {size}");
-    self.curAddr* <- (self.basePtr as uword);
+  fn pushN[T](self: *mut Arena, ts: View[T]): Buffer[T] {
+    let size = ts.buffer.sizeBytes();
+    let align = types/alignOf[T]();
+    let base = self.pushLayout(size, align);
+    let buffer: Buffer[T] = Buffer/fromRawPointerAndCount[T](base, ts.len());
+    Buffer/copyFrom(src = ts.buffer, dst = buffer);
+    buffer
   }
+
+  fn pushString(self: *mut Arena, s: string): string {
+    let data: Buffer[char] = self.pushN(s.view());
+    string/wrapBuffer(data)
+  }
+
 }

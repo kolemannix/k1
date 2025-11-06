@@ -923,6 +923,7 @@ impl TypedProgram {
             PatternCtor::Pointer => writ.write_str("<ptr>"),
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
             PatternCtor::FunctionPointer => writ.write_str("fn*"),
+            PatternCtor::Array => writ.write_str("<array>"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;
                 self.display_pattern_ctor(*inner, writ)

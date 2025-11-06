@@ -1,7 +1,9 @@
+#include <string.h>
+#include <sys/mman.h>
 typedef struct {
-    long *x;
-    long y;
-    long z;
+  long *x;
+  long y;
+  long z;
 } Point;
 
 Point make_point() {
@@ -13,5 +15,7 @@ Point make_point() {
 }
 
 int main() {
+  off_t asdf;
+  void *addr = mmap(NULL, 1024, );
   return 0;
 }

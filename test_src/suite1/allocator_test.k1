@@ -1,7 +1,7 @@
 ns allocator_test;
 
 fn test(): unit {
-  let* a = core/Arena/new(initialMb = 1);
+  let* a = core/Arena/default();
 
   let b = a.push(true);
   let p = a.push({ x: 10, y: 10 });
@@ -9,6 +9,6 @@ fn test(): unit {
   assert(s.len() == 13);
   assertEquals(s.*, "Hello, memory");
 
-  a.freeAll();
+  a.release();
 
 }

@@ -87,6 +87,6 @@ fn testPosix(): unit {
     println("Nonexistent command isOk(): {failStatus.isOk()}");
 }
 
-fn main(): unit {
+fn mainTmp(): unit {
     test();
 }

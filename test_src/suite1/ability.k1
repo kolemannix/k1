@@ -21,7 +21,7 @@ ability Codec {
 impl Codec for string {
   fn aConst(): u8 { 10 }
   fn write(self: string): View[u8] {
-    self.view().toByteView()
+    self.view().asByteView()
   }
   fn read(buffer: View[u8]): string {
     string/fromBytes(buffer)

@@ -2125,13 +2125,23 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         &mut self,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
-        let Some(hash_token) = self.maybe_consume_next(K::Hash) else { return Ok(None) };
-        let maybe_directive = self.peek();
-        match self.parse_static_expr(hash_token, maybe_directive, true, condition)? {
-            Some(static_expr_id) => Ok(Some(static_expr_id)),
-            None => {
-                Err(error_expected("static definition (e.g. #static or #meta)", maybe_directive))
+        let (maybe_hash, maybe_directive) = self.peek_two();
+        if maybe_hash.kind == K::Hash {
+            // Leave `#debug` entirely alone
+            if self.get_token_chars(maybe_directive) == "debug" {
+                Ok(None)
+            } else {
+                self.advance();
+                match self.parse_static_expr(maybe_hash, maybe_directive, true, condition)? {
+                    Some(static_expr_id) => Ok(Some(static_expr_id)),
+                    None => Err(error_expected(
+                        "static definition (e.g. #static or #meta)",
+                        maybe_directive,
+                    )),
+                }
             }
+        } else {
+            Ok(None)
         }
     }
 

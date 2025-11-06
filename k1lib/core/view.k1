@@ -105,8 +105,8 @@ ns View {
     { buffer: self.buffer.toCharBuffer() }
   }
 
-  fn toByteView(self: View[char]): View[byte] {
-    { buffer: self.buffer.toByteBuffer() }
+  fn asByteView(self: View[char]): View[byte] {
+    { buffer: self.buffer.asByteBuffer() }
   }
 
 }

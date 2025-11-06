@@ -1084,6 +1084,10 @@ impl TypedProgram {
                 self.unify_and_find_substitutions_rec(passed_type, static_slot.inner_type_id)
             }
             _ if passed_type == slot_type => TypeUnificationResult::Matching,
+            // --------------- MISS CASES: further cases for better error information ---------------------
+            (passed_type, Type::Reference(_passed_t)) if passed_type.as_reference().is_none() => {
+                TypeUnificationResult::NonMatching("Consider passing a reference")
+            }
             _ => {
                 debug!("  -> Non-Matching");
                 TypeUnificationResult::NonMatching("Unrelated types")
