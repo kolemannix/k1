@@ -128,10 +128,10 @@ ns Buffer {
 
   fn copyFrom[T](src: Buffer[T], dst: Buffer[T]): unit {
     if src.len > dst.len {
-      crash("Buffer copy dest index out of bounds: {src.len} > {dst.len}")
+      crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
     };
     let numBytes = bufferSizeBytes[T](src.len);
-    mem/copy(dst = dst.dataPointer(), src = src.dataPointer(), count = src.len);
+    mem/copy(dst = dst.dataPointer(), src = src.dataPointer(), count = numBytes);
     ()
   }
 

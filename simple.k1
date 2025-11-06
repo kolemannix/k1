@@ -16,7 +16,7 @@ ns SpillList {
 
   fn len[T, N: static uword](self: SpillList[T, N]): uword {
     switch self {
-      .Inline(fixlist) -> fixlist.used,
+      .Inline(fixlist) -> fixlist.len(),
       .Spilled(list) -> list.len,
     }
   }
@@ -29,9 +29,9 @@ ns SpillList {
   }
 
   fn _spill[T, N: static uword](fixlist: *mut FixList[T, N]): List[T] {
-    let* list = List/withCapacity[T](fixlist.used * 2);
+    let* list = List/withCapacity[T](fixlist.len() * 2);
 
-    let srcBuffer = fixlist.inner*.asBuffer();
+    let srcBuffer = fixlist.data*.asBuffer();
     list.appendBuffer(srcBuffer);
     eprintln("Spilled to a list of cap {list.cap()}");
     //eprintln("Items: {list.*}");

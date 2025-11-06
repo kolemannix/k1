@@ -84,24 +84,24 @@ fn bufferConcat(): unit {
   let buf2 = Buffer/filled(2, 2);
 
   let combined = buf1.concat(buf2);
-  assert(combined.len == 4);
-  assert(combined.get(0) == 1);
-  assert(combined.get(1) == 1);
-  assert(combined.get(2) == 2);
-  assert(combined.get(3) == 2);
+  assertEquals(combined.len, 4);
+  assertEquals(combined.get(0), 1);
+  assertEquals(combined.get(1), 1);
+  assertEquals(combined.get(2), 2);
+  assertEquals(combined.get(3), 2);
 }
 
 fn bufferSwap(): unit {
   let* buf = Buffer/filled(3, 0);
-  buf.*.set(0, 10);
-  buf.*.set(1, 20);
-  buf.*.set(2, 30);
+  buf.set(0, 10);
+  buf.set(1, 20);
+  buf.set(2, 30);
 
   buf.swap(0, 2);
 
-  assert(buf.*.get(0) == 30);
-  assert(buf.*.get(1) == 20);
-  assert(buf.*.get(2) == 10);
+  assertEquals(buf.get(0), 30);
+  assertEquals(buf.get(1), 20);
+  assertEquals(buf.get(2), 10);
 }
 
 fn bufferClone(): unit {
