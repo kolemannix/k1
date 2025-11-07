@@ -2183,7 +2183,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.k1.exprs.get(expr_id);
-        let span = expr.get_span();
+        let span = self.k1.exprs.get_span(expr_id);
 
         // TODO: push debug log level for debugged exprs in codegen as well
         // #[cfg(debug_assertions)]
@@ -2443,7 +2443,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .codegen_expr_basic_value(enum_get_tag.enum_expr_or_reference)?
                     .into_pointer_value();
                 let enum_type_id = self.k1.types.get_type_id_dereferenced(
-                    self.k1.exprs.get(enum_get_tag.enum_expr_or_reference).get_type(),
+                    self.k1.exprs.get_type(enum_get_tag.enum_expr_or_reference),
                 );
                 let enum_llvm_type = self.codegen_type(enum_type_id)?.expect_enum();
                 let enum_tag_value = self.get_enum_tag(enum_llvm_type.tag_type, enum_value);
@@ -2451,7 +2451,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 let target_expr_type_id =
-                    self.k1.exprs.get(enum_get_payload.enum_variant_expr).get_type();
+                    self.k1.exprs.get_type(enum_get_payload.enum_variant_expr);
                 let enum_type = self.k1.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
                 let enum_value =
@@ -2709,7 +2709,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
                 let fn_value =
-                    self.lambda_functions.get(&self.k1.get_expr_type_id(cast.base_expr)).unwrap();
+                    self.lambda_functions.get(&self.k1.exprs.get_type(cast.base_expr)).unwrap();
                 let fn_ptr = fn_value.as_global_value().as_pointer_value();
 
                 let lam_obj = self.builtin_types.dynamic_lambda_object.get_undef();
@@ -3463,8 +3463,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                 };
 
-                let value_type =
-                    self.codegen_type(self.k1.exprs.get(assignment.value).get_type())?;
+                let value_type = self.codegen_type(self.k1.exprs.get_type(assignment.value))?;
                 self.store_k1_value(&value_type, lhs_pointer, rhs);
                 Ok(self.builtin_types.unit_basic().into())
             }

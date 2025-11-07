@@ -727,7 +727,7 @@ pub fn compile_top_level_expr(
     b.push_block(name);
 
     let _result = compile_expr(&mut b, None, expr)?;
-    let return_pt = match b.type_to_inst_kind(b.k1.exprs.get(expr).get_type()) {
+    let return_pt = match b.type_to_inst_kind(b.k1.exprs.get_type(expr)) {
         InstKind::Value(pt) => Some(pt),
         InstKind::Void => None,
         InstKind::Terminator => None,
@@ -1148,7 +1148,7 @@ fn compile_expr(
     expr: TypedExprId,
 ) -> TyperResult<Value> {
     let prev_span = b.cur_span;
-    b.cur_span = b.k1.exprs.get(expr).get_span();
+    b.cur_span = b.k1.exprs.get_span(expr);
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr).clone();
     debug!("compiling {} {}", e.kind_str(), b.k1.expr_to_string(expr));
@@ -1835,7 +1835,7 @@ fn compile_expr(
             let enum_base = compile_expr(b, None, e_get_tag.enum_expr_or_reference)?;
             let enum_type =
                 b.k1.types
-                    .get_type_dereferenced(b.k1.get_expr_type_id(e_get_tag.enum_expr_or_reference))
+                    .get_type_dereferenced(b.k1.exprs.get_type(e_get_tag.enum_expr_or_reference))
                     .expect_enum();
             let tag_type = enum_type.tag_type;
             let tag_scalar = b.get_physical_type(tag_type);
@@ -1859,7 +1859,7 @@ fn compile_expr(
 
             let variant_type =
                 b.k1.types
-                    .get_type_dereferenced(b.k1.get_expr_type_id(e_get_payload.enum_variant_expr))
+                    .get_type_dereferenced(b.k1.exprs.get_type(e_get_payload.enum_variant_expr))
                     .expect_enum_variant();
             let variant_pt = b.get_physical_type(variant_type.my_type_id).expect_agg();
             let variant_payload = variant_type.payload;
@@ -2180,7 +2180,7 @@ fn compile_arith_binop(
     let rhs = compile_expr(b, None, call.args[1])?;
     use IntrinsicArithOpClass as Class;
     use IntrinsicArithOpOp as Op;
-    let lhs_type = b.k1.get_expr_type_id(call.args[0]);
+    let lhs_type = b.k1.exprs.get_type(call.args[0]);
     let lhs_width = b.k1.types.get_layout(lhs_type).size_bits() as u8;
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
@@ -2326,7 +2326,7 @@ fn compile_matching_condition(
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                if b.k1.get_expr_type_id(*value) == NEVER_TYPE_ID {
+                if b.k1.exprs.get_type(*value) == NEVER_TYPE_ID {
                     return Ok(());
                 }
                 let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
@@ -2376,7 +2376,7 @@ pub fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnitId) -> Option
 pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnitId) -> SpanId {
     match unit {
         CompilableUnitId::Function(function_id) => k1.get_function_span(function_id),
-        CompilableUnitId::Expr(typed_expr_id) => k1.exprs.get(typed_expr_id).get_span(),
+        CompilableUnitId::Expr(typed_expr_id) => k1.exprs.get_span(typed_expr_id),
     }
 }
 
@@ -2611,7 +2611,7 @@ pub fn display_unit_name(
             k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), "/", true);
         }
         CompilableUnitId::Expr(typed_expr_id) => {
-            let expr_span = k1.exprs.get(typed_expr_id).get_span();
+            let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
         }
@@ -2630,7 +2630,7 @@ pub fn display_unit(
             k1.write_ident(w, k1.functions.get(function_id).name)?;
         }
         CompilableUnitId::Expr(typed_expr_id) => {
-            let expr_span = k1.exprs.get(typed_expr_id).get_span();
+            let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
         }

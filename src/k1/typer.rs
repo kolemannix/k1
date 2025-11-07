@@ -1511,6 +1511,7 @@ impl TypedExpr {
         }
     }
 
+    // nocommit delete get_type
     pub fn get_type(&self) -> TypeId {
         match self {
             TypedExpr::Struct(struc) => struc.type_id,
@@ -2859,7 +2860,7 @@ impl TypedProgram {
                 }
             }
             TypedStmt::Assignment(assgn) => {
-                if self.exprs.get(assgn.value).get_type() == NEVER_TYPE_ID {
+                if self.exprs.get_type(assgn.value) == NEVER_TYPE_ID {
                     NEVER_TYPE_ID
                 } else {
                     UNIT_TYPE_ID
@@ -2878,7 +2879,7 @@ impl TypedProgram {
 
     pub fn get_stmt_span(&self, stmt: TypedStmtId) -> SpanId {
         match self.stmts.get(stmt) {
-            TypedStmt::Expr(e, _ty) => self.exprs.get(*e).get_span(),
+            TypedStmt::Expr(e, _ty) => self.exprs.get_span(*e),
             TypedStmt::Let(val_def) => val_def.span,
             TypedStmt::Assignment(assgn) => assgn.span,
             TypedStmt::Require(req) => req.span,
@@ -2898,7 +2899,7 @@ impl TypedProgram {
     }
 
     fn add_expr_id_to_block(&mut self, block: &mut TypedBlock, expr: TypedExprId) {
-        let ty = self.exprs.get(expr).get_type();
+        let ty = self.exprs.get_type(expr);
         self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
     }
 
@@ -3483,8 +3484,8 @@ impl TypedProgram {
             }
             ParsedTypeExpr::TypeOf(tof) => {
                 let expr = self.eval_expr(tof.target_expr, EvalExprContext::make(scope_id))?;
-                let ty = self.exprs.get(expr);
-                Ok(ty.get_type())
+                let ty = self.exprs.get_type(expr);
+                Ok(ty)
             }
             ParsedTypeExpr::TypeFromId(type_from_id) => {
                 let type_from_id = *type_from_id;
@@ -4692,7 +4693,7 @@ impl TypedProgram {
         expr: TypedExprId,
         scope_id: ScopeId,
     ) -> CheckExprTypeResult<'a> {
-        let actual_type_id = self.exprs.get(expr).get_type();
+        let actual_type_id = self.exprs.get_type(expr);
 
         let check_result = self.check_types(expected, actual_type_id, scope_id);
         let Err(msg) = check_result else { return CheckExprTypeResult::Ok };
@@ -4718,7 +4719,7 @@ impl TypedProgram {
             (Type::Static(expected_static), None) => {
                 if expected_static.inner_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                        let static_lifted_type = self.exprs.get(static_lifted).get_type();
+                        let static_lifted_type = self.exprs.get_type(static_lifted);
                         return match self.check_types(expected, static_lifted_type, scope_id) {
                             Err(msg) => CheckExprTypeResult::Err(format!(
                                 "Static lift resulted in wrong value: {msg}"
@@ -4736,7 +4737,7 @@ impl TypedProgram {
         // If we expect a lambda object and you pass a lambda
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
             if let Type::Lambda(lambda_type) = self.get_expr_type(expr) {
-                let span = self.exprs.get(expr).get_span();
+                let span = self.exprs.get_span(expr);
                 let lambda_object_type = self.types.add_lambda_object(
                     &self.ast.idents,
                     lambda_type.function_type,
@@ -4766,7 +4767,7 @@ impl TypedProgram {
             if let TypedExpr::FunctionPointer(fun_ref) = self.exprs.get(expr) {
                 let lambda_object =
                     self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
-                let lambda_object_type = self.exprs.get(lambda_object).get_type();
+                let lambda_object_type = self.exprs.get_type(lambda_object);
                 if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
                     return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj".into());
                 }
@@ -4843,7 +4844,7 @@ impl TypedProgram {
         );
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
-                let span = self.exprs.get(expr).get_span();
+                let span = self.exprs.get_span(expr);
                 Err(TyperError { message: msg, span, level: ErrorLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
@@ -5139,7 +5140,7 @@ impl TypedProgram {
                 if let Some(function_id) = call.callee.maybe_function_id() {
                     let function = self.functions.get(function_id);
                     if let Some(IntrinsicOperation::Zeroed) = function.intrinsic_type {
-                        let return_type_id = self.exprs.get(expr_id).get_type();
+                        let return_type_id = self.exprs.get_type(expr_id);
                         let static_value_id =
                             self.static_values.add(StaticValue::Zero(return_type_id));
                         Ok(Some(static_value_id))
@@ -5195,7 +5196,7 @@ impl TypedProgram {
         let expr = self.exprs.add_tmp(TypedExpr::Block(typed_block));
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
-        let required_type_id = self.exprs.get(expr).get_type();
+        let required_type_id = self.exprs.get_type(expr);
         let output_type_id =
             if static_ctx.is_metaprogram { STRING_TYPE_ID } else { required_type_id };
 
@@ -6322,12 +6323,9 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_expr_type_id(&self, expr_id: TypedExprId) -> TypeId {
-        self.exprs.get(expr_id).get_type()
-    }
-
+    // nocommit determine this function's fate
     pub fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
-        self.types.get(self.exprs.get(expr_id).get_type())
+        self.types.get(self.exprs.get_type(expr_id))
     }
 
     fn eval_field_access(
@@ -6396,7 +6394,7 @@ impl TypedProgram {
                     return failf!(
                         field_access.span,
                         "{name} must be used on a reference; this is a {}",
-                        self.type_id_to_string(self.exprs.get(base_expr).get_type())
+                        self.type_id_to_string(self.exprs.get_type(base_expr))
                     );
                 }
             };
@@ -6435,7 +6433,7 @@ impl TypedProgram {
         }
 
         let base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
-        let base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr_type = self.exprs.get_type(base_expr);
 
         // Optional fork case: .tag enum special accessor
         if field_access.field_name == self.ast.idents.b.tag {
@@ -6658,7 +6656,7 @@ impl TypedProgram {
                         e
                     })?;
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
-        let try_value_type = self.get_expr_type_id(try_value_original_expr);
+        let try_value_type = self.exprs.get_type(try_value_original_expr);
         let value_try_impl =
             self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
@@ -6755,7 +6753,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
-        let operand_type = self.exprs.get(operand_expr).get_type();
+        let operand_type = self.exprs.get_type(operand_expr);
         let _unwrap_impl = self.expect_ability_implementation(
             operand_type,
             UNWRAP_ABILITY_ID,
@@ -6786,7 +6784,7 @@ impl TypedProgram {
             None => None,
         };
         let base_expr = self.eval_expr(operand, ctx.with_expected_type(inner_expected_type))?;
-        let base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr_type = self.exprs.get_type(base_expr);
         let reference_type = self.types.get(base_expr_type).as_reference().ok_or_else(|| {
             errf!(
                 span,
@@ -7227,7 +7225,7 @@ impl TypedProgram {
                             errf!(e.span, "List element had incorrect type: {}", e.message)
                         })?,
                 };
-                let this_element_type = self.exprs.get(element_expr_checked).get_type();
+                let this_element_type = self.exprs.get_type(element_expr_checked);
                 if element_type.is_none() {
                     // Erase static type info
                     let chased_type = self.types.get_chased_id(this_element_type);
@@ -7321,7 +7319,7 @@ impl TypedProgram {
                     )?
                 }
             };
-            let type_id = self.exprs.get(push_call).get_type();
+            let type_id = self.exprs.get_type(push_call);
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
             self.push_block_stmt_id(&mut list_lit_block, push_stmt);
         }
@@ -7397,7 +7395,7 @@ impl TypedProgram {
                 None,
             );
             let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx.scope_id)?;
-            let variable_type = self.exprs.get(variable_expr).get_type();
+            let variable_type = self.exprs.get_type(variable_expr);
             match self.types.get_no_follow_static(variable_type) {
                 Type::Static(stat) => {
                     if let Some(value_id) = stat.value_id {
@@ -7628,7 +7626,7 @@ impl TypedProgram {
                 Some(expr) => *expr,
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
-            let expr_type = self.exprs.get(expr).get_type();
+            let expr_type = self.exprs.get_type(expr);
             if expr_type == NEVER_TYPE_ID {
                 return failf!(ast_field.span, "never is not allowed in struct literals");
             }
@@ -7723,7 +7721,7 @@ impl TypedProgram {
                         e.message
                     )
                 })?;
-            let expr_type = self.exprs.get(expr).get_type();
+            let expr_type = self.exprs.get_type(expr);
             if expr_type == NEVER_TYPE_ID {
                 return failf!(passed_field.span, "never is not allowed in struct literals");
             }
@@ -8370,7 +8368,7 @@ impl TypedProgram {
         let match_result_type = arms
             .iter()
             .find_map(|arm| {
-                let conseqent_type = self.exprs.get(arm.consequent_expr).get_type();
+                let conseqent_type = self.exprs.get_type(arm.consequent_expr);
                 if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
             })
             .unwrap_or(NEVER_TYPE_ID);
@@ -8397,8 +8395,8 @@ impl TypedProgram {
 
         let mut all_unguarded_patterns: FixVec<(TypedPatternId, usize), MemTmp> =
             self.tmp.new_vec(cases.iter().map(|pc| pc.patterns.len() as u32).sum());
-        let target_expr_type = self.exprs.get(target_expr).get_type();
-        let target_expr_span = self.exprs.get(target_expr).get_span();
+        let target_expr_type = self.exprs.get_type(target_expr);
+        let target_expr_span = self.exprs.get_span(target_expr);
         for parsed_case in cases.iter() {
             let mut arm_patterns: SV2<TypedPatternId> =
                 SmallVec::with_capacity(parsed_case.patterns.len());
@@ -8493,7 +8491,7 @@ impl TypedProgram {
                     ctx.with_scope(arm_scope_id).with_expected_type(expected_arm_type_id),
                     true,
                 )?;
-                let consequent_expr_type = self.exprs.get(consequent_expr).get_type();
+                let consequent_expr_type = self.exprs.get_type(consequent_expr);
 
                 if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
                     expected_arm_type_id = Some(consequent_expr_type);
@@ -8595,7 +8593,7 @@ impl TypedProgram {
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
-        let target_expr_type = self.exprs.get(target_expr).get_type();
+        let target_expr_type = self.exprs.get_type(target_expr);
         let pat = self.patterns.get(pattern);
         match pat {
             TypedPattern::Struct(struct_pattern) => {
@@ -8828,7 +8826,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let base_expr = self.eval_expr(cast.base_expr, ctx.with_no_expected_type())?;
-        let base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr_type = self.exprs.get_type(base_expr);
         let target_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
         if base_expr_type == target_type {
             return failf!(cast.span, "Useless cast");
@@ -8980,8 +8978,8 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.b.it);
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
-        let iterable_type = self.exprs.get(iterable_expr).get_type();
-        let iterable_span = self.exprs.get(iterable_expr).get_span();
+        let iterable_type = self.exprs.get_type(iterable_expr);
+        let iterable_span = self.exprs.get_span(iterable_expr);
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
@@ -9112,7 +9110,7 @@ impl TypedProgram {
                 outer_for_expr_ctx,
                 false,
             )?;
-            let size_hint_ret_type = self.exprs.get(size_hint_call).get_type();
+            let size_hint_ret_type = self.exprs.get_type(size_hint_call);
             let size_hint_lower_bound =
                 self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
                     struct_type: size_hint_ret_type,
@@ -9315,7 +9313,7 @@ impl TypedProgram {
         )?;
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
-        let consequent_type = self.exprs.get(consequent).get_type();
+        let consequent_type = self.exprs.get_type(consequent);
 
         let cons_never = consequent_type == NEVER_TYPE_ID;
 
@@ -9330,7 +9328,7 @@ impl TypedProgram {
         } else {
             consequent
         };
-        let consequent_type = self.exprs.get(consequent).get_type();
+        let consequent_type = self.exprs.get_type(consequent);
 
         let alternate = if let Some(parsed_alt) = if_expr.alt {
             let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
@@ -9338,8 +9336,8 @@ impl TypedProgram {
         } else {
             self.synth_unit(if_expr.span)
         };
-        let alternate_type = self.exprs.get(alternate).get_type();
-        let alternate_span = self.exprs.get(alternate).get_span();
+        let alternate_type = self.exprs.get_type(alternate);
+        let alternate_span = self.exprs.get_span(alternate);
 
         let cons_never = consequent_type == NEVER_TYPE_ID; // By now, consequent could be 'unit'
         let alt_never = alternate_type == NEVER_TYPE_ID;
@@ -9448,7 +9446,7 @@ impl TypedProgram {
                     }
                 }
                 MatchingConditionInstr::Cond { value } => {
-                    if self.exprs.get(*value).get_type() == NEVER_TYPE_ID {
+                    if self.exprs.get_type(*value) == NEVER_TYPE_ID {
                         return true;
                     }
                 }
@@ -9481,7 +9479,7 @@ impl TypedProgram {
                 let target_expr = is_expr.target_expression;
                 let pattern = is_expr.pattern;
                 let target = self.eval_expr(target_expr, ctx)?;
-                let target_type = self.exprs.get(target).get_type();
+                let target_type = self.exprs.get_type(target);
                 let target_var = self.synth_variable_defn_simple(
                     self.ast.idents.b.if_target,
                     target,
@@ -9527,7 +9525,7 @@ impl TypedProgram {
                 let span = other.get_span();
                 let condition =
                     self.eval_expr(parsed_expr_id, ctx.with_expected_type(Some(BOOL_TYPE_ID)))?;
-                let condition_type = self.exprs.get(condition).get_type();
+                let condition_type = self.exprs.get_type(condition);
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition_type, ctx.scope_id) {
                     return failf!(span, "Expected boolean condition: {msg}");
                 };
@@ -9547,7 +9545,7 @@ impl TypedProgram {
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
         let matching_condition = self.eval_matching_condition(expr_id, condition_ctx)?;
         let condition_span = matching_condition.span;
-        let span = self.ast.exprs.get(expr_id).get_span();
+        let span = self.ast.exprs.get_span(expr_id);
         let true_arm = TypedMatchArm {
             condition: matching_condition,
             consequent_expr: self.synth_bool(true, span),
@@ -9670,7 +9668,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         // LHS must implement Unwrap and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
-        let lhs_type = self.exprs.get(lhs).get_type();
+        let lhs_type = self.exprs.get_type(lhs);
         let unwrap_impl = self
             .expect_ability_implementation(lhs_type, UNWRAP_ABILITY_ID, ctx.scope_id, span)
             .map_err(|e| {
@@ -9684,7 +9682,7 @@ impl TypedProgram {
         let output_type = self.named_types.get_nth(unwrap_impl.impl_arguments, 0).type_id;
 
         let rhs = self.eval_expr(rhs, ctx.with_expected_type(Some(output_type)))?;
-        let rhs_type = self.exprs.get(rhs).get_type();
+        let rhs_type = self.exprs.get_type(rhs);
         if let Err(msg) = self.check_types(output_type, rhs_type, ctx.scope_id) {
             return failf!(span, "RHS value incompatible with `Unwrap` output of LHS: {}", msg);
         }
@@ -9983,7 +9981,7 @@ impl TypedProgram {
                 true,
             )?,
         };
-        let return_value_type = self.exprs.get(return_value).get_type();
+        let return_value_type = self.exprs.get_type(return_value);
         if return_value_type == NEVER_TYPE_ID {
             return failf!(
                 span,
@@ -10021,7 +10019,7 @@ impl TypedProgram {
             for deferred_parsed_expr in gathered_defers.into_iter() {
                 let deferred_expr =
                     self.eval_expr(deferred_parsed_expr, ctx.with_no_expected_type())?;
-                let deferred_expr_type_id = self.exprs.get(deferred_expr).get_type();
+                let deferred_expr_type_id = self.exprs.get_type(deferred_expr);
                 self.push_block_stmt(
                     &mut block,
                     TypedStmt::Expr(deferred_expr, deferred_expr_type_id),
@@ -10093,7 +10091,7 @@ impl TypedProgram {
                         }
                     }
                 };
-                let actual_break_type = self.exprs.get(break_value).get_type();
+                let actual_break_type = self.exprs.get_type(break_value);
                 if actual_break_type == NEVER_TYPE_ID {
                     return failf!(
                         call_span,
@@ -10193,7 +10191,7 @@ impl TypedProgram {
                     return failf!(
                         span,
                         "Cannot use .getRef() on this Array since it is not a reference: {}",
-                        self.type_id_to_string(self.exprs.get(base).get_type())
+                        self.type_id_to_string(self.exprs.get_type(base))
                     );
                 }
                 let access_kind = if array_reference_type.is_some() {
@@ -10212,7 +10210,7 @@ impl TypedProgram {
                     array_type.element_type
                 };
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
-                    let static_index_type = self.exprs.get(static_index_expr).get_type();
+                    let static_index_type = self.exprs.get_type(static_index_expr);
                     if let Some(index_usize) = self
                         .get_value_of_static_type(static_index_type)
                         .and_then(|sv| sv.as_uword())
@@ -10364,7 +10362,7 @@ impl TypedProgram {
                 };
             } else if fn_name == self.ast.idents.b.fromStatic {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
-                let base_type_id = self.exprs.get(base_value).get_type();
+                let base_type_id = self.exprs.get_type(base_value);
                 let Some(static_type) = self.types.get_static_type_of_type(base_type_id) else {
                     return failf!(
                         call_span,
@@ -10395,7 +10393,7 @@ impl TypedProgram {
             return Ok(Either::Left(enum_as_result));
         }
 
-        let base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr_type = self.exprs.get_type(base_expr);
         let base_for_method = self.types.get_base_for_method(base_expr_type);
 
         if let Type::Array(_array_type) = self.types.get(base_for_method) {
@@ -10648,7 +10646,7 @@ impl TypedProgram {
         for (arg, param) in passed_args.zip(self.types.mem.getn(ability_fn_type.logical_params())) {
             let arg_and_param = match arg {
                 MaybeTypedExpr::Typed(expr) => {
-                    let type_id = self.exprs.get(expr).get_type();
+                    let type_id = self.exprs.get_type(expr);
                     InferenceInputPair {
                         arg: TypeOrParsedExpr::Type(type_id),
                         param_type: param.type_id,
@@ -10730,7 +10728,7 @@ impl TypedProgram {
         base_expr_id: TypedExprId,
         span: SpanId,
     ) -> TyperResult<Option<TypedExprId>> {
-        let original_type = self.exprs.get(base_expr_id).get_type();
+        let original_type = self.exprs.get_type(base_expr_id);
         let (enum_type, is_reference) = match self.types.get(original_type) {
             Type::Enum(e) => (e, false),
             Type::EnumVariant(ev) => (self.types.get(ev.enum_type_id).expect_enum(), false),
@@ -10776,7 +10774,7 @@ impl TypedProgram {
             Type::Enum(e) => (e, false),
             _ => return Ok(None),
         };
-        let base_expr_type = self.exprs.get(base_expr).get_type();
+        let base_expr_type = self.exprs.get_type(base_expr);
         let span = fn_call.span;
         let variants = e.variants.clone();
         let mut s = std::mem::take(&mut self.buffers.name_builder);
@@ -11208,7 +11206,7 @@ impl TypedProgram {
                 _ => {
                     panic!(
                         "Invalid dynamic function callee: {}",
-                        self.type_id_to_string(self.exprs.get(*dynamic).get_type())
+                        self.type_id_to_string(self.exprs.get_type(*dynamic))
                     )
                 }
             },
@@ -11421,12 +11419,12 @@ impl TypedProgram {
         // evaluated. This simplifies later compiler stages to not have to carve out special cases
         // for divergent expressions
         for (index, arg) in typechecked_arguments.iter().enumerate() {
-            if self.exprs.get(*arg).get_type() == NEVER_TYPE_ID {
+            if self.exprs.get_type(*arg) == NEVER_TYPE_ID {
                 let exprs_so_far = &typechecked_arguments[0..=index];
                 // We'll make a block with N expression statements
                 let mut b = self.synth_block(ctx.scope_id, span);
                 for e in exprs_so_far {
-                    let e_type_id = self.exprs.get(*e).get_type();
+                    let e_type_id = self.exprs.get_type(*e);
                     self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
                 }
                 return Ok(self.exprs.add_tmp(TypedExpr::Block(b)));
@@ -11485,7 +11483,7 @@ impl TypedProgram {
             }
             e => {
                 failf!(
-                    self.exprs.get(expr_id).get_span(),
+                    self.exprs.get_span(expr_id),
                     "Expression type is unsupported for static lift: {}. For more complex values, use a #static expression instead",
                     e.kind_str()
                 )
@@ -11494,11 +11492,11 @@ impl TypedProgram {
         if let Ok(result) = result {
             debug_assert_eq!(
                 self.types
-                    .get_no_follow_static(self.exprs.get(result).get_type())
+                    .get_no_follow_static(self.exprs.get_type(result))
                     .as_static()
                     .unwrap()
                     .inner_type_id,
-                self.exprs.get(expr_id).get_type()
+                self.exprs.get_type(expr_id)
             );
         }
         result
@@ -11946,7 +11944,7 @@ impl TypedProgram {
                 .with_expected_type(Some(specialized_return_type)),
         )?;
 
-        let body_type = self.exprs.get(typed_body).get_type();
+        let body_type = self.exprs.get_type(typed_body);
         if let Err(msg) =
             self.check_types(specialized_return_type, body_type, specialized_function_scope_id)
         {
@@ -11989,7 +11987,7 @@ impl TypedProgram {
                 self.get_span_for_expr_type(typed_match_expr.arms.first().unwrap().consequent_expr)
             }
             TypedExpr::Return(r) => self.get_span_for_expr_type(r.value),
-            e => e.get_span(),
+            _e => self.exprs.get_span(typed_expr_id),
         }
     }
 
@@ -12094,7 +12092,7 @@ impl TypedProgram {
                 };
                 let actual_type = match value_expr {
                     None => None,
-                    Some(value_expr) => Some(self.exprs.get(value_expr).get_type()),
+                    Some(value_expr) => Some(self.exprs.get_type(value_expr)),
                 };
 
                 let variable_type = match actual_type {
@@ -12165,8 +12163,8 @@ impl TypedProgram {
                 }
 
                 let else_body = self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
-                if self.exprs.get(else_body).get_type() != NEVER_TYPE_ID {
-                    let else_span = self.exprs.get(else_body).get_span();
+                if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
+                    let else_span = self.exprs.get_span(else_body);
                     return failf!(else_span, "else branch must diverge; try returning or exiting");
                 }
 
@@ -12187,9 +12185,9 @@ impl TypedProgram {
                     );
                 };
                 let (typed_variable_id, lhs) = self.eval_variable(assignment.lhs, ctx.scope_id)?;
-                let lhs_type = self.exprs.get(lhs).get_type();
+                let lhs_type = self.exprs.get_type(lhs);
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
-                let rhs_type = self.exprs.get(rhs).get_type();
+                let rhs_type = self.exprs.get_type(rhs);
                 if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
                 }
@@ -12209,7 +12207,7 @@ impl TypedProgram {
                 static_assert_size!(parse::StoreStmt, 12);
                 let set_stmt = set_stmt.clone();
                 let lhs = self.eval_expr(set_stmt.lhs, ctx.with_no_expected_type())?;
-                let lhs_type = self.exprs.get(lhs).get_type();
+                let lhs_type = self.exprs.get_type(lhs);
                 let Some(lhs_type) = self.types.get(lhs_type).as_reference() else {
                     return failf!(
                         self.ast.exprs.get_span(set_stmt.lhs),
@@ -12226,7 +12224,7 @@ impl TypedProgram {
                 let expected_rhs = lhs_type.inner_type;
                 let rhs =
                     self.eval_expr(set_stmt.rhs, ctx.with_expected_type(Some(expected_rhs)))?;
-                let rhs_type = self.exprs.get(rhs).get_type();
+                let rhs_type = self.exprs.get_type(rhs);
                 if let Err(msg) = self.check_types(expected_rhs, rhs_type, ctx.scope_id) {
                     return failf!(set_stmt.span, "Invalid type for assignment: {}", msg,);
                 }
@@ -12256,7 +12254,7 @@ impl TypedProgram {
                 } else {
                     self.eval_expr(*expression, ctx)?
                 };
-                let expr_type = self.exprs.get(expr).get_type();
+                let expr_type = self.exprs.get_type(expr);
                 let stmt_id = self.stmts.add(TypedStmt::Expr(expr, expr_type));
                 Ok(Some(stmt_id))
             }
@@ -12339,7 +12337,7 @@ impl TypedProgram {
                     match self.stmts.get(stmt_id) {
                         TypedStmt::Expr(expr, _expr_type_id) => {
                             // Return this expr
-                            let expr_span = self.exprs.get(*expr).get_span();
+                            let expr_span = self.exprs.get_span(*expr);
                             let return_expr = self.exprs.add_tmp(TypedExpr::Return(TypedReturn {
                                 span: expr_span,
                                 value: *expr,
@@ -12384,7 +12382,7 @@ impl TypedProgram {
                             *deferred_parsed_expr,
                             ctx.with_no_expected_type().with_is_defer(true),
                         )?;
-                        let defer_type = self.exprs.get(deferred_code).get_type();
+                        let defer_type = self.exprs.get_type(deferred_code);
                         let defer_stmt_id =
                             self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
                         if terminating {
@@ -12659,7 +12657,7 @@ impl TypedProgram {
                 }
             }
         }?;
-        let never_payload = payload.is_some_and(|p| self.exprs.get(p).get_type() == NEVER_TYPE_ID);
+        let never_payload = payload.is_some_and(|p| self.exprs.get_type(p) == NEVER_TYPE_ID);
         if never_payload {
             // Might as well just codegen the payload expr that wants to exit; we can't put it in
             // a variant and now all downstream code doesn't have to worry about the 'crash
@@ -13518,7 +13516,7 @@ impl TypedProgram {
                         .with_is_generic_pass(is_generic),
                 )?;
                 if let Err(msg) =
-                    self.check_types(return_type, self.exprs.get(block).get_type(), fn_scope_id)
+                    self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
                 {
                     let return_type_span = self.ast.get_type_expr_span(parsed_function_ret_type);
                     return failf!(

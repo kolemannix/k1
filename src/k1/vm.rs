@@ -454,7 +454,7 @@ pub fn execute_compiled_unit(
     _input_parameters: &[(VariableId, StaticValueId)],
 ) -> TyperResult<StaticValueId> {
     let start = k1.timing.clock.raw();
-    let span = k1.exprs.get(expr_id).get_span();
+    let span = k1.exprs.get_span(expr_id);
     vm.eval_span = span;
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
@@ -504,7 +504,7 @@ pub fn execute_compiled_unit(
         match top_ret_info {
             None => Ok(k1.static_values.unit_id()),
             Some(info) => {
-                let expr_type = k1.exprs.get(expr_id).get_type();
+                let expr_type = k1.exprs.get_type(expr_id);
                 let RetPlace::Addr { addr } = info.place else { panic!("We set this to Addr") };
                 let final_value = match info.t {
                     PhysicalType::Scalar(scalar_type) => {

@@ -143,12 +143,13 @@ impl TypedProgram {
                         self_.eval_expr_with_coercion(*parsed_expr, inference_context, false);
                     match evaluation_result {
                         Ok(expr_id) => {
-                            let expr = self_.exprs.get(expr_id);
+                            let expr_type = self_.exprs.get_type(expr_id);
+                            let expr_span = self_.exprs.get_span(expr_id);
                             debug!(
                                 "[infer {infer_depth}] Actual type is: {}",
-                                self_.type_id_to_string(expr.get_type())
+                                self_.type_id_to_string(expr_type)
                             );
-                            (expr.get_type(), expr.get_span())
+                            (expr_type, expr_span)
                         }
                         Err(e) => {
                             // Some expression types, like lambdas, fail really easily if we don't
@@ -497,7 +498,7 @@ impl TypedProgram {
                 let passed_type = match expr {
                     MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
                     MaybeTypedExpr::Typed(expr) => {
-                        TypeOrParsedExpr::Type(self.exprs.get(*expr).get_type())
+                        TypeOrParsedExpr::Type(self.exprs.get_type(*expr))
                     }
                 };
                 InferenceInputPair {
@@ -615,7 +616,7 @@ impl TypedProgram {
                                 p,
                                 ctx.with_expected_type(Some(substituted_param_type)),
                             )?;
-                            let lambda_type = self.exprs.get(the_lambda).get_type();
+                            let lambda_type = self.exprs.get_type(the_lambda);
                             debug!(
                                 "Using a Lambda as an ftp: {}",
                                 self.type_id_to_string(lambda_type)
@@ -624,7 +625,7 @@ impl TypedProgram {
                         }
                         _other => {
                             let expr = self.eval_expr(p, ctx.with_no_expected_type())?;
-                            let type_id = self.exprs.get(expr).get_type();
+                            let type_id = self.exprs.get_type(expr);
                             match self.types.get(type_id) {
                                 Type::Lambda(_) => PhysicalPassedFunction::Lambda(expr, type_id),
                                 Type::LambdaObject(_) => {
@@ -636,7 +637,7 @@ impl TypedProgram {
                                     PhysicalPassedFunction::FunctionPointer(expr)
                                 }
                                 _ => {
-                                    let span = self.exprs.get(expr).get_span();
+                                    let span = self.exprs.get_span(expr);
                                     return failf!(
                                         span,
                                         "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
