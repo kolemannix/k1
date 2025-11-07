@@ -21,7 +21,7 @@ use crate::{
 };
 use crate::{failf, mformat};
 use ahash::HashMapExt;
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
 use itertools::Itertools;
 use log::debug;
 use smallvec::smallvec;

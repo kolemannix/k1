@@ -18,7 +18,7 @@ fn run(input: *mut iword): Pointer {
   input as Pointer
 }
 
-fn testThreads(): i32 {
+fn main(): i32 {
   myvar <- 1000;
   let* arena = Arena/default();
   let input = arena.push(42);

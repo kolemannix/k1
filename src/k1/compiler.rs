@@ -194,8 +194,8 @@ pub struct Args {
     pub write_llvm: bool,
 
     /// No Optimize
-    #[arg(long, default_value_t = false)]
-    pub no_llvm_opt: bool,
+    #[arg(long, default_value_t = true)]
+    pub optimize: bool,
 
     /// Dump Module
     #[arg(long, default_value_t = false)]
@@ -408,6 +408,7 @@ pub fn write_executable(
     out_dir: &Path,
     module_name: &Path,
     extra_options: &[String],
+    optimize: bool,
 ) -> Result<()> {
     let clang_time = std::time::Instant::now();
 
@@ -437,7 +438,13 @@ pub fn write_executable(
         // "-v",
         if debug { "-g" } else { "" },
         if debug { "-fsanitize=address,undefined" } else { "" },
-        if debug { "-O0" } else { "-O3" },
+        if debug {
+            "-O0"
+        } else if optimize {
+            "-O3"
+        } else {
+            "-O0"
+        },
         "-L",
         llvm_lib_base.to_str().unwrap(),
         "-I",
@@ -493,9 +500,7 @@ pub fn codegen_module<'ctx, 'module>(
     out_dir: &Path,
     do_write_executable: bool,
 ) -> Result<Codegen<'ctx, 'module>> {
-    let llvm_optimize = !args.no_llvm_opt;
-
-    let mut codegen = Codegen::create(ctx, typed_module, args.debug, llvm_optimize);
+    let mut codegen = Codegen::create(ctx, typed_module, args.debug, args.optimize);
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_program() {
@@ -512,7 +517,10 @@ pub fn codegen_module<'ctx, 'module>(
         write_program_dump(codegen.k1);
         anyhow::bail!(e)
     }
-    if let Err(e) = codegen.optimize_verify(llvm_optimize) {
+
+    // Sometimes its really nice to inspect optimized IR instead of assembly!
+    let optimize_ir = false;
+    if let Err(e) = codegen.optimize_verify(optimize_ir) {
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
     };
@@ -541,6 +549,7 @@ pub fn codegen_module<'ctx, 'module>(
             out_dir,
             &module_name_path,
             &args.clang_options,
+            args.optimize,
         )?;
     }
 

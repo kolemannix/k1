@@ -917,6 +917,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         LexMode::Interp { brace_depth } => Some(brace_depth),
                         _ => None,
                     };
+                    #[allow(clippy::unnecessary_unwrap)]
                     if (c == '{' || c == '}') && interp_brace_depth.is_some() {
                         let interp_brace_depth = interp_brace_depth.unwrap();
                         if c == '{' {

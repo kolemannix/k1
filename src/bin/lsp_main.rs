@@ -130,7 +130,7 @@ impl Backend {
         let args = k1::compiler::Args {
             no_std: false,
             write_llvm: false,
-            no_llvm_opt: false,
+            optimize: false,
             dump_module: false,
             debug: true,
             profile: false,

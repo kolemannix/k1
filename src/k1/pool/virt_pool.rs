@@ -199,7 +199,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         &mut self.data_mut()[index..end]
     }
 
-    pub fn iter(&self) -> std::slice::Iter<T> {
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.data()[0..self.len].iter()
     }
 

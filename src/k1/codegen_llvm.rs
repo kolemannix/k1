@@ -20,7 +20,6 @@ use inkwell::debug_info::{
     DISubprogram, DISubroutineType, DIType, DWARFEmissionKind, DWARFSourceLanguage,
     DebugInfoBuilder,
 };
-use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
@@ -2250,11 +2249,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(struct_ptr.as_basic_value_enum().into())
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                let name = if cfg!(debug_assertions) {
-                    &format!("struc.{}", self.k1.ast.idents.get_name(field_access.target_field))
-                } else {
-                    ""
-                };
                 let field_index = field_access.field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
                 let struct_physical_type = struct_llvm_type.struct_type;
@@ -2263,7 +2257,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let struct_pointer = struc.into_pointer_value();
                 let field_pointer = self
                     .builder
-                    .build_struct_gep(struct_physical_type, struct_pointer, field_index, name)
+                    .build_struct_gep(struct_physical_type, struct_pointer, field_index, "")
                     .unwrap();
                 // Don't even attempt to load the value for referencing access
                 if field_access.is_reference_through() {
@@ -2274,8 +2268,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     // could be inside a reference, we can't assume this isn't mutable memory just
                     // because our immediate base struct isn't a reference
                     let make_copy = field_access.access_kind == FieldAccessKind::Dereference;
-                    let field_value =
-                        self.load_k1_value(field_type, field_pointer, name, make_copy);
+                    let field_value = self.load_k1_value(field_type, field_pointer, "", make_copy);
                     Ok(field_value.into())
                 }
             }
@@ -2755,26 +2748,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         block
     }
 
-    fn codegen_enum_is_variant(
-        &mut self,
-        enum_value: PointerValue<'ctx>,
-        variant_tag_value: IntValue<'ctx>,
-        variant_name: &str,
-    ) -> IntValue<'ctx> {
-        let enum_tag_value = self.get_enum_tag(variant_tag_value.get_type(), enum_value);
-        let is_equal = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                enum_tag_value,
-                variant_tag_value,
-                "is_variant_cmp",
-            )
-            .unwrap();
-        let is_equal_bool = self.i1_to_bool(is_equal, &format!("is_variant_{}", variant_name));
-        is_equal_bool
-    }
-
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
         self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
     }
@@ -3232,7 +3205,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let variable_id = self.k1.a.get_nth(function.param_variables, index);
         let fn_type = self.k1.types.get(function.type_id).expect_function();
         let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
-        let variable_value = self.variable_to_value.get(&variable_id).unwrap();
+        let variable_value = self.variable_to_value.get(variable_id).unwrap();
         let basic_value =
             self.load_variable_value(&self.codegen_type(param_type.type_id)?, *variable_value);
         Ok(basic_value.into())
@@ -4105,15 +4078,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
-        // if optimize {
-        //     self.llvm_module
-        //         .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
-        //         .unwrap();
-        // } else {
-        //     self.llvm_module
-        //         .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
-        //         .unwrap();
-        // }
+        if optimize {
+            self.llvm_module
+                .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
+                .unwrap();
+        } else {
+            // self.llvm_module
+            //     .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
+            //     .unwrap();
+        }
 
         self.llvm_module.verify().unwrap();
 

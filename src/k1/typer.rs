@@ -58,7 +58,7 @@ use crate::parse::{
     ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
-use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings, vmtw};
+use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
 
 #[cfg(test)]
 mod layout_test;
@@ -1110,7 +1110,6 @@ pub enum FieldAccessKind {
 #[derive(Clone)]
 pub struct FieldAccess {
     pub base: TypedExprId,
-    pub target_field: Ident,
     pub field_index: u32,
     pub result_type: TypeId,
     pub struct_type: TypeId,
@@ -3968,7 +3967,7 @@ impl TypedProgram {
             // int, bool, char
             // Opt[T] -> Opt[char]
             let generic_parent = spec_info.generic_parent;
-            let mut new_type_args = self.tmp.new_vec(spec_info.type_args.len() as u32);
+            let mut new_type_args = self.tmp.new_vec(spec_info.type_args.len());
             for prev_arg in self.types.mem.getn_sv4(spec_info.type_args) {
                 let new_type = self.substitute_in_type(prev_arg, substitution_pairs);
                 new_type_args.push(new_type);
@@ -4664,7 +4663,15 @@ impl TypedProgram {
             (Type::Static(expected_static), None) => {
                 if expected_static.inner_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
-                        return CheckExprTypeResult::Coerce(static_lifted, "static_lift".into());
+                        let static_lifted_type = self.exprs.get(static_lifted).get_type();
+                        return match self.check_types(expected, static_lifted_type, scope_id) {
+                            Err(msg) => CheckExprTypeResult::Err(format!(
+                                "Static lift resulted in wrong value: {msg}"
+                            )),
+                            Ok(_) => {
+                                CheckExprTypeResult::Coerce(static_lifted, "static_lift".into())
+                            }
+                        };
                     }
                 }
             }
@@ -4774,6 +4781,11 @@ impl TypedProgram {
         expr: TypedExprId,
         scope_id: ScopeId,
     ) -> TyperResult<TypedExprId> {
+        debug!(
+            "check_and_coerce `{}`, expected: {}",
+            self.expr_to_string(expr),
+            self.type_id_to_string(expected)
+        );
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get(expr).get_span();
@@ -6802,7 +6814,7 @@ impl TypedProgram {
             debug!(
                 "COMPILED `{}` (hint {})\n`{}`",
                 self_.ast.get_span_content(expr_span),
-                self_.type_id_option_to_string(ctx.expected_type_id),
+                self_.type_id_to_string_opt(ctx.expected_type_id),
                 self_.expr_to_string_with_type(result_expr)
             );
         };
@@ -6818,7 +6830,7 @@ impl TypedProgram {
             "eval_expr_inner: {} (hint {})",
             self.ast.get_span_content(self.ast.exprs.get_span(expr_id)),
             //&self.ast.expr_id_to_string(expr_id),
-            self.type_id_option_to_string(ctx.expected_type_id),
+            self.type_id_to_string_opt(ctx.expected_type_id),
         );
         let expr = self.ast.exprs.get(expr_id);
         match expr {
@@ -11097,27 +11109,6 @@ impl TypedProgram {
             }
         }
         Ok(ArgsAndParams { args: final_args, params: final_params })
-    }
-
-    fn check_call_argument(
-        &mut self,
-        param: &FnParamType,
-        arg: TypedExprId,
-        calling_scope: ScopeId,
-    ) -> TyperResult<TypedExprId> {
-        debug!(
-            "Checking that argument {} has type {}",
-            self.expr_to_string(arg),
-            self.type_id_to_string(param.type_id)
-        );
-        self.check_and_coerce_expr(param.type_id, arg, calling_scope).map_err(|e| {
-            errf!(
-                e.span,
-                "Invalid type for parameter {}\n{}",
-                self.ident_str(param.name),
-                e.message
-            )
-        })
     }
 
     pub fn is_callee_generic(&self, callee: &Callee) -> bool {

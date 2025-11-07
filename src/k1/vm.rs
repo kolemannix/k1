@@ -26,8 +26,8 @@ use crate::{
         StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
         TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
         types::{
-            self, ContainerKind, FloatType, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
-            PhysicalType, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
+            self, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType,
+            STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
         },
     },
 };

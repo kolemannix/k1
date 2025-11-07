@@ -40,23 +40,40 @@ ns FixList {
 
   fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, string] {
     let needed = self.len() + values.len();
-    if needed < self.capacity() {
+    if needed <= self.capacity() {
       let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
       Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
       self.used* <- needed as u32;
       .Ok(())
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
-      .Err("{typename} cannot fulfill push. {needed} (needed) > {self.capacity()}")
+      .Err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
     }
   }
 
   fn pushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): unit {
-    self.tryPushN[T, N](values).unwrap()
+    let result = self.tryPushN[T, N](values);
+    if result is .Err(msg) crash(msg)
   }
 
   fn asView[T, N: static uword](self: *FixList[T, N]): View[T] {
     self.data*.asView().slice(0, self.len())
+  }
+
+  fn get[T, N: static uword](self: *FixList[T, N], index: uword): T {
+    self.toMut.getRef(index).*
+  }
+
+  fn getRef[T, N: static uword](self: *mut FixList[T, N], index: uword): *mut T {
+    if index < self.len() {
+      self.data*.getRef(index)
+    } else {
+      crash("FixList index out of bounds: {index} > {self.len()}")
+    }
+  }
+
+  fn set[T, N: static uword](self: *mut FixList[T, N], index: uword, value: T): unit {
+    self.getRef(index) <- value
   }
 
 }

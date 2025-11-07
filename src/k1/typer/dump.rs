@@ -125,7 +125,7 @@ impl TypedProgram {
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
-    pub fn type_id_option_to_string(&self, type_id: Option<TypeId>) -> String {
+    pub fn type_id_to_string_opt(&self, type_id: Option<TypeId>) -> String {
         type_id.map(|t| self.type_id_to_string(t)).unwrap_or("<no type>".to_string())
     }
 
@@ -566,7 +566,9 @@ impl TypedProgram {
             TypedExpr::StructFieldAccess(field_access) => {
                 self.display_expr_id(field_access.base, w, indentation)?;
                 w.write_str(".")?;
-                self.write_ident(w, field_access.target_field)?;
+                let fields = self.types.get(field_access.struct_type).expect_struct().fields;
+                let name = self.types.mem.get_nth(fields, field_access.field_index as usize).name;
+                self.write_ident(w, name)?;
                 if field_access.is_reference_through() {
                     w.write_char('*')?;
                 }
@@ -870,7 +872,7 @@ impl TypedProgram {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        if cond.patterns.len() == 0 {
+        if cond.patterns.is_empty() {
             writeln!(w, "<no patterns>")?;
         } else {
             writeln!(w, "Patterns: ")?;

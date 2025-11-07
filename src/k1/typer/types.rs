@@ -22,12 +22,6 @@ pub struct StructTypeField {
 }
 impl_copy_if_small!(8, StructTypeField);
 
-#[derive(Debug, Clone)]
-pub struct StructLayout {
-    pub layout: Layout,
-    pub field_offsets: SV8<u32>,
-}
-
 #[derive(Clone)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,

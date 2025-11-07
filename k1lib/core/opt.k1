@@ -5,7 +5,7 @@ ns Opt {
   fn isSome[T](self: ?T): bool { self is .Some(_) }
   fn isNone[T](self: ?T): bool { self is .None }
 
-  fn get[T](self: ?T): T {
+  fn get[T](context locn: compiler/SourceLocation)(self: ?T): T {
     if self is .Some(t) t else {
       crash("Opt.get on None")
     }

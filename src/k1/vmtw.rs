@@ -31,9 +31,9 @@ use crate::{
         TyperResult, VariableExpr, VariableId,
         types::{
             BOOL_TYPE_ID, CHAR_TYPE_ID, ContainerKind, F32_TYPE_ID, F64_TYPE_ID, FloatType,
-            I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID,
-            STRING_TYPE_ID, Type, TypeId, TypePool, TypedEnumVariant, U32_TYPE_ID, U64_TYPE_ID,
-            UNIT_TYPE_ID, UWORD_TYPE_ID,
+            I32_TYPE_ID, I64_TYPE_ID, IWORD_TYPE_ID, IntegerType, POINTER_TYPE_ID, STRING_TYPE_ID,
+            Type, TypeId, TypePool, TypedEnumVariant, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
+            UWORD_TYPE_ID,
         },
     },
 };
@@ -1396,7 +1396,7 @@ fn execute_call(
     let name = function.name;
 
     // Arguments!
-    let param_variables = function.param_variables.clone();
+    let param_variables = function.param_variables;
     let mut param_values: SmallVec<[(VariableId, Value); 8]> = smallvec![];
     let is_lambda = maybe_lambda_env_ptr.is_some();
     let arg_offset = if is_lambda { 1 } else { 0 };
