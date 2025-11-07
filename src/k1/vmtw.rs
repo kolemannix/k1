@@ -462,7 +462,7 @@ pub fn execute_single_expr_with_vm(
         vm.globals.insert(GLOBAL_ID_STATIC, Value::Bool(true));
     }
 
-    let span = m.exprs.get(expr).get_span();
+    let span = m.exprs.get_span(expr);
     vm.eval_span = span;
     vm.stack.push_new_frame(None, Some(span));
 
@@ -527,7 +527,7 @@ macro_rules! execute_expr_return_exit {
 fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperResult<VmResult> {
     vm.eval_depth.fetch_add(1, Ordering::Relaxed);
     let prev = vm.eval_span;
-    vm.eval_span = k1.exprs.get(expr).get_span();
+    vm.eval_span = k1.exprs.get_span(expr);
     let mut vm = scopeguard::guard(vm, |vm| {
         vm.eval_depth.fetch_sub(1, Ordering::Relaxed);
         vm.eval_span = prev;
@@ -706,7 +706,7 @@ fn execute_expr(vm: &mut Vm, k1: &mut TypedProgram, expr: TypedExprId) -> TyperR
             // interpret the base ptr as a ptr to the tag type
             let enum_type = k1
                 .types
-                .get_type_dereferenced(k1.exprs.get(get_tag.enum_expr_or_reference).get_type())
+                .get_type_dereferenced(k1.exprs.get_type(get_tag.enum_expr_or_reference))
                 .expect_enum();
             let tag_value = load_value(vm, k1, enum_type.tag_type, ptr, true)?;
             Ok(tag_value.into())

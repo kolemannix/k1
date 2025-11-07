@@ -528,7 +528,7 @@ impl TypedProgram {
         let mut s = String::new();
         self.display_expr_id(expr, &mut s, 0).unwrap();
         s.push_str(": ");
-        self.display_type_id(&mut s, self.exprs.get(expr).get_type(), false).unwrap();
+        self.display_type_id(&mut s, self.exprs.get_type(expr), false).unwrap();
         s
     }
 
@@ -705,9 +705,7 @@ impl TypedProgram {
                 w.write_char('[')?;
                 let variant = self
                     .types
-                    .get_type_dereferenced(
-                        self.get_expr_type_id(get_payload_expr.enum_variant_expr),
-                    )
+                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.enum_variant_expr))
                     .expect_enum_variant();
                 self.write_ident(w, variant.name)?;
                 w.write_char(']')?;

@@ -58,9 +58,8 @@ impl TypedProgram {
         alternate: TypedExprId,
         span: SpanId,
     ) -> TypedExprId {
-        let condition_expr = self.exprs.get(condition);
-        let condition_diverges = condition_expr.get_type() == NEVER_TYPE_ID;
-        let condition_span = self.exprs.get(condition).get_span();
+        let condition_diverges = self.exprs.get_type(condition) == NEVER_TYPE_ID;
+        let condition_span = self.exprs.get_span(condition);
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
                 patterns,
@@ -96,7 +95,7 @@ impl TypedProgram {
         cast_type: CastType,
         span: Option<SpanId>,
     ) -> TypedExprId {
-        let span = span.unwrap_or_else(|| self.exprs.get(expr).get_span());
+        let span = span.unwrap_or_else(|| self.exprs.get_span(expr));
         self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
             cast_type,
             base_expr: expr,
@@ -111,9 +110,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_optional_some(&mut self, expr_id: TypedExprId) -> (TypedExprId, TypeId) {
-        let expr = self.exprs.get(expr_id);
-        let span = expr.get_span();
-        let inner_type = expr.get_type();
+        let span = self.exprs.get_span(expr_id);
+        let inner_type = self.exprs.get_type(expr_id);
         let optional_type = self.synth_optional_type(inner_type);
         let some_variant = self
             .types
@@ -153,9 +151,8 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
-        let base_expr = self.exprs.get(base);
-        let span = base_expr.get_span();
-        let type_id = self.types.get(base_expr.get_type()).expect_reference().inner_type;
+        let span = self.exprs.get_span(base);
+        let type_id = self.get_expr_type(base).expect_reference().inner_type;
         self.exprs.add_tmp(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
     }
 
@@ -201,9 +198,8 @@ impl TypedProgram {
         is_referencing: bool,
         owner_scope: ScopeId,
     ) -> SynthedVariable {
-        let initializer = self.exprs.get(initializer_id);
-        let initializer_type = initializer.get_type();
-        let span = initializer.get_span();
+        let initializer_type = self.exprs.get_type(initializer_id);
+        let span = self.exprs.get_span(initializer_id);
         let type_id = if is_referencing {
             self.types.add_reference_type(initializer_type, is_mutable)
         } else {
@@ -309,8 +305,8 @@ impl TypedProgram {
         writer: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let span = self.exprs.get(to_print).get_span();
-        let writer_type_id = self.exprs.get(writer).get_type();
+        let span = self.exprs.get_span(to_print);
+        let writer_type_id = self.exprs.get_type(writer);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_Print_printTo.with_span(span),
             &[writer_type_id],
@@ -335,7 +331,7 @@ impl TypedProgram {
             let field = self.types.mem.get_nth(struct_type.fields, index);
             #[cfg(debug_assertions)]
             {
-                let field_expr_type = self.exprs.get(field_expr).get_type();
+                let field_expr_type = self.exprs.get_type(field_expr);
                 if let Err(msg) = self.check_types(field.type_id, field_expr_type, scope_id) {
                     panic!("synthed struct fields failed typechecking: {}", msg)
                 }
@@ -415,7 +411,7 @@ impl TypedProgram {
         value: TypedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let span = self.exprs.get(value).get_span();
+        let span = self.exprs.get_span(value);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_discard.with_span(span),
             &[],
@@ -434,11 +430,11 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let enum_type = self
             .types
-            .get_type_dereferenced(self.get_expr_type_id(enum_expr_or_reference))
+            .get_type_dereferenced(self.exprs.get_type(enum_expr_or_reference))
             .expect_enum();
         let tag_type = enum_type.tag_type;
         let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
-        let span = span.unwrap_or(self.exprs.get(enum_expr_or_reference).get_span());
+        let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
         let get_tag = self.exprs.add_tmp(TypedExpr::EnumGetTag(GetEnumTag {
             enum_expr_or_reference,
             result_type_id: tag_type,
