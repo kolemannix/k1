@@ -34,7 +34,6 @@ fn main(): i32 {
    let tmp = mem/getTempArena();
    println("Size of StringBuilder: {types/sizeOf[StringBuilder]()}");
 
-   testFixList();
    let* sb = StringBuilder/new();
    for IntRange/upTo(128) do {
      if it % 2 == 0 sb.writeChar('a')
@@ -44,17 +43,6 @@ fn main(): i32 {
    assertEquals(s.len(), 128);
    assertEquals(s.get(0), 'a');
    assertEquals(s.get(127), 'b');
-   //{
-   //  let* (sb_2404: *mut List[char]) = withCapacity__char_1(7uword);
-   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
-   //  Print_iword_3_printTo__*mut List[char]_1(1iword, sb_2404);
-   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
-   //  Print_iword_3_printTo__*mut List[char]_1(2iword, sb_2404);
-   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
-   //  Print_iword_3_printTo__*mut List[char]_1(3iword, sb_2404);
-   //  Print_string_3_printTo__*mut List[char]_1("", sb_2404);
-   //  wrapList(sb_2404.*)
-   //}: string;
   "{1} {2} {3}";
   0
 }
