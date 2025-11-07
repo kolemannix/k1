@@ -81,7 +81,7 @@ impl TypedProgram {
             },
             consequent_expr: alternate,
         };
-        self.exprs.add(TypedExpr::Match(TypedMatchExpr {
+        self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
             initial_let_statements: eco_vec![],
             result_type,
             arms: eco_vec![cons_arm, alt_arm],
@@ -97,7 +97,7 @@ impl TypedProgram {
         span: Option<SpanId>,
     ) -> TypedExprId {
         let span = span.unwrap_or_else(|| self.exprs.get(expr).get_span());
-        self.exprs.add(TypedExpr::Cast(TypedCast {
+        self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
             cast_type,
             base_expr: expr,
             target_type_id: target_type,
@@ -122,7 +122,7 @@ impl TypedProgram {
             .variant_by_name(self.ast.idents.b.Some)
             .unwrap();
 
-        let some_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+        let some_expr = self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
             variant_type_id: some_variant.my_type_id,
             variant_index: some_variant.index,
             span,
@@ -141,7 +141,7 @@ impl TypedProgram {
             .expect_enum()
             .variant_by_name(self.ast.idents.b.None)
             .unwrap();
-        let none_expr = self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+        let none_expr = self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
             variant_type_id: none_variant.my_type_id,
             variant_index: none_variant.index,
             span,
@@ -156,7 +156,7 @@ impl TypedProgram {
         let base_expr = self.exprs.get(base);
         let span = base_expr.get_span();
         let type_id = self.types.get(base_expr.get_type()).expect_reference().inner_type;
-        self.exprs.add(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
+        self.exprs.add_tmp(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
     }
 
     pub(super) fn synth_block(&mut self, parent_scope: ScopeId, span: SpanId) -> TypedBlock {
@@ -223,7 +223,7 @@ impl TypedProgram {
         let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
         let variable_id = self.variables.add(variable);
         let variable_expr =
-            self.exprs.add(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));
+            self.exprs.add_tmp(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
@@ -342,7 +342,11 @@ impl TypedProgram {
             }
             fields.push(StructLiteralField { name: field.name, expr: field_expr });
         }
-        self.exprs.add(TypedExpr::Struct(StructLiteral { fields, type_id: struct_type_id, span }))
+        self.exprs.add_tmp(TypedExpr::Struct(StructLiteral {
+            fields,
+            type_id: struct_type_id,
+            span,
+        }))
     }
 
     pub(super) fn synth_string_literal(
@@ -386,7 +390,7 @@ impl TypedProgram {
             type_id: COMPILER_SOURCE_LOC_TYPE_ID,
             span,
         });
-        self.exprs.add(struct_expr)
+        self.exprs.add_tmp(struct_expr)
     }
 
     pub(super) fn synth_crash_call(
@@ -435,7 +439,7 @@ impl TypedProgram {
         let tag_type = enum_type.tag_type;
         let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get(enum_expr_or_reference).get_span());
-        let get_tag = self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
+        let get_tag = self.exprs.add_tmp(TypedExpr::EnumGetTag(GetEnumTag {
             enum_expr_or_reference,
             result_type_id: tag_type,
             span,

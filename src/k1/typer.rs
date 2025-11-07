@@ -2302,6 +2302,60 @@ pub struct ProgramSettings {
 pub struct MemTmp;
 pub struct MemPerm;
 
+pub struct TypedExprPool {
+    // SoA pools
+    pub exprs: VPool<TypedExpr, TypedExprId>,
+    pub type_ids: VPool<TypeId, TypedExprId>,
+    pub spans: VPool<SpanId, TypedExprId>,
+}
+
+impl TypedExprPool {
+    pub fn make_with_hint(hint: usize) -> Self {
+        TypedExprPool {
+            exprs: VPool::make_with_hint("typed_exprs", hint),
+            type_ids: VPool::make_with_hint("typed_expr_type_ids", hint),
+            spans: VPool::make_with_hint("typed_expr_spans", hint),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.exprs.len()
+    }
+
+    pub fn add_tmp(&mut self, expr: TypedExpr) -> TypedExprId {
+        let type_id = expr.get_type();
+        let span = expr.get_span();
+        self.addNEW(expr, type_id, span)
+    }
+
+    pub fn addNEW(&mut self, expr: TypedExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
+        let id = self.exprs.next_id();
+        let id0 = self.type_ids.add(type_id);
+        let id1 = self.spans.add(span);
+        let id2 = self.exprs.add(expr);
+        debug_assert_eq!(id, id0);
+        debug_assert_eq!(id, id1);
+        debug_assert_eq!(id, id2);
+        id
+    }
+
+    pub fn get(&self, id: TypedExprId) -> &TypedExpr {
+        self.exprs.get(id)
+    }
+
+    pub fn get_mut(&mut self, id: TypedExprId) -> &mut TypedExpr {
+        self.exprs.get_mut(id)
+    }
+
+    pub fn get_type(&self, id: TypedExprId) -> TypeId {
+        *self.type_ids.get(id)
+    }
+
+    pub fn get_span(&self, id: TypedExprId) -> SpanId {
+        *self.spans.get(id)
+    }
+}
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     pub program_settings: ProgramSettings,
@@ -2312,7 +2366,7 @@ pub struct TypedProgram {
     pub variables: VPool<Variable, VariableId>,
     pub types: TypePool,
     pub globals: VPool<TypedGlobal, TypedGlobalId>,
-    pub exprs: VPool<TypedExpr, TypedExprId>,
+    pub exprs: TypedExprPool,
     pub calls: VPool<Call, CallId>,
     pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
@@ -2325,7 +2379,8 @@ pub struct TypedProgram {
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
     /// Key is 'self' type
     pub ability_impl_table: FxHashMap<TypeId, Vec<AbilityImplHandle>>,
-    /// Key is base ability id
+    /// Key is base ability id; the order per base is important; we want earlier
+    /// blanket impls to be more specific, and to be tried first
     pub blanket_impls: FxHashMap<AbilityId, EcoVec<AbilityImplId>>,
     pub function_name_to_ability: FxHashMap<Ident, EcoVec<AbilityId>>,
     pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
@@ -2466,7 +2521,7 @@ impl TypedProgram {
             variables: VPool::make_with_hint("typed_variables", 8192),
             types,
             globals: VPool::make_with_hint("typed_globals", 4096),
-            exprs: VPool::make_with_hint("typed_exprs", 65536),
+            exprs: TypedExprPool::make_with_hint(65536),
             calls: VPool::make_with_hint("typed_calls", 32768),
             stmts: VPool::make_with_hint("typed_stmts", 8192 << 1),
             static_values: StaticValuePool::make_with_hint(8192),
@@ -2833,7 +2888,7 @@ impl TypedProgram {
 
     fn add_expr_stmt(&mut self, expr: TypedExpr) -> TypedStmtId {
         let type_id = expr.get_type();
-        let id = self.exprs.add(expr);
+        let id = self.exprs.add_tmp(expr);
         self.stmts.add(TypedStmt::Expr(id, type_id))
     }
 
@@ -4690,7 +4745,7 @@ impl TypedProgram {
                 match self.check_types(expected, lambda_object_type, scope_id) {
                     Ok(_) => {
                         return CheckExprTypeResult::Coerce(
-                            self.exprs.add(TypedExpr::Cast(TypedCast {
+                            self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
                                 cast_type: CastType::LambdaToLambdaObject,
                                 base_expr: expr,
                                 target_type_id: lambda_object_type,
@@ -5137,7 +5192,7 @@ impl TypedProgram {
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let typed_block = self.eval_block(&parsed_expr_as_block, ctx, true)?;
-        let expr = self.exprs.add(TypedExpr::Block(typed_block));
+        let expr = self.exprs.add_tmp(TypedExpr::Block(typed_block));
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
         let required_type_id = self.exprs.get(expr).get_type();
@@ -6247,7 +6302,7 @@ impl TypedProgram {
                         );
                     }
                     let fixup_expr_id =
-                        self.exprs.add(TypedExpr::PendingCapture(PendingCaptureExpr {
+                        self.exprs.add_tmp(TypedExpr::PendingCapture(PendingCaptureExpr {
                             captured_variable_id: variable_id,
                             type_id: v.type_id,
                             resolved_expr: None,
@@ -6256,7 +6311,7 @@ impl TypedProgram {
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
                     Ok((variable_id, fixup_expr_id))
                 } else {
-                    let expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
+                    let expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
                         type_id: v.type_id,
                         variable_id,
                         span: variable_name_span,
@@ -6445,9 +6500,8 @@ impl TypedProgram {
                 } else {
                     target_field.type_id
                 };
-                Ok(self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
+                Ok(self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
                     base: base_expr,
-                    target_field: field_access.field_name,
                     field_index: field_index as u32,
                     result_type,
                     access_kind,
@@ -6481,7 +6535,7 @@ impl TypedProgram {
                     payload_type_id
                 };
 
-                Ok(self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                Ok(self.exprs.add_tmp(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
                     enum_variant_expr: base_expr,
                     result_type_id,
                     variant_index,
@@ -6540,7 +6594,6 @@ impl TypedProgram {
                             )
                         })?;
                     let field_type = target_field.type_id;
-                    let field_name = target_field.name;
                     let opt_unwrap = self.synth_typed_call_typed_args(
                         self.ast.idents.f.Opt_get.with_span(span),
                         &[opt_inner_type],
@@ -6548,15 +6601,15 @@ impl TypedProgram {
                         ctx.with_scope(block_scope).with_no_expected_type(),
                         false,
                     )?;
-                    let field_access = self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
-                        base: opt_unwrap,
-                        target_field: field_name,
-                        field_index: field_index as u32,
-                        span,
-                        access_kind: FieldAccessKind::ValueToValue,
-                        result_type: field_type,
-                        struct_type: opt_inner_type,
-                    }));
+                    let field_access =
+                        self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
+                            base: opt_unwrap,
+                            field_index: field_index as u32,
+                            span,
+                            access_kind: FieldAccessKind::ValueToValue,
+                            result_type: field_type,
+                            struct_type: opt_inner_type,
+                        }));
                     let (consequent, consequent_type_id) = self.synth_optional_some(field_access);
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
@@ -6569,7 +6622,7 @@ impl TypedProgram {
                     );
                     self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
                     self.add_expr_id_to_block(&mut block, if_expr);
-                    Ok(self.exprs.add(TypedExpr::Block(block)))
+                    Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
                 } else {
                     failf!(
                         span,
@@ -6677,9 +6730,9 @@ impl TypedProgram {
             span,
         });
         let make_error_call =
-            self.exprs.add(TypedExpr::Call { call_id, return_type: block_return_type, span });
+            self.exprs.add_tmp(TypedExpr::Call { call_id, return_type: block_return_type, span });
         let return_error_expr =
-            self.exprs.add(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
+            self.exprs.add_tmp(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
         let if_expr = self.synth_if_else(
             MSlice::empty(),
             value_success_type,
@@ -6692,7 +6745,7 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
         self.add_expr_id_to_block(&mut result_block, if_expr);
 
-        Ok(self.exprs.add(TypedExpr::Block(result_block)))
+        Ok(self.exprs.add_tmp(TypedExpr::Block(result_block)))
     }
 
     fn eval_unwrap_operator(
@@ -6741,7 +6794,7 @@ impl TypedProgram {
                 self.type_id_to_string(base_expr_type)
             )
         })?;
-        Ok(self.exprs.add(TypedExpr::Deref(DerefExpr {
+        Ok(self.exprs.add_tmp(TypedExpr::Deref(DerefExpr {
             type_id: reference_type.inner_type,
             target: base_expr,
             span,
@@ -6882,7 +6935,7 @@ impl TypedProgram {
                 } else {
                     STRING_TYPE_ID
                 };
-                let static_expr = self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+                let static_expr = self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
                     value_id: static_value_id,
                     type_id: type_to_use,
                     is_typed_as_static,
@@ -6906,7 +6959,7 @@ impl TypedProgram {
                     ParsedBlockKind::LoopBody => false,
                 };
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
-                Ok(self.exprs.add(TypedExpr::Block(block)))
+                Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
             }
             ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
@@ -7116,7 +7169,7 @@ impl TypedProgram {
     fn add_static_value_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let inner_type_id = self.static_values.get(value_id).get_type();
         let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
-        self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+        self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
             value_id,
             type_id: static_type_id,
             is_typed_as_static: true,
@@ -7126,7 +7179,7 @@ impl TypedProgram {
 
     fn add_static_constant_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let type_id = self.static_values.get(value_id).get_type();
-        self.exprs.add(TypedExpr::StaticValue(StaticConstantExpr {
+        self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
             value_id,
             type_id,
             is_typed_as_static: false,
@@ -7285,7 +7338,7 @@ impl TypedProgram {
             ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
         self.add_expr_id_to_block(&mut list_lit_block, final_expression);
-        Ok(self.exprs.add(TypedExpr::Block(list_lit_block)))
+        Ok(self.exprs.add_tmp(TypedExpr::Block(list_lit_block)))
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
@@ -7313,7 +7366,7 @@ impl TypedProgram {
                 None => self.synth_unit(span),
                 Some(expected) => {
                     let unit_expr = self.synth_unit(span);
-                    self.exprs.add(TypedExpr::Cast(TypedCast {
+                    self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
                         cast_type: CastType::Transmute,
                         base_expr: unit_expr,
                         target_type_id: expected,
@@ -7587,7 +7640,7 @@ impl TypedProgram {
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct =
             StructLiteral { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct)))
+        Ok(self.exprs.add_tmp(TypedExpr::Struct(typed_struct)))
     }
 
     fn eval_expected_struct(
@@ -7746,7 +7799,7 @@ impl TypedProgram {
             type_id: output_struct_type_id,
         };
         let expr = TypedExpr::Struct(typed_struct);
-        Ok(self.exprs.add(expr))
+        Ok(self.exprs.add_tmp(expr))
     }
 
     fn eval_while_loop(
@@ -7783,8 +7836,8 @@ impl TypedProgram {
         // break and return
         let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
 
-        let body_block = self.exprs.add(TypedExpr::Block(body_block));
-        Ok(self.exprs.add(TypedExpr::WhileLoop(WhileLoop {
+        let body_block = self.exprs.add_tmp(TypedExpr::Block(body_block));
+        Ok(self.exprs.add_tmp(TypedExpr::WhileLoop(WhileLoop {
             condition,
             body: body_block,
             type_id: loop_type,
@@ -7812,8 +7865,8 @@ impl TypedProgram {
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
-        let body_block = self.exprs.add(TypedExpr::Block(block));
-        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr {
+        let body_block = self.exprs.add_tmp(TypedExpr::Block(block));
+        Ok(self.exprs.add_tmp(TypedExpr::LoopExpr(LoopExpr {
             body_block,
             break_type: loop_info.break_type.unwrap_or(UNIT_TYPE_ID),
             span: loop_expr.span,
@@ -7899,7 +7952,7 @@ impl TypedProgram {
                 false,
             )?;
             self.add_expr_id_to_block(&mut block, build_call);
-            Ok(self.exprs.add(TypedExpr::Block(block)))
+            Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
         }
     }
 
@@ -7920,17 +7973,15 @@ impl TypedProgram {
             let env_struct_reference_type = k1.types.add_reference_type(env_struct_type, false);
             // Note: Can't capture 2 variables of the same name in a lambda. Might not
             //       actually be a problem
-            let (field_index, env_struct_field) =
+            let (field_index, _env_struct_field) =
                 k1.types.get_struct_field_by_name(env_struct_type, v.name).unwrap();
-            let field_name = env_struct_field.name;
-            let env_variable_expr = k1.exprs.add(TypedExpr::Variable(VariableExpr {
+            let env_variable_expr = k1.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
                 variable_id: environment_param_variable_id,
                 type_id: env_struct_reference_type,
                 span,
             }));
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: env_variable_expr,
-                target_field: field_name,
                 field_index: field_index as u32,
                 result_type: variable_type,
                 struct_type: env_struct_type,
@@ -8057,7 +8108,7 @@ impl TypedProgram {
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
         let name = self.ast.idents.intern(name_string);
 
-        let body_expr_id = self.exprs.add(TypedExpr::Block(body));
+        let body_expr_id = self.exprs.add_tmp(TypedExpr::Block(body));
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
 
@@ -8100,7 +8151,7 @@ impl TypedProgram {
             }
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
-            let expr_id = self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
+            let expr_id = self.exprs.add_tmp(TypedExpr::FunctionPointer(FunctionPointerExpr {
                 function_id: body_function_id,
                 function_pointer_type,
                 span,
@@ -8114,7 +8165,7 @@ impl TypedProgram {
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
             env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
-            let var_expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
+            let var_expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
                 type_id: v.type_id,
                 variable_id: *captured_variable_id,
                 span,
@@ -8125,7 +8176,7 @@ impl TypedProgram {
         let environment_struct_type =
             self.types.add_anon(Type::Struct(StructType { fields: env_fields_handle }));
 
-        let environment_struct = self.exprs.add(TypedExpr::Struct(StructLiteral {
+        let environment_struct = self.exprs.add_tmp(TypedExpr::Struct(StructLiteral {
             fields: env_exprs,
             type_id: environment_struct_type,
             span: body_span,
@@ -8150,7 +8201,7 @@ impl TypedProgram {
         typed_params.insert(0, environment_param);
         param_variables.insert(0, environment_param_variable_id);
 
-        let environment_param_access_expr = self.exprs.add(TypedExpr::Variable(VariableExpr {
+        let environment_param_access_expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
             variable_id: param_variables[0],
             type_id: POINTER_TYPE_ID,
             span: body_span,
@@ -8242,7 +8293,7 @@ impl TypedProgram {
             ctx.is_inference(),
             body_function_id
         );
-        Ok(self.exprs.add(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
+        Ok(self.exprs.add_tmp(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
     }
 
     fn ensure_parsed_expr_to_block(
@@ -8323,7 +8374,7 @@ impl TypedProgram {
                 if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
             })
             .unwrap_or(NEVER_TYPE_ID);
-        Ok(self.exprs.add(TypedExpr::Match(TypedMatchExpr {
+        Ok(self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
             initial_let_statements: eco_vec![match_subject_variable.defn_stmt],
             result_type: match_result_type,
             arms,
@@ -8566,9 +8617,8 @@ impl TypedProgram {
                         pattern_field.field_type_id
                     };
                     let get_struct_field =
-                        self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
+                        self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
                             base: target_expr,
-                            target_field: pattern_field.name,
                             field_index: pattern_field.field_index,
                             result_type,
                             struct_type,
@@ -8632,7 +8682,7 @@ impl TypedProgram {
                     } else {
                         variant_type_id
                     };
-                    let enum_as_variant = self.exprs.add(TypedExpr::Cast(TypedCast {
+                    let enum_as_variant = self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
                         cast_type: if is_referencing {
                             CastType::ReferenceToReference
                         } else {
@@ -8643,7 +8693,7 @@ impl TypedProgram {
                         span: enum_pattern.span,
                     }));
                     let get_payload_expr =
-                        self.exprs.add(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                        self.exprs.add_tmp(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
                             enum_variant_expr: enum_as_variant,
                             result_type_id,
                             variant_index,
@@ -8915,7 +8965,7 @@ impl TypedProgram {
                 self.type_id_to_string(target_type).blue()
             ),
         }?;
-        Ok(self.exprs.add(TypedExpr::Cast(TypedCast {
+        Ok(self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
             base_expr,
             target_type_id: target_type,
             cast_type,
@@ -8934,6 +8984,7 @@ impl TypedProgram {
         let iterable_span = self.exprs.get(iterable_expr).get_span();
         let body_span = for_expr.body_block.span;
 
+        // Project: Kill all this with the macro system
         let (target_is_iterator, item_type) = match self.expect_ability_implementation(
             iterable_type,
             ITERABLE_ABILITY_ID,
@@ -9062,15 +9113,15 @@ impl TypedProgram {
                 false,
             )?;
             let size_hint_ret_type = self.exprs.get(size_hint_call).get_type();
-            let size_hint_lower_bound = self.exprs.add(TypedExpr::StructFieldAccess(FieldAccess {
-                struct_type: size_hint_ret_type,
-                base: size_hint_call,
-                target_field: get_ident!(self, "atLeast"),
-                field_index: 0,
-                result_type: UWORD_TYPE_ID,
-                access_kind: FieldAccessKind::ValueToValue,
-                span: iterable_span,
-            }));
+            let size_hint_lower_bound =
+                self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
+                    struct_type: size_hint_ret_type,
+                    base: size_hint_call,
+                    field_index: 0,
+                    result_type: UWORD_TYPE_ID,
+                    access_kind: FieldAccessKind::ValueToValue,
+                    span: iterable_span,
+                }));
             let synth_function_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(body_span),
                 &[body_block_result_type],
@@ -9092,7 +9143,7 @@ impl TypedProgram {
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
-        let user_body_block_id = self.exprs.add(TypedExpr::Block(body_block));
+        let user_body_block_id = self.exprs.add_tmp(TypedExpr::Block(body_block));
         let user_block_variable = self.synth_variable_defn_simple(
             get_ident!(self, "block_expr_val"),
             user_body_block_id,
@@ -9129,8 +9180,8 @@ impl TypedProgram {
         }));
         let mut break_block = self.synth_block(loop_scope_id, body_span);
         self.push_block_stmt_id(&mut break_block, break_expr);
-        let consequent_block_id = self.exprs.add(TypedExpr::Block(consequent_block));
-        let break_block_id = self.exprs.add(TypedExpr::Block(break_block));
+        let consequent_block_id = self.exprs.add_tmp(TypedExpr::Block(consequent_block));
+        let break_block_id = self.exprs.add_tmp(TypedExpr::Block(break_block));
         let if_next_loop_else_break_expr = self.synth_if_else(
             MSlice::empty(),
             UNIT_TYPE_ID,
@@ -9157,7 +9208,7 @@ impl TypedProgram {
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
-        let body_block = self.exprs.add(TypedExpr::Block(loop_block));
+        let body_block = self.exprs.add_tmp(TypedExpr::Block(loop_block));
         let loop_expr = TypedExpr::LoopExpr(LoopExpr {
             body_block,
             break_type: UNIT_TYPE_ID,
@@ -9183,7 +9234,7 @@ impl TypedProgram {
             self.add_expr_id_to_block(&mut for_expr_block, yield_expr);
         }
 
-        let final_expr = self.exprs.add(TypedExpr::Block(for_expr_block));
+        let final_expr = self.exprs.add_tmp(TypedExpr::Block(for_expr_block));
         Ok(final_expr)
     }
 
@@ -9324,7 +9375,7 @@ impl TypedProgram {
             },
             consequent_expr: alternate,
         };
-        Ok(self.exprs.add(TypedExpr::Match(TypedMatchExpr {
+        Ok(self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
             initial_let_statements: eco_vec![],
             result_type: overall_type,
             arms: eco_vec![cons_arm, alt_arm],
@@ -9517,7 +9568,7 @@ impl TypedProgram {
             arms: eco_vec![true_arm, false_arm],
             span,
         });
-        Ok(self.exprs.add(match_expr))
+        Ok(self.exprs.add_tmp(match_expr))
     }
 
     fn eval_binary_op(
@@ -9552,7 +9603,7 @@ impl TypedProgram {
                         ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         true,
                     )?;
-                    Ok(self.exprs.add(TypedExpr::LogicalAnd(TypedLogicalAnd {
+                    Ok(self.exprs.add_tmp(TypedExpr::LogicalAnd(TypedLogicalAnd {
                         lhs,
                         rhs,
                         span: binary_op.span,
@@ -9570,7 +9621,7 @@ impl TypedProgram {
                     ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                     true,
                 )?;
-                Ok(self.exprs.add(TypedExpr::LogicalOr(TypedLogicalOr {
+                Ok(self.exprs.add_tmp(TypedExpr::LogicalOr(TypedLogicalOr {
                     lhs,
                     rhs,
                     span: binary_op.span,
@@ -9669,7 +9720,7 @@ impl TypedProgram {
         );
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.add_expr_id_to_block(&mut coalesce_block, if_else);
-        Ok(self.exprs.add(TypedExpr::Block(coalesce_block)))
+        Ok(self.exprs.add_tmp(TypedExpr::Block(coalesce_block)))
     }
 
     fn eval_equality_expr(
@@ -9843,7 +9894,7 @@ impl TypedProgram {
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.function_id,
-                                lambda_value_expr: self.exprs.add(TypedExpr::Variable(
+                                lambda_value_expr: self.exprs.add_tmp(TypedExpr::Variable(
                                     VariableExpr {
                                         variable_id,
                                         type_id: function_variable.type_id,
@@ -9853,7 +9904,7 @@ impl TypedProgram {
                                 lambda_type_id: function_variable.type_id,
                             })),
                             Type::LambdaObject(_lambda_object) => {
-                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add(
+                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add_tmp(
                                     TypedExpr::Variable(VariableExpr {
                                         variable_id,
                                         type_id: function_variable.type_id,
@@ -9873,7 +9924,7 @@ impl TypedProgram {
                             }
                             Type::FunctionPointer(_function_pointer) => {
                                 let function_pointer_expr =
-                                    self.exprs.add(TypedExpr::Variable(VariableExpr {
+                                    self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
                                         variable_id,
                                         type_id: function_variable.type_id,
                                         span: fn_call.name.span,
@@ -9960,7 +10011,7 @@ impl TypedProgram {
             }
         }
         let return_expr =
-            self.exprs.add(TypedExpr::Return(TypedReturn { value: return_value, span }));
+            self.exprs.add_tmp(TypedExpr::Return(TypedReturn { value: return_value, span }));
         if gathered_defers.is_empty() {
             Ok(return_expr)
         } else {
@@ -9977,7 +10028,7 @@ impl TypedProgram {
                 );
             }
             self.push_block_stmt(&mut block, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-            Ok(self.exprs.add(TypedExpr::Block(block)))
+            Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
         }
     }
 
@@ -10066,7 +10117,7 @@ impl TypedProgram {
                     )
                 }
 
-                Ok(Some(self.exprs.add(TypedExpr::Break(TypedBreak {
+                Ok(Some(self.exprs.add_tmp(TypedExpr::Break(TypedBreak {
                     value: break_value,
                     loop_scope: enclosing_loop_scope_id,
                     loop_type,
@@ -10179,7 +10230,7 @@ impl TypedProgram {
                     }
                 }
                 let get_element_expr =
-                    self.exprs.add(TypedExpr::ArrayGetElement(ArrayGetElement {
+                    self.exprs.add_tmp(TypedExpr::ArrayGetElement(ArrayGetElement {
                         base,
                         index: index_expr,
                         result_type,
@@ -10425,7 +10476,7 @@ impl TypedProgram {
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.types.add_function_pointer_type(function.type_id);
-        self.exprs.add(TypedExpr::FunctionPointer(FunctionPointerExpr {
+        self.exprs.add_tmp(TypedExpr::FunctionPointer(FunctionPointerExpr {
             function_id,
             function_pointer_type,
             span: call_span,
@@ -10475,7 +10526,7 @@ impl TypedProgram {
             dyn_function.parsed_id,
         );
         let function_to_lam_obj_id =
-            self.exprs.add(TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
+            self.exprs.add_tmp(TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
                 function_id: dyn_function_id,
                 span: call_span,
                 lambda_object_type_id,
@@ -10695,7 +10746,7 @@ impl TypedProgram {
 
         let base_expr =
             if is_reference { self.synth_dereference(base_expr_id) } else { base_expr_id };
-        Ok(Some(self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
+        Ok(Some(self.exprs.add_tmp(TypedExpr::EnumGetTag(GetEnumTag {
             enum_expr_or_reference: base_expr,
             result_type_id: tag_type,
             span,
@@ -10755,7 +10806,7 @@ impl TypedProgram {
         let condition = self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
         let cast_type =
             if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
-        let cast_expr = self.exprs.add(TypedExpr::Cast(TypedCast {
+        let cast_expr = self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
             cast_type,
             base_expr,
             target_type_id: resulting_type_id,
@@ -11005,13 +11056,13 @@ impl TypedProgram {
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
                     let found = self.variables.get(matching_context_variable);
-                    final_args.push(MaybeTypedExpr::Typed(self.exprs.add(TypedExpr::Variable(
-                        VariableExpr {
+                    final_args.push(MaybeTypedExpr::Typed(self.exprs.add_tmp(
+                        TypedExpr::Variable(VariableExpr {
                             variable_id: matching_context_variable,
                             type_id: found.type_id,
                             span,
-                        },
-                    ))));
+                        }),
+                    )));
                     final_params.push(*context_param);
                 } else {
                     let is_source_loc = context_param.type_id == COMPILER_SOURCE_LOC_TYPE_ID;
@@ -11378,7 +11429,7 @@ impl TypedProgram {
                     let e_type_id = self.exprs.get(*e).get_type();
                     self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
                 }
-                return Ok(self.exprs.add(TypedExpr::Block(b)));
+                return Ok(self.exprs.add_tmp(TypedExpr::Block(b)));
             }
         }
 
@@ -11407,7 +11458,7 @@ impl TypedProgram {
             self.handle_intrinsic(call, intrinsic_type, ctx)
         } else {
             let call_id = self.calls.add(call);
-            Ok(self.exprs.add(TypedExpr::Call { call_id, return_type: call_return_type, span }))
+            Ok(self.exprs.add_tmp(TypedExpr::Call { call_id, return_type: call_return_type, span }))
         }
     }
 
@@ -11487,7 +11538,7 @@ impl TypedProgram {
                     is_typed_as_static: false,
                     span,
                 });
-                Ok(self.exprs.add(static_value_expr))
+                Ok(self.exprs.add_tmp(static_value_expr))
             }
             IntrinsicOperation::StaticTypeToValue => {
                 // intern fn staticTypeToValue[T, ST: static T](): ST
@@ -11510,7 +11561,7 @@ impl TypedProgram {
                         is_typed_as_static: true,
                         span,
                     });
-                    Ok(self.exprs.add(static_value_expr))
+                    Ok(self.exprs.add_tmp(static_value_expr))
                 } else {
                     // Since the static type has no value, we know this is generic code
                     // and we just need to generate a term that typechecks, so a
@@ -12289,7 +12340,7 @@ impl TypedProgram {
                         TypedStmt::Expr(expr, _expr_type_id) => {
                             // Return this expr
                             let expr_span = self.exprs.get(*expr).get_span();
-                            let return_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
+                            let return_expr = self.exprs.add_tmp(TypedExpr::Return(TypedReturn {
                                 span: expr_span,
                                 value: *expr,
                             }));
@@ -12302,10 +12353,11 @@ impl TypedProgram {
                         | TypedStmt::Require(_)
                         | TypedStmt::Defer(_) => {
                             let unit = self.synth_unit(stmt_span);
-                            let return_unit_expr = self.exprs.add(TypedExpr::Return(TypedReturn {
-                                span: stmt_span,
-                                value: unit,
-                            }));
+                            let return_unit_expr =
+                                self.exprs.add_tmp(TypedExpr::Return(TypedReturn {
+                                    span: stmt_span,
+                                    value: unit,
+                                }));
                             let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
                             let return_unit_id = self.stmts.add(return_unit);
                             stmts.push(stmt_id);
@@ -12616,7 +12668,7 @@ impl TypedProgram {
             Ok(never_payload_expr)
         } else {
             let enum_constructor =
-                self.exprs.add(TypedExpr::EnumConstructor(TypedEnumConstructor {
+                self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
                     variant_type_id,
                     variant_index,
                     payload,
