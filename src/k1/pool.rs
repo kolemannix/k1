@@ -248,7 +248,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
         &mut self.vec[index..end]
     }
 
-    pub fn iter(&self) -> std::slice::Iter<T> {
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.vec.iter()
     }
 

@@ -1,8 +1,6 @@
 ns static_literals;
 fn test(): unit {
-  // nocommit missing type literal check?
-  let a: 5 = 1;
-  let a: -3 = -3;
+  assertEquals(testCompile(1: 5), .Some("Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type: 5iword vs 1iword"));
   let c: 'c' = 'c';
   let pi: 3.14 = 3.14;
   let hello: "hello" = "hello";

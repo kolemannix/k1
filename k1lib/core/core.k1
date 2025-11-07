@@ -317,17 +317,47 @@ impl Print for iword {
   }
 }
 
-impl[S, F] Try[T = S, E = F] for Result[S, F] {
-  fn makeError(e: E): Self   { .Err(e) }
-  fn makeOk(t: T): Self { .Ok(t) }
+impl[S, F: Print] Try[T = S, E = F] for Result[S, F] {
+  fn makeError(e: E): Self { .Err(e) }
+  fn makeOk(t: T): Self    { .Ok(t) }
 
   fn isOk(self: Self): bool { self is .Ok(_) }
-  fn getOk(self: Self): T  { self.asOk().!.value }
-  fn getError(self: Self): E { self.asErr().!.value }
+  fn getOk(self: Self): T  { 
+    switch self {
+      .Ok(s) -> s,
+      .Err(e) -> crash("getOk() on .Err: {e}")
+    }
+  }
+  fn getError(self: Self): E { 
+    switch self {
+      .Ok(_) -> crash("getError() on .Ok"),
+      .Err(e) -> e
+    }
+  }
 }
 
-impl[S, F] Unwrap[Inner = S] for Result[S, F] {
-  fn hasValue(self: Self): bool { self is .Ok(_) }
+impl[S, F] Try[T = S, E = F] for Result[S, F] {
+  fn makeError(e: E): Self { .Err(e) }
+  fn makeOk(t: T): Self    { .Ok(t) }
+
+  fn isOk(self: Self): bool { self is .Ok(_) }
+  fn getOk(self: Self): T  { 
+    switch self {
+      .Ok(s) -> s,
+      .Err(e) -> crash("getOk() on .Err")
+    }
+  }
+  fn getError(self: Self): E { 
+    switch self {
+      .Ok(_) -> crash("getError() on .Ok"),
+      .Err(e) -> e
+    }
+  }
+}
+
+// All Try types are Unwrap
+impl[S, F, U: Try[T = S, E = F]] Unwrap[Inner = S] for U {
+  fn hasValue(self: Self): bool { self.isOk() }
   fn unwrap(self: Self): Inner { self.getOk() }
   //fn make(inner: Inner): Self { Result.Ok(inner) }
   fn make(inner: Inner): Self { Try/makeOk(inner) }

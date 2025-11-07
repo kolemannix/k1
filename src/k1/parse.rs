@@ -2103,10 +2103,10 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             Ok(Some(ParsedId::AbilityImpl(ability_impl_id)))
         } else {
             if condition.is_some() {
-                return Err(error_expected(
+                Err(error_expected(
                     "Some definition following condition directive #if",
                     self.peek(),
-                ));
+                ))
             } else if self.peek().kind == terminator {
                 self.advance();
                 Ok(None)

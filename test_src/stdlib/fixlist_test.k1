@@ -1,0 +1,22 @@
+use std/FixList
+fn testFixList(): unit {
+  let* fl: *mut FixList[int, 4uword] = zeroed();
+  assertEquals(fl.len(), 0);
+  fl.push(40);
+  assertEquals(fl.len(), 1);
+  fl.push(41);
+  fl.push(42);
+  fl.push(43);
+
+  fl.clear();
+  assertEquals(fl.len(), 0);
+
+  fl.pushN([-1, -2, -3, -5]);
+  assertEquals(fl.len(), 4);
+  assertEquals(fl.get(0), -1);
+  assertEquals(fl.get(3), -5);
+  fl.set(1, 10);
+  assertEquals(fl.get(1), 10);
+  assertEquals(fl.len(), 4);
+
+}

@@ -35,7 +35,6 @@ pub struct Mem<Tag = ()> {
     cursor: *const u8,
     _marker: PhantomData<Tag>,
 }
-pub type MemNoTag = Mem<()>;
 
 // We use NonZeroU32 so that the handles are niched, allowing for use
 // for no size cost in types like Option and Result
@@ -151,12 +150,6 @@ impl<'a, Tag> std::fmt::Write for MemWriter<'a, Tag> {
             }
         };
         Ok(())
-    }
-}
-
-impl Mem {
-    fn make_untagged() -> Mem<()> {
-        Mem::make()
     }
 }
 
@@ -560,7 +553,7 @@ mod test {
 
     #[test]
     fn test() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let handle = arena.push_h(42u32);
         let value = arena.get(handle);
         assert_eq!(*value, 42);
@@ -576,7 +569,7 @@ mod test {
 
     #[test]
     fn push_slice_iter() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let h = arena.pushn_iter((0..10).map(|x| x * 10));
         assert_eq!(h.len(), 10);
         assert_eq!(arena.getn(h), &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
@@ -588,7 +581,7 @@ mod test {
 
     #[test]
     fn vec() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(16);
         for i in 0..16 {
             v.push(i * 10);
@@ -603,7 +596,7 @@ mod test {
 
     #[test]
     fn vec_extend() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(16);
         v.extend(&[1, 2, 3, 4, 5]);
         assert_eq!(v.len(), 5);
@@ -618,7 +611,7 @@ mod test {
     #[test]
     #[should_panic(expected = "FixVec is full")]
     fn vec_extend_oob() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(3);
         v.extend(&[1, 2, 3, 4, 5]);
     }
@@ -626,7 +619,7 @@ mod test {
     #[test]
     #[should_panic(expected = "FixVec is full")]
     fn vec_oob() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(4);
         for i in 0..5 {
             v.push(i * 10);
@@ -635,7 +628,7 @@ mod test {
 
     #[test]
     fn dup_slice() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let h = arena.pushn(&[1, 2, 3, 4, 5]);
         let h2 = arena.dupn(h);
         assert_eq!(h.len(), h2.len());
@@ -645,7 +638,7 @@ mod test {
 
     #[test]
     fn insert() {
-        let mut arena = Mem::make_untagged();
+        let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(5);
         v.push(1);
         v.push(2);

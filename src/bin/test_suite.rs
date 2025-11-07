@@ -103,7 +103,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     std::fs::create_dir_all(&out_dir)?;
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
-        no_llvm_opt: true,
+        optimize: true,
         debug: true,
         no_std: false,
         write_llvm: true,
@@ -310,15 +310,23 @@ pub fn main() -> Result<()> {
                         let filename = filename.to_string();
                         eprintln!("{filename:040}...");
                         let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
-                        if result.is_ok() {
-                            eprintln!("{filename:040} {}", "PASS".green());
-                            success.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            let mut failures = failures.lock().unwrap();
-                            failures.push((
-                                test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
-                                result.unwrap_err(),
-                            ));
+                        match result {
+                            Ok(_) => {
+                                eprintln!("{filename:040} {}", "PASS".green());
+                                success.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                let mut failures = failures.lock().unwrap();
+                                failures.push((
+                                    test.as_path()
+                                        .file_name()
+                                        .unwrap()
+                                        .to_str()
+                                        .unwrap()
+                                        .to_string(),
+                                    e,
+                                ));
+                            }
                         }
                     })
                     .unwrap();
@@ -330,15 +338,18 @@ pub fn main() -> Result<()> {
             let filename = test.as_path().file_name().unwrap().to_str().unwrap();
             eprintln!("{filename:040}...");
             let result = test_file(&ctx, test.as_path(), test_suite_args.interpret);
-            if result.is_ok() {
-                eprintln!("{filename:040} {}", "PASS".green());
-                success.fetch_add(1, Ordering::Relaxed);
-            } else {
-                let mut failures = failures.lock().unwrap();
-                failures.push((
-                    test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
-                    result.unwrap_err(),
-                ));
+            match result {
+                Ok(_) => {
+                    eprintln!("{filename:040} {}", "PASS".green());
+                    success.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    let mut failures = failures.lock().unwrap();
+                    failures.push((
+                        test.as_path().file_name().unwrap().to_str().unwrap().to_string(),
+                        e,
+                    ));
+                }
             }
         }
     }

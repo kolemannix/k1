@@ -2,10 +2,12 @@ use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use std::{collections::hash_map::Entry, hash::Hash};
 
+#[allow(unused)]
 pub struct FixMap<K, V> {
     inner: FxHashMap<K, V>,
 }
 
+#[allow(unused)]
 impl<K, V> FixMap<K, V> {
     pub fn with_capacity(cap: usize) -> Self {
         Self { inner: FxHashMap::with_capacity(cap) }
@@ -24,6 +26,7 @@ impl<K, V> FixMap<K, V> {
     }
 }
 
+#[allow(unused)]
 impl<K: Eq + Hash, V> FixMap<K, V> {
     pub fn insert(&mut self, key: K, value: V) -> Option<V>
     where
@@ -49,7 +52,7 @@ impl<K: Eq + Hash, V> FixMap<K, V> {
         self.inner.get(key)
     }
 
-    pub fn entry(&mut self, key: K) -> Entry<K, V> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
         self.inner.entry(key)
     }
 }
