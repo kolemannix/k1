@@ -14,7 +14,7 @@ mod pool;
 mod strings;
 pub mod typer;
 pub mod vm;
-pub mod vmtw;
+//pub mod vmtw;
 
 pub const KILOBYTE: usize = 1024;
 pub const MEGABYTE: usize = KILOBYTE * 1024;

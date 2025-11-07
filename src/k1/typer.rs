@@ -832,7 +832,7 @@ impl FunctionSignature {
 pub struct TypedFunction {
     pub name: Ident,
     pub scope: ScopeId,
-    pub param_variables: MSlice<VariableId, MemPerm>,
+    pub param_variables: MSlice<VariableId, TypedProgram>,
     pub type_params: NamedTypeSlice,
     pub function_type_params: SliceHandle<FunctionTypeParamId>,
     pub body_block: Option<TypedExprId>,
@@ -959,7 +959,7 @@ pub(crate) enum TypeUnificationResult {
     NonMatching(&'static str),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VariableExpr {
     pub variable_id: VariableId,
     pub type_id: TypeId,
@@ -967,14 +967,14 @@ pub struct VariableExpr {
 }
 impl_copy_if_small!(12, VariableExpr);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct DerefExpr {
     pub target: TypedExprId,
     pub type_id: TypeId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Callee {
     StaticFunction(FunctionId),
     StaticLambda {
@@ -1026,7 +1026,7 @@ impl Callee {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Call {
     pub callee: Callee,
     pub args: SmallVec<[TypedExprId; FUNC_PARAM_IDEAL_COUNT]>,
@@ -1038,17 +1038,15 @@ pub struct Call {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct StructLiteralField {
     pub name: Ident,
     pub expr: TypedExprId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StructLiteral {
-    pub fields: EcoVec<StructLiteralField>,
-    pub type_id: TypeId,
-    pub span: SpanId,
+    pub fields: MSlice<StructLiteralField, TypedProgram>,
 }
 
 #[derive(Debug, Clone)]
@@ -1125,10 +1123,8 @@ impl FieldAccess {
 
 #[derive(Clone)]
 pub struct TypedEnumConstructor {
-    pub variant_type_id: TypeId,
     pub variant_index: u32,
     pub payload: Option<TypedExprId>,
-    pub span: SpanId,
 }
 impl_copy_if_small!(16, TypedEnumConstructor);
 
@@ -1302,8 +1298,6 @@ impl Display for CastType {
 pub struct TypedCast {
     pub cast_type: CastType,
     pub base_expr: TypedExprId,
-    pub target_type_id: TypeId,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -1355,7 +1349,7 @@ pub struct MatchingCondition {
     /// Though that's something I could now consider changing, the trick would be to generate
     /// a single set of variables for all the bindings that each point to the unique variables from each
     /// pattern. We already check for exact number and name, so this is possible
-    pub patterns: MSlice<TypedPatternId, TypedPatternPool>,
+    // pub patterns: MSlice<TypedPatternId, TypedPatternPool>,
     pub instrs: EcoVec<MatchingConditionInstr>,
     #[allow(unused)]
     pub binding_eligible: bool,
@@ -1374,8 +1368,6 @@ impl_copy_if_small!(8, MatchingConditionInstr);
 pub struct WhileLoop {
     pub condition: MatchingCondition,
     pub body: TypedExprId,
-    pub type_id: TypeId,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -1390,9 +1382,7 @@ impl_copy_if_small!(12, LoopExpr);
 /// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
     pub initial_let_statements: EcoVec<TypedStmtId>,
-    pub result_type: TypeId,
     pub arms: EcoVec<TypedMatchArm>,
-    pub span: SpanId,
 }
 
 #[derive(Clone, Copy)]
@@ -1412,14 +1402,12 @@ pub struct TypedLogicalOr {
 #[derive(Clone, Copy)]
 pub struct StaticConstantExpr {
     pub value_id: StaticValueId,
-    pub type_id: TypeId,
     pub is_typed_as_static: bool,
-    pub span: SpanId,
 }
 
 nz_u32_id!(CallId);
 
-static_assert_size!(TypedExpr, 56);
+static_assert_size!(TypedExpr, 40);
 #[derive(Clone)]
 pub enum TypedExpr {
     StaticValue(StaticConstantExpr),
@@ -1514,57 +1502,57 @@ impl TypedExpr {
     // nocommit delete get_type
     pub fn get_type(&self) -> TypeId {
         match self {
-            TypedExpr::Struct(struc) => struc.type_id,
+            TypedExpr::Struct(_struc) => TypeId::PENDING,
             TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::Deref(deref) => deref.type_id,
             TypedExpr::Block(b) => b.expr_type,
             TypedExpr::Call { return_type, .. } => *return_type,
-            TypedExpr::Match(match_) => match_.result_type,
+            TypedExpr::Match(_match_) => TypeId::PENDING,
             TypedExpr::LogicalAnd(_) => BOOL_TYPE_ID,
             TypedExpr::LogicalOr(_) => BOOL_TYPE_ID,
-            TypedExpr::WhileLoop(while_loop) => while_loop.type_id,
+            TypedExpr::WhileLoop(_) => TypeId::PENDING,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
-            TypedExpr::EnumConstructor(enum_cons) => enum_cons.variant_type_id,
+            TypedExpr::EnumConstructor(_enum_cons) => TypeId::PENDING,
             TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
-            TypedExpr::Cast(c) => c.target_type_id,
+            TypedExpr::Cast(_c) => TypeId::PENDING,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
             TypedExpr::Lambda(lambda) => lambda.lambda_type,
             TypedExpr::FunctionPointer(f) => f.function_pointer_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
             TypedExpr::PendingCapture(pc) => pc.type_id,
-            TypedExpr::StaticValue(s) => s.type_id,
+            TypedExpr::StaticValue(_) => TypeId::PENDING,
         }
     }
 
     pub fn get_span(&self) -> SpanId {
         match self {
-            TypedExpr::Struct(struc) => struc.span,
+            TypedExpr::Struct(_struc) => SpanId::NONE,
             TypedExpr::StructFieldAccess(field_access) => field_access.span,
             TypedExpr::ArrayGetElement(ag) => ag.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::Deref(deref) => deref.span,
             TypedExpr::Block(b) => b.span,
             TypedExpr::Call { span, .. } => *span,
-            TypedExpr::Match(match_) => match_.span,
+            TypedExpr::Match(_match_) => SpanId::NONE,
             TypedExpr::LogicalAnd(a) => a.span,
             TypedExpr::LogicalOr(o) => o.span,
-            TypedExpr::WhileLoop(while_loop) => while_loop.span,
+            TypedExpr::WhileLoop(_) => SpanId::NONE,
             TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
-            TypedExpr::EnumConstructor(e) => e.span,
+            TypedExpr::EnumConstructor(_e) => SpanId::NONE,
             TypedExpr::EnumGetTag(get_tag) => get_tag.span,
             TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
-            TypedExpr::Cast(c) => c.span,
+            TypedExpr::Cast(_c) => SpanId::NONE,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
             TypedExpr::Lambda(lambda) => lambda.span,
             TypedExpr::FunctionPointer(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
             TypedExpr::PendingCapture(pc) => pc.span,
-            TypedExpr::StaticValue(s) => s.span,
+            TypedExpr::StaticValue(_) => SpanId::NONE,
         }
     }
 
@@ -2116,7 +2104,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: NamedTypeSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: MSlice<AbilityImplFunction, MemPerm>,
+    pub functions: MSlice<AbilityImplFunction, TypedProgram>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2125,7 +2113,11 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(&self, mem: &kmem::Mem<MemPerm>, index: u32) -> &AbilityImplFunction {
+    pub fn function_at_index(
+        &self,
+        mem: &kmem::Mem<TypedProgram>,
+        index: u32,
+    ) -> &AbilityImplFunction {
         mem.get_nth(self.functions, index as usize)
     }
 
@@ -2301,7 +2293,6 @@ pub struct ProgramSettings {
 }
 
 pub struct MemTmp;
-pub struct MemPerm;
 
 pub struct TypedExprPool {
     // SoA pools
@@ -2326,10 +2317,24 @@ impl TypedExprPool {
     pub fn add_tmp(&mut self, expr: TypedExpr) -> TypedExprId {
         let type_id = expr.get_type();
         let span = expr.get_span();
-        self.addNEW(expr, type_id, span)
+        self.add(expr, type_id, span)
     }
 
-    pub fn addNEW(&mut self, expr: TypedExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
+    pub fn add_static(
+        &mut self,
+        value_id: StaticValueId,
+        type_id: TypeId,
+        is_typed_as_static: bool,
+        span: SpanId,
+    ) -> TypedExprId {
+        self.add(
+            TypedExpr::StaticValue(StaticConstantExpr { value_id, is_typed_as_static }),
+            type_id,
+            span,
+        )
+    }
+
+    pub fn add(&mut self, expr: TypedExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
         let id = self.exprs.next_id();
         let id0 = self.type_ids.add(type_id);
         let id1 = self.spans.add(span);
@@ -2432,7 +2437,7 @@ pub struct TypedProgram {
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
 
     /// Perm arena space
-    pub a: kmem::Mem<MemPerm>,
+    pub mem: kmem::Mem<TypedProgram>,
     /// tmp arena space
     pub tmp: kmem::Mem<MemTmp>,
 
@@ -2572,7 +2577,7 @@ impl TypedProgram {
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
 
-            a: kmem::Mem::make(),
+            mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
             bytecode: bc::ProgramBytecode::make(32768, word_size),
@@ -4746,12 +4751,12 @@ impl TypedProgram {
                 match self.check_types(expected, lambda_object_type, scope_id) {
                     Ok(_) => {
                         return CheckExprTypeResult::Coerce(
-                            self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-                                cast_type: CastType::LambdaToLambdaObject,
-                                base_expr: expr,
-                                target_type_id: lambda_object_type,
-                                span,
-                            })),
+                            self.synth_cast(
+                                expr,
+                                lambda_object_type,
+                                CastType::LambdaToLambdaObject,
+                                Some(span),
+                            ),
                             "lam->lamobj".into(),
                         );
                     }
@@ -5492,7 +5497,7 @@ impl TypedProgram {
         }
         let impl_kind = AbilityImplKind::TypeParamConstraint;
         let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
-        let mut impl_functions = self.a.new_vec(functions.len() as u32);
+        let mut impl_functions = self.mem.new_vec(functions.len() as u32);
         for f in functions.iter() {
             let generic_fn = self.get_function(f.function_id);
             let generic_sig = generic_fn.signature();
@@ -5529,7 +5534,7 @@ impl TypedProgram {
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
-            functions: self.a.vec_to_mslice(&impl_functions),
+            functions: self.mem.vec_to_mslice(&impl_functions),
             scope_id,
             span,
             compile_errors: vec![],
@@ -6019,13 +6024,13 @@ impl TypedProgram {
 
         let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
 
-        let mut specialized_functions = self.a.new_vec(blanket_impl.functions.len());
+        let mut specialized_functions = self.mem.new_vec(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         debug!(
             "blanket impl instance scope before function specialization: {}",
             self.scope_id_to_string(new_impl_scope)
         );
-        for blanket_impl_function in self.a.getn(blanket_impl.functions) {
+        for blanket_impl_function in self.mem.getn(blanket_impl.functions) {
             // If the functions are abstract, just the type ids
             // If concrete do the declaration thing
             //
@@ -6066,7 +6071,7 @@ impl TypedProgram {
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
             impl_arguments: substituted_impl_arguments_handle,
-            functions: self.a.vec_to_mslice(&specialized_functions),
+            functions: self.mem.vec_to_mslice(&specialized_functions),
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: vec![],
@@ -6611,7 +6616,6 @@ impl TypedProgram {
                     let (consequent, consequent_type_id) = self.synth_optional_some(field_access);
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
-                        MSlice::empty(),
                         consequent_type_id,
                         has_value,
                         consequent,
@@ -6719,7 +6723,7 @@ impl TypedProgram {
         // FIXME: Consider alternatives for locating the block's makeError function
         //        in a less brittle way
         let block_make_error_fn =
-            self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.a, 0);
+            self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.mem, 0);
         let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: smallvec![get_error_call],
@@ -6732,7 +6736,6 @@ impl TypedProgram {
         let return_error_expr =
             self.exprs.add_tmp(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
         let if_expr = self.synth_if_else(
-            MSlice::empty(),
             value_success_type,
             is_ok_call,
             get_ok_call,
@@ -6933,12 +6936,8 @@ impl TypedProgram {
                 } else {
                     STRING_TYPE_ID
                 };
-                let static_expr = self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
-                    value_id: static_value_id,
-                    type_id: type_to_use,
-                    is_typed_as_static,
-                    span: *span,
-                }));
+                let static_expr =
+                    self.exprs.add_static(static_value_id, type_to_use, is_typed_as_static, *span);
                 Ok(static_expr)
             }
             ParsedExpr::Variable(_variable) => Ok(self.eval_variable(expr_id, ctx.scope_id)?.1),
@@ -7129,7 +7128,7 @@ impl TypedProgram {
                     );
                 };
                 let impl_ = self.ability_impls.get(impl_handle.full_impl_id);
-                let impl_function = impl_.function_at_index(&self.a, tafr.index);
+                let impl_function = impl_.function_at_index(&self.mem, tafr.index);
                 self.eval_function_call(
                     &call_ast_expr,
                     None,
@@ -7167,22 +7166,12 @@ impl TypedProgram {
     fn add_static_value_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let inner_type_id = self.static_values.get(value_id).get_type();
         let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
-        self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
-            value_id,
-            type_id: static_type_id,
-            is_typed_as_static: true,
-            span,
-        }))
+        self.exprs.add_static(value_id, static_type_id, true, span)
     }
 
     fn add_static_constant_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let type_id = self.static_values.get(value_id).get_type();
-        self.exprs.add_tmp(TypedExpr::StaticValue(StaticConstantExpr {
-            value_id,
-            type_id,
-            is_typed_as_static: false,
-            span,
-        }))
+        self.exprs.add_static(value_id, type_id, false, span)
     }
 
     fn eval_list_literal(
@@ -7364,12 +7353,7 @@ impl TypedProgram {
                 None => self.synth_unit(span),
                 Some(expected) => {
                     let unit_expr = self.synth_unit(span);
-                    self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-                        cast_type: CastType::Transmute,
-                        base_expr: unit_expr,
-                        target_type_id: expected,
-                        span,
-                    }))
+                    self.synth_cast(unit_expr, expected, CastType::Transmute, Some(span))
                 }
             };
             return Ok(StaticExecutionResult::TypedExpr(typed_expr));
@@ -7608,10 +7592,10 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let mut field_values = eco_vec![];
         let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
+        let mut field_values = self.mem.new_vec(parsed_struct.fields.len() as u32);
         let mut field_defns = self.types.mem.new_vec(parsed_struct.fields.len() as u32);
         let ast_struct = parsed_struct.clone();
         for ast_field in ast_struct.fields.iter() {
@@ -7636,9 +7620,8 @@ impl TypedProgram {
 
         let struct_type = StructType { fields: self.types.mem.vec_to_mslice(&field_defns) };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
-        let typed_struct =
-            StructLiteral { fields: field_values, span: ast_struct.span, type_id: struct_type_id };
-        Ok(self.exprs.add_tmp(TypedExpr::Struct(typed_struct)))
+        let typed_struct = StructLiteral { fields: self.mem.vec_to_mslice(&field_values) };
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, ast_struct.span))
     }
 
     fn eval_expected_struct(
@@ -7700,10 +7683,8 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: EcoVec<StructLiteralField> =
-            EcoVec::with_capacity(field_count as usize);
-        let mut field_types: FixVec<StructTypeField, TypePool> =
-            self.types.mem.new_vec(field_count);
+        let mut field_values: FixVec<StructLiteralField, _> = self.mem.new_vec(field_count);
+        let mut field_types: FixVec<StructTypeField, _> = self.types.mem.new_vec(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
@@ -7791,13 +7772,8 @@ impl TypedProgram {
             output_instance_info,
         );
 
-        let typed_struct = StructLiteral {
-            fields: field_values,
-            span: ast_struct.span,
-            type_id: output_struct_type_id,
-        };
-        let expr = TypedExpr::Struct(typed_struct);
-        Ok(self.exprs.add_tmp(expr))
+        let typed_struct = StructLiteral { fields: self.mem.vec_to_mslice(&field_values) };
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), output_struct_type_id, ast_struct.span))
     }
 
     fn eval_while_loop(
@@ -7827,20 +7803,23 @@ impl TypedProgram {
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        // TODO: Detect divergent loops:
-        // if loop has no breaks or returns, can we type is as never?
+        // TODO: Also detect divergent loops: if loop has no breaks or returns, can we type is as never?
         //
         // Loop Info should be able to track this, if we report every
         // break and return
         let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
+        // nocommit: Just don't emit a WhileLoop if condition diverges; but maybe a warning
+        //           Is this the time to add warnings? I think so
+        if condition.diverges {
+            //
+        }
 
         let body_block = self.exprs.add_tmp(TypedExpr::Block(body_block));
-        Ok(self.exprs.add_tmp(TypedExpr::WhileLoop(WhileLoop {
-            condition,
-            body: body_block,
-            type_id: loop_type,
-            span: while_expr.span,
-        })))
+        Ok(self.exprs.add(
+            TypedExpr::WhileLoop(WhileLoop { condition, body: body_block }),
+            loop_type,
+            while_expr.span,
+        ))
     }
 
     fn eval_loop_expr(
@@ -8056,7 +8035,7 @@ impl TypedProgram {
             });
         }
 
-        let mut param_variables = self.a.new_vec(lambda_arguments.len() as u32 + 1);
+        let mut param_variables = self.mem.new_vec(lambda_arguments.len() as u32 + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
@@ -8122,7 +8101,7 @@ impl TypedProgram {
             let body_function_id = self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
-                param_variables: self.a.vec_to_mslice(&param_variables),
+                param_variables: self.mem.vec_to_mslice(&param_variables),
                 type_params: SliceHandle::empty(),
                 function_type_params: SliceHandle::empty(),
                 body_block: Some(body_expr_id),
@@ -8159,7 +8138,7 @@ impl TypedProgram {
 
         let mut env_field_types =
             self.types.mem.new_vec(lambda_info.captured_variables.len() as u32);
-        let mut env_exprs = EcoVec::with_capacity(lambda_info.captured_variables.len());
+        let mut env_exprs = self.mem.new_vec(lambda_info.captured_variables.len() as u32);
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
             env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
@@ -8174,11 +8153,11 @@ impl TypedProgram {
         let environment_struct_type =
             self.types.add_anon(Type::Struct(StructType { fields: env_fields_handle }));
 
-        let environment_struct = self.exprs.add_tmp(TypedExpr::Struct(StructLiteral {
-            fields: env_exprs,
-            type_id: environment_struct_type,
-            span: body_span,
-        }));
+        let environment_struct = self.exprs.add(
+            TypedExpr::Struct(StructLiteral { fields: self.mem.vec_to_mslice(&env_exprs) }),
+            environment_struct_type,
+            body_span,
+        );
 
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type, false);
@@ -8250,7 +8229,7 @@ impl TypedProgram {
         let body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            param_variables: self.a.vec_to_mslice(&param_variables),
+            param_variables: self.mem.vec_to_mslice(&param_variables),
             type_params: SliceHandle::empty(),
             function_type_params: SliceHandle::empty(),
             body_block: Some(body_expr_id),
@@ -8345,7 +8324,6 @@ impl TypedProgram {
 
         let fallback_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -8372,12 +8350,14 @@ impl TypedProgram {
                 if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
             })
             .unwrap_or(NEVER_TYPE_ID);
-        Ok(self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: eco_vec![match_subject_variable.defn_stmt],
-            result_type: match_result_type,
-            arms,
-            span: match_expr_span,
-        })))
+        Ok(self.exprs.add(
+            TypedExpr::Match(TypedMatchExpr {
+                initial_let_statements: eco_vec![match_subject_variable.defn_stmt],
+                arms,
+            }),
+            match_result_type,
+            match_expr_span,
+        ))
     }
 
     fn eval_match_arms(
@@ -8505,7 +8485,6 @@ impl TypedProgram {
                 };
                 typed_arms.push(TypedMatchArm {
                     condition: MatchingCondition {
-                        patterns: self.patterns.add_pattern_slice(&[pattern]),
                         instrs,
                         binding_eligible: true,
                         diverges: condition_diverges,
@@ -8561,18 +8540,14 @@ impl TypedProgram {
                 );
             }
 
-            if let Some(useless_index) =
-                all_unguarded_patterns.iter().position(|(_, kill_count)| *kill_count == 0)
+            if let Some((useless_pattern, _useless_index)) =
+                all_unguarded_patterns.iter().find(|(_, kill_count)| *kill_count == 0)
             {
-                let pattern_slice = typed_arms[useless_index].condition.patterns;
-                // For actual match expressions, which this is, we'll always have
-                // exactly 1 pattern per arm
-                let pattern = self.patterns.get_slice(pattern_slice)[0];
-                if !self.patterns.pattern_has_innumerable_literal(pattern) {
+                if !self.patterns.pattern_has_innumerable_literal(*useless_pattern) {
                     return failf!(
-                        self.patterns.get(pattern).span_id(),
-                        "Useless pattern: {}",
-                        self.pattern_to_string(pattern)
+                        self.patterns.get(*useless_pattern).span_id(),
+                        "This pattern handled no cases: {}",
+                        self.pattern_to_string(*useless_pattern)
                     );
                 }
             }
@@ -8680,16 +8655,16 @@ impl TypedProgram {
                     } else {
                         variant_type_id
                     };
-                    let enum_as_variant = self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-                        cast_type: if is_referencing {
+                    let enum_as_variant = self.synth_cast(
+                        target_expr,
+                        variant_target_type,
+                        if is_referencing {
                             CastType::ReferenceToReference
                         } else {
                             CastType::EnumToVariant
                         },
-                        target_type_id: variant_target_type,
-                        base_expr: target_expr,
-                        span: enum_pattern.span,
-                    }));
+                        Some(enum_pattern.span),
+                    );
                     let get_payload_expr =
                         self.exprs.add_tmp(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
                             enum_variant_expr: enum_as_variant,
@@ -8963,12 +8938,7 @@ impl TypedProgram {
                 self.type_id_to_string(target_type).blue()
             ),
         }?;
-        Ok(self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-            base_expr,
-            target_type_id: target_type,
-            cast_type,
-            span: cast.span,
-        })))
+        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(cast.span)))
     }
 
     fn eval_for_expr(
@@ -9181,7 +9151,6 @@ impl TypedProgram {
         let consequent_block_id = self.exprs.add_tmp(TypedExpr::Block(consequent_block));
         let break_block_id = self.exprs.add_tmp(TypedExpr::Block(break_block));
         let if_next_loop_else_break_expr = self.synth_if_else(
-            MSlice::empty(),
             UNIT_TYPE_ID,
             next_is_some_call,
             consequent_block_id,
@@ -9365,7 +9334,6 @@ impl TypedProgram {
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -9373,12 +9341,14 @@ impl TypedProgram {
             },
             consequent_expr: alternate,
         };
-        Ok(self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: eco_vec![],
-            result_type: overall_type,
-            arms: eco_vec![cons_arm, alt_arm],
-            span: if_expr.span,
-        })))
+        Ok(self.exprs.add(
+            TypedExpr::Match(TypedMatchExpr {
+                initial_let_statements: eco_vec![],
+                arms: eco_vec![cons_arm, alt_arm],
+            }),
+            overall_type,
+            if_expr.span,
+        ))
     }
 
     fn eval_matching_condition(
@@ -9428,13 +9398,7 @@ impl TypedProgram {
         let diverges = self.matching_condition_diverges(&instrs);
 
         let span = self.ast.get_expr_span(condition);
-        Ok(MatchingCondition {
-            patterns: self.patterns.add_pattern_slice(&all_patterns),
-            instrs,
-            binding_eligible: allow_bindings,
-            diverges,
-            span,
-        })
+        Ok(MatchingCondition { instrs, binding_eligible: allow_bindings, diverges, span })
     }
 
     fn matching_condition_diverges(&self, instrs: &[MatchingConditionInstr]) -> bool {
@@ -9552,7 +9516,6 @@ impl TypedProgram {
         };
         let false_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -9562,11 +9525,9 @@ impl TypedProgram {
         };
         let match_expr = TypedExpr::Match(TypedMatchExpr {
             initial_let_statements: eco_vec![],
-            result_type: BOOL_TYPE_ID,
             arms: eco_vec![true_arm, false_arm],
-            span,
         });
-        Ok(self.exprs.add_tmp(match_expr))
+        Ok(self.exprs.add(match_expr, BOOL_TYPE_ID, span))
     }
 
     fn eval_binary_op(
@@ -9708,14 +9669,7 @@ impl TypedProgram {
             false,
         )?;
 
-        let if_else = self.synth_if_else(
-            MSlice::empty(),
-            output_type,
-            lhs_has_value,
-            lhs_get_expr,
-            rhs,
-            span,
-        );
+        let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.add_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add_tmp(TypedExpr::Block(coalesce_block)))
@@ -10260,7 +10214,6 @@ impl TypedProgram {
                     false,
                 )?;
                 let if_else_expr = self.synth_if_else(
-                    MSlice::empty(),
                     result_type,
                     is_in_bounds,
                     get_element_expr,
@@ -10501,10 +10454,10 @@ impl TypedProgram {
                 global_id: None,
                 flags: VariableFlags::empty(),
             });
-            let mut new_variables = self.a.new_vec(new_function.param_variables.len() + 1);
+            let mut new_variables = self.mem.new_vec(new_function.param_variables.len() + 1);
             new_variables.push(empty_env_variable);
-            new_variables.extend(self.a.getn(new_function.param_variables));
-            new_function.param_variables = self.a.vec_to_mslice(&new_variables);
+            new_variables.extend(self.mem.getn(new_function.param_variables));
+            new_function.param_variables = self.mem.vec_to_mslice(&new_variables);
 
             let new_function_type =
                 self.add_lambda_env_to_function_type(new_function.type_id, function_defn_span);
@@ -10719,7 +10672,7 @@ impl TypedProgram {
         let impl_function = self
             .ability_impls
             .get(impl_handle.full_impl_id)
-            .function_at_index(&self.a, ability_function_ref.index);
+            .function_at_index(&self.mem, ability_function_ref.index);
         Ok(*impl_function)
     }
 
@@ -10804,26 +10757,14 @@ impl TypedProgram {
         let condition = self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
         let cast_type =
             if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
-        let cast_expr = self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-            cast_type,
-            base_expr,
-            target_type_id: resulting_type_id,
-            span,
-        }));
+        let cast_expr = self.synth_cast(base_expr, resulting_type_id, cast_type, Some(span));
         let (consequent, consequent_type_id) =
                 // base_expr is the enum type, or a reference to it
                 // resulting_type_id is the variant, or a reference to it
                 self.synth_optional_some(cast_expr);
         let alternate = self.synth_optional_none(resulting_type_id, span);
 
-        Ok(Some(self.synth_if_else(
-            MSlice::empty(),
-            consequent_type_id,
-            condition,
-            consequent,
-            alternate,
-            span,
-        )))
+        Ok(Some(self.synth_if_else(consequent_type_id, condition, consequent, alternate, span)))
     }
 
     fn handle_enum_constructor(
@@ -11478,7 +11419,7 @@ impl TypedProgram {
         let result = match self.exprs.get(expr_id) {
             TypedExpr::StaticValue(static_constant) if !static_constant.is_typed_as_static => {
                 let value_id = static_constant.value_id;
-                let span = static_constant.span;
+                let span = self.exprs.get_span(expr_id);
                 Ok(self.add_static_value_expr(value_id, span))
             }
             e => {
@@ -11525,54 +11466,37 @@ impl TypedProgram {
                     return failf!(span, "Argument must be a u64 literal");
                 };
                 let Some(static_value_id) = StaticValueId::from_u32(*u64_value as u32) else {
-                    return failf!(span, "Invalid static value id: {}. Must be a u32", u64_value);
+                    return failf!(span, "Invalid static value id: {}. Cannot be zero", u64_value);
                 };
                 let Some(value) = self.static_values.get_opt(static_value_id) else {
-                    return failf!(span, "No static value with id {}", static_value_id);
+                    return failf!(span, "No static value with given id: {}", static_value_id);
                 };
-                let static_value_expr = TypedExpr::StaticValue(StaticConstantExpr {
-                    value_id: static_value_id,
-                    type_id: value.get_type(),
-                    is_typed_as_static: false,
-                    span,
-                });
-                Ok(self.exprs.add_tmp(static_value_expr))
+                Ok(self.exprs.add_static(static_value_id, value.get_type(), false, span))
             }
             IntrinsicOperation::StaticTypeToValue => {
-                // intern fn staticTypeToValue[T, ST: static T](): ST
+                // intern fn staticTypeToValue[T, ST: static T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
                 let static_type_arg = self.named_types.get_nth(call.type_args, 1);
 
-                let return_static_type = static_type_arg.type_id;
-                let Type::Static(static_type) = self.types.get_no_follow_static(return_static_type)
+                let return_type = call.return_type;
+                let Type::Static(static_type) =
+                    self.types.get_no_follow_static(static_type_arg.type_id)
                 else {
                     return failf!(
                         span,
-                        "Expected type must be a static type, got {}",
-                        self.type_id_to_string(return_static_type)
+                        "Internal Error: 2nd type arg should be static: {}",
+                        self.type_id_to_string(static_type_arg.type_id)
                     );
                 };
                 if let Some(static_value_id) = static_type.value_id {
-                    let static_value_expr = TypedExpr::StaticValue(StaticConstantExpr {
-                        value_id: static_value_id,
-                        type_id: return_static_type,
-                        is_typed_as_static: true,
-                        span,
-                    });
-                    Ok(self.exprs.add_tmp(static_value_expr))
+                    Ok(self.add_static_constant_expr(static_value_id, span))
                 } else {
                     // Since the static type has no value, we know this is generic code
                     // and we just need to generate a term that typechecks, so a
                     // unit casted to the generic static type. We should probably invent
                     // a way to do this that doesn't require 2 nodes
-                    let static_type_arg_type_id = static_type_arg.type_id;
                     let unit_expr = self.synth_unit(span);
-                    Ok(self.synth_cast(
-                        unit_expr,
-                        static_type_arg_type_id,
-                        CastType::Transmute,
-                        None,
-                    ))
+                    Ok(self.synth_cast(unit_expr, return_type, CastType::Transmute, None))
                 }
             }
             IntrinsicOperation::CompilerSourceLocation => {
@@ -11819,13 +11743,13 @@ impl TypedProgram {
         }
 
         let mut param_variables: FixVec<VariableId, _> =
-            self.a.new_vec(specialized_function_type.physical_params.len());
+            self.mem.new_vec(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
             .types
             .mem
             .getn(specialized_function_type.physical_params)
             .iter()
-            .zip(self.a.getn(generic_function_param_variables))
+            .zip(self.mem.getn(generic_function_param_variables))
         {
             let name = self.variables.get(*generic_param).name;
             let mut flags = VariableFlags::empty();
@@ -11864,7 +11788,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: specialized_name_ident,
             scope: spec_fn_scope,
-            param_variables: self.a.vec_to_mslice(&param_variables),
+            param_variables: self.mem.vec_to_mslice(&param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
@@ -12665,13 +12589,11 @@ impl TypedProgram {
             let never_payload_expr = payload.unwrap();
             Ok(never_payload_expr)
         } else {
-            let enum_constructor =
-                self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
-                    variant_type_id,
-                    variant_index,
-                    payload,
-                    span,
-                }));
+            let enum_constructor = self.exprs.add(
+                TypedExpr::EnumConstructor(TypedEnumConstructor { variant_index, payload }),
+                variant_type_id,
+                span,
+            );
             let casted_expr = match ctx.expected_type_id.map(|t| self.types.get(t)) {
                 Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
                     debug!(
@@ -13198,7 +13120,7 @@ impl TypedProgram {
         // Process parameters
         let param_count = parsed_function_context_params.len() + parsed_function_params.len();
         let mut param_types: FixVec<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
-        let mut param_variables = self_.a.new_vec(param_count as u32);
+        let mut param_variables = self_.mem.new_vec(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
@@ -13409,7 +13331,7 @@ impl TypedProgram {
         let type_params_handle = self_.named_types.add_slice_copy(&type_params);
         let function_type_params_handle =
             self_.function_type_params.add_slice_copy(&function_type_params);
-        let param_variables_handle = self_.a.vec_to_mslice(&param_variables);
+        let param_variables_handle = self_.mem.vec_to_mslice(&param_variables);
         let actual_function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -13950,7 +13872,7 @@ impl TypedProgram {
             };
         }
 
-        let mut typed_functions = self.a.new_vec(ability.functions.len() as u32);
+        let mut typed_functions = self.mem.new_vec(ability.functions.len() as u32);
         for ability_function_ref in &ability.functions {
             let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
                 let the_fn = self.ast.get_function(fn_id);
@@ -14037,7 +13959,7 @@ impl TypedProgram {
             ability_id,
             base_ability_id,
             impl_arguments: impl_arguments_handle,
-            functions: self.a.vec_to_mslice(&typed_functions),
+            functions: self.mem.vec_to_mslice(&typed_functions),
             scope_id: impl_scope_id,
             span,
             compile_errors: vec![],
@@ -14067,7 +13989,7 @@ impl TypedProgram {
         };
         let ability_impl = self.ability_impls.get(ability_impl_id);
 
-        for impl_fn in self.a.getn(ability_impl.functions).iter() {
+        for impl_fn in self.mem.getn(ability_impl.functions).iter() {
             let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
@@ -14824,7 +14746,7 @@ impl TypedProgram {
         }
 
         self.tmp.print_usage("tmp end");
-        self.a.print_usage("mem end");
+        self.mem.print_usage("mem end");
         self.types.mem.print_usage("types end");
         self.bytecode.mem.print_usage("bytecode end");
 

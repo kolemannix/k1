@@ -137,12 +137,7 @@ ns meta {
   // Can only be called by generated code
   intern fn getStaticValue[T](id: u64): T
 
-  intern fn staticTypeToValue[T, ST: static T](): ST
-
-  fn summonStatic[T, ST: static T](): T {
-    let st: ST = meta/staticTypeToValue();
-    st.fromStatic()
-  }
+  intern fn staticTypeToValue[T, ST: static T](): T
 
 }
 

@@ -93,7 +93,7 @@ impl TypedProgram {
 
         match self.exprs.get(expr) {
             TypedExpr::Struct(s) => {
-                for f in s.fields.clone().iter() {
+                for f in self.mem.getn(s.fields).iter() {
                     recurse!(f.expr);
                 }
             }

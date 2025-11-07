@@ -671,7 +671,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     // Set up parameters
     let param_variables = f.param_variables;
     let mut params = b.k1.bytecode.mem.new_vec(param_variables.len());
-    for (index, param_variable_id) in b.k1.a.getn(param_variables).iter().enumerate() {
+    for (index, param_variable_id) in b.k1.mem.getn(param_variables).iter().enumerate() {
         let v = b.k1.variables.get(*param_variable_id);
         let t = b.get_physical_type(v.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
@@ -1151,17 +1151,19 @@ fn compile_expr(
     b.cur_span = b.k1.exprs.get_span(expr);
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr).clone();
+    let expr_type = b.k1.exprs.get_type(expr);
     debug!("compiling {} {}", e.kind_str(), b.k1.expr_to_string(expr));
     match e {
         TypedExpr::Struct(struct_literal) => {
-            let struct_pt = b.get_physical_type(struct_literal.type_id);
+            let struct_type_id = expr_type;
+            let struct_pt = b.get_physical_type(struct_type_id);
             let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
                 None => b.push_alloca(struct_pt, "struct literal").as_value(),
             };
-            for (field_index, field) in struct_literal.fields.iter().enumerate() {
-                debug_assert!(b.k1.types.get(struct_literal.type_id).as_struct().is_some());
+            for (field_index, field) in b.k1.mem.getn(struct_literal.fields).iter().enumerate() {
+                debug_assert!(b.k1.types.get(struct_type_id).as_struct().is_some());
                 let struct_offset = b.push_struct_offset(
                     struct_agg_id,
                     struct_base,
@@ -1565,6 +1567,7 @@ fn compile_expr(
             }
         }
         TypedExpr::Match(match_expr) => {
+            let match_result_type = expr_type;
             for stmt in &match_expr.initial_let_statements {
                 compile_stmt(b, None, *stmt)?;
             }
@@ -1590,10 +1593,10 @@ fn compile_expr(
             let end_name = mformat!(b.k1.bytecode.mem, "match_end__{}", expr.as_u32());
             let match_end_block = b.push_block(end_name);
             b.goto_block(match_end_block);
-            let result_inst_kind = b.type_to_inst_kind(match_expr.result_type);
+            let result_inst_kind = b.type_to_inst_kind(match_result_type);
             let result_came_from = match result_inst_kind {
                 InstKind::Value(_) => {
-                    let pt = b.get_physical_type(match_expr.result_type);
+                    let pt = b.get_physical_type(match_result_type);
                     Some(b.push_inst(
                         Inst::CameFrom { t: pt, incomings: MSlice::empty() },
                         "match phi",
@@ -1645,7 +1648,7 @@ fn compile_expr(
                         unreachable!()
                     };
                     *i = real_incomings;
-                    let pt_id = b.get_physical_type(match_expr.result_type);
+                    let pt_id = b.get_physical_type(match_result_type);
                     Ok(store_rich_if_dst(
                         b,
                         dst,
@@ -1810,14 +1813,15 @@ fn compile_expr(
             }
         }
         TypedExpr::EnumConstructor(enumc) => {
-            let variant_pt = b.get_physical_type(enumc.variant_type_id);
+            let variant_type_id = expr_type;
+            let variant_pt = b.get_physical_type(variant_type_id);
             let enum_base = match dst {
                 Some(dst) => dst,
                 None => b.push_alloca(variant_pt, "enum literal storage").as_value(),
             };
 
             let tag_base = enum_base;
-            let enum_variant = b.k1.types.get(enumc.variant_type_id).expect_enum_variant();
+            let enum_variant = b.k1.types.get(variant_type_id).expect_enum_variant();
             let tag_int_value = enum_variant.tag_value;
             let int_imm = b.make_int_value(&tag_int_value, "enum tag");
             b.push_store(tag_base, int_imm, "store enum lit tag");
@@ -1941,7 +1945,7 @@ fn compile_expr(
         }
         TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),
         TypedExpr::StaticValue(stat) => {
-            let t = b.get_physical_type(stat.type_id);
+            let t = b.get_physical_type(expr_type);
             // We lower the simple scalar static values
             // but leave the aggregates as globals
             match b.k1.static_values.get(stat.value_id) {
@@ -2022,8 +2026,9 @@ fn compile_cast(
     // Where to put the result; aka value placement or destination-aware codegen
     dst: Option<Value>,
     c: &TypedCast,
-    _expr_id: TypedExprId,
+    expr_id: TypedExprId,
 ) -> TyperResult<Value> {
+    let target_type_id = b.k1.exprs.get_type(expr_id);
     match c.cast_type {
         CastType::EnumToVariant
         | CastType::VariantToEnum
@@ -2033,11 +2038,13 @@ fn compile_cast(
         | CastType::IntegerCast(IntegerCastDirection::NoOp)
         | CastType::Integer8ToChar
         | CastType::StaticErase
-        | CastType::Transmute
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, dst, c.base_expr)?;
             Ok(base_noop)
+        }
+        CastType::Transmute => {
+            todo!()
         }
         CastType::IntegerCast(IntegerCastDirection::SignChange) => {
             // Treating this as a noop for now but it does mean that
@@ -2050,7 +2057,7 @@ fn compile_cast(
         | CastType::IntegerCast(IntegerCastDirection::Truncate)
         | CastType::IntegerExtendFromChar => {
             let base = compile_expr(b, None, c.base_expr)?;
-            let to_pt = b.get_physical_type(c.target_type_id);
+            let to_pt = b.get_physical_type(target_type_id);
             let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
                 CastType::IntegerCast(IntegerCastDirection::Extend)
@@ -2094,7 +2101,7 @@ fn compile_cast(
         | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
             let from = b.get_value_kind(&base).expect_value().unwrap().expect_scalar();
-            let to = b.get_physical_type(c.target_type_id).expect_scalar();
+            let to = b.get_physical_type(target_type_id).expect_scalar();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { v: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { v: base, to },

@@ -32,7 +32,10 @@ https://justforfunnoreally.dev/
 Heroes
 - Andreas Kling
 - Jonathan Blow
-- 
+- Ken Thompson
+- Chris Lattner
+- Bjarne Stroustrup
+- [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
 
 ## Example
 
