@@ -1580,7 +1580,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.builtin_types.unit_basic().into())
     }
 
-    fn codegen_match(&mut self, match_expr: &TypedMatchExpr) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_match(
+        &mut self,
+        expr_id: TypedExprId,
+        match_expr: &TypedMatchExpr,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
+        let match_result_type = self.k1.exprs.get_type(expr_id);
         for stmt in &match_expr.initial_let_statements {
             if let instr @ LlvmValue::Void(_) = self.codegen_statement(*stmt)? {
                 return Ok(instr);
@@ -1605,7 +1610,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         let match_end_block = self.ctx.append_basic_block(current_fn, "match_end");
         self.builder.position_at_end(match_end_block);
-        let result_k1_type = self.codegen_type(match_expr.result_type)?;
+        let result_k1_type = self.codegen_type(match_result_type)?;
 
         // If the whole match exits, there's no phi value
         let result_value = if result_k1_type.type_id() == NEVER_TYPE_ID {
@@ -2183,6 +2188,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.k1.exprs.get(expr_id);
+        let expr_type = self.k1.exprs.get_type(expr_id);
         let span = self.k1.exprs.get_span(expr_id);
 
         // TODO: push debug log level for debugged exprs in codegen as well
@@ -2228,11 +2234,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Struct(struc) => {
                 debug!("codegen struct {}", self.k1.expr_to_string_with_type(expr_id));
-                let k1_type = self.codegen_type(struc.type_id)?;
+                let k1_type = self.codegen_type(expr_type)?;
                 let struct_ptr = self.build_k1_alloca(&k1_type, "struct_literal");
                 let struct_k1_llvm_type = k1_type.expect_struct();
                 let struct_llvm_struct = struct_k1_llvm_type.struct_type;
-                for (idx, field) in struc.fields.iter().enumerate() {
+                for (idx, field) in self.k1.mem.getn(struc.fields).iter().enumerate() {
                     let value = self.codegen_expr_basic_value(field.expr)?;
                     let field_addr = self
                         .builder
@@ -2315,7 +2321,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(element_value.into())
                 }
             }
-            TypedExpr::Match(match_expr) => self.codegen_match(match_expr),
+            TypedExpr::Match(match_expr) => self.codegen_match(expr_id, match_expr),
             TypedExpr::LogicalAnd(and_expr) => {
                 let lhs = return_void!(self.codegen_expr(and_expr.lhs)?).into_int_value();
 
@@ -2401,7 +2407,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::Call { call_id, .. } => self.codegen_function_call(*call_id),
             TypedExpr::EnumConstructor(enum_constr) => {
-                let llvm_type = self.codegen_type(enum_constr.variant_type_id)?;
+                let llvm_type = self.codegen_type(expr_type)?;
                 let enum_ptr = self.build_k1_alloca(&llvm_type, "enum_constr");
 
                 let enum_type = llvm_type.expect_enum();
@@ -2477,7 +2483,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(payload_copied.into())
                 }
             }
-            TypedExpr::Cast(cast) => self.codegen_cast(cast),
+            TypedExpr::Cast(cast) => self.codegen_cast(expr_type, span, cast),
             TypedExpr::Return(ret) => {
                 let return_result = self.codegen_expr(ret.value)?;
                 let LlvmValue::BasicValue(return_value) = return_result else {
@@ -2570,7 +2576,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         }
     }
 
-    fn codegen_cast(&mut self, cast: &TypedCast) -> CodegenResult<LlvmValue<'ctx>> {
+    #[inline(always)]
+    fn codegen_cast(
+        &mut self,
+        target_type_id: TypeId,
+        span: SpanId,
+        cast: &TypedCast,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
         match cast.cast_type {
             CastType::EnumToVariant
             | CastType::VariantToEnum
@@ -2588,8 +2600,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             | CastType::IntegerExtendFromChar => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
-                let llvm_type = self.codegen_type(cast.target_type_id)?;
-                let integer_type = self.k1.types.get(cast.target_type_id).expect_integer();
+                let llvm_type = self.codegen_type(target_type_id)?;
+                let integer_type = self.k1.types.get(target_type_id).expect_integer();
                 let value: IntValue<'ctx> = if integer_type.is_signed() {
                     self.builder
                         .build_int_s_extend(
@@ -2612,7 +2624,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
-                let int_type = self.codegen_type(cast.target_type_id)?;
+                let int_type = self.codegen_type(target_type_id)?;
                 let truncated_value = self
                     .builder
                     .build_int_truncate(
@@ -2626,7 +2638,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             CastType::FloatExtend => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let float_dst_type =
-                    self.codegen_type(cast.target_type_id)?.rich_repr_type().into_float_type();
+                    self.codegen_type(target_type_id)?.rich_repr_type().into_float_type();
                 let extended_value =
                     self.builder.build_float_ext(from_value, float_dst_type, "fext").unwrap();
                 Ok(extended_value.as_basic_value_enum().into())
@@ -2634,14 +2646,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             CastType::FloatTruncate => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
                 let float_dst_type =
-                    self.codegen_type(cast.target_type_id)?.rich_repr_type().into_float_type();
+                    self.codegen_type(target_type_id)?.rich_repr_type().into_float_type();
                 let extended_value =
                     self.builder.build_float_trunc(from_value, float_dst_type, "ftrunc").unwrap();
                 Ok(extended_value.as_basic_value_enum().into())
             }
             CastType::FloatToUnsignedInteger | CastType::FloatToSignedInteger => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
-                let int_dst_type = self.codegen_type(cast.target_type_id)?;
+                let int_dst_type = self.codegen_type(target_type_id)?;
                 let int_dst_type_llvm = int_dst_type.rich_repr_type().into_int_type();
                 let casted_int_value = if matches!(cast.cast_type, CastType::FloatToSignedInteger) {
                     self.builder
@@ -2656,7 +2668,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             CastType::IntegerUnsignedToFloat | CastType::IntegerSignedToFloat => {
                 let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
-                let float_dst_type = self.codegen_type(cast.target_type_id)?;
+                let float_dst_type = self.codegen_type(target_type_id)?;
                 let float_dst_type_llvm = float_dst_type.rich_repr_type().into_float_type();
                 let casted_float_value = if matches!(cast.cast_type, CastType::IntegerSignedToFloat)
                 {
@@ -2724,7 +2736,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(lam_obj_ptr.as_basic_value_enum().into())
             }
             CastType::Transmute => {
-                self.k1.ice_with_span("Cast Transmute unsupported by codegen", cast.span)
+                self.k1.ice_with_span("Cast Transmute unsupported by codegen", span)
             }
         }
     }
@@ -3202,7 +3214,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function: &TypedFunction,
         index: usize,
     ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
-        let variable_id = self.k1.a.get_nth(function.param_variables, index);
+        let variable_id = self.k1.mem.get_nth(function.param_variables, index);
         let fn_type = self.k1.types.get(function.type_id).expect_function();
         let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
         let variable_value = self.variable_to_value.get(variable_id).unwrap();
@@ -3767,7 +3779,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
-            let variable_id = *self.k1.a.get_nth(typed_function.param_variables, i - sret_offset);
+            let variable_id = *self.k1.mem.get_nth(typed_function.param_variables, i - sret_offset);
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.k1.ast.idents.get("ret").unwrap(),

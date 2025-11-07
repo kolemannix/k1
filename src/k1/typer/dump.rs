@@ -535,22 +535,14 @@ impl TypedProgram {
     pub fn display_expr_id(
         &self,
         expr_id: TypedExprId,
-        writ: &mut impl Write,
-        indentation: usize,
-    ) -> std::fmt::Result {
-        self.display_expr(self.exprs.get(expr_id), writ, indentation)
-    }
-
-    pub fn display_expr(
-        &self,
-        expr: &TypedExpr,
         w: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
-        match expr {
+        let expr_type = self.exprs.get_type(expr_id);
+        match self.exprs.get(expr_id) {
             TypedExpr::Struct(struc) => {
                 w.write_str("{\n")?;
-                for (idx, field) in struc.fields.iter().enumerate() {
+                for (idx, field) in self.mem.getn(struc.fields).iter().enumerate() {
                     if idx > 0 {
                         w.write_str(",\n")?;
                     }
@@ -677,7 +669,7 @@ impl TypedProgram {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 w.write_str(".")?;
-                let variant = self.types.get(enum_constr.variant_type_id).expect_enum_variant();
+                let variant = self.types.get(expr_type).expect_enum_variant();
                 w.write_str(self.ident_str(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     w.write_str("(")?;
@@ -689,7 +681,7 @@ impl TypedProgram {
             TypedExpr::Cast(cast) => {
                 self.display_expr_id(cast.base_expr, w, indentation)?;
                 write!(w, " as({}) ", cast.cast_type)?;
-                self.display_type_id(w, cast.target_type_id, false)
+                self.display_type_id(w, expr_type, false)
             }
             TypedExpr::EnumGetTag(get_tag) => {
                 self.display_expr_id(get_tag.enum_expr_or_reference, w, indentation)?;
@@ -870,20 +862,6 @@ impl TypedProgram {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        if cond.patterns.is_empty() {
-            writeln!(w, "<no patterns>")?;
-        } else {
-            writeln!(w, "Patterns: ")?;
-            for (idx, &pattern) in self.patterns.get_slice(cond.patterns).iter().enumerate() {
-                w.write_str(&"  ".repeat(indentation))?;
-                self.display_pattern(pattern, w)?;
-                if idx != cond.patterns.len() as usize - 1 {
-                    w.write_str(" and ")?;
-                }
-            }
-            writeln!(w)?;
-        }
-
         for instr in &cond.instrs {
             match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
@@ -1095,7 +1073,7 @@ impl TypedProgram {
         self.display_type_id(w, i.self_type_id, false)?;
         if display_functions {
             w.write_str(" {\n")?;
-            for ability_impl_fn in self.a.getn(i.functions) {
+            for ability_impl_fn in self.mem.getn(i.functions) {
                 w.write_str("\t\t")?;
                 match *ability_impl_fn {
                     AbilityImplFunction::FunctionId(ability_impl_fn) => {

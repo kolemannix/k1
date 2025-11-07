@@ -51,7 +51,6 @@ impl TypedProgram {
 
     pub(super) fn synth_if_else(
         &mut self,
-        patterns: TypedPatternSlice,
         result_type: TypeId,
         condition: TypedExprId,
         consequent: TypedExprId,
@@ -62,7 +61,6 @@ impl TypedProgram {
         let condition_span = self.exprs.get_span(condition);
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns,
                 instrs: eco_vec![MatchingConditionInstr::Cond { value: condition }],
                 binding_eligible: true,
                 diverges: condition_diverges,
@@ -72,7 +70,6 @@ impl TypedProgram {
         };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                patterns: MSlice::empty(),
                 instrs: eco_vec![],
                 binding_eligible: true,
                 diverges: false,
@@ -80,12 +77,14 @@ impl TypedProgram {
             },
             consequent_expr: alternate,
         };
-        self.exprs.add_tmp(TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: eco_vec![],
+        self.exprs.add(
+            TypedExpr::Match(TypedMatchExpr {
+                initial_let_statements: eco_vec![],
+                arms: eco_vec![cons_arm, alt_arm],
+            }),
             result_type,
-            arms: eco_vec![cons_arm, alt_arm],
             span,
-        }))
+        )
     }
 
     pub(super) fn synth_cast(
@@ -96,12 +95,7 @@ impl TypedProgram {
         span: Option<SpanId>,
     ) -> TypedExprId {
         let span = span.unwrap_or_else(|| self.exprs.get_span(expr));
-        self.exprs.add_tmp(TypedExpr::Cast(TypedCast {
-            cast_type,
-            base_expr: expr,
-            target_type_id: target_type,
-            span,
-        }))
+        self.exprs.add(TypedExpr::Cast(TypedCast { cast_type, base_expr: expr }), target_type, span)
     }
 
     pub(super) fn synth_optional_type(&mut self, inner_type: TypeId) -> TypeId {
@@ -120,12 +114,14 @@ impl TypedProgram {
             .variant_by_name(self.ast.idents.b.Some)
             .unwrap();
 
-        let some_expr = self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            variant_type_id: some_variant.my_type_id,
-            variant_index: some_variant.index,
+        let some_expr = self.exprs.add(
+            TypedExpr::EnumConstructor(TypedEnumConstructor {
+                variant_index: some_variant.index,
+                payload: Some(expr_id),
+            }),
+            some_variant.my_type_id,
             span,
-            payload: Some(expr_id),
-        }));
+        );
         let casted =
             self.synth_cast(some_expr, some_variant.enum_type_id, CastType::VariantToEnum, None);
         (casted, optional_type)
@@ -139,12 +135,14 @@ impl TypedProgram {
             .expect_enum()
             .variant_by_name(self.ast.idents.b.None)
             .unwrap();
-        let none_expr = self.exprs.add_tmp(TypedExpr::EnumConstructor(TypedEnumConstructor {
-            variant_type_id: none_variant.my_type_id,
-            variant_index: none_variant.index,
+        let none_expr = self.exprs.add(
+            TypedExpr::EnumConstructor(TypedEnumConstructor {
+                variant_index: none_variant.index,
+                payload: None,
+            }),
+            none_variant.my_type_id,
             span,
-            payload: None,
-        }));
+        );
         let casted =
             self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum, None);
         casted
@@ -316,35 +314,6 @@ impl TypedProgram {
         )
     }
 
-    pub fn synth_struct_expr(
-        &mut self,
-        struct_type_id: TypeId,
-        field_exprs: Vec<TypedExprId>,
-        scope_id: ScopeId,
-        span: SpanId,
-    ) -> TypedExprId {
-        let struct_type = self.types.get(struct_type_id).expect_struct();
-        debug_assert_eq!(struct_type.fields.len() as usize, field_exprs.len());
-        let mut fields: EcoVec<StructLiteralField> =
-            EcoVec::with_capacity(struct_type.fields.len() as usize);
-        for (index, field_expr) in field_exprs.into_iter().enumerate() {
-            let field = self.types.mem.get_nth(struct_type.fields, index);
-            #[cfg(debug_assertions)]
-            {
-                let field_expr_type = self.exprs.get_type(field_expr);
-                if let Err(msg) = self.check_types(field.type_id, field_expr_type, scope_id) {
-                    panic!("synthed struct fields failed typechecking: {}", msg)
-                }
-            }
-            fields.push(StructLiteralField { name: field.name, expr: field_expr });
-        }
-        self.exprs.add_tmp(TypedExpr::Struct(StructLiteral {
-            fields,
-            type_id: struct_type_id,
-            span,
-        }))
-    }
-
     pub(super) fn synth_string_literal(
         &mut self,
         string_id: StringId,
@@ -375,18 +344,14 @@ impl TypedProgram {
         let filename_string_id = self.ast.strings.intern(&source.filename);
         let filename_expr = self.synth_string_literal(filename_string_id, span);
 
+        let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);
         let struct_expr = TypedExpr::Struct(StructLiteral {
-            fields: eco_vec![
+            fields: self.mem.pushn(&[
                 StructLiteralField { name: self.ast.idents.b.filename, expr: filename_expr },
-                StructLiteralField {
-                    name: self.ast.idents.b.line,
-                    expr: self.synth_int(TypedIntValue::U64(line_number as u64), span),
-                },
-            ],
-            type_id: COMPILER_SOURCE_LOC_TYPE_ID,
-            span,
+                StructLiteralField { name: self.ast.idents.b.line, expr: line_number_expr },
+            ]),
         });
-        self.exprs.add_tmp(struct_expr)
+        self.exprs.add(struct_expr, COMPILER_SOURCE_LOC_TYPE_ID, span)
     }
 
     pub(super) fn synth_crash_call(
