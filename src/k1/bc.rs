@@ -1,4 +1,5 @@
 use crate::compiler::WordSize;
+use crate::kmem::FixVec;
 use crate::parse::NumericWidth;
 // Copyright (c) 2025 knix
 // All rights reserved.
@@ -11,20 +12,18 @@ use crate::parse::NumericWidth;
 // and will help make adding other backends far, far easier
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
+use crate::{failf, mformat};
 use crate::{
-    SV8,
     kmem::{self, MSlice, MStr},
     lex::SpanId,
     nz_u32_id,
     pool::VPool,
     typer::{types::*, *},
 };
-use crate::{failf, mformat};
 use ahash::HashMapExt;
 use fxhash::FxHashMap;
 use itertools::Itertools;
 use log::debug;
-use smallvec::smallvec;
 use std::fmt::Write;
 
 macro_rules! b_ice {
@@ -1183,7 +1182,7 @@ fn compile_expr(
                 field_access.field_index,
                 "struct field access",
             );
-            let result_type = b.get_physical_type(field_access.result_type);
+            let result_type = b.get_physical_type(expr_type);
             let result = build_field_access(
                 b,
                 field_access.access_kind,
@@ -1568,12 +1567,12 @@ fn compile_expr(
         }
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;
-            for stmt in &match_expr.initial_let_statements {
+            for stmt in b.k1.mem.getn(match_expr.initial_let_statements) {
                 compile_stmt(b, None, *stmt)?;
             }
 
-            let mut arm_blocks = b.k1.bytecode.mem.new_vec(match_expr.arms.len() as u32);
-            for (arm_index, _arm) in match_expr.arms.iter().enumerate() {
+            let mut arm_blocks = b.k1.bytecode.mem.new_vec(match_expr.arms.len());
+            for (arm_index, _arm) in b.k1.mem.getn(match_expr.arms).iter().enumerate() {
                 let name = mformat!(b.k1.bytecode.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
                 let name_cons =
                     mformat!(b.k1.bytecode.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
@@ -1609,9 +1608,10 @@ fn compile_expr(
                 InstKind::Terminator => None,
             };
 
-            let mut incomings: SV8<CameFromCase> = smallvec![];
+            let mut incomings: FixVec<CameFromCase, _> =
+                b.k1.bytecode.mem.new_vec(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
-                match_expr.arms.iter().enumerate().zip(arm_blocks.iter())
+                b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
                 let next_arm = arm_blocks.get(index + 1);
                 let next_arm_or_fail: BlockId = match next_arm {
@@ -1641,7 +1641,7 @@ fn compile_expr(
                     Ok(inst.as_value())
                 }
                 Some(came_from) => {
-                    let real_incomings = b.k1.bytecode.mem.pushn(&incomings);
+                    let real_incomings = b.k1.bytecode.mem.vec_to_mslice(&incomings);
                     let Inst::CameFrom { incomings: i, .. } =
                         b.k1.bytecode.instrs.get_mut(came_from)
                     else {
@@ -2326,7 +2326,7 @@ fn compile_matching_condition(
         b.push_jump(cons_block, "empty condition");
         return Ok(());
     }
-    for (index, inst) in mc.instrs.iter().enumerate() {
+    for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
         match inst {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;

@@ -61,8 +61,7 @@ impl TypedProgram {
         let condition_span = self.exprs.get_span(condition);
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
-                instrs: eco_vec![MatchingConditionInstr::Cond { value: condition }],
-                binding_eligible: true,
+                instrs: self.mem.pushn(&[MatchingConditionInstr::Cond { value: condition }]),
                 diverges: condition_diverges,
                 span: condition_span,
             },
@@ -70,8 +69,7 @@ impl TypedProgram {
         };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                instrs: eco_vec![],
-                binding_eligible: true,
+                instrs: MSlice::empty(),
                 diverges: false,
                 span: condition_span,
             },
@@ -79,8 +77,8 @@ impl TypedProgram {
         };
         self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: eco_vec![],
-                arms: eco_vec![cons_arm, alt_arm],
+                initial_let_statements: MSlice::empty(),
+                arms: self.mem.pushn(&[cons_arm, alt_arm]),
             }),
             result_type,
             span,

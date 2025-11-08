@@ -618,11 +618,11 @@ impl TypedProgram {
             }
             TypedExpr::Block(block) => self.display_block(block, w, indentation),
             TypedExpr::Match(typed_match) => {
-                for stmt in &typed_match.initial_let_statements {
+                for stmt in self.mem.getn(typed_match.initial_let_statements) {
                     self.display_stmt(*stmt, w, indentation)?;
                 }
                 w.write_str("switch {\n")?;
-                for (idx, case) in typed_match.arms.iter().enumerate() {
+                for (idx, case) in self.mem.getn(typed_match.arms).iter().enumerate() {
                     w.write_str(&"  ".repeat(indentation + 1))?;
                     writeln!(w, "ARM {idx}").unwrap();
                     self.display_matching_condition(w, &case.condition, indentation + 1)?;
@@ -630,7 +630,7 @@ impl TypedProgram {
                     w.write_str(&"  ".repeat(indentation + 2))?;
                     w.write_str("-> ")?;
                     self.display_expr_id(case.consequent_expr, w, indentation + 2)?;
-                    if idx < typed_match.arms.len() - 1 {
+                    if idx < typed_match.arms.len() as usize - 1 {
                         w.write_str("\n")?;
                     }
                 }
@@ -862,7 +862,7 @@ impl TypedProgram {
         cond: &MatchingCondition,
         indentation: usize,
     ) -> std::fmt::Result {
-        for instr in &cond.instrs {
+        for instr in self.mem.getn(cond.instrs) {
             match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
                     self.display_stmt(*let_stmt, w, indentation)?;
