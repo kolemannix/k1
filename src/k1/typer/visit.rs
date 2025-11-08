@@ -44,7 +44,7 @@ impl TypedProgram {
         state: &mut S,
         action: &mut impl FnMut(&TypedProgram, TypedExprId, &mut S) -> Option<R>,
     ) -> Option<R> {
-        for instr in &cond.instrs {
+        for instr in self.mem.getn(cond.instrs) {
             let result = match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
                     self.visit_stmt_tree(*let_stmt, state, action)
@@ -127,10 +127,10 @@ impl TypedProgram {
                 }
             }
             TypedExpr::Match(typed_match) => {
-                for stmt in &typed_match.initial_let_statements {
+                for stmt in self.mem.getn(typed_match.initial_let_statements) {
                     recurse_stmt!(*stmt);
                 }
-                for arm in &typed_match.arms {
+                for arm in self.mem.getn(typed_match.arms) {
                     if let Some(r) = self.visit_matching_condition(&arm.condition, state, action) {
                         return Some(r);
                     };

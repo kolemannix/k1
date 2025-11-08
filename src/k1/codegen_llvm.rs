@@ -1586,7 +1586,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match_expr: &TypedMatchExpr,
     ) -> CodegenResult<LlvmValue<'ctx>> {
         let match_result_type = self.k1.exprs.get_type(expr_id);
-        for stmt in &match_expr.initial_let_statements {
+        for stmt in self.k1.mem.getn(match_expr.initial_let_statements) {
             if let instr @ LlvmValue::Void(_) = self.codegen_statement(*stmt)? {
                 return Ok(instr);
             }
@@ -1595,7 +1595,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let mut arm_blocks: SV8<_> = smallvec![];
-        for (index, _arm) in match_expr.arms.iter().enumerate() {
+        for (index, _arm) in self.k1.mem.getn(match_expr.arms).iter().enumerate() {
             let arm_block = self.ctx.append_basic_block(current_fn, &format!("arm_{index}"));
             let arm_consequent_block =
                 self.ctx.append_basic_block(current_fn, &format!("arm_cons_{index}"));
@@ -1624,7 +1624,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
 
         'arm: for ((index, arm), (arm_block, arm_cons_block)) in
-            match_expr.arms.iter().enumerate().zip(arm_blocks.iter())
+            self.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
         {
             let next_arm = arm_blocks.get(index + 1);
             let next_arm_or_fail = next_arm.map(|p| p.0).unwrap_or(fail_block);
@@ -3512,7 +3512,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         cons_block: BasicBlock<'ctx>,
         else_block: BasicBlock<'ctx>,
     ) -> CodegenResult<()> {
-        for stmt in &condition.instrs {
+        for stmt in self.k1.mem.getn(condition.instrs) {
             match stmt {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
                     self.codegen_statement(*let_stmt)?;

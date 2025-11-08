@@ -1109,10 +1109,8 @@ pub enum FieldAccessKind {
 pub struct FieldAccess {
     pub base: TypedExprId,
     pub field_index: u32,
-    pub result_type: TypeId,
     pub struct_type: TypeId,
     pub access_kind: FieldAccessKind,
-    pub span: SpanId,
 }
 
 impl FieldAccess {
@@ -1157,7 +1155,7 @@ pub struct TypedEnumIsVariantExpr {
 }
 impl_copy_if_small!(16, TypedEnumIsVariantExpr);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedMatchArm {
     pub condition: MatchingCondition,
     pub consequent_expr: TypedExprId,
@@ -1342,17 +1340,9 @@ pub struct PendingCaptureExpr {
     pub span: SpanId,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct MatchingCondition {
-    /// Multiple patterns does _not_ mean the user provided multiple patterns in a switch,
-    /// that case currently gets compiled to N arms, where N is the number of alternate patterns
-    /// Though that's something I could now consider changing, the trick would be to generate
-    /// a single set of variables for all the bindings that each point to the unique variables from each
-    /// pattern. We already check for exact number and name, so this is possible
-    // pub patterns: MSlice<TypedPatternId, TypedPatternPool>,
-    pub instrs: EcoVec<MatchingConditionInstr>,
-    #[allow(unused)]
-    pub binding_eligible: bool,
+    pub instrs: MSlice<MatchingConditionInstr, TypedProgram>,
     pub diverges: bool,
     pub span: SpanId,
 }
@@ -1381,8 +1371,8 @@ impl_copy_if_small!(12, LoopExpr);
 #[derive(Clone)]
 /// Invariant: The last arm's condition must always evaluate to 'true'
 pub struct TypedMatchExpr {
-    pub initial_let_statements: EcoVec<TypedStmtId>,
-    pub arms: EcoVec<TypedMatchArm>,
+    pub initial_let_statements: MSlice<TypedStmtId, TypedProgram>,
+    pub arms: MSlice<TypedMatchArm, TypedProgram>,
 }
 
 #[derive(Clone, Copy)]
@@ -1425,7 +1415,15 @@ pub enum TypedExpr {
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     Match(TypedMatchExpr),
+    /// Takes 2 boolean expressions and runs the 2nd only if the first is true, returning the logical AND
+    /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
+    /// It could possibly be a macro one day, desugaring to an if/else. Actually, it can
+    /// already desugar to an if/else! nocommit(3)
     LogicalAnd(TypedLogicalAnd),
+    /// Takes 2 boolean expressions and runs the 2nd only if the first is false, returning the logical OR
+    /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
+    /// It could possibly be a macro one day, desugaring to an if/else. Actually, it can
+    /// already desugar to an if/else! nocommit(3)
     LogicalOr(TypedLogicalOr),
     // Current largest variant at 56 bytes
     // nocommit(3): Deal with the size of MatchingCondition
@@ -1503,7 +1501,7 @@ impl TypedExpr {
     pub fn get_type(&self) -> TypeId {
         match self {
             TypedExpr::Struct(_struc) => TypeId::PENDING,
-            TypedExpr::StructFieldAccess(field_access) => field_access.result_type,
+            TypedExpr::StructFieldAccess(_field_access) => TypeId::PENDING,
             TypedExpr::ArrayGetElement(ag) => ag.result_type,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::Deref(deref) => deref.type_id,
@@ -1531,7 +1529,7 @@ impl TypedExpr {
     pub fn get_span(&self) -> SpanId {
         match self {
             TypedExpr::Struct(_struc) => SpanId::NONE,
-            TypedExpr::StructFieldAccess(field_access) => field_access.span,
+            TypedExpr::StructFieldAccess(_field_access) => SpanId::NONE,
             TypedExpr::ArrayGetElement(ag) => ag.span,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::Deref(deref) => deref.span,
@@ -2347,6 +2345,12 @@ impl TypedExprPool {
 
     pub fn get(&self, id: TypedExprId) -> &TypedExpr {
         self.exprs.get(id)
+    }
+
+    pub fn set_full(&mut self, id: TypedExprId, expr: TypedExpr, type_id: TypeId, span: SpanId) {
+        *self.exprs.get_mut(id) = expr;
+        *self.type_ids.get_mut(id) = type_id;
+        *self.spans.get_mut(id) = span;
     }
 
     pub fn get_mut(&mut self, id: TypedExprId) -> &mut TypedExpr {
@@ -6503,14 +6507,16 @@ impl TypedProgram {
                 } else {
                     target_field.type_id
                 };
-                Ok(self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
-                    base: base_expr,
-                    field_index: field_index as u32,
+                Ok(self.exprs.add(
+                    TypedExpr::StructFieldAccess(FieldAccess {
+                        base: base_expr,
+                        field_index: field_index as u32,
+                        access_kind,
+                        struct_type: struct_type_id,
+                    }),
                     result_type,
-                    access_kind,
-                    struct_type: struct_type_id,
                     span,
-                })))
+                ))
             }
             Type::EnumVariant(ev) => {
                 if self.ast.idents.get_name(field_access.field_name) != "value" {
@@ -6604,15 +6610,16 @@ impl TypedProgram {
                         ctx.with_scope(block_scope).with_no_expected_type(),
                         false,
                     )?;
-                    let field_access =
-                        self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
+                    let field_access = self.exprs.add(
+                        TypedExpr::StructFieldAccess(FieldAccess {
                             base: opt_unwrap,
                             field_index: field_index as u32,
-                            span,
                             access_kind: FieldAccessKind::ValueToValue,
-                            result_type: field_type,
                             struct_type: opt_inner_type,
-                        }));
+                        }),
+                        field_type,
+                        span,
+                    );
                     let (consequent, consequent_type_id) = self.synth_optional_some(field_access);
                     let alternate = self.synth_optional_none(field_type, span);
                     let if_expr = self.synth_if_else(
@@ -7944,7 +7951,7 @@ impl TypedProgram {
             captured_variable_id: VariableId,
             env_struct_type: TypeId,
             span: SpanId,
-        ) -> TypedExpr {
+        ) -> (TypedExpr, TypeId, SpanId) {
             let v = k1.variables.get(captured_variable_id);
             let variable_type = v.type_id;
             let env_struct_reference_type = k1.types.add_reference_type(env_struct_type, false);
@@ -7960,12 +7967,10 @@ impl TypedProgram {
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: env_variable_expr,
                 field_index: field_index as u32,
-                result_type: variable_type,
                 struct_type: env_struct_type,
                 access_kind: FieldAccessKind::ValueToValue,
-                span,
             });
-            env_field_access
+            (env_field_access, variable_type, span)
         }
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
         let lambda_scope_id =
@@ -8210,14 +8215,14 @@ impl TypedProgram {
             let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
                 unreachable!()
             };
-            let field_access_expr = fixup_capture_expr_new(
+            let (field_access_expr, type_id, span_id) = fixup_capture_expr_new(
                 self,
                 environment_casted_variable.variable_id,
                 pc.captured_variable_id,
                 environment_struct_type,
                 pc.span,
             );
-            *self.exprs.get_mut(pending_fixup) = field_access_expr;
+            self.exprs.set_full(pending_fixup, field_access_expr, type_id, span_id);
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
@@ -8314,70 +8319,22 @@ impl TypedProgram {
 
         let match_expr_span = match_parsed_expr.span;
         let arms_ctx = ctx.with_scope(match_scope_id);
-        let mut arms = self.eval_match_arms(
-            match_subject_variable.variable_expr,
-            &match_parsed_expr.cases,
-            arms_ctx,
-            partial,
-            allow_bindings,
-        )?;
 
-        let fallback_arm = TypedMatchArm {
-            condition: MatchingCondition {
-                instrs: eco_vec![],
-                binding_eligible: true,
-                diverges: false,
-                span: match_expr_span,
-            },
-            consequent_expr: self.synth_crash_call(
-                "No cases matched",
-                match_expr_span,
-                ctx.with_no_expected_type(),
-            )?,
-        };
-        arms.push(fallback_arm);
+        let parsed_cases = &match_parsed_expr.cases;
+        let total_arms: usize =
+            parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
 
-        // TODO: Principled handling of never, which means calling into some unit of code
-        // whose job it is to unify or otherwise reduce two or more types into 1, or produce an
-        // error?
-        //
-        // The result type of the match is the type of the first non-never arm, or never
-        // They've already been typechecked against each other.
-        let match_result_type = arms
-            .iter()
-            .find_map(|arm| {
-                let conseqent_type = self.exprs.get_type(arm.consequent_expr);
-                if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
-            })
-            .unwrap_or(NEVER_TYPE_ID);
-        Ok(self.exprs.add(
-            TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: eco_vec![match_subject_variable.defn_stmt],
-                arms,
-            }),
-            match_result_type,
-            match_expr_span,
-        ))
-    }
-
-    fn eval_match_arms(
-        &mut self,
-        target_expr: TypedExprId,
-        cases: &[parse::ParsedMatchCase],
-        ctx: EvalExprContext,
-        partial_match: bool,
-        allow_bindings: bool,
-    ) -> TyperResult<EcoVec<TypedMatchArm>> {
-        let mut typed_arms: EcoVec<TypedMatchArm> = EcoVec::new();
+        let mut typed_arms: FixVec<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
-        let match_scope_id = ctx.scope_id;
 
         let mut all_unguarded_patterns: FixVec<(TypedPatternId, usize), MemTmp> =
-            self.tmp.new_vec(cases.iter().map(|pc| pc.patterns.len() as u32).sum());
-        let target_expr_type = self.exprs.get_type(target_expr);
-        let target_expr_span = self.exprs.get_span(target_expr);
-        for parsed_case in cases.iter() {
+            self.tmp.new_vec(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
+        let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
+        let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
+
+        // Core loop to build up the typed, compiled match arms
+        for parsed_case in parsed_cases.iter() {
             let mut arm_patterns: SV2<TypedPatternId> =
                 SmallVec::with_capacity(parsed_case.patterns.len());
             let multi_pattern = parsed_case.patterns.len() > 1;
@@ -8440,25 +8397,31 @@ impl TypedProgram {
             // arms, and somehow compile in the right variables defns based on which one passed.
             // Which isn't possible to know at compile time. So I think this is just where we are.
             // It'd be nice to re-use the typed expr across different scopes, but we can't do that
+
+            // nocommit: Can I just do this inside the above loop and avoid the need for the
+            // arm_patterns array?
             for pattern in arm_patterns.into_iter() {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
-                let pattern_eval_ctx = ctx.with_scope(arm_scope_id).with_no_expected_type();
-                let mut instrs = eco_vec![];
+                let pattern_eval_ctx = arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
+                let mut instrs: SV8<_> = smallvec![];
                 self.compile_pattern_into_values(
                     pattern,
-                    target_expr,
+                    match_subject_variable.variable_expr,
                     &mut instrs,
                     false,
                     pattern_eval_ctx,
                 )?;
+                if instrs.spilled() {
+                    eprintln!("spilled instrs: {}", instrs.len());
+                }
 
                 match parsed_case.guard_condition_expr {
                     None => {}
                     Some(guard_condition_expr_id) => {
                         let guard_condition_expr = self.eval_expr(
                             guard_condition_expr_id,
-                            ctx.with_scope(arm_scope_id).with_expected_type(Some(BOOL_TYPE_ID)),
+                            pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         )?;
                         instrs.push(MatchingConditionInstr::Cond { value: guard_condition_expr });
                     }
@@ -8468,7 +8431,7 @@ impl TypedProgram {
                 // since the bindings are now available
                 let consequent_expr = self.eval_expr_with_coercion(
                     parsed_case.expression,
-                    ctx.with_scope(arm_scope_id).with_expected_type(expected_arm_type_id),
+                    pattern_eval_ctx.with_expected_type(expected_arm_type_id),
                     true,
                 )?;
                 let consequent_expr_type = self.exprs.get_type(consequent_expr);
@@ -8483,20 +8446,20 @@ impl TypedProgram {
                     Some(guard_expr) => self.ast.get_expr_span(guard_expr),
                     None => self.patterns.get(pattern).span_id(),
                 };
-                typed_arms.push(TypedMatchArm {
+                let match_arm = TypedMatchArm {
                     condition: MatchingCondition {
-                        instrs,
-                        binding_eligible: true,
+                        instrs: self.mem.pushn(&instrs),
                         diverges: condition_diverges,
                         span: condition_span,
                     },
                     consequent_expr,
-                });
+                };
+                typed_arms.push(match_arm);
             }
         }
 
         // Exhaustiveness Checking
-        if !partial_match {
+        if !partial {
             let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
             let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
             trial_constructors.clear();
@@ -8553,7 +8516,37 @@ impl TypedProgram {
             }
         }
 
-        Ok(typed_arms)
+        let fallback_arm = TypedMatchArm {
+            condition: MatchingCondition {
+                instrs: MSlice::empty(),
+                diverges: false,
+                span: match_expr_span,
+            },
+            consequent_expr: self.synth_crash_call(
+                "No cases matched",
+                match_expr_span,
+                arms_ctx.with_no_expected_type(),
+            )?,
+        };
+        typed_arms.push(fallback_arm);
+
+        // The result type of the match is the type of the first non-never arm, or never
+        // They've already been typechecked against each other.
+        let match_result_type = typed_arms
+            .iter()
+            .find_map(|arm| {
+                let conseqent_type = self.exprs.get_type(arm.consequent_expr);
+                if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
+            })
+            .unwrap_or(NEVER_TYPE_ID);
+        Ok(self.exprs.add(
+            TypedExpr::Match(TypedMatchExpr {
+                initial_let_statements: self.mem.pushn(&[match_subject_variable.defn_stmt]),
+                arms: self.mem.vec_to_mslice(&typed_arms),
+            }),
+            match_result_type,
+            match_expr_span,
+        ))
     }
 
     /// Accumulates a list of 'BindingOrCond' while 'compiling' a pattern match.
@@ -8564,7 +8557,7 @@ impl TypedProgram {
         &mut self,
         pattern: TypedPatternId,
         target_expr: TypedExprId,
-        instrs: &mut EcoVec<MatchingConditionInstr>,
+        instrs: &mut SV8<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
@@ -8589,19 +8582,20 @@ impl TypedProgram {
                     } else {
                         pattern_field.field_type_id
                     };
-                    let get_struct_field =
-                        self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
+                    let get_struct_field = self.exprs.add(
+                        TypedExpr::StructFieldAccess(FieldAccess {
                             base: target_expr,
                             field_index: pattern_field.field_index,
-                            result_type,
                             struct_type,
                             access_kind: if is_referencing {
                                 FieldAccessKind::ReferenceThrough
                             } else {
                                 FieldAccessKind::ValueToValue
                             },
-                            span: struct_pattern_span,
-                        }));
+                        }),
+                        result_type,
+                        struct_pattern_span,
+                    );
                     let var_name = self.build_ident_with(|k1, s| {
                         write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
                     });
@@ -9081,15 +9075,16 @@ impl TypedProgram {
                 false,
             )?;
             let size_hint_ret_type = self.exprs.get_type(size_hint_call);
-            let size_hint_lower_bound =
-                self.exprs.add_tmp(TypedExpr::StructFieldAccess(FieldAccess {
+            let size_hint_lower_bound = self.exprs.add(
+                TypedExpr::StructFieldAccess(FieldAccess {
                     struct_type: size_hint_ret_type,
                     base: size_hint_call,
                     field_index: 0,
-                    result_type: UWORD_TYPE_ID,
                     access_kind: FieldAccessKind::ValueToValue,
-                    span: iterable_span,
-                }));
+                }),
+                UWORD_TYPE_ID,
+                iterable_span,
+            );
             let synth_function_call = self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(body_span),
                 &[body_block_result_type],
@@ -9334,8 +9329,7 @@ impl TypedProgram {
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             condition: MatchingCondition {
-                instrs: eco_vec![],
-                binding_eligible: true,
+                instrs: MSlice::empty(),
                 diverges: false,
                 span: condition_span,
             },
@@ -9343,8 +9337,8 @@ impl TypedProgram {
         };
         Ok(self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
-                initial_let_statements: eco_vec![],
-                arms: eco_vec![cons_arm, alt_arm],
+                initial_let_statements: MSlice::empty(),
+                arms: self.mem.pushn(&[cons_arm, alt_arm]),
             }),
             overall_type,
             if_expr.span,
@@ -9359,7 +9353,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: EcoVec<MatchingConditionInstr> = EcoVec::new();
+        let mut instrs: SV8<MatchingConditionInstr> = smallvec![];
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
@@ -9367,8 +9361,11 @@ impl TypedProgram {
             &mut instrs,
             ctx,
         )?;
+        if instrs.spilled() {
+            eprintln!("instrs spilled: {}", instrs.len());
+        }
 
-        let mut all_bindings: SmallVec<[VariablePattern; 8]> = SmallVec::new();
+        let mut all_bindings: SmallVec<[VariablePattern; 8]> = smallvec![];
         for pattern in all_patterns.iter() {
             self.patterns.get_pattern_bindings_rec(*pattern, &mut all_bindings);
         }
@@ -9398,7 +9395,7 @@ impl TypedProgram {
         let diverges = self.matching_condition_diverges(&instrs);
 
         let span = self.ast.get_expr_span(condition);
-        Ok(MatchingCondition { instrs, binding_eligible: allow_bindings, diverges, span })
+        Ok(MatchingCondition { instrs: self.mem.pushn(&instrs), diverges, span })
     }
 
     fn matching_condition_diverges(&self, instrs: &[MatchingConditionInstr]) -> bool {
@@ -9434,7 +9431,7 @@ impl TypedProgram {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
-        instrs: &mut EcoVec<MatchingConditionInstr>,
+        instrs: &mut SV8<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -9516,16 +9513,15 @@ impl TypedProgram {
         };
         let false_arm = TypedMatchArm {
             condition: MatchingCondition {
-                instrs: eco_vec![],
-                binding_eligible: true,
+                instrs: MSlice::empty(),
                 diverges: false,
                 span: condition_span,
             },
             consequent_expr: self.synth_bool(false, span),
         };
         let match_expr = TypedExpr::Match(TypedMatchExpr {
-            initial_let_statements: eco_vec![],
-            arms: eco_vec![true_arm, false_arm],
+            initial_let_statements: MSlice::empty(),
+            arms: self.mem.pushn(&[true_arm, false_arm]),
         });
         Ok(self.exprs.add(match_expr, BOOL_TYPE_ID, span))
     }
@@ -11873,7 +11869,7 @@ impl TypedProgram {
             self.check_types(specialized_return_type, body_type, specialized_function_scope_id)
         {
             return failf!(
-                self.get_span_for_expr_type(typed_body),
+                self.get_span_responsible_for_expr_type(typed_body),
                 "Function body type mismatch: {}\n specialized signature is: {}",
                 msg,
                 self.type_id_to_string(specialized_function_type)
@@ -11893,13 +11889,13 @@ impl TypedProgram {
 
     /// Used to drill down to the span that is responsible for the type of the given expression
     /// For example, the last statement of a block, rather than the entire span
-    pub fn get_span_for_expr_type(&self, typed_expr_id: TypedExprId) -> SpanId {
+    pub fn get_span_responsible_for_expr_type(&self, typed_expr_id: TypedExprId) -> SpanId {
         match self.exprs.get(typed_expr_id) {
             TypedExpr::Block(typed_block) => match typed_block.statements.last() {
                 None => typed_block.span,
                 Some(stmt) => match self.stmts.get(*stmt) {
                     TypedStmt::Expr(typed_expr_id, _) => {
-                        self.get_span_for_expr_type(*typed_expr_id)
+                        self.get_span_responsible_for_expr_type(*typed_expr_id)
                     }
                     TypedStmt::Let(let_stmt) => let_stmt.span,
                     TypedStmt::Assignment(a) => a.span,
@@ -11907,10 +11903,10 @@ impl TypedProgram {
                     TypedStmt::Defer(defer) => defer.span,
                 },
             },
-            TypedExpr::Match(typed_match_expr) => {
-                self.get_span_for_expr_type(typed_match_expr.arms.first().unwrap().consequent_expr)
-            }
-            TypedExpr::Return(r) => self.get_span_for_expr_type(r.value),
+            TypedExpr::Match(typed_match_expr) => self.get_span_responsible_for_expr_type(
+                self.mem.get_nth_opt(typed_match_expr.arms, 0).unwrap().consequent_expr,
+            ),
+            TypedExpr::Return(r) => self.get_span_responsible_for_expr_type(r.value),
             _e => self.exprs.get_span(typed_expr_id),
         }
     }
@@ -12074,7 +12070,7 @@ impl TypedProgram {
                     self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
                 // Make the binding variables unavailable in the else scope
-                for instr in &condition.instrs {
+                for instr in self.mem.getn(condition.instrs) {
                     if let MatchingConditionInstr::Binding { let_stmt } = instr {
                         let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
                         let variable = self.variables.get(stmt.variable_id);

@@ -1,16 +1,11 @@
 // Disclaimer: Super claude-y sloppy but working fork/execve example
+// What's cool is that claude got here just by following compiler errors and reading the core lib
+// I didn't even consider that **char was valid k1 syntax and did the expected thing.
 
 // Process execution wrapper for K1  
 // Raw execve-based implementation
 
-fn test(): unit {
-    #if core/k1/OS_POSIX {
-        testPosix()
-    } else {
-        println("Process execution only supported on POSIX systems")
-    }
-}
-
+// dead #if but could be done
 #if core/k1/OS_POSIX
 
 // POSIX system call extern declarations
@@ -87,6 +82,10 @@ fn testPosix(): unit {
     println("Nonexistent command isOk(): {failStatus.isOk()}");
 }
 
-fn mainTmp(): unit {
-    test();
+fn testExecProcess(): unit {
+  #if core/k1/OS_POSIX {
+    testPosix()
+  } else {
+    println("Process execution only supported on POSIX systems")
+  }
 }
