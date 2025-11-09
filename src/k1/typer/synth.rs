@@ -163,6 +163,45 @@ impl TypedProgram {
         BlockBuilder { statements: self.mem.new_vec(max_len), scope_id: block_scope_id, span }
     }
 
+    /// Sometimes a sub-expression of a larger construct has type `never`, for example a function argument
+    /// In that case, we'd rather generate code that just runs each expression up to the NEVER one,
+    /// than a function call that can never actually be a function call! Also true for while loop
+    /// conditions.
+    ///
+    /// We use this function to generate such 'never' blocks from a series of expressions
+    pub(super) fn make_never_block(
+        &mut self,
+        exprs: &[TypedExprId],
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let mut b = self.synth_block(scope_id, ScopeType::LexicalBlock, span, exprs.len() as u32);
+        for e in exprs {
+            let e_type_id = self.exprs.get_type(*e);
+            self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
+        }
+        return self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID);
+    }
+
+    pub(super) fn make_never_condition_block(
+        &mut self,
+        instrs: &[MatchingConditionInstr],
+        scope_id: ScopeId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let mut b =
+            BlockBuilder { statements: self.mem.new_vec(instrs.len() as u32), scope_id, span };
+        for i in instrs {
+            match i {
+                MatchingConditionInstr::Binding { let_stmt } => b.statements.push(*let_stmt),
+                MatchingConditionInstr::Cond { value } => {
+                    self.push_expr_id_to_block(&mut b, *value);
+                }
+            }
+        }
+        return self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID);
+    }
+
     /// Creates a non-mutable, mangled, non-referencing variable defn.
     /// This is the vastly most common case
     pub(super) fn synth_variable_defn_simple(
