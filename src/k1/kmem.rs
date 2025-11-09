@@ -1,8 +1,5 @@
-use smallvec::SmallVec;
-
 // Copyright (c) 2025 knix
 // All rights reserved.
-use crate::static_assert_size;
 /// A wildly unsafe memory Arena because I never
 /// intend to free any of this except when throwing
 /// away the entire compiler and I simply cannot deal
@@ -20,6 +17,9 @@ use crate::static_assert_size;
 /// if our slice handle is 64 bytes, which it should be, if I'm willing to
 /// address less than 4GB in here and can use a 32-bit offset. Actually I can use
 /// 48 bits for the offset and 16 for the length
+use smallvec::SmallVec;
+
+use crate::static_assert_size;
 macro_rules! fuckit {
     ($($t:tt)*) => {
         unsafe { $($t)* }
@@ -407,6 +407,11 @@ impl<Tag> Mem<Tag> {
 
     pub fn get_nth_opt<T>(&self, handle: MSlice<T, Tag>, n: usize) -> Option<&'static T> {
         self.getn(handle).get(n)
+    }
+
+    pub fn get_last_opt<T>(&self, handle: MSlice<T, Tag>) -> Option<&'static T> {
+        let slice = self.getn(handle);
+        slice.last()
     }
 
     pub fn slices_equal_copy<T: Copy + PartialEq + Eq>(
