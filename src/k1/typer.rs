@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{FixVec, MHandle, MSlice, Mem};
+use crate::kmem::{FixList, MHandle, MSlice, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -759,7 +759,7 @@ pub struct TypedLambda {
 
 pub struct BlockBuilder {
     pub scope_id: ScopeId,
-    pub statements: FixVec<TypedStmtId, TypedProgram>,
+    pub statements: FixList<TypedStmtId, TypedProgram>,
     pub span: SpanId,
 }
 
@@ -1343,10 +1343,6 @@ pub struct PendingCaptureExpr {
 #[derive(Clone, Copy)]
 pub struct MatchingCondition {
     pub instrs: MSlice<MatchingConditionInstr, TypedProgram>,
-    // nocommit: Can we just not allow crashing in conditions? Or at least compile to just the
-    // instrs?
-    pub diverges: bool,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -2913,13 +2909,13 @@ impl TypedProgram {
         }
     }
 
-    fn add_expr_stmt(&mut self, expr: TypedExpr) -> TypedStmtId {
+    fn push_expr_to_block(&mut self, expr: TypedExpr) -> TypedStmtId {
         let type_id = expr.get_type();
         let id = self.exprs.add_tmp(expr);
         self.stmts.add(TypedStmt::Expr(id, type_id))
     }
 
-    fn add_expr_id_to_block(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
+    fn push_expr_id_to_block(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
         let ty = self.exprs.get_type(expr);
         self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
     }
@@ -3143,7 +3139,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
-                let mut fields: FixVec<StructTypeField, TypePool> =
+                let mut fields: FixList<StructTypeField, TypePool> =
                     self.types.mem.new_vec(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
@@ -3467,7 +3463,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: FixVec<FnParamType, _> =
+                let mut params: FixList<FnParamType, _> =
                     self.types.mem.new_vec(fun_type.params.len() as u32);
 
                 for (index, param) in fun_type.params.iter().enumerate() {
@@ -3837,7 +3833,7 @@ impl TypedProgram {
                         }
                         let g_params = g.params;
                         let mut type_arguments = self.tmp.new_vec(ty_app.args.len() as u32);
-                        let mut subst_pairs: FixVec<TypeSubstitutionPair, MemTmp> =
+                        let mut subst_pairs: FixList<TypeSubstitutionPair, MemTmp> =
                             self.tmp.new_vec(ty_app.args.len() as u32);
                         for (param, parsed_arg) in self
                             .named_types
@@ -4185,7 +4181,7 @@ impl TypedProgram {
                 if new_return_type != old_return_type {
                     any_new = true
                 };
-                let mut new_params: FixVec<FnParamType, _> = self.tmp.new_vec(old_params.len());
+                let mut new_params: FixList<FnParamType, _> = self.tmp.new_vec(old_params.len());
                 for param in self.types.mem.getn(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
@@ -6643,7 +6639,7 @@ impl TypedProgram {
                         span,
                     );
                     self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
-                    self.add_expr_id_to_block(&mut block, if_expr);
+                    self.push_expr_id_to_block(&mut block, if_expr);
                     let ty = self.exprs.get_type(if_expr);
                     Ok(self.exprs.add_block(&mut self.mem, block, ty))
                 } else {
@@ -6765,7 +6761,7 @@ impl TypedProgram {
         );
 
         self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
-        self.add_expr_id_to_block(&mut result_block, if_expr);
+        self.push_expr_id_to_block(&mut result_block, if_expr);
 
         Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
     }
@@ -7221,7 +7217,7 @@ impl TypedProgram {
             self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count as u32);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: FixVec<TypedExprId, MemTmp> = {
+        let elements: FixList<TypedExprId, MemTmp> = {
             let mut elements = self.tmp.new_vec(element_count as u32);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
@@ -7345,7 +7341,7 @@ impl TypedProgram {
             )?,
             ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
-        self.add_expr_id_to_block(&mut list_lit_block, final_expr);
+        self.push_expr_id_to_block(&mut list_lit_block, final_expr);
         let final_expr_type = self.exprs.get_type(final_expr);
         Ok(self.exprs.add_block(&mut self.mem, list_lit_block, final_expr_type))
     }
@@ -7705,8 +7701,8 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: FixVec<StructLiteralField, _> = self.mem.new_vec(field_count);
-        let mut field_types: FixVec<StructTypeField, _> = self.types.mem.new_vec(field_count);
+        let mut field_values: FixList<StructLiteralField, _> = self.mem.new_vec(field_count);
+        let mut field_types: FixList<StructTypeField, _> = self.types.mem.new_vec(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
@@ -7810,7 +7806,7 @@ impl TypedProgram {
         let condition_block_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-        let condition = self
+        let condition_or_block = self
             .eval_matching_condition(while_expr.cond, ctx.with_scope(condition_block_scope_id))?;
 
         let body_block_scope_id = self.scopes.add_child_scope(
@@ -7931,7 +7927,7 @@ impl TypedProgram {
                                 string_builder_var.variable_expr,
                                 block_ctx,
                             )?;
-                            self.add_expr_id_to_block(&mut block, print_literal_call);
+                            self.push_expr_id_to_block(&mut block, print_literal_call);
                         }
                     }
                     parse::InterpolatedStringPart::Expr(expr_id) => {
@@ -7941,7 +7937,7 @@ impl TypedProgram {
                             string_builder_var.variable_expr,
                             ctx,
                         )?;
-                        self.add_expr_id_to_block(&mut block, print_expr_call);
+                        self.push_expr_id_to_block(&mut block, print_expr_call);
                     }
                 };
             }
@@ -7953,7 +7949,7 @@ impl TypedProgram {
                 block_ctx,
                 false,
             )?;
-            self.add_expr_id_to_block(&mut block, build_call);
+            self.push_expr_id_to_block(&mut block, build_call);
             let build_call_type = self.exprs.get_type(build_call);
             Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
         }
@@ -8347,11 +8343,11 @@ impl TypedProgram {
         let total_arms: usize =
             parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
 
-        let mut typed_arms: FixVec<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: FixList<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
-        let mut all_unguarded_patterns: FixVec<(TypedPatternId, usize), MemTmp> =
+        let mut all_unguarded_patterns: FixList<(TypedPatternId, usize), MemTmp> =
             self.tmp.new_vec(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
@@ -8580,7 +8576,7 @@ impl TypedProgram {
         &mut self,
         pattern: TypedPatternId,
         target_expr: TypedExprId,
-        instrs: &mut SV8<MatchingConditionInstr>,
+        instrs: &mut FixList<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
@@ -9143,7 +9139,7 @@ impl TypedProgram {
                 outer_for_expr_ctx,
                 false,
             )?;
-            self.add_expr_id_to_block(&mut consequent_block, list_push_call);
+            self.push_expr_id_to_block(&mut consequent_block, list_push_call);
         }
 
         let next_is_some_call = self.synth_typed_call_typed_args(
@@ -9169,7 +9165,7 @@ impl TypedProgram {
             break_expr,
             body_span,
         );
-        self.add_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
+        self.push_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
 
         // Append the index increment to the body block
         let one_expr = self.synth_uword(1, iterable_span);
@@ -9200,7 +9196,7 @@ impl TypedProgram {
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             for_expr_initial_statements.push(yielded_coll_variable.defn_stmt);
         }
-        let loop_stmt_id = self.add_expr_stmt(loop_expr);
+        let loop_stmt_id = self.push_expr_to_block(loop_expr);
         for_expr_initial_statements.push(loop_stmt_id);
 
         if let Some(yielded_coll_variable) = yielded_coll_variable {
@@ -9373,11 +9369,11 @@ impl TypedProgram {
         &mut self,
         condition: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<MatchingCondition> {
+    ) -> TyperResult<Either<TypedExprId, MatchingCondition>> {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: SV8<MatchingConditionInstr> = smallvec![];
+        let mut instrs: FixList<MatchingConditionInstr> = self.mem.new_vec(8);
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
@@ -9420,28 +9416,36 @@ impl TypedProgram {
             }
         }
 
-        let diverges = self.matching_condition_diverges(&instrs);
-
-        let span = self.ast.get_expr_span(condition);
-        Ok(MatchingCondition { instrs: self.mem.pushn(&instrs), diverges, span })
+        let diverges_at = self.matching_condition_diverges(&instrs);
+        if let Some(diverge_index) = diverges_at {
+            let condition_span = self.ast.get_expr_span(condition);
+            let never_block = self.make_never_condition_block(
+                &instrs[0..=diverge_index],
+                ctx.scope_id,
+                condition_span,
+            );
+            Ok(Either::Left(never_block))
+        } else {
+            Ok(MatchingCondition { instrs: self.mem.pushn(&instrs) })
+        }
     }
 
-    fn matching_condition_diverges(&self, instrs: &[MatchingConditionInstr]) -> bool {
-        for instr in instrs {
+    fn matching_condition_diverges(&self, instrs: &[MatchingConditionInstr]) -> Option<usize> {
+        for (index, instr) in instrs.iter().enumerate() {
             match instr {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
                     if self.get_stmt_type(*let_stmt) == NEVER_TYPE_ID {
-                        return true;
+                        return Some(index);
                     }
                 }
                 MatchingConditionInstr::Cond { value } => {
                     if self.exprs.get_type(*value) == NEVER_TYPE_ID {
-                        return true;
+                        return Some(index);
                     }
                 }
             }
         }
-        false
+        None
     }
 
     /// Handles chains of booleans and pattern statements (IsExprs).
@@ -9459,7 +9463,7 @@ impl TypedProgram {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
-        instrs: &mut SV8<MatchingConditionInstr>,
+        instrs: &mut FixList<MatchingConditionInstr>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -9695,7 +9699,7 @@ impl TypedProgram {
 
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
-        self.add_expr_id_to_block(&mut coalesce_block, if_else);
+        self.push_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
     }
 
@@ -10661,7 +10665,7 @@ impl TypedProgram {
             fn_call.span,
             ctx.scope_id,
         )?;
-        let mut parameter_constraints: FixVec<Option<TypeId>, MemTmp> =
+        let mut parameter_constraints: FixList<Option<TypeId>, MemTmp> =
             self.tmp.new_vec(ability_params.len() as u32);
         for ab_param in &ability_params {
             if ab_param.is_impl_param {
@@ -11392,18 +11396,7 @@ impl TypedProgram {
         for (index, arg) in typechecked_arguments.iter().enumerate() {
             if self.exprs.get_type(*arg) == NEVER_TYPE_ID {
                 let exprs_so_far = &typechecked_arguments[0..=index];
-                // We'll make a block with N expression statements
-                let mut b = self.synth_block(
-                    ctx.scope_id,
-                    ScopeType::LexicalBlock,
-                    span,
-                    exprs_so_far.len() as u32,
-                );
-                for e in exprs_so_far {
-                    let e_type_id = self.exprs.get_type(*e);
-                    self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
-                }
-                return Ok(self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID));
+                return Ok(self.make_never_block(exprs_so_far, ctx.scope_id, span));
             }
         }
 
@@ -11777,7 +11770,7 @@ impl TypedProgram {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
-        let mut param_variables: FixVec<VariableId, _> =
+        let mut param_variables: FixList<VariableId, _> =
             self.mem.new_vec(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
             .types
@@ -13153,7 +13146,7 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = parsed_function_context_params.len() + parsed_function_params.len();
-        let mut param_types: FixVec<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
+        let mut param_types: FixList<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
         let mut param_variables = self_.mem.new_vec(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
@@ -15287,7 +15280,7 @@ impl TypedProgram {
                     self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
                 // { name: string), typeId: u64, offset: uword }
                 let struct_layout = self.types.get_struct_layout(type_id);
-                let mut field_values: FixVec<StaticValueId, StaticValuePool> =
+                let mut field_values: FixList<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_vec(struct_type.fields.len());
                 for (index, f) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));

@@ -1,5 +1,5 @@
 use crate::compiler::WordSize;
-use crate::kmem::FixVec;
+use crate::kmem::FixList;
 use crate::parse::NumericWidth;
 // Copyright (c) 2025 knix
 // All rights reserved.
@@ -1608,7 +1608,7 @@ fn compile_expr(
                 InstKind::Terminator => None,
             };
 
-            let mut incomings: FixVec<CameFromCase, _> =
+            let mut incomings: FixList<CameFromCase, _> =
                 b.k1.bytecode.mem.new_vec(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())

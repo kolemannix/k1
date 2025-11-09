@@ -196,7 +196,7 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0)
     }
 
-    pub fn vec_to_mslice<T>(&self, fix_vec: &FixVec<T, Tag>) -> MSlice<T, Tag> {
+    pub fn vec_to_mslice<T>(&self, fix_vec: &FixList<T, Tag>) -> MSlice<T, Tag> {
         let offset = self.ptr_to_offset(fix_vec.buf.cast_const());
         MSlice::make(offset, fix_vec.len() as u32)
     }
@@ -301,11 +301,11 @@ impl<Tag> Mem<Tag> {
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
-    pub fn new_vec<T>(&mut self, len: u32) -> FixVec<T, Tag> {
+    pub fn new_vec<T>(&mut self, len: u32) -> FixList<T, Tag> {
         let dst = self.push_slice_uninit(len as usize);
 
         let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
-        FixVec { buf: raw_slice, len: 0, _tag: PhantomData }
+        FixList { buf: raw_slice, len: 0, _tag: PhantomData }
     }
 
     pub fn get_str(&self, s: MStr<Tag>) -> &str {
@@ -449,36 +449,59 @@ impl<Tag> Mem<Tag> {
 }
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
-pub struct FixVec<T, Tag = ()> {
+pub struct FixList<T, Tag = ()> {
     buf: *mut [T],
     len: usize,
     _tag: PhantomData<Tag>,
 }
 
-impl<T, Tag> FixVec<T, Tag> {
+impl<T, Tag> FixList<T, Tag> {
     pub fn len(&self) -> usize {
         self.len
     }
 
-    pub fn push(&mut self, val: T) {
-        if self.len == self.buf.len() {
-            panic!("FixVec is full {}", self.buf.len());
-        }
+    pub fn cap(&self) -> usize {
+        self.buf.len()
+    }
+
+    fn push_unchecked(&mut self, val: T) {
         unsafe {
             (*self.buf)[self.len] = val;
         }
         self.len += 1;
     }
 
+    pub fn push(&mut self, val: T) {
+        if self.len == self.cap() {
+            panic!("FixList is full {}", self.buf.len());
+        }
+        self.push_unchecked(val)
+    }
+
     pub fn try_push(&mut self, val: T) -> Result<(), T> {
-        if self.len == self.buf.len() {
+        if self.len == self.cap() {
             Err(val)
         } else {
-            unsafe {
-                (*self.buf)[self.len] = val;
-            }
-            self.len += 1;
+            self.push_unchecked(val);
             Ok(())
+        }
+    }
+
+    // This doesn't have to be the same arena, actually.
+    // For now we'll constrain the tag, but we should provide
+    // a separate method that returns a new list in whatever
+    // arena is passed
+    pub fn push_grow(&mut self, mem: &mut Mem<Tag>, val: T)
+    where
+        T: Copy,
+    {
+        if self.len == self.cap() {
+            let mut new_me = mem.new_vec(self.cap() as u32 * 2);
+            new_me.extend(self.as_slice());
+            new_me.push_unchecked(val);
+            *self = new_me;
+        } else {
+            self.push_unchecked(val)
         }
     }
 
@@ -487,7 +510,7 @@ impl<T, Tag> FixVec<T, Tag> {
     where
         T: Copy,
     {
-        if self.len == self.buf.len() {
+        if self.len == self.cap() {
             panic!("FixVec is full {}", self.buf.len());
         }
         if index > self.len {
@@ -532,20 +555,20 @@ impl<T, Tag> FixVec<T, Tag> {
     }
 }
 
-impl<T, Tag> std::ops::Index<usize> for FixVec<T, Tag> {
+impl<T, Tag> std::ops::Index<usize> for FixList<T, Tag> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T, Tag> std::ops::IndexMut<usize> for FixVec<T, Tag> {
+impl<T, Tag> std::ops::IndexMut<usize> for FixList<T, Tag> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.as_slice_mut()[index]
     }
 }
 
-impl<T, Tag> Deref for FixVec<T, Tag> {
+impl<T, Tag> Deref for FixList<T, Tag> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.as_slice()
@@ -651,5 +674,16 @@ mod test {
         v.insert(2, 3);
         assert_eq!(v.len(), 4);
         assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn grow() {
+        let mut arena: Mem<()> = Mem::make();
+        let mut v = arena.new_vec(2);
+        v.push_grow(&mut arena, 1);
+        v.push_grow(&mut arena, 2);
+        v.push_grow(&mut arena, 3);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
     }
 }
