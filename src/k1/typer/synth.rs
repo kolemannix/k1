@@ -152,15 +152,15 @@ impl TypedProgram {
         self.exprs.add_tmp(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
     }
 
-    pub(super) fn synth_block(&mut self, parent_scope: ScopeId, span: SpanId) -> TypedBlock {
-        let block_scope_id =
-            self.scopes.add_child_scope(parent_scope, ScopeType::LexicalBlock, None, None);
-        TypedBlock {
-            expr_type: UNIT_TYPE_ID,
-            statements: eco_vec![],
-            scope_id: block_scope_id,
-            span,
-        }
+    pub(super) fn synth_block(
+        &mut self,
+        parent_scope: ScopeId,
+        scope_type: ScopeType,
+        span: SpanId,
+        max_len: u32,
+    ) -> BlockBuilder {
+        let block_scope_id = self.scopes.add_child_scope(parent_scope, scope_type, None, None);
+        BlockBuilder { statements: self.mem.new_vec(max_len), scope_id: block_scope_id, span }
     }
 
     /// Creates a non-mutable, mangled, non-referencing variable defn.

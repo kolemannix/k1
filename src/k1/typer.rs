@@ -757,12 +757,16 @@ pub struct TypedLambda {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
-pub struct TypedBlock {
-    pub expr_type: TypeId,
+pub struct BlockBuilder {
     pub scope_id: ScopeId,
-    pub statements: EcoVec<TypedStmtId>,
+    pub statements: FixVec<TypedStmtId, TypedProgram>,
     pub span: SpanId,
+}
+
+#[derive(Clone)]
+pub struct TypedBlock {
+    pub scope_id: ScopeId,
+    pub statements: MSlice<TypedStmtId, TypedProgram>,
 }
 
 #[derive(Debug, Clone)]
@@ -1079,13 +1083,11 @@ impl ArrayLiteral {
 pub struct ArrayGetElement {
     pub base: TypedExprId,
     pub index: TypedExprId,
-    pub result_type: TypeId,
     pub array_type: TypeId,
     // This is really just a field access by number instead of name
     pub access_kind: FieldAccessKind,
-    pub span: SpanId,
 }
-impl_copy_if_small!(24, ArrayGetElement);
+impl_copy_if_small!(16, ArrayGetElement);
 
 /// Also used for EnumGetPayload.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1335,14 +1337,14 @@ pub struct FunctionPointerExpr {
 #[derive(Debug, Clone)]
 pub struct PendingCaptureExpr {
     pub captured_variable_id: VariableId,
-    pub type_id: TypeId,
     pub resolved_expr: Option<TypedExprId>,
-    pub span: SpanId,
 }
 
 #[derive(Clone, Copy)]
 pub struct MatchingCondition {
     pub instrs: MSlice<MatchingConditionInstr, TypedProgram>,
+    // nocommit: Can we just not allow crashing in conditions? Or at least compile to just the
+    // instrs?
     pub diverges: bool,
     pub span: SpanId,
 }
@@ -1397,7 +1399,7 @@ pub struct StaticConstantExpr {
 
 nz_u32_id!(CallId);
 
-static_assert_size!(TypedExpr, 40);
+static_assert_size!(TypedExpr, 24);
 #[derive(Clone)]
 pub enum TypedExpr {
     StaticValue(StaticConstantExpr),
@@ -1425,7 +1427,7 @@ pub enum TypedExpr {
     /// It could possibly be a macro one day, desugaring to an if/else. Actually, it can
     /// already desugar to an if/else! nocommit(3)
     LogicalOr(TypedLogicalOr),
-    // Current largest variant at 56 bytes
+    // Current largest variant at 24 bytes
     // nocommit(3): Deal with the size of MatchingCondition
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
@@ -1502,10 +1504,10 @@ impl TypedExpr {
         match self {
             TypedExpr::Struct(_struc) => TypeId::PENDING,
             TypedExpr::StructFieldAccess(_field_access) => TypeId::PENDING,
-            TypedExpr::ArrayGetElement(ag) => ag.result_type,
+            TypedExpr::ArrayGetElement(_ag) => TypeId::PENDING,
             TypedExpr::Variable(var) => var.type_id,
             TypedExpr::Deref(deref) => deref.type_id,
-            TypedExpr::Block(b) => b.expr_type,
+            TypedExpr::Block(_b) => TypeId::PENDING,
             TypedExpr::Call { return_type, .. } => *return_type,
             TypedExpr::Match(_match_) => TypeId::PENDING,
             TypedExpr::LogicalAnd(_) => BOOL_TYPE_ID,
@@ -1521,7 +1523,7 @@ impl TypedExpr {
             TypedExpr::Lambda(lambda) => lambda.lambda_type,
             TypedExpr::FunctionPointer(f) => f.function_pointer_type,
             TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
-            TypedExpr::PendingCapture(pc) => pc.type_id,
+            TypedExpr::PendingCapture(_pc) => TypeId::PENDING,
             TypedExpr::StaticValue(_) => TypeId::PENDING,
         }
     }
@@ -1530,10 +1532,10 @@ impl TypedExpr {
         match self {
             TypedExpr::Struct(_struc) => SpanId::NONE,
             TypedExpr::StructFieldAccess(_field_access) => SpanId::NONE,
-            TypedExpr::ArrayGetElement(ag) => ag.span,
+            TypedExpr::ArrayGetElement(_ag) => SpanId::NONE,
             TypedExpr::Variable(var) => var.span,
             TypedExpr::Deref(deref) => deref.span,
-            TypedExpr::Block(b) => b.span,
+            TypedExpr::Block(_b) => SpanId::NONE,
             TypedExpr::Call { span, .. } => *span,
             TypedExpr::Match(_match_) => SpanId::NONE,
             TypedExpr::LogicalAnd(a) => a.span,
@@ -1549,7 +1551,7 @@ impl TypedExpr {
             TypedExpr::Lambda(lambda) => lambda.span,
             TypedExpr::FunctionPointer(f) => f.span,
             TypedExpr::FunctionToLambdaObject(f) => f.span,
-            TypedExpr::PendingCapture(pc) => pc.span,
+            TypedExpr::PendingCapture(_pc) => SpanId::NONE,
             TypedExpr::StaticValue(_) => SpanId::NONE,
         }
     }
@@ -2318,6 +2320,22 @@ impl TypedExprPool {
         self.add(expr, type_id, span)
     }
 
+    pub fn add_block(
+        &mut self,
+        mem: &mut Mem<TypedProgram>,
+        builder: BlockBuilder,
+        type_id: TypeId,
+    ) -> TypedExprId {
+        self.add(
+            TypedExpr::Block(TypedBlock {
+                scope_id: builder.scope_id,
+                statements: mem.vec_to_mslice(&builder.statements),
+            }),
+            type_id,
+            builder.span,
+        )
+    }
+
     pub fn add_static(
         &mut self,
         value_id: StaticValueId,
@@ -2847,14 +2865,12 @@ impl TypedProgram {
         }
     }
 
-    fn push_block_stmt_id(&self, block: &mut TypedBlock, stmt: TypedStmtId) {
-        block.expr_type = self.get_stmt_type(stmt);
+    fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
         block.statements.push(stmt);
     }
 
-    fn push_block_stmt(&mut self, block: &mut TypedBlock, stmt: TypedStmt) {
+    fn push_block_stmt(&mut self, block: &mut BlockBuilder, stmt: TypedStmt) {
         let id = self.stmts.add(stmt);
-        block.expr_type = self.get_stmt_type(id);
         block.statements.push(id);
     }
 
@@ -2902,12 +2918,7 @@ impl TypedProgram {
         self.stmts.add(TypedStmt::Expr(id, type_id))
     }
 
-    fn add_expr_to_block(&mut self, block: &mut TypedBlock, expr: TypedExpr) {
-        let stmt_id = self.add_expr_stmt(expr);
-        self.push_block_stmt_id(block, stmt_id)
-    }
-
-    fn add_expr_id_to_block(&mut self, block: &mut TypedBlock, expr: TypedExprId) {
+    fn add_expr_id_to_block(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
         let ty = self.exprs.get_type(expr);
         self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
     }
@@ -5201,8 +5212,7 @@ impl TypedProgram {
         //              Currently we just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let typed_block = self.eval_block(&parsed_expr_as_block, ctx, true)?;
-        let expr = self.exprs.add_tmp(TypedExpr::Block(typed_block));
+        let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
         let required_type_id = self.exprs.get_type(expr);
@@ -6311,13 +6321,14 @@ impl TypedProgram {
                             "Should not capture namespaced things, I think?"
                         );
                     }
-                    let fixup_expr_id =
-                        self.exprs.add_tmp(TypedExpr::PendingCapture(PendingCaptureExpr {
+                    let fixup_expr_id = self.exprs.add(
+                        TypedExpr::PendingCapture(PendingCaptureExpr {
                             captured_variable_id: variable_id,
-                            type_id: v.type_id,
                             resolved_expr: None,
-                            span: variable_name_span,
-                        }));
+                        }),
+                        v.type_id,
+                        variable_name_span,
+                    );
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
                     Ok((variable_id, fixup_expr_id))
                 } else {
@@ -6570,7 +6581,8 @@ impl TypedProgram {
                     //           'wrap' function that wraps (optional Some equivalent)
                     // It doesn't really support chaining yet, kinda useless so I also won't make it ability-based yet
                     // See coalescing_v2.wip for plan
-                    let mut block = self.synth_block(ctx.scope_id, span);
+                    let mut block =
+                        self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
                     let block_scope = block.scope_id;
                     let base_expr_var = self.synth_variable_defn_simple(
                         field_access.field_name,
@@ -6631,7 +6643,8 @@ impl TypedProgram {
                     );
                     self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
                     self.add_expr_id_to_block(&mut block, if_expr);
-                    Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
+                    let ty = self.exprs.get_type(if_expr);
+                    Ok(self.exprs.add_block(&mut self.mem, block, ty))
                 } else {
                     failf!(
                         span,
@@ -6699,7 +6712,7 @@ impl TypedProgram {
             .find(|nt| nt.name == get_ident!(self, "T"))
             .map(|nt| nt.type_id)
             .unwrap();
-        let mut result_block = self.synth_block(scope_id, span);
+        let mut result_block = self.synth_block(scope_id, ScopeType::LexicalBlock, span, 2);
         let try_value_var = self.synth_variable_defn_simple(
             self.ast.idents.b.try_value,
             try_value_original_expr,
@@ -6753,7 +6766,7 @@ impl TypedProgram {
         self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
         self.add_expr_id_to_block(&mut result_block, if_expr);
 
-        Ok(self.exprs.add_tmp(TypedExpr::Block(result_block)))
+        Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
     }
 
     fn eval_unwrap_operator(
@@ -6963,7 +6976,7 @@ impl TypedProgram {
                     ParsedBlockKind::LoopBody => false,
                 };
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
-                Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
+                Ok(block)
             }
             ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
@@ -7203,8 +7216,8 @@ impl TypedProgram {
         let parsed_elements = &list_expr.elements;
         let element_count = parsed_elements.len();
 
-        let mut list_lit_block = self.synth_block(ctx.scope_id, span);
-        list_lit_block.statements = EcoVec::with_capacity(2 + element_count);
+        let mut list_lit_block =
+            self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count as u32);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
         let elements: FixVec<TypedExprId, MemTmp> = {
@@ -7319,7 +7332,7 @@ impl TypedProgram {
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
             self.push_block_stmt_id(&mut list_lit_block, push_stmt);
         }
-        let final_expression = match list_kind {
+        let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
             ContainerKind::View => self.synth_typed_call_typed_args(
@@ -7331,8 +7344,9 @@ impl TypedProgram {
             )?,
             ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
-        self.add_expr_id_to_block(&mut list_lit_block, final_expression);
-        Ok(self.exprs.add_tmp(TypedExpr::Block(list_lit_block)))
+        self.add_expr_id_to_block(&mut list_lit_block, final_expr);
+        let final_expr_type = self.exprs.get_type(final_expr);
+        Ok(self.exprs.add_block(&mut self.mem, list_lit_block, final_expr_type))
     }
 
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
@@ -7821,7 +7835,6 @@ impl TypedProgram {
             //
         }
 
-        let body_block = self.exprs.add_tmp(TypedExpr::Block(body_block));
         Ok(self.exprs.add(
             TypedExpr::WhileLoop(WhileLoop { condition, body: body_block }),
             loop_type,
@@ -7841,7 +7854,7 @@ impl TypedProgram {
         // Expected type is handled by loop info above, its needed by 'break's but notably we do not
         // want to require the loop's block to return a type other than Unit, so we pass None.
         let expected_expression_type_for_block = None;
-        let block = self.eval_block(
+        let body_block = self.eval_block(
             &loop_expr.body.clone(),
             ctx.with_scope(body_scope).with_expected_type(expected_expression_type_for_block),
             false,
@@ -7849,7 +7862,6 @@ impl TypedProgram {
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
-        let body_block = self.exprs.add_tmp(TypedExpr::Block(block));
         Ok(self.exprs.add_tmp(TypedExpr::LoopExpr(LoopExpr {
             body_block,
             break_type: loop_info.break_type.unwrap_or(UNIT_TYPE_ID),
@@ -7879,7 +7891,12 @@ impl TypedProgram {
             Ok(e)
         } else {
             let interpolated_string = interpolated_string.clone();
-            let mut block = self.synth_block(ctx.scope_id, span);
+            let mut block = self.synth_block(
+                ctx.scope_id,
+                ScopeType::LexicalBlock,
+                span,
+                part_count as u32 + 2,
+            );
             let block_scope = block.scope_id;
             let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
             let part_count_expr = self.synth_uword(part_count, span);
@@ -7936,7 +7953,8 @@ impl TypedProgram {
                 false,
             )?;
             self.add_expr_id_to_block(&mut block, build_call);
-            Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
+            let build_call_type = self.exprs.get_type(build_call);
+            Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
         }
     }
 
@@ -8059,20 +8077,21 @@ impl TypedProgram {
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
         let ast_body_block =
             self.ensure_parsed_expr_to_block(lambda_body, ParsedBlockKind::FunctionBody);
-        let body = self.eval_block(
+        let body_expr_id = self.eval_block(
             &ast_body_block,
             ctx.with_scope(lambda_scope_id).with_expected_type(expected_return_type),
             true,
         )?;
+        let body_type = self.exprs.get_type(body_expr_id);
         if let Some(expected_return_type) = expected_return_type {
-            if let Err(msg) = self.check_types(expected_return_type, body.expr_type, ctx.scope_id) {
-                return failf!(body.span, "Closure returns incorrect type: {msg}");
+            if let Err(msg) = self.check_types(expected_return_type, body_type, ctx.scope_id) {
+                return failf!(body_span, "Lambda returns incorrect type: {msg}");
             }
         }
 
-        let return_type = match body.expr_type {
+        let return_type = match body_type {
             NEVER_TYPE_ID => expected_return_type.unwrap_or(NEVER_TYPE_ID),
-            _ => body.expr_type,
+            _ => body_type,
         };
 
         let encl_fn_id = self
@@ -8089,8 +8108,6 @@ impl TypedProgram {
         });
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
         let name = self.ast.idents.intern(name_string);
-
-        let body_expr_id = self.exprs.add_tmp(TypedExpr::Block(body));
 
         let lambda_info = self.scopes.get_lambda_info(lambda_scope_id);
 
@@ -8203,7 +8220,11 @@ impl TypedProgram {
             lambda_scope_id,
         );
         if let TypedExpr::Block(body) = self.exprs.get_mut(body_expr_id) {
-            body.statements.insert(0, environment_casted_variable.defn_stmt);
+            let mut new_stmts = self.mem.new_vec(body.statements.len() + 1);
+            new_stmts.push(environment_casted_variable.defn_stmt);
+            new_stmts.extend(self.mem.getn(body.statements));
+
+            body.statements = self.mem.vec_to_mslice(&new_stmts);
         } else {
             panic!()
         }
@@ -8215,12 +8236,13 @@ impl TypedProgram {
             let TypedExpr::PendingCapture(pc) = self.exprs.get(pending_fixup) else {
                 unreachable!()
             };
+            let pc_span = self.exprs.get_span(pending_fixup);
             let (field_access_expr, type_id, span_id) = fixup_capture_expr_new(
                 self,
                 environment_casted_variable.variable_id,
                 pc.captured_variable_id,
                 environment_struct_type,
-                pc.span,
+                pc_span,
             );
             self.exprs.set_full(pending_fixup, field_access_expr, type_id, span_id);
         }
@@ -9018,14 +9040,16 @@ impl TypedProgram {
             true, //is_referencing
             outer_for_expr_scope,
         );
-        let mut loop_block = self.synth_block(outer_for_expr_scope, body_span);
+        let mut loop_block =
+            self.synth_block(outer_for_expr_scope, ScopeType::LexicalBlock, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
         let expected_block_type = ctx
             .expected_type_id
             .and_then(|t| self.types.get_as_list_instance(t))
             .map(|list_type| list_type.element_type);
 
-        let mut consequent_block = self.synth_block(loop_scope_id, iterable_span);
+        let mut consequent_block =
+            self.synth_block(loop_scope_id, ScopeType::LexicalBlock, iterable_span, 3);
 
         let loop_scope_ctx = ctx.with_scope(loop_scope_id).with_no_expected_type();
         let iterator_next_call = self.synth_typed_call_typed_args(
@@ -9057,14 +9081,8 @@ impl TypedProgram {
             ctx.with_scope(consequent_block.scope_id).with_expected_type(expected_block_type),
             false,
         )?;
-        let body_block_result_type = body_block.expr_type;
+        let body_block_result_type = self.exprs.get_type(body_block);
 
-        let resulting_type = if is_do_block {
-            UNIT_TYPE_ID
-        } else {
-            let result_type_slice = self.types.mem.pushn(&[body_block_result_type]);
-            self.instantiate_generic_type(LIST_TYPE_ID, result_type_slice)
-        };
         let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
         let yielded_coll_variable = if !is_do_block {
             let size_hint_call = self.synth_typed_call_typed_args(
@@ -9106,7 +9124,7 @@ impl TypedProgram {
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
-        let user_body_block_id = self.exprs.add_tmp(TypedExpr::Block(body_block));
+        let user_body_block_id = body_block;
         let user_block_variable = self.synth_variable_defn_simple(
             get_ident!(self, "block_expr_val"),
             user_body_block_id,
@@ -9135,21 +9153,19 @@ impl TypedProgram {
             false,
         )?;
         let unit_break = self.synth_unit(body_span);
-        let break_expr = self.add_expr_stmt(TypedExpr::Break(TypedBreak {
+        let break_expr = self.exprs.add_tmp(TypedExpr::Break(TypedBreak {
             value: unit_break,
             loop_scope: loop_scope_id,
             loop_type: LoopType::Loop,
             span: body_span,
         }));
-        let mut break_block = self.synth_block(loop_scope_id, body_span);
-        self.push_block_stmt_id(&mut break_block, break_expr);
-        let consequent_block_id = self.exprs.add_tmp(TypedExpr::Block(consequent_block));
-        let break_block_id = self.exprs.add_tmp(TypedExpr::Block(break_block));
+        let consequent_block_id =
+            self.exprs.add_block(&mut self.mem, consequent_block, UNIT_TYPE_ID);
         let if_next_loop_else_break_expr = self.synth_if_else(
             UNIT_TYPE_ID,
             next_is_some_call,
             consequent_block_id,
-            break_block_id,
+            break_expr,
             body_span,
         );
         self.add_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
@@ -9170,33 +9186,40 @@ impl TypedProgram {
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
-        let body_block = self.exprs.add_tmp(TypedExpr::Block(loop_block));
+        let body_block = self.exprs.add_block(&mut self.mem, loop_block, UNIT_TYPE_ID);
         let loop_expr = TypedExpr::LoopExpr(LoopExpr {
             body_block,
             break_type: UNIT_TYPE_ID,
             span: for_expr.span,
         });
 
-        let mut for_expr_initial_statements = EcoVec::with_capacity(4);
+        let mut for_expr_initial_statements = self.mem.new_vec(5);
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             for_expr_initial_statements.push(yielded_coll_variable.defn_stmt);
         }
-        let mut for_expr_block = TypedBlock {
-            expr_type: resulting_type,
-            scope_id: outer_for_expr_scope,
-            statements: for_expr_initial_statements,
-            span: for_expr.body_block.span,
-        };
+        let loop_stmt_id = self.add_expr_stmt(loop_expr);
+        for_expr_initial_statements.push(loop_stmt_id);
 
-        self.add_expr_to_block(&mut for_expr_block, loop_expr);
         if let Some(yielded_coll_variable) = yielded_coll_variable {
             let yield_expr = self.synth_dereference(yielded_coll_variable.variable_expr);
-            self.add_expr_id_to_block(&mut for_expr_block, yield_expr);
+            let yield_expr_type = self.exprs.get_type(yield_expr);
+            let yield_stmt_id = self.stmts.add(TypedStmt::Expr(yield_expr, yield_expr_type));
+            for_expr_initial_statements.push(yield_stmt_id);
         }
 
-        let final_expr = self.exprs.add_tmp(TypedExpr::Block(for_expr_block));
+        let final_type =
+            self.get_stmt_type(*for_expr_initial_statements.as_slice().last().unwrap());
+        let final_expr = self.exprs.add_block(
+            &mut self.mem,
+            BlockBuilder {
+                scope_id: outer_for_expr_scope,
+                statements: for_expr_initial_statements,
+                span: for_expr.body_block.span,
+            },
+            final_type,
+        );
         Ok(final_expr)
     }
 
@@ -9362,7 +9385,11 @@ impl TypedProgram {
             ctx,
         )?;
         if instrs.spilled() {
-            eprintln!("instrs spilled: {}", instrs.len());
+            eprintln!(
+                "instrs spilled: {}\n{}",
+                instrs.len(),
+                self.ast.get_span_content(self.ast.get_expr_span(condition))
+            );
         }
 
         let mut all_bindings: SmallVec<[VariablePattern; 8]> = smallvec![];
@@ -9643,7 +9670,7 @@ impl TypedProgram {
         if let Err(msg) = self.check_types(output_type, rhs_type, ctx.scope_id) {
             return failf!(span, "RHS value incompatible with `Unwrap` output of LHS: {}", msg);
         }
-        let mut coalesce_block = self.synth_block(ctx.scope_id, span);
+        let mut coalesce_block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
         let lhs_variable = self.synth_variable_defn_simple(
             get_ident!(self, "optelse_lhs"),
             lhs,
@@ -9668,7 +9695,7 @@ impl TypedProgram {
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
         self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
         self.add_expr_id_to_block(&mut coalesce_block, if_else);
-        Ok(self.exprs.add_tmp(TypedExpr::Block(coalesce_block)))
+        Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
     }
 
     fn eval_equality_expr(
@@ -9963,7 +9990,12 @@ impl TypedProgram {
         if gathered_defers.is_empty() {
             Ok(return_expr)
         } else {
-            let mut block = self.synth_block(ctx.scope_id, span);
+            let mut block = self.synth_block(
+                ctx.scope_id,
+                ScopeType::LexicalBlock,
+                span,
+                gathered_defers.len() as u32 + 1,
+            );
             // No need to reverse; they are already in fifo order due to the way
             // we traverse upwards when gathering them
             for deferred_parsed_expr in gathered_defers.into_iter() {
@@ -9976,7 +10008,7 @@ impl TypedProgram {
                 );
             }
             self.push_block_stmt(&mut block, TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-            Ok(self.exprs.add_tmp(TypedExpr::Block(block)))
+            Ok(self.exprs.add_block(&mut self.mem, block, NEVER_TYPE_ID))
         }
     }
 
@@ -10177,15 +10209,16 @@ impl TypedProgram {
                         }
                     }
                 }
-                let get_element_expr =
-                    self.exprs.add_tmp(TypedExpr::ArrayGetElement(ArrayGetElement {
+                let get_element_expr = self.exprs.add(
+                    TypedExpr::ArrayGetElement(ArrayGetElement {
                         base,
                         index: index_expr,
-                        result_type,
                         array_type: array_type_id,
                         access_kind,
-                        span,
-                    }));
+                    }),
+                    result_type,
+                    span,
+                );
                 let array_length_expr = self.synth_typed_call_typed_args(
                     QIdent::naked(self.ast.idents.b.len, span),
                     &[],
@@ -11359,12 +11392,17 @@ impl TypedProgram {
             if self.exprs.get_type(*arg) == NEVER_TYPE_ID {
                 let exprs_so_far = &typechecked_arguments[0..=index];
                 // We'll make a block with N expression statements
-                let mut b = self.synth_block(ctx.scope_id, span);
+                let mut b = self.synth_block(
+                    ctx.scope_id,
+                    ScopeType::LexicalBlock,
+                    span,
+                    exprs_so_far.len() as u32,
+                );
                 for e in exprs_so_far {
                     let e_type_id = self.exprs.get_type(*e);
                     self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
                 }
-                return Ok(self.exprs.add_tmp(TypedExpr::Block(b)));
+                return Ok(self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID));
             }
         }
 
@@ -11891,8 +11929,8 @@ impl TypedProgram {
     /// For example, the last statement of a block, rather than the entire span
     pub fn get_span_responsible_for_expr_type(&self, typed_expr_id: TypedExprId) -> SpanId {
         match self.exprs.get(typed_expr_id) {
-            TypedExpr::Block(typed_block) => match typed_block.statements.last() {
-                None => typed_block.span,
+            TypedExpr::Block(typed_block) => match self.mem.get_last_opt(typed_block.statements) {
+                None => self.exprs.get_span(typed_expr_id),
                 Some(stmt) => match self.stmts.get(*stmt) {
                     TypedStmt::Expr(typed_expr_id, _) => {
                         self.get_span_responsible_for_expr_type(*typed_expr_id)
@@ -12188,12 +12226,12 @@ impl TypedProgram {
         // This block's scope is ALREADY PROVIDED AND SET IN CTX
         ctx: EvalExprContext,
         needs_terminator: bool,
-    ) -> TyperResult<TypedBlock> {
+    ) -> TyperResult<TypedExprId> {
         let block_scope = ctx.scope_id;
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression");
         }
-        let mut stmts: EcoVec<TypedStmtId> = EcoVec::with_capacity(block.stmts.len());
+        let mut stmts = self.mem.new_vec(block.stmts.len() as u32 + 1);
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -12224,24 +12262,10 @@ impl TypedProgram {
                     }
                 }
             }
-            let mut is_return = false;
-            if let TypedStmt::Expr(id, _) = stmt {
-                let e = self.exprs.get(*id);
-                let just_a_return = matches!(e, TypedExpr::Return(_));
-                if just_a_return {
-                    is_return = true;
-                } else {
-                    if let TypedExpr::Block(b) = e {
-                        if let Some(s) = b.statements.last() {
-                            if let TypedStmt::Expr(e2, _) = self.stmts.get(*s) {
-                                if let TypedExpr::Return(_) = self.exprs.get(*e2) {
-                                    is_return = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            };
+
+            // If this statement early returns, we need to insert deferred code.
+            let is_return =
+                if let TypedStmt::Expr(id, _) = stmt { self.expr_is_return(*id) } else { false };
 
             let stmt_span = self.get_stmt_span(stmt_id);
             last_expr_type = self.get_stmt_type(stmt_id);
@@ -12315,17 +12339,30 @@ impl TypedProgram {
             }
         }
 
-        let has_defers = self.scopes.block_defers.contains_key(&block_scope);
-        let typed_block = TypedBlock {
-            expr_type: last_expr_type,
-            scope_id: block_scope,
-            statements: stmts,
-            span: block.span,
-        };
-        if has_defers {
-            debug!("TYPED BLOCK with defers:\n{}", self.block_to_string(&typed_block));
+        let id = self.exprs.add_block(
+            &mut self.mem,
+            BlockBuilder { scope_id: block_scope, statements: stmts, span: block.span },
+            last_expr_type,
+        );
+        Ok(id)
+    }
+
+    fn expr_is_return(&self, mut expr_id: TypedExprId) -> bool {
+        loop {
+            match self.exprs.get(expr_id) {
+                TypedExpr::Return(_) => return true,
+                TypedExpr::Block(b) => {
+                    if let Some(s) = self.mem.get_last_opt(b.statements) {
+                        if let TypedStmt::Expr(e2, _) = self.stmts.get(*s) {
+                            expr_id = *e2;
+                            continue;
+                        }
+                    }
+                    return false;
+                }
+                _ => return false,
+            }
         }
-        Ok(typed_block)
     }
 
     fn resolve_intrinsic_function_type(

@@ -2402,7 +2402,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and yield the result value
-                let block_value = self.codegen_block(block)?;
+                let block_value = self.codegen_block(block, span)?;
                 Ok(block_value)
             }
             TypedExpr::Call { call_id, .. } => self.codegen_function_call(*call_id),
@@ -3433,11 +3433,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(instr)
     }
 
-    fn codegen_block(&mut self, block: &TypedBlock) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_block(
+        &mut self,
+        block: &TypedBlock,
+        span: SpanId,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
         let unit_value = self.builtin_types.unit_basic().into();
         let mut last: LlvmValue<'ctx> = unit_value;
-        self.set_debug_location_from_span(block.span);
-        for stmt in &block.statements {
+        self.set_debug_location_from_span(span);
+        for stmt in self.k1.mem.getn(block.statements) {
             if let LlvmValue::Void(never_instr) = last {
                 eprintln!("Aborting block after generating {}", never_instr);
                 break;
@@ -3547,6 +3551,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let TypedExpr::Block(body_block) = self.k1.exprs.get(while_loop.body) else {
             unreachable!()
         };
+        let body_span = self.k1.exprs.get_span(while_loop.body);
         self.loops.insert(
             body_block.scope_id,
             LoopInfo { break_value_ptr: None, break_type: None, end_block: loop_end_block },
@@ -3558,7 +3563,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.codegen_matching_condition(&while_loop.condition, loop_body_block, loop_end_block)?;
 
         self.builder.position_at_end(loop_body_block);
-        let body_value = self.codegen_block(body_block)?;
+        let body_value = self.codegen_block(body_block, body_span)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {
@@ -3582,6 +3587,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let TypedExpr::Block(body_block) = self.k1.exprs.get(loop_expr.body_block) else {
             unreachable!()
         };
+        let body_span = self.k1.exprs.get_span(loop_expr.body_block);
         self.loops.insert(
             body_block.scope_id,
             LoopInfo {
@@ -3595,7 +3601,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.builder.build_unconditional_branch(loop_body_block).unwrap();
 
         self.builder.position_at_end(loop_body_block);
-        let body_value = self.codegen_block(body_block)?;
+        let body_value = self.codegen_block(body_block, body_span)?;
         match body_value.as_basic_value() {
             Either::Left(_instr) => {}
             Either::Right(_bv) => {
@@ -3837,13 +3843,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 )?;
             }
             None => {
-                let function_block = typed_function.body_block.unwrap_or_else(|| {
+                let function_block_id = typed_function.body_block.unwrap_or_else(|| {
                     panic!("Function has no block {}", self.get_ident_name(typed_function.name))
                 });
-                let TypedExpr::Block(function_block) = self.k1.exprs.get(function_block) else {
+                let TypedExpr::Block(function_block) = self.k1.exprs.get(function_block_id) else {
                     panic!("Expected block")
                 };
-                self.codegen_block(function_block)?;
+                let block_span = self.k1.exprs.get_span(function_block_id);
+                self.codegen_block(function_block, block_span)?;
             }
         };
         self.debug.pop_scope();

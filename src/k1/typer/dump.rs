@@ -447,22 +447,16 @@ impl TypedProgram {
         writ: &mut impl Write,
         indentation: usize,
     ) -> std::fmt::Result {
-        if block.statements.len() == 1 {
-            if let TypedStmt::Expr(expr, _) = self.stmts.get(block.statements[0]) {
-                return self.display_expr_id(*expr, writ, indentation);
-            }
-        }
-        writ.write_str("{\n")?;
-        for (idx, stmt) in block.statements.iter().enumerate() {
+        for (idx, stmt) in self.mem.getn(block.statements).iter().enumerate() {
             self.display_stmt(*stmt, writ, indentation + 1)?;
-            if idx < block.statements.len() - 1 {
+            if idx < block.statements.len() as usize - 1 {
                 writ.write_str(";")?;
             }
             writ.write_str("\n")?;
         }
         writ.write_str(&"  ".repeat(indentation))?;
-        writ.write_str("}: ")?;
-        self.display_type_id(writ, block.expr_type, false)
+        writ.write_str("}")?;
+        Ok(())
     }
 
     pub fn stmt_to_string(&self, stmt: TypedStmtId) -> String {

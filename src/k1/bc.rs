@@ -1012,9 +1012,9 @@ fn compile_block_stmts(
     debug!("compiling block {}", b.k1.block_to_string(body));
 
     let mut last_ret = None;
-    let statements = body.statements.clone();
-    for (index, &stmt) in statements.iter().enumerate() {
-        let is_last = index == statements.len() - 1;
+    let statements = body.statements;
+    for (index, &stmt) in b.k1.mem.getn(statements).iter().enumerate() {
+        let is_last = index == statements.len() as usize - 1;
         let stmt_dst = if is_last { dst } else { None };
         last_ret = Some(compile_stmt(b, stmt_dst, stmt)?);
     }
@@ -1203,7 +1203,7 @@ fn compile_expr(
                 Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
                 "array get offset",
             );
-            let result_type = b.get_physical_type(array_get.result_type);
+            let result_type = b.get_physical_type(expr_type);
             let result = build_field_access(
                 b,
                 array_get.access_kind,
