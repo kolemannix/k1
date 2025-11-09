@@ -2748,6 +2748,7 @@ impl TypedProgram {
         let total_elapsed_ms = self.timing.elapsed_ms(total_start);
         eprintln!("module {} took {}ms", src_path_name, total_elapsed_ms);
         eprintln!("\t{} expressions", self.exprs.len());
+        eprintln!("\t{} statements", self.stmts.len());
         eprintln!("\t{} functions", self.functions.len());
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());

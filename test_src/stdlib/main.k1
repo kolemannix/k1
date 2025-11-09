@@ -1,6 +1,6 @@
 fn main(): i32 {
 
-  //hash_test/test();
+  hash_test/test();
   testFixList();
 
   0
