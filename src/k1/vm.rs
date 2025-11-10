@@ -921,6 +921,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                 // - Push a stack frame
                 vm.stack.push_new_frame(Some(vm.eval_span), compiled_function, ret_info);
+                if vm.stack.frames.len() >= 1024 {
+                    eprintln!("vm stack {}", vm.stack.frames.len());
+                    eprintln!("{}", make_stack_trace(k1, &vm.stack))
+                }
                 debug_assert_eq!(new_frame_index, vm.stack.current_frame_index());
 
                 // Prepare the function's arguments
@@ -1956,9 +1960,6 @@ impl Stack {
         let base_ptr = self.cursor;
 
         let frame = StackFrame::make(index, base_ptr, call_span, owner, ret_info);
-        if self.frames.len() == 512 {
-            eprintln!("vm stack > 512");
-        }
         let registers_size =
             size_of::<Value>() * (frame.inst_slice.len() + frame.param_count as usize);
         let registers_align = align_of::<Value>();

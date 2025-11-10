@@ -2,4 +2,4 @@
 set -x
 set -e
 cargo build --features profile --profile profiling --bin compiler
-target/profiling/compiler --profile check $1
+target/profiling/k1 --profile check $1

@@ -196,7 +196,7 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0)
     }
 
-    pub fn vec_to_mslice<T>(&self, fix_vec: &FixList<T, Tag>) -> MSlice<T, Tag> {
+    pub fn vec_to_mslice<T>(&self, fix_vec: &MList<T, Tag>) -> MSlice<T, Tag> {
         let offset = self.ptr_to_offset(fix_vec.buf.cast_const());
         MSlice::make(offset, fix_vec.len() as u32)
     }
@@ -301,11 +301,11 @@ impl<Tag> Mem<Tag> {
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
-    pub fn new_vec<T>(&mut self, len: u32) -> FixList<T, Tag> {
+    pub fn new_vec<T>(&mut self, len: u32) -> MList<T, Tag> {
         let dst = self.push_slice_uninit(len as usize);
 
         let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
-        FixList { buf: raw_slice, len: 0, _tag: PhantomData }
+        MList { buf: raw_slice, len: 0, _tag: PhantomData }
     }
 
     pub fn get_str(&self, s: MStr<Tag>) -> &str {
@@ -449,13 +449,14 @@ impl<Tag> Mem<Tag> {
 }
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
-pub struct FixList<T, Tag = ()> {
+/// Can behave like an auto-growing list if the _grow variants are used
+pub struct MList<T, Tag = ()> {
     buf: *mut [T],
     len: usize,
     _tag: PhantomData<Tag>,
 }
 
-impl<T, Tag> FixList<T, Tag> {
+impl<T, Tag> MList<T, Tag> {
     pub fn len(&self) -> usize {
         self.len
     }
@@ -473,7 +474,7 @@ impl<T, Tag> FixList<T, Tag> {
 
     pub fn push(&mut self, val: T) {
         if self.len == self.cap() {
-            panic!("FixList is full {}", self.buf.len());
+            panic!("MList is full {}", self.buf.len());
         }
         self.push_unchecked(val)
     }
@@ -491,12 +492,16 @@ impl<T, Tag> FixList<T, Tag> {
     // For now we'll constrain the tag, but we should provide
     // a separate method that returns a new list in whatever
     // arena is passed
+    #[track_caller]
     pub fn push_grow(&mut self, mem: &mut Mem<Tag>, val: T)
     where
         T: Copy,
     {
+        let loc = std::panic::Location::caller();
         if self.len == self.cap() {
-            let mut new_me = mem.new_vec(self.cap() as u32 * 2);
+            let new_cap = self.cap() as u32 * 2;
+            eprintln!("{}:{} Growing from {} -> {}", loc.file(), loc.line(), self.cap(), new_cap);
+            let mut new_me = mem.new_vec(new_cap);
             new_me.extend(self.as_slice());
             new_me.push_unchecked(val);
             *self = new_me;
@@ -511,10 +516,10 @@ impl<T, Tag> FixList<T, Tag> {
         T: Copy,
     {
         if self.len == self.cap() {
-            panic!("FixVec is full {}", self.buf.len());
+            panic!("MList is full {}", self.buf.len());
         }
         if index > self.len {
-            panic!("FixVec insert index out of bounds: {} > {}", index, self.len);
+            panic!("MList insert index out of bounds: {} > {}", index, self.len);
         }
         unsafe {
             let slice = &mut *self.buf;
@@ -529,7 +534,7 @@ impl<T, Tag> FixList<T, Tag> {
         T: Copy,
     {
         if self.len + vals.len() > self.buf.len() {
-            panic!("FixVec is full {} + {} > {}", self.len, vals.len(), self.buf.len());
+            panic!("MList is full {} + {} > {}", self.len, vals.len(), self.buf.len());
         }
         unsafe {
             let dst = &mut (&mut (*self.buf))[self.len..self.len + vals.len()];
@@ -555,20 +560,40 @@ impl<T, Tag> FixList<T, Tag> {
     }
 }
 
-impl<T, Tag> std::ops::Index<usize> for FixList<T, Tag> {
+impl<T, Tag> std::ops::Index<usize> for MList<T, Tag> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T, Tag> std::ops::IndexMut<usize> for FixList<T, Tag> {
+impl<T, Tag> std::ops::Index<std::ops::Range<usize>> for MList<T, Tag> {
+    type Output = [T];
+    fn index(&self, index: std::ops::Range<usize>) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
+impl<T, Tag> std::ops::Index<std::ops::RangeInclusive<usize>> for MList<T, Tag> {
+    type Output = [T];
+    fn index(&self, index: std::ops::RangeInclusive<usize>) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
+impl<T, Tag> std::ops::IndexMut<usize> for MList<T, Tag> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.as_slice_mut()[index]
     }
 }
 
-impl<T, Tag> Deref for FixList<T, Tag> {
+impl<T, Tag> std::ops::IndexMut<std::ops::Range<usize>> for MList<T, Tag> {
+    fn index_mut(&mut self, index: std::ops::Range<usize>) -> &mut Self::Output {
+        &mut self.as_slice_mut()[index]
+    }
+}
+
+impl<T, Tag> Deref for MList<T, Tag> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.as_slice()
@@ -637,7 +662,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "FixVec is full")]
+    #[should_panic(expected = "MList is full")]
     fn vec_extend_oob() {
         let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(3);
@@ -645,7 +670,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "FixVec is full")]
+    #[should_panic(expected = "MList is full")]
     fn vec_oob() {
         let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_vec(4);

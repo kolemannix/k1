@@ -129,7 +129,7 @@ fn test(): unit {
 
   assertEquals[string](#static {
     let* sb = core/StringBuilder/new();
-    sb.putString("Hello");
+    sb.writeString("Hello");
     sb.build()
   }, "Hello");
 

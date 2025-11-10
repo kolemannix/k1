@@ -2378,7 +2378,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(phi.as_basic_value().into())
             }
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
-            TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr),
+            TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr, expr_type),
             TypedExpr::Deref(deref) => {
                 let value = self.codegen_expr_basic_value(deref.target)?;
                 let value_ptr = value.into_pointer_value();
@@ -3484,7 +3484,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(self.builtin_types.unit_basic().into())
             }
             TypedStmt::Require(require_stmt) => {
-                let start_block = self.builder.get_insert_block().unwrap();
                 let require_continue_block = self.append_basic_block("require_continue");
                 let require_else_block = self.append_basic_block("require_else");
 
@@ -3497,12 +3496,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.position_at_end(require_else_block);
                 self.codegen_expr(require_stmt.else_body)?;
 
-                if require_stmt.condition.diverges {
-                    require_continue_block.remove_from_function().unwrap();
-                    self.builder.position_at_end(start_block);
-                } else {
-                    self.builder.position_at_end(require_continue_block);
-                }
+                self.builder.position_at_end(require_continue_block);
 
                 Ok(self.builtin_types.unit_basic().into())
             }
@@ -3575,13 +3569,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(self.builtin_types.unit_basic().into())
     }
 
-    fn codegen_loop_expr(&mut self, loop_expr: &LoopExpr) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_loop_expr(
+        &mut self,
+        loop_expr: &LoopExpr,
+        expr_type: TypeId,
+    ) -> CodegenResult<LlvmValue<'ctx>> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let loop_body_block = self.ctx.append_basic_block(current_fn, "loop_body");
         let loop_end_block = self.ctx.append_basic_block(current_fn, "loop_end");
 
-        let break_type = self.codegen_type(loop_expr.break_type)?;
+        let break_type = self.codegen_type(expr_type)?;
         // TODO llvm ir Optimization: skip alloca if break is unit type
         let break_value_ptr = self.build_k1_alloca(&break_type, "break");
         let TypedExpr::Block(body_block) = self.k1.exprs.get(loop_expr.body_block) else {
@@ -3592,7 +3590,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             body_block.scope_id,
             LoopInfo {
                 break_value_ptr: Some(break_value_ptr),
-                break_type: Some(loop_expr.break_type),
+                break_type: Some(expr_type),
                 end_block: loop_end_block,
             },
         );

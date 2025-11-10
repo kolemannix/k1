@@ -1,48 +1,15 @@
-use std/SpillList
-
-deftype StringBuilder = { list: SpillList[u8, 64uword] }
-ns StringBuilder {
-  fn new(): StringBuilder {
-    { list: SpillList/new() }
-  }
-  fn build(self: *mut StringBuilder): string {
-    let l: *mut SpillList[u8, 64uword] = self.list*;
-    let s = string/fromBytes(self.list*.asView().cloned());
-    l.clear();
-    s
-  }
-  fn buildIn(self: *mut StringBuilder, arena: *mut core/Arena): string {
-    let l: *mut SpillList[u8, 64uword] = self.list*;
-    let tempS = string/fromBytes(self.list*.asView());
-    let s = arena.pushString(tempS);
-    l.clear();
-    s
-  }
-  fn buildTmp(self: *mut StringBuilder): string { self.buildIn(mem/getTempArena()) }
-}
-
-impl Writer for *mut StringBuilder {
-  fn writeByte(self: Self, b: u8): unit {
-    self.list*.push(b)
-  }
-  fn writeBytes(self: Self, b: View[u8]): unit {
-    self.list*.pushN(b)
-  }
-}
-
 fn main(): i32 { 
-   let tmp = mem/getTempArena();
-   println("Size of StringBuilder: {types/sizeOf[StringBuilder]()}");
+   println("Size of StringBuilder: {types/sizeOf[core/StringBuilder]()}");
 
-   let* sb = StringBuilder/new();
+   let* sb = core/StringBuilder/new();
    for IntRange/upTo(128) do {
      if it % 2 == 0 sb.writeChar('a')
      else sb.writeChar('b');
    };
-   let s = sb.buildIn(tmp);
+   let s = sb.buildTmp();
    assertEquals(s.len(), 128);
    assertEquals(s.get(0), 'a');
    assertEquals(s.get(127), 'b');
-  "{1} {2} {3}";
+   println("{1} {2} {3}");
   0
 }
