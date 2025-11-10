@@ -37,6 +37,11 @@ ns List {
     { len: 0, buffer: buffer }
   }
 
+  fn withCapacityIn[T](context mode: mem/AllocMode)(cap: uword): List[T] {
+    let buffer = Buffer/_allocateIn[T](cap);
+    { len: 0, buffer: buffer }
+  }
+
   fn reserve[T](self: *mut List[T], count: uword): unit {
     if self.cap() >= count { return(()) };
     self.buffer*._growTo[T](context ALLOC_MODE)(count);
