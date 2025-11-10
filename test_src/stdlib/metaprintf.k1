@@ -1,11 +1,13 @@
-use meta/CodeBuilder
+use core/StringBuilder
+use meta/CodeWriter
 
 // TODO: need to flesh this out more with format specifiers
 //           and other things
 fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
   let* result: *mut List[char] = List/empty();
   #meta(fmtString) {
-    let code = CodeBuilder/new();
+    // nocommit(3): Preallocate and re-use the temp arena for VMs
+    let* code = StringBuilder/new();
     let argsTypeId = types/typeId[Args]();
     let schema = types/typeSchema(argsTypeId);
     // This naive splitting doesn't work; we need to walk the format string

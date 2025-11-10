@@ -15,15 +15,15 @@ ns type_schema {
     require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
     let name = typeName(id);
-    sb.putString("Struct {name} {{\n");
+    sb.writeString("Struct {name} {{\n");
     for field in fields do {
-      sb.putString("  ");
-      sb.putString(field.name);
-      sb.putString(": ");
-      sb.putString(typeName(field.typeId));
-      sb.putString("\n");
+      sb.writeString("  ");
+      sb.writeString(field.name);
+      sb.writeString(": ");
+      sb.writeString(typeName(field.typeId));
+      sb.writeString("\n");
     };
-    sb.putString("}");
+    sb.writeString("}");
     sb.build()
   }
 

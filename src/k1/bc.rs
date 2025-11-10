@@ -1,15 +1,15 @@
+/// Copyright (c) 2025 knix
+/// All rights reserved.
+///
+/// The goal here is a strongly-typed SSA form
+/// instruction-based IR with basic blocks, obviously
+/// very much like LLVM, as that is our primary target.
+/// But I currently think there's going to be a lot of value
+/// in having our own. It'll be easier to write an interpreter for
+/// and will help make adding other backends far, far easier
 use crate::compiler::WordSize;
-use crate::kmem::FixList;
+use crate::kmem::MList;
 use crate::parse::NumericWidth;
-// Copyright (c) 2025 knix
-// All rights reserved.
-//
-// The goal here is a strongly-typed SSA form
-// instruction-based IR with basic blocks, obviously
-// very much like LLVM, as that is our primary target.
-// But I currently think there's going to be a lot of value
-// in having our own. It'll be easier to write an interpreter for
-// and will help make adding other backends far, far easier
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, mformat};
@@ -877,7 +877,10 @@ impl<'k1> Builder<'k1> {
         base: Value,
         field_index: u32,
         comment: &str,
-    ) -> InstId {
+    ) -> Value {
+        if field_index == 0 {
+            return base;
+        }
         let Some(offset) = self.k1.types.get_struct_field_offset(agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
@@ -885,10 +888,27 @@ impl<'k1> Builder<'k1> {
             Inst::StructOffset { struct_t: agg_id, base, field_index, vm_offset: offset },
             comment,
         )
+        .as_value()
     }
 
     fn push_jump(&mut self, block_id: BlockId, comment: &str) -> InstId {
         self.push_inst(Inst::Jump(block_id), comment)
+    }
+
+    fn push_jump_if(&mut self, cond: Value, cons: BlockId, alt: BlockId, comment: &str) -> InstId {
+        if let Value::Imm32 { t: ScalarType::U8, data: b32 } = cond {
+            if b32 == 1 {
+                // JMPIF true ...
+                self.push_jump(cons, comment)
+            } else if b32 == 0 {
+                // JMPIF false ...
+                self.push_jump(alt, comment)
+            } else {
+                panic!("Unexpected condition value: {b32}")
+            }
+        } else {
+            self.push_inst(Inst::JumpIf { cond, cons, alt }, comment)
+        }
     }
 
     fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType, comment: &str) -> InstId {
@@ -967,7 +987,11 @@ impl<'k1> Builder<'k1> {
 
     fn get_physical_type(&self, type_id: TypeId) -> PhysicalType {
         self.k1.types.get_physical_type(type_id).unwrap_or_else(|| {
-            b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string(type_id))
+            b_ice!(
+                self,
+                "Not a physical type: {}",
+                self.k1.type_id_to_string_ext(self.k1.types.get_chased_id(type_id), true)
+            )
         })
     }
 
@@ -1127,9 +1151,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             compile_expr(b, None, req.else_body)?;
 
             b.goto_block(require_continue_block);
-            if req.condition.diverges {
-                b.push_inst_anon(Inst::Unreachable);
-            }
 
             Ok(Value::UNIT)
         }
@@ -1169,7 +1190,7 @@ fn compile_expr(
                     field_index as u32,
                     "struct lit field ptr",
                 );
-                compile_expr(b, Some(struct_offset.as_value()), field.expr)?;
+                compile_expr(b, Some(struct_offset), field.expr)?;
             }
             Ok(struct_base)
         }
@@ -1183,13 +1204,8 @@ fn compile_expr(
                 "struct field access",
             );
             let result_type = b.get_physical_type(expr_type);
-            let result = build_field_access(
-                b,
-                field_access.access_kind,
-                dst,
-                field_ptr.as_value(),
-                result_type,
-            );
+            let result =
+                build_field_access(b, field_access.access_kind, dst, field_ptr, result_type);
             Ok(result)
         }
         TypedExpr::ArrayGetElement(array_get) => {
@@ -1496,14 +1512,14 @@ fn compile_expr(
                             TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
                             "dyn lam fn ptr offset",
                         );
-                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr.as_value(), false, "");
+                        let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, "");
                         let env_addr = b.push_struct_offset(
                             lam_obj_pt,
                             lambda_obj,
                             TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                             "dyn lam env ptr offset",
                         );
-                        let env = load_value(b, ptr_pt, env_addr.as_value(), false, "");
+                        let env = load_value(b, ptr_pt, env_addr, false, "");
 
                         args.push(env);
                         BcCallee::Indirect(fn_ptr)
@@ -1608,7 +1624,7 @@ fn compile_expr(
                 InstKind::Terminator => None,
             };
 
-            let mut incomings: FixList<CameFromCase, _> =
+            let mut incomings: MList<CameFromCase, _> =
                 b.k1.bytecode.mem.new_vec(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
@@ -1669,10 +1685,7 @@ fn compile_expr(
 
             let lhs = compile_expr(b, None, and.lhs)?;
             let lhs_end_block = b.cur_block;
-            b.push_inst(
-                Inst::JumpIf { cond: lhs, cons: rhs_check, alt: final_block },
-                "logical and",
-            );
+            b.push_jump_if(lhs, rhs_check, final_block, "logical and");
             incomings.push(CameFromCase { from: lhs_end_block, value: Value::FALSE });
 
             b.goto_block(rhs_check);
@@ -1703,10 +1716,7 @@ fn compile_expr(
 
             let lhs = compile_expr(b, None, or.lhs)?;
             let lhs_end_block = b.cur_block;
-            b.push_inst(
-                Inst::JumpIf { cond: lhs, cons: final_block, alt: rhs_check },
-                "logical or",
-            );
+            b.push_jump_if(lhs, final_block, rhs_check, "logical or");
             incomings.push(CameFromCase { from: lhs_end_block, value: Value::TRUE });
 
             b.goto_block(rhs_check);
@@ -1761,9 +1771,9 @@ fn compile_expr(
             let end_name = mformat!(b.k1.bytecode.mem, "loop_end__{}", expr.as_u32());
             let loop_end_block = b.push_block(end_name);
 
-            let break_pt_id = b.get_physical_type(loop_expr.break_type);
+            let break_pt_id = b.get_physical_type(expr_type);
 
-            let break_value = if loop_expr.break_type != UNIT_TYPE_ID {
+            let break_value = if expr_type != UNIT_TYPE_ID {
                 Some(b.push_alloca(break_pt_id, "loop break value"))
             } else {
                 None
@@ -1829,8 +1839,7 @@ fn compile_expr(
             if let Some(payload_expr) = &enumc.payload {
                 let payload_offset =
                     b.push_struct_offset(variant_pt.expect_agg(), enum_base, 1, "enum payload ptr");
-                let _payload_value =
-                    compile_expr(b, Some(payload_offset.as_value()), *payload_expr)?;
+                let _payload_value = compile_expr(b, Some(payload_offset), *payload_expr)?;
             }
 
             Ok(enum_base)
@@ -1876,7 +1885,7 @@ fn compile_expr(
                 debug_assert!(base_is_reference);
                 // We're generating a pointer to the payload. The variant itself is a reference
                 // and the value we produce here is just a pointer to the payload
-                let stored = store_simple_if_dst(b, dst, payload_offset.as_value());
+                let stored = store_simple_if_dst(b, dst, payload_offset);
                 Ok(stored)
             } else {
                 // We're loading the payload. The variant itself may or may not be a reference.
@@ -1894,7 +1903,7 @@ fn compile_expr(
                     b,
                     payload_pt_id,
                     dst,
-                    payload_offset.as_value(),
+                    payload_offset,
                     make_copy,
                     "deliver enum payload",
                 );
@@ -1925,14 +1934,12 @@ fn compile_expr(
                 None => b.push_alloca(obj_struct_type, "lam obj storage").as_value(),
             };
             let fn_ptr = Value::FunctionAddr(fn_to_lam_obj.function_id);
-            let lam_obj_fn_ptr_addr = b
-                .push_struct_offset(
-                    obj_struct_type.expect_agg(),
-                    lam_obj_ptr,
-                    TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
-                    "",
-                )
-                .as_value();
+            let lam_obj_fn_ptr_addr = b.push_struct_offset(
+                obj_struct_type.expect_agg(),
+                lam_obj_ptr,
+                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
+                "",
+            );
             b.push_store(lam_obj_fn_ptr_addr, fn_ptr, "");
             let lam_obj_env_ptr_addr = b.push_struct_offset(
                 obj_struct_type.expect_agg(),
@@ -1940,7 +1947,7 @@ fn compile_expr(
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                 "",
             );
-            b.push_store(lam_obj_env_ptr_addr.as_value(), Value::PtrZero, "");
+            b.push_store(lam_obj_env_ptr_addr, Value::PtrZero, "");
             Ok(lam_obj_ptr)
         }
         TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),
@@ -2162,7 +2169,7 @@ fn compile_cast(
                 TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
                 "",
             );
-            b.push_store(lam_obj_fn_ptr_addr.as_value(), fn_ptr, "");
+            b.push_store(lam_obj_fn_ptr_addr, fn_ptr, "");
 
             let lam_obj_env_ptr_addr = b.push_struct_offset(
                 obj_struct_type.expect_agg(),
@@ -2170,7 +2177,7 @@ fn compile_cast(
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                 "",
             );
-            b.push_store(lam_obj_env_ptr_addr.as_value(), lambda_env_ptr, "");
+            b.push_store(lam_obj_env_ptr_addr, lambda_env_ptr, "");
 
             Ok(lam_obj_ptr)
         }
@@ -2320,7 +2327,6 @@ fn compile_matching_condition(
     cons_block: BlockId,
     condition_fail_block: BlockId,
 ) -> TyperResult<()> {
-    b.cur_span = mc.span;
     if mc.instrs.is_empty() {
         // Always true
         b.push_jump(cons_block, "empty condition");
@@ -2338,12 +2344,10 @@ fn compile_matching_condition(
                 }
                 let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
                 let continue_block = b.push_block(continue_name);
-                b.push_inst(
-                    Inst::JumpIf {
-                        cond: cond_value,
-                        cons: continue_block,
-                        alt: condition_fail_block,
-                    },
+                b.push_jump_if(
+                    cond_value,
+                    continue_block,
+                    condition_fail_block,
                     "matching cond cond",
                 );
                 b.goto_block(continue_block);

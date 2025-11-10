@@ -1,9 +1,8 @@
-use std/FixList
 deftype SpillList[T, N: static uword] = either Inline(FixList[T, N]), Spilled(List[T])
 ns SpillList {
 
   fn new[T, N: static uword](): SpillList[T, N] {
-    .Inline(zeroed[FixList[T, N]]())
+    .Inline(mem/zeroed[FixList[T, N]]())
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use
@@ -29,12 +28,11 @@ ns SpillList {
   }
 
   fn _spill[T, N: static uword](fixlist: *mut FixList[T, N]): List[T] {
-    let* list = List/withCapacity[T](fixlist.len() * 2);
+    let* list = List/withCapacity[T](fixlist.cap() * 2);
 
-    let srcBuffer = fixlist.data*.asBuffer();
+    let srcBuffer = fixlist.asBuffer();
     list.appendBuffer(srcBuffer);
     eprintln("Spilled to a list of cap {list.cap()}");
-    //eprintln("Items: {list.*}");
 
     list.*
   }

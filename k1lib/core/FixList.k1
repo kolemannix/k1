@@ -8,7 +8,7 @@
 // 0    4
 deftype FixList[T, N: static uword] = { used: u32, data: Array[T, N] }
 ns FixList {
-  fn capacity[T, N: static uword](self: FixList[T, N]): uword { self.data.len() }
+  fn cap[T, N: static uword](self: FixList[T, N]): uword { self.data.len() }
   fn len[T, N: static uword](self: FixList[T, N]): uword { self.used as uword }
 
   fn clear[T, N: static uword](self: *mut FixList[T, N]): unit {
@@ -18,18 +18,18 @@ ns FixList {
 
   fn push[T, N: static uword](self: *mut FixList[T, N], value: T): unit {
     let used: uword = self.len();
-    if used < self.capacity() {
+    if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used as u32 + 1;
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
-      crash("{typename} cannot fulfill push. {used + 1} > {self.capacity()}")
+      crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
     }
   }
 
   fn tryPush[T, N: static uword](self: *mut FixList[T, N], value: T): Result[unit, unit] {
     let used: uword = self.len();
-    if used < self.capacity() {
+    if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used as u32 + 1;
       .Ok(())
@@ -38,22 +38,27 @@ ns FixList {
     }
   }
 
-  fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, string] {
+  fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, unit] {
     let needed = self.len() + values.len();
-    if needed <= self.capacity() {
+    if needed <= self.cap() {
       let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
       Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
       self.used* <- needed as u32;
       .Ok(())
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
-      .Err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
+      .Err(())
+      //.Err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
     }
   }
 
   fn pushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): unit {
     let result = self.tryPushN[T, N](values);
-    if result is .Err(msg) crash(msg)
+    if result is .Err(msg) crash("FixList out of space")
+  }
+
+  fn asBuffer[T, N: static uword](self: *mut FixList[T, N]): Buffer[T] {
+    self.data*.asBuffer().slice(0, self.len())
   }
 
   fn asView[T, N: static uword](self: *FixList[T, N]): View[T] {

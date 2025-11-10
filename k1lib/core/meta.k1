@@ -3,6 +3,26 @@
 
 ns meta {
 
+  ability CodeWriter {
+    fn line(self: Self, line: string): unit 
+    fn lines[Iter: Iterator[Item = string]](self: Self, lines: Iter): unit {
+      for l in lines do { self.line(l) }
+    }
+    fn var[T](self: Self, name: string, value: T): unit 
+  }
+  
+  impl[W: Writer] CodeWriter for W {
+    fn line(self: Self, line: string): unit {
+      self.writeString(line);
+      self.writeString("\n");
+    }
+    
+    fn var[T](self: Self, name: string, value: T): unit {
+      let bakedVar = meta/bakedVariable[T](name, value);
+      self.writeString(bakedVar)
+    }
+  }
+
   fn bakedValueExpr[T](value: T): string {
     let valueId = bakeStaticValue[T](value);
     `core/meta/getStaticValue({valueId})`
@@ -12,27 +32,6 @@ ns meta {
     let bakedValueExpr: string = bakedValueExpr[T](value);
     let typeId = types/typeId[T]();
     `let {name}: typeFromId({typeId}) = {bakedValueExpr};\n`
-  }
-
-  deftype CodeBuilder = { sb: StringBuilder }
-  ns CodeBuilder {
-    fn new(): CodeBuilder { { sb: StringBuilder/withCapacity(1024) } }
-    fn string(self: CodeBuilder, line: string): unit {
-      self.sb.writeString(line);
-    }
-    fn line(self: CodeBuilder, line: string): unit {
-      self.sb.writeString(line);
-      self.sb.writeString("\n");
-    }
-    fn lines[Iter: Iterator[Item = string]](self: CodeBuilder, lines: Iter): unit {
-      for l in lines do { self.line(l) }
-    }
-    
-    fn var[T](self: CodeBuilder, name: string, value: T): unit {
-      let bakedVar = bakedVariable[T](name, value);
-      self.sb.writeString(bakedVar)
-    }
-    fn build(self: CodeBuilder): string { self.sb.build() }
   }
 
   // Note: If we had an interface for "growable collection", we could implement it here.
@@ -45,7 +44,7 @@ ns meta {
       crash("Its called a STRUCT of arrays for a reason");
     if fields.isEmpty() { crash("Input struct must have at least one field") };
 
-    let code = CodeBuilder/new();
+    let* code = StringBuilder/new();
     code.line("deftype {name} = {{");
     for f in fields do {
       code.line("  ARR_{f.name}: List[typeFromId({f.typeId})],");

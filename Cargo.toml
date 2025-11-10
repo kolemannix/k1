@@ -2,7 +2,7 @@
 name = "k1"
 version = "0.1.0"
 edition = "2024"
-default-run = "compiler"
+default-run = "k1"
 
 [lib]
 name = "k1"
@@ -59,7 +59,7 @@ name = "test_suite"
 path = "src/bin/test_suite.rs"
 
 [[bin]]
-name = "compiler"
+name = "k1"
 path = "src/bin/compiler_main.rs"
 
 [[bin]]

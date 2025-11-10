@@ -57,22 +57,14 @@ impl TypedProgram {
         alternate: TypedExprId,
         span: SpanId,
     ) -> TypedExprId {
-        let condition_diverges = self.exprs.get_type(condition) == NEVER_TYPE_ID;
-        let condition_span = self.exprs.get_span(condition);
         let cons_arm = TypedMatchArm {
             condition: MatchingCondition {
                 instrs: self.mem.pushn(&[MatchingConditionInstr::Cond { value: condition }]),
-                diverges: condition_diverges,
-                span: condition_span,
             },
             consequent_expr: consequent,
         };
         let alt_arm = TypedMatchArm {
-            condition: MatchingCondition {
-                instrs: MSlice::empty(),
-                diverges: false,
-                span: condition_span,
-            },
+            condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
         self.exprs.add(
@@ -180,7 +172,7 @@ impl TypedProgram {
             let e_type_id = self.exprs.get_type(*e);
             self.push_block_stmt(&mut b, TypedStmt::Expr(*e, e_type_id));
         }
-        return self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID);
+        self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID)
     }
 
     pub(super) fn make_never_condition_block(
@@ -199,7 +191,7 @@ impl TypedProgram {
                 }
             }
         }
-        return self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID);
+        self.exprs.add_block(&mut self.mem, b, NEVER_TYPE_ID)
     }
 
     /// Creates a non-mutable, mangled, non-referencing variable defn.

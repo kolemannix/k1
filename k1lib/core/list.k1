@@ -258,12 +258,12 @@ ns List {
 
   // TODO(stdlib) remove or tweak this; assumes global allocation
   fn join[T: Show](self: List[T], sep: string): string {
-    let b = StringBuilder/new();
+    let* b = StringBuilder/new();
     for s in self do {
-      b.putString(s.show());
+      b.writeString(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
-        b.putChar('\n');
+        b.writeChar('\n');
       }
     };
     b.build()

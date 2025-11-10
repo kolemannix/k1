@@ -19,12 +19,13 @@ ns pre {
 
 ns test_meta;
 
-use meta/CodeBuilder
+use core/StringBuilder
+use core/meta/CodeWriter
 
 fn simpleIncrement(): i32 {
   let x = 10;
   #meta {
-    let code = CodeBuilder/new();
+    let* code = StringBuilder/new();
     for core/IntRange/upTo(5) do {
       code.line("x := x + 1;");
     };
@@ -39,7 +40,7 @@ use core/Writer
 use types/TypeSchema
 use types/typeSchema
 
-fn _writeJsonFromSchema(code: CodeBuilder, name: string, typeId: u64): unit {
+fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, typeId: u64): unit {
   switch typeSchema(typeId) {
     .Struct(s) -> {
       code.line("w.writeChar('{{');");
@@ -47,7 +48,7 @@ fn _writeJsonFromSchema(code: CodeBuilder, name: string, typeId: u64): unit {
 
         let fieldLetName = `_{name}{f.name}`;
 
-        code.string(
+        code.writeString(
 `let {fieldLetName} = {name}.{f.name};
 w.writeString("\"{f.name}\":");
 `
@@ -79,7 +80,7 @@ w.writeString("\"{f.name}\":");
 fn writeJson[T, W: Writer](context w: W)(t: T): unit {
   #meta {
     let typeId = types/typeId[T]();
-    let code = CodeBuilder/new();
+    let* code = StringBuilder/new();
     _writeJsonFromSchema(code, "t", typeId);
     code.build()
   }

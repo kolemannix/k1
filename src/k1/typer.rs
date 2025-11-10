@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{FixList, MHandle, MSlice, Mem};
+use crate::kmem::{MHandle, MList, MSlice, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -759,7 +759,7 @@ pub struct TypedLambda {
 
 pub struct BlockBuilder {
     pub scope_id: ScopeId,
-    pub statements: FixList<TypedStmtId, TypedProgram>,
+    pub statements: MList<TypedStmtId, TypedProgram>,
     pub span: SpanId,
 }
 
@@ -1131,12 +1131,10 @@ impl_copy_if_small!(16, TypedEnumConstructor);
 #[derive(Clone)]
 pub struct GetEnumVariantPayload {
     pub enum_variant_expr: TypedExprId,
-    pub result_type_id: TypeId,
     pub variant_index: u32,
     pub access_kind: FieldAccessKind,
-    pub span: SpanId,
 }
-impl_copy_if_small!(20, GetEnumVariantPayload);
+impl_copy_if_small!(12, GetEnumVariantPayload);
 
 /// enum_expr can be an enum value, or a Type::Reference to an enum
 /// This saves us having to generate a dereference of the entire value
@@ -1361,10 +1359,8 @@ pub struct WhileLoop {
 #[derive(Debug, Clone)]
 pub struct LoopExpr {
     pub body_block: TypedExprId,
-    pub break_type: TypeId,
-    pub span: SpanId,
 }
-impl_copy_if_small!(12, LoopExpr);
+impl_copy_if_small!(4, LoopExpr);
 
 #[derive(Clone)]
 /// Invariant: The last arm's condition must always evaluate to 'true'
@@ -1395,11 +1391,12 @@ pub struct StaticConstantExpr {
 
 nz_u32_id!(CallId);
 
-static_assert_size!(TypedExpr, 24);
+static_assert_size!(TypedExpr, 20);
 #[derive(Clone)]
 pub enum TypedExpr {
     StaticValue(StaticConstantExpr),
     Struct(StructLiteral),
+    // Current largest variant at 20 bytes
     StructFieldAccess(FieldAccess),
     ArrayGetElement(ArrayGetElement),
     Variable(VariableExpr),
@@ -1415,16 +1412,14 @@ pub enum TypedExpr {
     Match(TypedMatchExpr),
     /// Takes 2 boolean expressions and runs the 2nd only if the first is true, returning the logical AND
     /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
-    /// It could possibly be a macro one day, desugaring to an if/else. Actually, it can
-    /// already desugar to an if/else! nocommit(3)
+    /// It could possibly be a macro one day, desugaring to an if/else.
+    /// Actually, it can already desugar to an if/else! nocommit(3)
     LogicalAnd(TypedLogicalAnd),
     /// Takes 2 boolean expressions and runs the 2nd only if the first is false, returning the logical OR
     /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
-    /// It could possibly be a macro one day, desugaring to an if/else. Actually, it can
-    /// already desugar to an if/else! nocommit(3)
+    /// It could possibly be a macro one day, desugaring to an if/else.
+    /// Actually, it can already desugar to an if/else! nocommit(3)
     LogicalOr(TypedLogicalOr),
-    // Current largest variant at 24 bytes
-    // nocommit(3): Deal with the size of MatchingCondition
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
@@ -1509,10 +1504,10 @@ impl TypedExpr {
             TypedExpr::LogicalAnd(_) => BOOL_TYPE_ID,
             TypedExpr::LogicalOr(_) => BOOL_TYPE_ID,
             TypedExpr::WhileLoop(_) => TypeId::PENDING,
-            TypedExpr::LoopExpr(loop_expr) => loop_expr.break_type,
+            TypedExpr::LoopExpr(_loop_expr) => TypeId::PENDING,
             TypedExpr::EnumConstructor(_enum_cons) => TypeId::PENDING,
             TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
-            TypedExpr::EnumGetPayload(as_variant) => as_variant.result_type_id,
+            TypedExpr::EnumGetPayload(_as_variant) => TypeId::PENDING,
             TypedExpr::Cast(_c) => TypeId::PENDING,
             TypedExpr::Return(_ret) => NEVER_TYPE_ID,
             TypedExpr::Break(_break) => NEVER_TYPE_ID,
@@ -1537,10 +1532,10 @@ impl TypedExpr {
             TypedExpr::LogicalAnd(a) => a.span,
             TypedExpr::LogicalOr(o) => o.span,
             TypedExpr::WhileLoop(_) => SpanId::NONE,
-            TypedExpr::LoopExpr(loop_expr) => loop_expr.span,
+            TypedExpr::LoopExpr(_loop_expr) => SpanId::NONE,
             TypedExpr::EnumConstructor(_e) => SpanId::NONE,
             TypedExpr::EnumGetTag(get_tag) => get_tag.span,
-            TypedExpr::EnumGetPayload(as_variant) => as_variant.span,
+            TypedExpr::EnumGetPayload(_as_variant) => SpanId::NONE,
             TypedExpr::Cast(_c) => SpanId::NONE,
             TypedExpr::Return(ret) => ret.span,
             TypedExpr::Break(brk) => brk.span,
@@ -2755,6 +2750,21 @@ impl TypedProgram {
             self.timing.total_bytecode_nanos / 1_000_000
         );
 
+        #[cfg(feature = "profile")]
+        {
+            let mut exprs_by_kind = FxHashMap::new();
+            for expr in self.exprs.exprs.iter() {
+                let i = exprs_by_kind.entry(expr.kind_str()).or_insert(0);
+                *i += 1
+            }
+            eprintln!("\tExpression kinds:");
+            let exprs_by_kind_sorted =
+                exprs_by_kind.iter().sorted_by_key(|i| -i.1).collect::<Vec<_>>();
+            for (k, v) in exprs_by_kind_sorted.iter() {
+                eprintln!("\t\t{}: {}", k, v);
+            }
+        }
+
         Ok(module_id)
     }
 
@@ -2888,13 +2898,7 @@ impl TypedProgram {
                     UNIT_TYPE_ID
                 }
             }
-            TypedStmt::Require(req) => {
-                if req.condition.diverges {
-                    NEVER_TYPE_ID
-                } else {
-                    UNIT_TYPE_ID
-                }
-            }
+            TypedStmt::Require(_req) => UNIT_TYPE_ID,
             TypedStmt::Defer(_defer) => UNIT_TYPE_ID,
         }
     }
@@ -2909,10 +2913,9 @@ impl TypedProgram {
         }
     }
 
-    fn push_expr_to_block(&mut self, expr: TypedExpr) -> TypedStmtId {
-        let type_id = expr.get_type();
-        let id = self.exprs.add_tmp(expr);
-        self.stmts.add(TypedStmt::Expr(id, type_id))
+    fn add_expr_stmt(&mut self, expr: TypedExprId) -> TypedStmtId {
+        let type_id = self.exprs.get_type(expr);
+        self.stmts.add(TypedStmt::Expr(expr, type_id))
     }
 
     fn push_expr_id_to_block(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
@@ -3139,7 +3142,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
-                let mut fields: FixList<StructTypeField, TypePool> =
+                let mut fields: MList<StructTypeField, TypePool> =
                     self.types.mem.new_vec(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
@@ -3463,7 +3466,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: FixList<FnParamType, _> =
+                let mut params: MList<FnParamType, _> =
                     self.types.mem.new_vec(fun_type.params.len() as u32);
 
                 for (index, param) in fun_type.params.iter().enumerate() {
@@ -3818,7 +3821,18 @@ impl TypedProgram {
                                 }));
                             Ok(recursive_reference)
                         } else {
-                            self.eval_type_defn(*parsed_type_defn_id, scope_id)
+                            eprintln!(
+                                "Evaluating {} inside {} because I haven't seen it",
+                                self.ident_str(self.ast.get_type_defn(*parsed_type_defn_id).name),
+                                self.scope_id_to_string(scope_id)
+                            );
+                            // Unresolved types are always named definitions
+                            let defn_info = self.types.get_defn_info(type_id).unwrap();
+
+                            let _result =
+                                self.eval_type_defn(*parsed_type_defn_id, defn_info.scope)?;
+                            // nocommit: Just re-calling ourself after resolution is a hack, or is it?
+                            self.eval_type_application(ty_app_id, scope_id, context)
                         }
                     }
                     Type::Generic(g) => {
@@ -3833,7 +3847,7 @@ impl TypedProgram {
                         }
                         let g_params = g.params;
                         let mut type_arguments = self.tmp.new_vec(ty_app.args.len() as u32);
-                        let mut subst_pairs: FixList<TypeSubstitutionPair, MemTmp> =
+                        let mut subst_pairs: MList<TypeSubstitutionPair, MemTmp> =
                             self.tmp.new_vec(ty_app.args.len() as u32);
                         for (param, parsed_arg) in self
                             .named_types
@@ -3936,7 +3950,6 @@ impl TypedProgram {
                     .collect();
                 let inner = gen_type.inner;
 
-                debug!("Instantiating Generic rhs {}", self.type_id_to_string_ext(inner, true));
                 let specialized_type = self.substitute_in_type_ext(
                     inner,
                     &substitution_pairs,
@@ -3947,12 +3960,13 @@ impl TypedProgram {
                 //if specialized_type == inner {
                 //    panic!("Instantiate should never no-op")
                 //}
+                // let is_sl = self.ident_str(defn_info.name) == "SpillList";
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
                         self.types.get_instance_info(specialized_type).unwrap().type_args;
                     eprintln!(
-                        "instantiated {} with params {} got expanded type: {}",
-                        self.ident_str(defn_info.name),
+                        "instantiated\n{} with params\n{} got expanded type:\n{}\n\n",
+                        self.type_id_to_string_ext(inner, true),
                         self.pretty_print_type_slice(inst_info, ", "),
                         self.type_id_to_string_ext(specialized_type, true)
                     );
@@ -4181,7 +4195,7 @@ impl TypedProgram {
                 if new_return_type != old_return_type {
                     any_new = true
                 };
-                let mut new_params: FixList<FnParamType, _> = self.tmp.new_vec(old_params.len());
+                let mut new_params: MList<FnParamType, _> = self.tmp.new_vec(old_params.len());
                 for param in self.types.mem.getn(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
@@ -6340,7 +6354,6 @@ impl TypedProgram {
         }
     }
 
-    // nocommit determine this function's fate
     pub fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
         self.types.get(self.exprs.get_type(expr_id))
     }
@@ -6552,13 +6565,15 @@ impl TypedProgram {
                     payload_type_id
                 };
 
-                Ok(self.exprs.add_tmp(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
-                    enum_variant_expr: base_expr,
+                Ok(self.exprs.add(
+                    TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                        enum_variant_expr: base_expr,
+                        variant_index,
+                        access_kind,
+                    }),
                     result_type_id,
-                    variant_index,
-                    access_kind,
                     span,
-                })))
+                ))
             }
             Type::Enum(_opt_type) => {
                 if let Some(opt_inner_type) = self.types.get_as_opt_instance(struct_type_id) {
@@ -7217,7 +7232,7 @@ impl TypedProgram {
             self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count as u32);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: FixList<TypedExprId, MemTmp> = {
+        let elements: MList<TypedExprId, MemTmp> = {
             let mut elements = self.tmp.new_vec(element_count as u32);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
@@ -7701,8 +7716,8 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: FixList<StructLiteralField, _> = self.mem.new_vec(field_count);
-        let mut field_types: FixList<StructTypeField, _> = self.types.mem.new_vec(field_count);
+        let mut field_values: MList<StructLiteralField, _> = self.mem.new_vec(field_count);
+        let mut field_types: MList<StructTypeField, _> = self.types.mem.new_vec(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
@@ -7808,6 +7823,10 @@ impl TypedProgram {
 
         let condition_or_block = self
             .eval_matching_condition(while_expr.cond, ctx.with_scope(condition_block_scope_id))?;
+        let condition = match condition_or_block {
+            Either::Right(mc) => mc,
+            Either::Left(crash_block) => return Ok(crash_block),
+        };
 
         let body_block_scope_id = self.scopes.add_child_scope(
             condition_block_scope_id,
@@ -7821,16 +7840,11 @@ impl TypedProgram {
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        // TODO: Also detect divergent loops: if loop has no breaks or returns, can we type is as never?
+        // TODO: detect divergent loops: if loop has no breaks or returns, can we type is as never?
         //
         // Loop Info should be able to track this, if we report every
         // break and return
-        let loop_type = if condition.diverges { NEVER_TYPE_ID } else { UNIT_TYPE_ID };
-        // nocommit: Just don't emit a WhileLoop if condition diverges; but maybe a warning
-        //           Is this the time to add warnings? I think so
-        if condition.diverges {
-            //
-        }
+        let loop_type = UNIT_TYPE_ID;
 
         Ok(self.exprs.add(
             TypedExpr::WhileLoop(WhileLoop { condition, body: body_block }),
@@ -7859,11 +7873,8 @@ impl TypedProgram {
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
-        Ok(self.exprs.add_tmp(TypedExpr::LoopExpr(LoopExpr {
-            body_block,
-            break_type: loop_info.break_type.unwrap_or(UNIT_TYPE_ID),
-            span: loop_expr.span,
-        })))
+        let break_type = loop_info.break_type.unwrap_or(UNIT_TYPE_ID);
+        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), break_type, loop_expr.span))
     }
 
     fn eval_interpolated_string(
@@ -7896,14 +7907,13 @@ impl TypedProgram {
             );
             let block_scope = block.scope_id;
             let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-            let part_count_expr = self.synth_uword(part_count, span);
             if self.ast.config.no_std {
                 return failf!(span, "Interpolated strings are not supported in no_std mode");
             }
             let new_string_builder = self.synth_typed_call_typed_args(
-                self.ast.idents.f.List_withCapacity.with_span(span),
-                &[CHAR_TYPE_ID],
-                &[part_count_expr],
+                self.ast.idents.f.StringBuilder_new.with_span(span),
+                &[],
+                &[],
                 block_ctx,
                 false,
             )?;
@@ -7941,11 +7951,10 @@ impl TypedProgram {
                     }
                 };
             }
-            let sb_deref = self.synth_dereference(string_builder_var.variable_expr);
             let build_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.core_string_wrapList.with_span(span),
+                self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
                 &[],
-                &[sb_deref],
+                &[string_builder_var.variable_expr],
                 block_ctx,
                 false,
             )?;
@@ -8343,11 +8352,11 @@ impl TypedProgram {
         let total_arms: usize =
             parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
 
-        let mut typed_arms: FixList<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
-        let mut all_unguarded_patterns: FixList<(TypedPatternId, usize), MemTmp> =
+        let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
             self.tmp.new_vec(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
@@ -8423,7 +8432,7 @@ impl TypedProgram {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
                 let pattern_eval_ctx = arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
-                let mut instrs: SV8<_> = smallvec![];
+                let mut instrs = self.mem.new_vec(8);
                 self.compile_pattern_into_values(
                     pattern,
                     match_subject_variable.variable_expr,
@@ -8431,9 +8440,6 @@ impl TypedProgram {
                     false,
                     pattern_eval_ctx,
                 )?;
-                if instrs.spilled() {
-                    eprintln!("spilled instrs: {}", instrs.len());
-                }
 
                 match parsed_case.guard_condition_expr {
                     None => {}
@@ -8459,18 +8465,8 @@ impl TypedProgram {
                     expected_arm_type_id = Some(consequent_expr_type);
                 }
 
-                let condition_diverges = self.matching_condition_diverges(&instrs);
-
-                let condition_span = match parsed_case.guard_condition_expr {
-                    Some(guard_expr) => self.ast.get_expr_span(guard_expr),
-                    None => self.patterns.get(pattern).span_id(),
-                };
                 let match_arm = TypedMatchArm {
-                    condition: MatchingCondition {
-                        instrs: self.mem.pushn(&instrs),
-                        diverges: condition_diverges,
-                        span: condition_span,
-                    },
+                    condition: MatchingCondition { instrs: self.mem.vec_to_mslice(&instrs) },
                     consequent_expr,
                 };
                 typed_arms.push(match_arm);
@@ -8536,11 +8532,7 @@ impl TypedProgram {
         }
 
         let fallback_arm = TypedMatchArm {
-            condition: MatchingCondition {
-                instrs: MSlice::empty(),
-                diverges: false,
-                span: match_expr_span,
-            },
+            condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: self.synth_crash_call(
                 "No cases matched",
                 match_expr_span,
@@ -8576,7 +8568,7 @@ impl TypedProgram {
         &mut self,
         pattern: TypedPatternId,
         target_expr: TypedExprId,
-        instrs: &mut FixList<MatchingConditionInstr>,
+        instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
@@ -8620,9 +8612,12 @@ impl TypedProgram {
                     });
                     let struct_field_variable =
                         self.synth_variable_defn_simple(var_name, get_struct_field, ctx.scope_id);
-                    instrs.push(MatchingConditionInstr::Binding {
-                        let_stmt: struct_field_variable.defn_stmt,
-                    });
+                    instrs.push_grow(
+                        &mut self.mem,
+                        MatchingConditionInstr::Binding {
+                            let_stmt: struct_field_variable.defn_stmt,
+                        },
+                    );
                     self.compile_pattern_into_values(
                         pattern_field.pattern,
                         struct_field_variable.variable_expr,
@@ -8642,7 +8637,10 @@ impl TypedProgram {
                     ctx,
                     Some(enum_pattern.span),
                 )?;
-                instrs.push(MatchingConditionInstr::Cond { value: is_variant_condition });
+                instrs.push_grow(
+                    &mut self.mem,
+                    MatchingConditionInstr::Cond { value: is_variant_condition },
+                );
 
                 if let Some(payload_pattern) = enum_pattern.payload {
                     let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
@@ -8678,25 +8676,27 @@ impl TypedProgram {
                         },
                         Some(enum_pattern.span),
                     );
-                    let get_payload_expr =
-                        self.exprs.add_tmp(TypedExpr::EnumGetPayload(GetEnumVariantPayload {
+                    let get_payload_expr = self.exprs.add(
+                        TypedExpr::EnumGetPayload(GetEnumVariantPayload {
                             enum_variant_expr: enum_as_variant,
-                            result_type_id,
                             variant_index,
                             access_kind: if is_referencing {
                                 FieldAccessKind::ReferenceThrough
                             } else {
                                 FieldAccessKind::ValueToValue
                             },
-                            span: enum_pattern.span,
-                        }));
+                        }),
+                        result_type_id,
+                        enum_pattern.span,
+                    );
                     let var_name =
                         self.ast.idents.intern(format!("payload_{}", self.ident_str(variant_name)));
                     let payload_variable =
                         self.synth_variable_defn_simple(var_name, get_payload_expr, ctx.scope_id);
-                    instrs.push(MatchingConditionInstr::Binding {
-                        let_stmt: payload_variable.defn_stmt,
-                    });
+                    instrs.push_grow(
+                        &mut self.mem,
+                        MatchingConditionInstr::Binding { let_stmt: payload_variable.defn_stmt },
+                    );
                     self.compile_pattern_into_values(
                         payload_pattern,
                         payload_variable.variable_expr,
@@ -8711,8 +8711,10 @@ impl TypedProgram {
                 let variable_ident = variable_pattern.name;
                 let binding_variable =
                     self.synth_variable_defn_visible(variable_ident, target_expr, ctx.scope_id);
-                instrs
-                    .push(MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt });
+                instrs.push_grow(
+                    &mut self.mem,
+                    MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt },
+                );
                 Ok(())
             }
             TypedPattern::Wildcard(_span) => Ok(()),
@@ -8755,7 +8757,10 @@ impl TypedProgram {
                         let char_expr = self.add_static_constant_expr(char_value, span);
                         let equals_pattern_char =
                             self.synth_equals_call(target_expr, char_expr, ctx, span)?;
-                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_char });
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::Cond { value: equals_pattern_char },
+                        );
                         Ok(())
                     }
                     TypedPattern::LiteralInteger(int_value, span) => {
@@ -8768,7 +8773,10 @@ impl TypedProgram {
                             ctx,
                             span,
                         )?;
-                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_int });
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::Cond { value: equals_pattern_int },
+                        );
                         Ok(())
                     }
                     TypedPattern::LiteralFloat(float_value, span) => {
@@ -8777,7 +8785,10 @@ impl TypedProgram {
                             self.add_static_constant_expr(*float_value, span);
                         let equals_pattern_float =
                             self.synth_equals_call(target_expr, pattern_float_literal, ctx, span)?;
-                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_float });
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::Cond { value: equals_pattern_float },
+                        );
                         Ok(())
                     }
                     TypedPattern::LiteralBool(bool_value, span) => {
@@ -8785,7 +8796,10 @@ impl TypedProgram {
                         let bool_expr = self.synth_bool(*bool_value, span);
                         let equals_pattern_bool =
                             self.synth_equals_call(target_expr, bool_expr, ctx, span)?;
-                        instrs.push(MatchingConditionInstr::Cond { value: equals_pattern_bool });
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::Cond { value: equals_pattern_bool },
+                        );
                         Ok(())
                     }
                     TypedPattern::LiteralString(string_id, span) => {
@@ -8793,7 +8807,10 @@ impl TypedProgram {
                         let string_expr = self.synth_string_literal(*string_id, span);
                         let condition =
                             self.synth_equals_call(target_expr, string_expr, ctx, span)?;
-                        instrs.push(MatchingConditionInstr::Cond { value: condition });
+                        instrs.push_grow(
+                            &mut self.mem,
+                            MatchingConditionInstr::Cond { value: condition },
+                        );
                         Ok(())
                     }
                     _ => {
@@ -9184,11 +9201,11 @@ impl TypedProgram {
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
         let body_block = self.exprs.add_block(&mut self.mem, loop_block, UNIT_TYPE_ID);
-        let loop_expr = TypedExpr::LoopExpr(LoopExpr {
-            body_block,
-            break_type: UNIT_TYPE_ID,
-            span: for_expr.span,
-        });
+        let loop_expr = self.exprs.add(
+            TypedExpr::LoopExpr(LoopExpr { body_block }),
+            UNIT_TYPE_ID,
+            for_expr.span,
+        );
 
         let mut for_expr_initial_statements = self.mem.new_vec(5);
         for_expr_initial_statements.push(index_variable.defn_stmt);
@@ -9196,7 +9213,7 @@ impl TypedProgram {
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
             for_expr_initial_statements.push(yielded_coll_variable.defn_stmt);
         }
-        let loop_stmt_id = self.push_expr_to_block(loop_expr);
+        let loop_stmt_id = self.add_expr_stmt(loop_expr);
         for_expr_initial_statements.push(loop_stmt_id);
 
         if let Some(yielded_coll_variable) = yielded_coll_variable {
@@ -9291,10 +9308,14 @@ impl TypedProgram {
         let match_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
 
-        let condition = self.eval_matching_condition(
+        let condition_or_block = self.eval_matching_condition(
             if_expr.cond,
             ctx.with_scope(match_scope_id).with_no_expected_type(),
         )?;
+        let condition = match condition_or_block {
+            Either::Left(block) => return Ok(block),
+            Either::Right(mc) => mc,
+        };
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
         let consequent_type = self.exprs.get_type(consequent);
@@ -9345,14 +9366,9 @@ impl TypedProgram {
             alternate
         };
 
-        let condition_span = condition.span;
         let cons_arm = TypedMatchArm { condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
-            condition: MatchingCondition {
-                instrs: MSlice::empty(),
-                diverges: false,
-                span: condition_span,
-            },
+            condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
         Ok(self.exprs.add(
@@ -9373,7 +9389,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: FixList<MatchingConditionInstr> = self.mem.new_vec(8);
+        let mut instrs: MList<MatchingConditionInstr, _> = self.mem.new_vec(16);
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
@@ -9381,13 +9397,6 @@ impl TypedProgram {
             &mut instrs,
             ctx,
         )?;
-        if instrs.spilled() {
-            eprintln!(
-                "instrs spilled: {}\n{}",
-                instrs.len(),
-                self.ast.get_span_content(self.ast.get_expr_span(condition))
-            );
-        }
 
         let mut all_bindings: SmallVec<[VariablePattern; 8]> = smallvec![];
         for pattern in all_patterns.iter() {
@@ -9426,7 +9435,7 @@ impl TypedProgram {
             );
             Ok(Either::Left(never_block))
         } else {
-            Ok(MatchingCondition { instrs: self.mem.pushn(&instrs) })
+            Ok(Either::Right(MatchingCondition { instrs: self.mem.pushn(&instrs) }))
         }
     }
 
@@ -9450,7 +9459,9 @@ impl TypedProgram {
 
     /// Handles chains of booleans and pattern statements (IsExprs).
     /// Does so by compiling the patterns (or boolean conditions) contained
-    /// in them into `conditions`, `setup_statements`, and `binding_statements`.
+    /// in them into either `conditions` or `bindings`.
+    /// Conditions are boolean expressions that, after failing, exit the matching condition.
+    /// Bindings are let statements
     ///
     /// Stores all patterns seen for later analysis (conflicting bindings)
     /// Reports whether bindings are allowed based on the following rule:
@@ -9463,7 +9474,7 @@ impl TypedProgram {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
-        instrs: &mut FixList<MatchingConditionInstr>,
+        instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -9480,7 +9491,10 @@ impl TypedProgram {
                 );
                 let pattern =
                     self.eval_pattern(pattern, target_type, ctx.scope_id, *allow_bindings)?;
-                instrs.push(MatchingConditionInstr::Binding { let_stmt: target_var.defn_stmt });
+                instrs.push_grow(
+                    &mut self.mem,
+                    MatchingConditionInstr::Binding { let_stmt: target_var.defn_stmt },
+                );
                 self.compile_pattern_into_values(
                     pattern,
                     target_var.variable_expr,
@@ -9522,7 +9536,7 @@ impl TypedProgram {
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition_type, ctx.scope_id) {
                     return failf!(span, "Expected boolean condition: {msg}");
                 };
-                instrs.push(MatchingConditionInstr::Cond { value: condition });
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::Cond { value: condition });
                 Ok(())
             }
         }
@@ -9536,19 +9550,17 @@ impl TypedProgram {
         let condition_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
-        let matching_condition = self.eval_matching_condition(expr_id, condition_ctx)?;
-        let condition_span = matching_condition.span;
+        let matching_condition = match self.eval_matching_condition(expr_id, condition_ctx)? {
+            Either::Left(block) => return Ok(block),
+            Either::Right(mc) => mc,
+        };
         let span = self.ast.exprs.get_span(expr_id);
         let true_arm = TypedMatchArm {
             condition: matching_condition,
             consequent_expr: self.synth_bool(true, span),
         };
         let false_arm = TypedMatchArm {
-            condition: MatchingCondition {
-                instrs: MSlice::empty(),
-                diverges: false,
-                span: condition_span,
-            },
+            condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: self.synth_bool(false, span),
         };
         let match_expr = TypedExpr::Match(TypedMatchExpr {
@@ -10665,7 +10677,7 @@ impl TypedProgram {
             fn_call.span,
             ctx.scope_id,
         )?;
-        let mut parameter_constraints: FixList<Option<TypeId>, MemTmp> =
+        let mut parameter_constraints: MList<Option<TypeId>, MemTmp> =
             self.tmp.new_vec(ability_params.len() as u32);
         for ab_param in &ability_params {
             if ab_param.is_impl_param {
@@ -11770,7 +11782,7 @@ impl TypedProgram {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
-        let mut param_variables: FixList<VariableId, _> =
+        let mut param_variables: MList<VariableId, _> =
             self.mem.new_vec(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
             .types
@@ -12095,37 +12107,52 @@ impl TypedProgram {
             ParsedStmt::Require(require) => {
                 static_assert_size!(parse::ParsedRequire, 12);
                 let require = require.clone();
-                let condition = self
-                    .eval_matching_condition(require.condition_expr, ctx.with_no_expected_type())?;
+                match self
+                    .eval_matching_condition(require.condition_expr, ctx.with_no_expected_type())?
+                {
+                    Either::Left(block) => {
+                        let stmt = self.add_expr_stmt(block);
+                        Ok(Some(stmt))
+                    }
+                    Either::Right(condition) => {
+                        let else_scope = self.scopes.add_child_scope(
+                            ctx.scope_id,
+                            ScopeType::LexicalBlock,
+                            None,
+                            None,
+                        );
 
-                let else_scope =
-                    self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+                        // Make the binding variables unavailable in the else scope
+                        for instr in self.mem.getn(condition.instrs) {
+                            if let MatchingConditionInstr::Binding { let_stmt } = instr {
+                                let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
+                                let variable = self.variables.get(stmt.variable_id);
 
-                // Make the binding variables unavailable in the else scope
-                for instr in self.mem.getn(condition.instrs) {
-                    if let MatchingConditionInstr::Binding { let_stmt } = instr {
-                        let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
-                        let variable = self.variables.get(stmt.variable_id);
-
-                        if !variable.user_hidden() {
-                            let else_scope = self.scopes.get_scope_mut(else_scope);
-                            else_scope.mask_variable(variable.name);
+                                if !variable.user_hidden() {
+                                    let else_scope = self.scopes.get_scope_mut(else_scope);
+                                    else_scope.mask_variable(variable.name);
+                                }
+                            }
                         }
+
+                        let else_body =
+                            self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
+                        if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
+                            let else_span = self.exprs.get_span(else_body);
+                            return failf!(
+                                else_span,
+                                "else branch must diverge; try returning or exiting"
+                            );
+                        }
+
+                        let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
+                            condition: Box::new(condition),
+                            else_body,
+                            span: require.span,
+                        }));
+                        Ok(Some(id))
                     }
                 }
-
-                let else_body = self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
-                if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
-                    let else_span = self.exprs.get_span(else_body);
-                    return failf!(else_span, "else branch must diverge; try returning or exiting");
-                }
-
-                let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
-                    condition: Box::new(condition),
-                    else_body,
-                    span: require.span,
-                }));
-                Ok(Some(id))
             }
             ParsedStmt::Assign(assign) => {
                 static_assert_size!(parse::AssignStmt, 12);
@@ -13146,7 +13173,7 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = parsed_function_context_params.len() + parsed_function_params.len();
-        let mut param_types: FixList<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
+        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
         let mut param_variables = self_.mem.new_vec(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
@@ -14640,7 +14667,7 @@ impl TypedProgram {
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
                 // Phase 1
-                eprint!("\r>> Phase 0.5 compile pre namespace");
+                eprintln!(">> Phase 0.5 compile pre namespace");
                 self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
                 pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
@@ -14663,7 +14690,7 @@ impl TypedProgram {
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
         let mut err_writer = stderr();
-        eprint!("\r>> Phase 1 declare namespaces and run global #meta programs");
+        eprintln!(">> Phase 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             bail!(
@@ -14674,7 +14701,7 @@ impl TypedProgram {
         }
 
         // Pending Type declaration phase
-        eprint!("\r>> Phase 2 declare types");
+        eprintln!(">> Phase 2 declare types");
         let type_defn_result =
             self.declare_types_in_namespace(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_defn_result {
@@ -14689,7 +14716,7 @@ impl TypedProgram {
             )
         }
         // Type evaluation phase
-        eprint!("\r>> Phase 3 evaluate types");
+        eprintln!(">> Phase 3 evaluate types");
         let type_eval_result =
             self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_eval_result {
@@ -14725,7 +14752,7 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        eprint!("\r>> Phase 4 declare rest of definitions (functions, globals, abilities)");
+        eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             eprintln!(
@@ -14741,7 +14768,7 @@ impl TypedProgram {
             self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
         );
 
-        eprint!("\r>> Phase 5 bodies (functions, globals, abilities)");
+        eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
         let unresolved_uses: Vec<_> =
@@ -14766,7 +14793,7 @@ impl TypedProgram {
             )
         }
 
-        eprintln!("\r>> Phase 6 specialize function bodies");
+        eprintln!(">> Phase 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
@@ -15280,7 +15307,7 @@ impl TypedProgram {
                     self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
                 // { name: string), typeId: u64, offset: uword }
                 let struct_layout = self.types.get_struct_layout(type_id);
-                let mut field_values: FixList<StaticValueId, StaticValuePool> =
+                let mut field_values: MList<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_vec(struct_type.fields.len());
                 for (index, f) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));

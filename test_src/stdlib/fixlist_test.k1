@@ -1,4 +1,4 @@
-use std/FixList
+use core/FixList
 fn testFixList(): unit {
   let* fl: *mut FixList[int, 4uword] = zeroed();
   assertEquals(fl.len(), 0);

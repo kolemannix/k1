@@ -163,6 +163,7 @@ pub struct BuiltinIdents {
     pub param_8: Ident,
     pub Some: Ident,
     pub None: Ident,
+    pub StringBuilder: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -202,6 +203,9 @@ pub struct BuiltinFunctions {
     pub ScalarCmp_le: QIdent,
     pub ScalarCmp_gt: QIdent,
     pub ScalarCmp_ge: QIdent,
+    pub StringBuilder_new: QIdent,
+    pub StringBuilder_build: QIdent,
+    pub StringBuilder_buildTmp: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -344,6 +348,7 @@ impl IdentPool {
             param_8: intern!("param_8"),
             Some: intern!("Some"),
             None: intern!("None"),
+            StringBuilder: intern!("StringBuilder"),
         };
 
         macro_rules! make_fn {
@@ -403,6 +408,11 @@ impl IdentPool {
         let ScalarCmp_gt: QIdent = make_fn!(&[b.ScalarCmp], b.gt);
         let ScalarCmp_ge: QIdent = make_fn!(&[b.ScalarCmp], b.ge);
 
+        let StringBuilder_new: QIdent = make_fn!(&[b.core, b.StringBuilder], intern!("new"));
+        let StringBuilder_build: QIdent = make_fn!(&[b.core, b.StringBuilder], intern!("build"));
+        let StringBuilder_buildTmp: QIdent =
+            make_fn!(&[b.core, b.StringBuilder], intern!("buildTmp"));
+
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
@@ -439,6 +449,9 @@ impl IdentPool {
             ScalarCmp_le,
             ScalarCmp_gt,
             ScalarCmp_ge,
+            StringBuilder_new,
+            StringBuilder_build,
+            StringBuilder_buildTmp,
         };
 
         Self { intern_pool: pool, slices, b, f }
