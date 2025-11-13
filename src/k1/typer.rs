@@ -2457,6 +2457,8 @@ pub struct TypedProgram {
     pub bytecode: bc::ProgramBytecode,
 
     pub timing: Timing,
+
+    pub global_id_k1_arena: Option<TypedGlobalId>
 }
 
 pub struct Timing {
@@ -2602,6 +2604,7 @@ impl TypedProgram {
                 total_vm_nanos: 0,
                 total_bytecode_nanos: 0,
             },
+            global_id_k1_arena: None
         }
     }
 
@@ -3143,7 +3146,7 @@ impl TypedProgram {
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
                 let mut fields: MList<StructTypeField, TypePool> =
-                    self.types.mem.new_vec(struct_defn.fields.len() as u32);
+                    self.types.mem.new_list(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
                         return failf!(
@@ -3467,7 +3470,7 @@ impl TypedProgram {
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
                 let mut params: MList<FnParamType, _> =
-                    self.types.mem.new_vec(fun_type.params.len() as u32);
+                    self.types.mem.new_list(fun_type.params.len() as u32);
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
@@ -3709,7 +3712,7 @@ impl TypedProgram {
                     .clone();
 
                 let mut combined_fields =
-                    self.types.mem.new_vec(struct1.fields.len() + struct2.fields.len());
+                    self.types.mem.new_list(struct1.fields.len() + struct2.fields.len());
                 combined_fields.extend(self.types.mem.getn(struct1.fields));
                 for field in self.types.mem.getn(struct2.fields).iter() {
                     let collision = combined_fields.iter().find(|f| f.name == field.name);
@@ -3821,7 +3824,7 @@ impl TypedProgram {
                                 }));
                             Ok(recursive_reference)
                         } else {
-                            eprintln!(
+                            debug!(
                                 "Evaluating {} inside {} because I haven't seen it",
                                 self.ident_str(self.ast.get_type_defn(*parsed_type_defn_id).name),
                                 self.scope_id_to_string(scope_id)
@@ -3846,9 +3849,9 @@ impl TypedProgram {
                             );
                         }
                         let g_params = g.params;
-                        let mut type_arguments = self.tmp.new_vec(ty_app.args.len() as u32);
+                        let mut type_arguments = self.tmp.new_list(ty_app.args.len() as u32);
                         let mut subst_pairs: MList<TypeSubstitutionPair, MemTmp> =
-                            self.tmp.new_vec(ty_app.args.len() as u32);
+                            self.tmp.new_list(ty_app.args.len() as u32);
                         for (param, parsed_arg) in self
                             .named_types
                             .copy_slice_sv4(g_params)
@@ -4054,7 +4057,7 @@ impl TypedProgram {
             // int, bool, char
             // Opt[T] -> Opt[char]
             let generic_parent = spec_info.generic_parent;
-            let mut new_type_args = self.tmp.new_vec(spec_info.type_args.len());
+            let mut new_type_args = self.tmp.new_list(spec_info.type_args.len());
             for prev_arg in self.types.mem.getn_sv4(spec_info.type_args) {
                 let new_type = self.substitute_in_type(prev_arg, substitution_pairs);
                 new_type_args.push(new_type);
@@ -4195,7 +4198,7 @@ impl TypedProgram {
                 if new_return_type != old_return_type {
                     any_new = true
                 };
-                let mut new_params: MList<FnParamType, _> = self.tmp.new_vec(old_params.len());
+                let mut new_params: MList<FnParamType, _> = self.tmp.new_list(old_params.len());
                 for param in self.types.mem.getn(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
@@ -4588,7 +4591,7 @@ impl TypedProgram {
                         )
                     })?
                     .clone();
-                let mut fields = self.patterns.mem.new_vec(struct_pattern.fields.len() as u32);
+                let mut fields = self.patterns.mem.new_list(struct_pattern.fields.len() as u32);
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
                     let (expected_field_index, expected_field) = expected_struct
                         .find_field(&self.types.mem, *field_name)
@@ -5247,7 +5250,7 @@ impl TypedProgram {
                 e
             });
 
-        vm.reset();
+        vm.reset(self.global_id_k1_arena);
 
         let static_value_id = execution_result?;
 
@@ -5377,6 +5380,10 @@ impl TypedProgram {
         });
 
         debug_assert_eq!(actual_global_id, global_id);
+
+        if scope_id == self.scopes.mem_scope_id && parsed_global.name == self.ast.idents.b.arena {
+            self.global_id_k1_arena = Some(global_id)
+        };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
         self.scopes.add_variable(scope_id, global_name, variable_id);
         Ok(variable_id)
@@ -5522,7 +5529,7 @@ impl TypedProgram {
         }
         let impl_kind = AbilityImplKind::TypeParamConstraint;
         let functions = self.abilities.get(impl_signature.specialized_ability_id).functions.clone();
-        let mut impl_functions = self.mem.new_vec(functions.len() as u32);
+        let mut impl_functions = self.mem.new_list(functions.len() as u32);
         for f in functions.iter() {
             let generic_fn = self.get_function(f.function_id);
             let generic_sig = generic_fn.signature();
@@ -6049,7 +6056,7 @@ impl TypedProgram {
 
         let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
 
-        let mut specialized_functions = self.mem.new_vec(blanket_impl.functions.len());
+        let mut specialized_functions = self.mem.new_list(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
         debug!(
             "blanket impl instance scope before function specialization: {}",
@@ -6476,6 +6483,16 @@ impl TypedProgram {
             if let Some(get_tag) = self.handle_enum_get_tag(base_expr, field_access.span)? {
                 return Ok(get_tag);
             }
+        }
+
+        if field_access.field_name == self.ast.idents.b.variantName {
+            if field_access.is_coalescing {
+                return failf!(field_access.span, "TODO: support coalesce for .variantName");
+            }
+            if is_assignment_lhs {
+                return failf!(field_access.span, "Cannot assign to variantName");
+            }
+            return failf!(field_access.span, "TODO: Generate variantName() code (for only enums that it is called on!)")
         }
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
@@ -7233,7 +7250,7 @@ impl TypedProgram {
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
         let elements: MList<TypedExprId, MemTmp> = {
-            let mut elements = self.tmp.new_vec(element_count as u32);
+            let mut elements = self.tmp.new_list(element_count as u32);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
                 let element_expr =
@@ -7628,8 +7645,8 @@ impl TypedProgram {
         let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
-        let mut field_values = self.mem.new_vec(parsed_struct.fields.len() as u32);
-        let mut field_defns = self.types.mem.new_vec(parsed_struct.fields.len() as u32);
+        let mut field_values = self.mem.new_list(parsed_struct.fields.len() as u32);
+        let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len() as u32);
         let ast_struct = parsed_struct.clone();
         for ast_field in ast_struct.fields.iter() {
             let parsed_expr = match ast_field.expr.as_ref() {
@@ -7716,8 +7733,8 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: MList<StructLiteralField, _> = self.mem.new_vec(field_count);
-        let mut field_types: MList<StructTypeField, _> = self.types.mem.new_vec(field_count);
+        let mut field_values: MList<StructLiteralField, _> = self.mem.new_list(field_count);
+        let mut field_types: MList<StructTypeField, _> = self.types.mem.new_list(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
@@ -7766,7 +7783,7 @@ impl TypedProgram {
 
                     // Run this inference on a fresh state; will be popped by infer()
                     self.ictx_push();
-                    let mut subst_pairs = self.tmp.new_vec(generic_fields.len());
+                    let mut subst_pairs = self.tmp.new_list(generic_fields.len());
                     for (value, generic_field) in
                         field_types.iter().zip(self.types.mem.getn(generic_fields).iter())
                     {
@@ -8003,7 +8020,7 @@ impl TypedProgram {
         let lambda_body = lambda.body;
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
-        let mut typed_params = self.types.mem.new_vec(lambda_arguments.len() as u32 + 1);
+        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() as u32 + 1);
         if let Some(t) = ctx.expected_type_id {
             debug!(
                 "lambda expected type is {} {}",
@@ -8064,7 +8081,7 @@ impl TypedProgram {
             });
         }
 
-        let mut param_variables = self.mem.new_vec(lambda_arguments.len() as u32 + 1);
+        let mut param_variables = self.mem.new_list(lambda_arguments.len() as u32 + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
         for typed_arg in typed_params.iter() {
@@ -8165,8 +8182,8 @@ impl TypedProgram {
         }
 
         let mut env_field_types =
-            self.types.mem.new_vec(lambda_info.captured_variables.len() as u32);
-        let mut env_exprs = self.mem.new_vec(lambda_info.captured_variables.len() as u32);
+            self.types.mem.new_list(lambda_info.captured_variables.len() as u32);
+        let mut env_exprs = self.mem.new_list(lambda_info.captured_variables.len() as u32);
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
             env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
@@ -8226,7 +8243,7 @@ impl TypedProgram {
             lambda_scope_id,
         );
         if let TypedExpr::Block(body) = self.exprs.get_mut(body_expr_id) {
-            let mut new_stmts = self.mem.new_vec(body.statements.len() + 1);
+            let mut new_stmts = self.mem.new_list(body.statements.len() + 1);
             new_stmts.push(environment_casted_variable.defn_stmt);
             new_stmts.extend(self.mem.getn(body.statements));
 
@@ -8352,12 +8369,12 @@ impl TypedProgram {
         let total_arms: usize =
             parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
 
-        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_vec(total_arms as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_list(total_arms as u32 + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
         let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
-            self.tmp.new_vec(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
+            self.tmp.new_list(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
@@ -8432,7 +8449,7 @@ impl TypedProgram {
                 let arm_scope_id =
                     self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
                 let pattern_eval_ctx = arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
-                let mut instrs = self.mem.new_vec(8);
+                let mut instrs = self.mem.new_list(8);
                 self.compile_pattern_into_values(
                     pattern,
                     match_subject_variable.variable_expr,
@@ -9207,7 +9224,7 @@ impl TypedProgram {
             for_expr.span,
         );
 
-        let mut for_expr_initial_statements = self.mem.new_vec(5);
+        let mut for_expr_initial_statements = self.mem.new_list(5);
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         if let Some(yielded_coll_variable) = &yielded_coll_variable {
@@ -9389,7 +9406,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: MList<MatchingConditionInstr, _> = self.mem.new_vec(16);
+        let mut instrs: MList<MatchingConditionInstr, _> = self.mem.new_list(16);
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
@@ -10500,7 +10517,7 @@ impl TypedProgram {
                 global_id: None,
                 flags: VariableFlags::empty(),
             });
-            let mut new_variables = self.mem.new_vec(new_function.param_variables.len() + 1);
+            let mut new_variables = self.mem.new_list(new_function.param_variables.len() + 1);
             new_variables.push(empty_env_variable);
             new_variables.extend(self.mem.getn(new_function.param_variables));
             new_function.param_variables = self.mem.vec_to_mslice(&new_variables);
@@ -10541,7 +10558,7 @@ impl TypedProgram {
         let physical_params = function_type.physical_params;
         let empty_env_struct_type = self.types.add_empty_struct();
         let empty_env_struct_ref = self.types.add_reference_type(empty_env_struct_type, false);
-        let mut new_params = self.types.mem.new_vec(physical_params.len() + 1);
+        let mut new_params = self.types.mem.new_list(physical_params.len() + 1);
 
         new_params.push(FnParamType {
             name: self.ast.idents.b.lambda_env_var_name,
@@ -10634,7 +10651,7 @@ impl TypedProgram {
                 &mut args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value))
             }
         };
-        let mut args_and_params = self.tmp.new_vec(passed_len as u32 + 1);
+        let mut args_and_params = self.tmp.new_list(passed_len as u32 + 1);
         if let Some(expected_type) = ctx.expected_type_id {
             args_and_params.push(InferenceInputPair {
                 arg: TypeOrParsedExpr::Type(expected_type),
@@ -10678,7 +10695,7 @@ impl TypedProgram {
             ctx.scope_id,
         )?;
         let mut parameter_constraints: MList<Option<TypeId>, MemTmp> =
-            self.tmp.new_vec(ability_params.len() as u32);
+            self.tmp.new_list(ability_params.len() as u32);
         for ab_param in &ability_params {
             if ab_param.is_impl_param {
                 continue;
@@ -11783,7 +11800,7 @@ impl TypedProgram {
         }
 
         let mut param_variables: MList<VariableId, _> =
-            self.mem.new_vec(specialized_function_type.physical_params.len());
+            self.mem.new_list(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
             .types
             .mem
@@ -12252,7 +12269,7 @@ impl TypedProgram {
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression");
         }
-        let mut stmts = self.mem.new_vec(block.stmts.len() as u32 + 1);
+        let mut stmts = self.mem.new_list(block.stmts.len() as u32 + 1);
         let mut last_expr_type: TypeId = UNIT_TYPE_ID;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
@@ -13173,8 +13190,8 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = parsed_function_context_params.len() + parsed_function_params.len();
-        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_vec(param_count as u32);
-        let mut param_variables = self_.mem.new_vec(param_count as u32);
+        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count as u32);
+        let mut param_variables = self_.mem.new_list(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
@@ -13926,7 +13943,7 @@ impl TypedProgram {
             };
         }
 
-        let mut typed_functions = self.mem.new_vec(ability.functions.len() as u32);
+        let mut typed_functions = self.mem.new_list(ability.functions.len() as u32);
         for ability_function_ref in &ability.functions {
             let matching_impl_function = parsed_impl_functions.iter().find_map(|&fn_id| {
                 let the_fn = self.ast.get_function(fn_id);
@@ -14438,6 +14455,10 @@ impl TypedProgram {
         let is_k1 = parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.k1;
         if is_k1 {
             self.scopes.k1_scope_id = ns_scope_id;
+        }
+        let is_mem = parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.mem;
+        if is_mem {
+            self.scopes.mem_scope_id = ns_scope_id
         }
         let is_types =
             parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.types;
@@ -15308,7 +15329,7 @@ impl TypedProgram {
                 // { name: string), typeId: u64, offset: uword }
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: MList<StaticValueId, StaticValuePool> =
-                    self.static_values.mem.new_vec(struct_type.fields.len());
+                    self.static_values.mem.new_list(struct_type.fields.len());
                 for (index, f) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
                     let name_string_value_id = self.static_values.add_string(name_string_id);
@@ -15401,7 +15422,7 @@ impl TypedProgram {
                     TypedProgram::make_int_kind(int_kind_enum, word_enum, tag_type),
                 ));
                 let mut variant_values =
-                    self.static_values.mem.new_vec(typed_enum.variants.len() as u32);
+                    self.static_values.mem.new_list(typed_enum.variants.len() as u32);
                 for variant in typed_enum.variants.clone().iter() {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
@@ -15516,7 +15537,7 @@ impl TypedProgram {
                     self.types.get_as_view_instance(function_params_view_type_id).unwrap();
 
                 let mut params_value_ids =
-                    self.static_values.mem.new_vec(fn_type.logical_params().len());
+                    self.static_values.mem.new_list(fn_type.logical_params().len());
                 // Skipping lambda environment parameters;
                 // knowing what is a lambda is covered by the type
                 // kind the function appears within

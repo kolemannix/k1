@@ -106,7 +106,16 @@ macro_rules! casted_float_op {
 }
 
 /// Bit-for-bit mappings of K1 types
+#[allow(non_snake_case)]
 pub mod k1_types {
+
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    pub struct Arena {
+        pub basePtr: *const u8,
+        pub curAddr: u64,
+        pub maxAddr: u64
+    }
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -171,12 +180,33 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, arena_global_id: Option<TypedGlobalId>) {
         // Note that we don't de-allocate any resources
         // we just zero the memory and reset the stack pointer
-        self.static_stack.reset();
+
+        let arena_to_preserve = if let Some(arena_global_id) = arena_global_id {
+            if let Some(arena_value) = self.globals.get(&arena_global_id) {
+                let arena_ptr: *const k1_types::Arena = arena_value.as_ptr().cast();
+                eprintln!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
+                let arena: k1_types::Arena = unsafe {arena_ptr.read() };
+                Some(arena)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.stack.reset();
+        self.static_stack.reset();
         self.globals.clear();
+
+        if let Some(mut arena) = arena_to_preserve {
+            // Voila!
+            arena.curAddr = arena.basePtr.addr() as u64;
+            let arena_ptr = self.static_stack.push_t(arena);
+            self.globals.insert(arena_global_id.unwrap(), Value::ptr(arena_ptr));
+        }
 
         self.eval_span = SpanId::NONE;
     }
@@ -1470,6 +1500,31 @@ fn resolve_value(
             let v = vm.stack.get_inst_value(frame_index, inst_index);
             v
         }
+        BcValue::StaticValue { t: _, id } => {
+            let v = static_value_to_vm_value(k1, id, vm.eval_span);
+            v
+        }
+        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
+        BcValue::FnParam { t: _, index } => {
+            let value = vm.stack.get_param_value(frame_index, index);
+            // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
+            value
+        }
+        BcValue::Imm32 { t, data } => {
+            let u32_data = data;
+            match t {
+                ScalarType::F32 => Value(u32_data as u64),
+                ScalarType::F64 => Value::f64(data as f32 as f64),
+                ScalarType::Pointer => Value(data as u64),
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
+                    Value(u32_data as i32 as i64 as u64)
+                }
+                ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
+                    Value(u32_data as u64)
+                }
+            }
+        }
+        BcValue::PtrZero => Value::NULLPTR,
         BcValue::Global { t, id } => {
             // Handle global
             // Case 1: It's a constant, already evaluated, stored in the global static space
@@ -1520,31 +1575,6 @@ fn resolve_value(
                 }
             }
         }
-        BcValue::StaticValue { t: _, id } => {
-            let v = static_value_to_vm_value(k1, id, vm.eval_span);
-            v
-        }
-        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
-        BcValue::FnParam { t: _, index } => {
-            let value = vm.stack.get_param_value(frame_index, index);
-            // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
-            value
-        }
-        BcValue::Imm32 { t, data } => {
-            let u32_data = data;
-            match t {
-                ScalarType::F32 => Value(u32_data as u64),
-                ScalarType::F64 => Value::f64(data as f32 as f64),
-                ScalarType::Pointer => Value(data as u64),
-                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
-                    Value(u32_data as i32 as i64 as u64)
-                }
-                ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
-                    Value(u32_data as u64)
-                }
-            }
-        }
-        BcValue::PtrZero => Value::NULLPTR,
     }
 }
 
@@ -2274,7 +2304,7 @@ pub fn vm_value_to_static_value(
                 return failf!(span, "Cannot convert array of unknown size to static value");
             };
             let count = count as usize;
-            let mut elements = k1.static_values.mem.new_vec(count as u32);
+            let mut elements = k1.static_values.mem.new_list(count as u32);
             let Some(element_pt) = k1.types.get_physical_type(element_type) else {
                 return failf!(
                     span,
@@ -2315,7 +2345,7 @@ pub fn vm_value_to_static_value(
                     ContainerKind::View => {
                         let view: k1_types::K1ViewLike = value_as_view(vm_value);
                         let element_pt = k1.types.get_physical_type(element_type).unwrap();
-                        let mut elements = k1.static_values.mem.new_vec(view.len as u32);
+                        let mut elements = k1.static_values.mem.new_list(view.len as u32);
                         for index in 0..view.len {
                             let elem_vm = get_view_element(k1, view.data, element_pt, index);
                             let elem_static =
@@ -2332,7 +2362,7 @@ pub fn vm_value_to_static_value(
                 }
             } else {
                 let struct_ptr = vm_value.as_ptr();
-                let mut field_value_ids = k1.static_values.mem.new_vec(struct_type.fields.len());
+                let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
                 // let struct_agg = k1.types.phys_types.get(struct_agg_id).agg_type;
                 let struct_shape = k1.types.get_struct_layout(type_id);
                 for (physical_field, k1_field) in

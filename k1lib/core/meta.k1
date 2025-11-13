@@ -81,13 +81,4 @@ ns meta {
     code.build()
   }
 
-  fn printLayout[T, W: Writer](w: W): unit {
-    switch types/typeSchema(structTypeId) {
-      .Struct(s) -> {},
-
-    }
-    require types/typeSchema(structTypeId) is .Struct({ fields }) else
-      crash("Its called a STRUCT of arrays for a reason");
-  }
-
 }

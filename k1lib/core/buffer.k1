@@ -77,7 +77,7 @@ ns Buffer {
   }
 
   fn filled[T](size: uword, value: T): Buffer[T] {
-    Buffer/filledIn[T](context mem/AllocMode/CURRENT)(size, value)
+    Buffer/filledIn[T](context .Current)(size, value)
   }
 
   fn _allocateIn[T](context alloc: mem/AllocMode)(count: uword): Buffer[T] {
@@ -85,24 +85,24 @@ ns Buffer {
       Pointer/NULL
     } else {
       let sizeBytes = bufferSizeBytes[T](count);
-      mem/allocIn(alloc, sizeBytes, core/types/alignOf[T]())
+      alloc.alloc(sizeBytes, core/types/alignOf[T]())
     };
     let data = ptr as *mut T;
     { len: count, data }
   }
 
   fn _allocate[T](count: uword): Buffer[T] {
-    _allocateIn[T](context mem/AllocMode/CURRENT)(count)
+    _allocateIn[T](context .Current)(count)
   }
 
   ////////////////////////
   // Modification
 
   fn _growTo[T](context alloc: mem/AllocMode)(self: *mut Buffer[T], newCount: uword): unit {
-    if mem/resolveMode(alloc).supportsRealloc() {
+    if alloc.resolve().supportsRealloc() {
       let newSize = bufferSizeBytes[T](newCount);
       let oldSize = bufferSizeBytes[T](self.len);
-      let newPtr = mem/reallocIn(context alloc)(
+      let newPtr = alloc.realloc(
         ptr = self.dataPointer(),
         oldSize = oldSize,
         align = core/types/alignOf[T](),
@@ -110,8 +110,7 @@ ns Buffer {
       );
       self <- { len: newCount, data: newPtr as *mut T }
     } else {
-      let newBuffer = _allocate[T](newCount);
-      copyFrom[T](src = self, dst = newBuffer);
+      let newBuffer = self._enlargedCloneIn(newCount);
       self <- newBuffer
     }
   }
@@ -123,7 +122,7 @@ ns Buffer {
   }
 
   fn _enlargedClone[T](self: Buffer[T], newCount: uword): Buffer[T] {
-    _enlargedCloneIn[T](context mem/AllocMode/CURRENT)(self, newCount)
+    _enlargedCloneIn[T](context .Current)(self, newCount)
   }
 
   fn copyFrom[T](src: Buffer[T], dst: Buffer[T]): unit {

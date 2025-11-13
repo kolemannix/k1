@@ -26,11 +26,16 @@ ns Arena {
   fn _virtual(usageHintMb: uword): Pointer {
     let basePtr: Pointer = mem/virtualAlloc(gb);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
+    // nocommit arena advise sequential
+    // posix/madvise();
     basePtr
   }
 
   fn default(): Arena {
+    println("making arena");
     let basePtr: Pointer = if k1/IS_STATIC mem/alloc(size = 10 * mb, align = 8) else _virtual(usageHintMb = 10);
+    //let header: *mut Arena = basePtr as *mut Arena;
+    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {
       basePtr: basePtr,
       curAddr: basePtr as uword,
@@ -48,7 +53,7 @@ ns Arena {
     self.curAddr* <- (self.basePtr as uword);
 
     if clear {
-      println("mem/set {self.basePtr} 0 {usedBytes}");
+      println("mem/set clear {self.basePtr} 0 {usedBytes}");
       mem/set(dst = self.basePtr, value = 0, count = usedBytes);
     }
   }
@@ -89,6 +94,10 @@ ns Arena {
   fn pushString(self: *mut Arena, s: string): string {
     let data: Buffer[char] = self.pushN(s.view());
     string/wrapBuffer(data)
+  }
+
+  fn pushList[T](self: *mut Arena, cap: uword): List[T] {
+    List/withCapacityIn(context .CustomArena(self))(cap)
   }
 
 }

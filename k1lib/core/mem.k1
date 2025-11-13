@@ -25,8 +25,6 @@ ns mem {
         offset = 0
       );
       if addr == (posix/MAP_FAILED as Pointer) crash("mmap failed");
-      // todo Advise sequential
-      // posix/madvise();
       addr
     }
   }
@@ -39,161 +37,150 @@ ns mem {
     }
   }
 
-  deftype AllocMode = {
-    kind: (either
-      Current,
-      SystemHeap,
-      CustomHeap(*mut Allocator),
-      TempBump,
-      Bump(*mut Arena),
-      Gc
-    )
+  deftype AllocMode = either
+    Current,
+    SystemHeap,
+    CustomHeap(*mut Allocator),
+    Arena,
+    CustomArena(*mut Arena),
+    Gc
+
+  impl Print for AllocMode {
+    fn printTo[W: Writer](self: Self, w: W): unit {
+      w.writeString(self.kindName())
+    }
   }
 
   ns AllocMode {
 
-    let SYSTEM_HEAP: AllocMode = { kind: .SystemHeap };
-    let CURRENT: AllocMode = { kind: .Current };
-    let TEMP: AllocMode = { kind: .TempBump };
-
-    fn supportsRealloc(self: AllocMode): bool { switch self.kind {
+    fn supportsRealloc(self: AllocMode): bool { switch self {
       .Current -> crash("unreachable"),
       .SystemHeap or .CustomHeap(_) -> true,
-      .TempBump or .Bump(_) -> false,
+      .Arena or .CustomArena(_) -> false,
       .Gc -> false
     } }
 
-    fn requiresFree(self: AllocMode): bool { switch self.kind {
+    fn requiresFree(self: AllocMode): bool { switch self {
       .Current -> crash("unreachable"),
       .SystemHeap -> true,
       .CustomHeap(_) -> true,
-      .TempBump -> false,
-      .Bump(_) -> false,
+      .Arena -> false,
+      .CustomArena(_) -> false,
       .Gc -> false
     } }
 
-    fn kindName(self: AllocMode): string { switch self.kind {
+    fn kindName(self: AllocMode): string { switch self {
       .Current -> "current",
       .SystemHeap -> "system",
       .CustomHeap(_) -> "custom",
-      .TempBump -> "temp_bump",
-      .Bump(_) -> "custom_bump",
+      .Arena -> "arena",
+      .CustomArena(_) -> "custom_bump",
       .Gc -> "gc"
     } }
-  }
 
-  fn resolveMode(mode: AllocMode): AllocMode {
-    switch mode.kind {
-      .Current -> {
-        let mode = mem/defaultAllocMode();
-        if mode.kind is .Current { crash("currentAllocMode.kind is Current; this will never resolve") };
-        mode
-      },
-      _ -> mode,
-    }
-  }
-
-  // FIXME: Runtime branching.
-  // We need more language enhancements to make this all
-  // compile-time branching
-  fn allocIn(mode: AllocMode, size: uword, align: uword): Pointer {
-    let mode = resolveMode(mode);
-    switch mode.kind {
-      .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/allocZeroed(size, align),
-      .CustomHeap(alloc) -> {
-        let zalloc = alloc.*.zalloc;
-        zalloc(size, align)
-      },
-      .Bump(bump) -> {
-        bump.pushLayout(size, align)
-      },
-      .TempBump -> {
-        mem/getTempArena().pushLayout(size, align)
-      },
-      .Gc -> {
-        crash("Gc is unimplemented; plan to support w/ bdwgc")
+    fn resolve(self: AllocMode): AllocMode {
+      switch self {
+        .Current -> {
+          let mode = mem/current();
+          if mode is .Current { crash("currentAllocMode.kind is Current; this will never resolve") };
+          mode
+        },
+        _ -> self,
       }
     }
-  }
 
-  fn newIn[T](mode: AllocMode, t: T): *mut T {
-    let ptr = allocIn(mode, core/types/sizeOf[T](), core/types/alignOf[T]());
-    let ref: *mut T = ptr.rw();
-    ref <- t;
-    ref
-  }
-
-  fn new[T](t: T): *mut T {
-    newIn[T](AllocMode/CURRENT, t)
-  }
-
-  fn reallocIn(mode: AllocMode, oldPtr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
-    let mode = resolveMode(mode);
-    switch mode.kind {
-      .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
-      .CustomHeap(alloc) -> {
-        let realloc = alloc.*.realloc;
-        realloc(oldPtr, oldSize, align, newSize)
-      },
-      .Bump(bump) -> {
-        crash("UnsupportedOperation: realloc")
-      },
-      .TempBump -> {
-        crash("UnsupportedOperation: realloc")
-      },
-      .Gc -> {
-        crash("UnsupportedOperation: realloc")
+    fn alloc(self: AllocMode, size: uword, align: uword): Pointer {
+      switch self.resolve() {
+        .Current -> { crash("unreachable") },
+        .SystemHeap -> mem/allocZeroed(size, align),
+        .CustomHeap(alloc) -> {
+          let zalloc = alloc.*.zalloc;
+          zalloc(size, align)
+        },
+        .CustomArena(bump) -> {
+          bump.pushLayout(size, align)
+        },
+        .Arena -> {
+          mem/arena().pushLayout(size, align)
+        },
+        .Gc -> {
+          crash("Gc is unimplemented; plan to support w/ bdwgc")
+        }
       }
     }
-  }
 
-  fn freeIn(mode: AllocMode, ptr: Pointer, size: uword, align: uword): unit {
-    let mode = resolveMode(mode);
-    switch mode.kind {
-      .Current -> { crash("unreachable") },
-      .SystemHeap -> mem/free(ptr, size, align),
-      .CustomHeap(alloc) -> {
-        let free = alloc.*.free;
-        free(ptr, size, align)
-      },
-      .Bump(bump) -> {
-        crash("UnsupportedOperation: free")
-      },
-      .TempBump -> {
-        crash("UnsupportedOperation: free")
-      },
-      .Gc -> {
-        crash("UnsupportedOperation: free")
+    fn realloc(self: AllocMode, oldPtr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+      switch self.resolve() {
+        .Current -> { crash("unreachable") },
+        .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
+        .CustomHeap(alloc) -> {
+          let reallocFn = alloc.*.realloc;
+          reallocFn(oldPtr, oldSize, align, newSize)
+        },
+        .CustomArena(bump) -> crash("UnsupportedOperation: Bump realloc"),
+        .Arena -> crash("UnsupportedOperation:.Arena realloc"),
+        .Gc -> crash("UnsupportedOperation: Gc realloc")
       }
     }
+
+    fn free(self: AllocMode, ptr: Pointer, size: uword, align: uword): unit {
+      switch self.resolve() {
+        .Current -> { crash("unreachable") },
+        .SystemHeap -> mem/free(ptr, size, align),
+        .CustomHeap(alloc) -> {
+          let freeFn = alloc.*.free;
+          freeFn(ptr, size, align)
+        },
+        .CustomArena(bump) -> crash("UnsupportedOperation: free"),
+        .Arena -> crash("UnsupportedOperation: free"),
+        .Gc -> crash("UnsupportedOperation: free")
+      }
+    }
+
+
+    fn allocT[T](self: AllocMode): *mut T {
+      self.alloc(size = types/sizeOf[T](), align = types/alignOf[T]()) as *mut T
+    }
+
+    fn new[T](self: AllocMode, t: T): *mut T {
+      let ref = self.allocT[T]();
+      ref <- t;
+      ref
+    }
+
   }
 
-  let* tls _k1_tempArena: *mut Arena = zeroed[Arena]();
+  fn new[T](t: T): *mut T { AllocMode.Current.new(t) }
 
-  let* tls _k1_currentAllocMode: *mut mem/AllocMode = AllocMode/SYSTEM_HEAP;
+  let* tls arena: *mut Arena = zeroed();
+
+  deftype alias ALLOC_STACK_MAX = 128uword
+  let* tls allocStack: *mut FixList[AllocMode, ALLOC_STACK_MAX] = { 
+    let* s = zeroed[FixList[AllocMode, ALLOC_STACK_MAX]]();
+    s.push(.Arena);
+    s
+  };
 
   // Eventually, we want 'push'/'pop' for allocMode
-  fn setDefaultAllocMode(mode: mem/AllocMode): unit {
-    _k1_currentAllocMode <- mode
+  fn pushMode(mode: AllocMode): unit {
+    allocStack.push(mode)
   }
-  fn defaultAllocMode(): mem/AllocMode {
-    _k1_currentAllocMode.*
+  fn popMode(): AllocMode {
+    allocStack.pop().!
+  }
+  fn current(): AllocMode {
+    let s = allocStack.last().!;
+    s
   }
 
-  // Initialize on first get() is perfect
   fn initTempArena(): unit {
-    if not _k1_tempArena.basePtr.isNull() {
-      crash("Arena already initialized")
-    };
-    let a = Arena/default();
-    _k1_tempArena <- a;
+    if not arena.basePtr.isNull() crash("Arena already initialized");
+    arena <- Arena/default();
   }
 
-  fn getTempArena(): *mut Arena {
-    if _k1_tempArena.basePtr.isNull() { initTempArena() };
-    _k1_tempArena
+  fn arena(): *mut Arena {
+    if arena.basePtr.isNull() { initTempArena() };
+    arena
   }
 
 }

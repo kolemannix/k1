@@ -121,11 +121,13 @@ pub struct Scopes {
     /// The actual function that a scope appears within is a very important thing to know
     pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
     /// SCOPES SoA POOLS END
+
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
     pub core_scope_id: ScopeId,
     pub k1_scope_id: ScopeId,
+    pub mem_scope_id: ScopeId,
     pub types_scope_id: ScopeId,
     pub array_scope_id: ScopeId,
 }
@@ -143,6 +145,7 @@ impl Scopes {
             block_defers: FxHashMap::new(),
             core_scope_id: ScopeId::PENDING,
             k1_scope_id: ScopeId::PENDING,
+            mem_scope_id: ScopeId::PENDING,
             types_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
         };

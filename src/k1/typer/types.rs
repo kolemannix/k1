@@ -998,7 +998,7 @@ pub struct EnumVariantLayout {
     pub payload: Option<PhysicalType>,
     pub payload_offset: Option<u32>,
     pub envelope: Layout,
-}
+} 
 
 #[derive(Clone, Copy)]
 pub enum AggType {
@@ -1191,7 +1191,7 @@ impl TypePool {
             Some(type_id) => type_id,
         };
 
-        let mut physical_types = self.mem.new_vec(e.variants.len() as u32);
+        let mut physical_types = self.mem.new_list(e.variants.len() as u32);
         let mut is_physical = true;
 
         // Enum sizing and layout rules:
@@ -1798,7 +1798,7 @@ impl TypePool {
                     }
                 } else {
                     let s_fields = s.fields;
-                    let mut fields = self.mem.new_vec(s.fields.len());
+                    let mut fields = self.mem.new_list(s.fields.len());
                     let mut layout = Layout::ZERO;
                     let mut not_physical = false;
                     for field in self.mem.getn(s_fields) {
@@ -1914,6 +1914,8 @@ impl TypePool {
     }
 
     /// Works for enum variants too
+    // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
+    // I wanna return a slice but with what backing memory?
     pub fn get_struct_layout(&self, struct_type_id: TypeId) -> SV4<StructField> {
         let struct_agg_id = self.get_physical_type(struct_type_id).unwrap().expect_agg();
         match self.phys_types.get(struct_agg_id).agg_type {

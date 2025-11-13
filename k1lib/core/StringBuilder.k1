@@ -5,20 +5,20 @@ ns StringBuilder {
   fn new(): StringBuilder {
     { list: SpillList/new() }
   }
-  fn build(self: *mut StringBuilder): string {
-    let l: *mut SpillList[u8, 64uword] = self.list*;
-    let s = string/fromBytes(self.list*.asView().cloned());
-    l.clear();
-    s
+
+  fn buildTmp(self: *StringBuilder): string {
+    switch self.list* {
+      .Inline(f)* -> string/fromBytes(f.asView().clonedIn(context .Arena)()),
+      .Spilled(l)* -> string/fromBytes(l.asView())
+    }
   }
-  fn buildIn(self: *mut StringBuilder, arena: *mut core/Arena): string {
-    let l: *mut SpillList[u8, 64uword] = self.list*;
-    let tempS = string/fromBytes(self.list*.asView());
-    let s = arena.pushString(tempS);
-    l.clear();
-    s
+
+  fn build(self: *StringBuilder): string {
+    switch self.list* {
+      .Inline(f)* -> string/fromBytes(f.asView().cloned()),
+      .Spilled(l)* -> string/fromBytes(l.asView())
+    }
   }
-  fn buildTmp(self: *mut StringBuilder): string { self.buildIn(mem/getTempArena()) }
 }
 
 impl Writer for *mut StringBuilder {

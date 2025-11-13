@@ -154,6 +154,7 @@ ns sys {
 
 ns files {
 
+  // nocommmit(4): This is a mess switch to posix or something
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
     let filenameCString = path.toCString();
 
@@ -163,7 +164,7 @@ ns files {
     };
     libc/files/fseek(file, 0, libc/files/SEEK_END);
     let fileSizeBytes = libc/files/ftell(file) as uword;
-    let buf = mem/allocIn(alloc, size = fileSizeBytes, align = 1);
+    let buf = alloc.alloc(size = fileSizeBytes, align = 1);
 
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
     libc/files/fread(buf, fileSizeBytes, 1, file);
@@ -172,7 +173,7 @@ ns files {
     );
     libc/files/fclose(file);
 
-    mem/freeIn(alloc, ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
+    alloc.free(ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
 
     string
   }
