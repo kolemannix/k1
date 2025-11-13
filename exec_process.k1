@@ -16,8 +16,7 @@ extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
 // Convert View[string] to null-terminated **char array for execve  
 fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): **char {
     let totalArgs = 1 + (args.len() as iword) + 1; // program + args + null terminator
-    let argv = mem/allocIn(
-      alloc,
+    let argv = alloc.alloc(
       size = (totalArgs as uword) * types/sizeOf[Pointer](),
       align = types/alignOf[Pointer]()
     ) as **char;
@@ -67,7 +66,7 @@ fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string])
 
 fn testPosix(): unit {
     println("Testing process execution...");
-    let context temp = mem/AllocMode/TEMP;
+    let context temp = mem/AllocMode.Arena;
     
     // Test 1: Simple echo command
     let echoStatus = runCommand(program = "/bin/echo", args = ["hello", "world"]).!;

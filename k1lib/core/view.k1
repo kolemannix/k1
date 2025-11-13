@@ -35,6 +35,10 @@ ns View {
     { buffer: self.buffer.cloned() }
   }
 
+  fn clonedIn[T](context alloc: mem/AllocMode)(self: View[T]): View[T] {
+    { buffer: self.buffer.clonedIn() }
+  }
+
   fn len[T](self: View[T]): uword { self.buffer.len }
 
   fn getRef[T](self: View[T], index: uword): *T {

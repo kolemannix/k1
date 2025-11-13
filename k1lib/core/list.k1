@@ -8,10 +8,6 @@
 // to be a convenient and easy workhorse for most use cases
 ns List {
 
-  // TODO: List will store its allocator,
-  // UnmanagedList will accept one at call sites
-  let ALLOC_MODE: mem/AllocMode = { kind: .Current };
-
   ///////////////////////////
   // Construction functions
 
@@ -44,7 +40,7 @@ ns List {
 
   fn reserve[T](self: *mut List[T], count: uword): unit {
     if self.cap() >= count { return(()) };
-    self.buffer*._growTo[T](context ALLOC_MODE)(count);
+    self.buffer*._growTo[T](context .Current)(count);
     assertdbg(self.buffer.len == count);
   }
 
@@ -107,13 +103,13 @@ ns List {
     } else .Some(self.buffer.get(index))
   }
 
-  fn _grow[T](self: *mut List[T]): unit {
-    let elemSize = core/types/sizeOf[T]();
+  fn _grow[T](context mode: mem/AllocMode)(self: *mut List[T]): unit {
     let newCap: uword = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
+      let elemSize = core/types/sizeOf[T]();
       if elemSize >= 1024 1 else 8
     } else {
-      self.*.cap() * 2
+      self.cap() * 2
     };
     self.reserve(newCap);
     ()
@@ -124,7 +120,7 @@ ns List {
     { len: self.len, buffer: newBuffer }
   }
 
-  fn push[T](self: *mut List[T], elem: T): unit {
+  fn pushIn[T](context mode: mem/AllocMode)(self: *mut List[T], elem: T): unit {
     let startLength = self.len;
     if startLength == self.*.cap() {
       self._grow();
@@ -132,6 +128,10 @@ ns List {
     self.len* <- startLength + 1;
     self.set(startLength, elem);
     ()
+  }
+
+  fn push[T](self: *mut List[T], elem: T): unit {
+    self.pushIn[T](context .Current)(elem)
   }
 
   fn slice[T](self: List[T], start: uword, end: uword): Buffer[T] {

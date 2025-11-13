@@ -37,7 +37,6 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::SV8;
 use crate::compiler::WordSize;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
@@ -51,10 +50,11 @@ use crate::typer::{
     AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
     IntegerCastDirection, IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind,
     IntrinsicOperation, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition,
-    MatchingConditionInstr, StaticContainerKind, StaticValue, StaticValueId, StaticValuePool,
-    TypedBlock, TypedCast, TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId,
-    TypedIntValue, TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
+    MatchingConditionInstr, StaticContainerKind, StaticValue, StaticValueId, TypedBlock, TypedCast,
+    TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue,
+    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
 };
+use crate::{SV8, kmem};
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -201,7 +201,6 @@ struct LlvmValueType<'ctx> {
 #[derive(Debug, Clone)]
 struct EnumVariantType<'ctx> {
     name: Ident,
-    envelope_type: ArrayType<'ctx>,
     variant_struct_type: StructType<'ctx>,
     payload_type: Option<K1LlvmType<'ctx>>,
     tag_value: IntValue<'ctx>,
@@ -214,7 +213,8 @@ struct LlvmEnumType<'ctx> {
     type_id: TypeId,
     #[allow(unused)]
     tag_type: IntType<'ctx>,
-    base_array_type: ArrayType<'ctx>,
+    envelope_type_just_bytes: ArrayType<'ctx>,
+    envelope_type_with_aligner: StructType<'ctx>,
     variants: Vec<EnumVariantType<'ctx>>,
     di_type: DIType<'ctx>,
     layout: Layout,
@@ -321,6 +321,32 @@ impl<'ctx> K1LlvmType<'ctx> {
         }
     }
 
+    /// Unions are impossible to encode directly in LLVM's type system.
+    /// We represent them, usually, as byte arrays, but these byte arrays have the wrong alignment.
+    /// We can correct for this in direct loads, stores, and copies, but when the union appears
+    /// inside another data structure, like a Struct or Array, we cannot tell LLVM its true
+    /// alignment, this causes GEPs to essentially ignore padding, because byte arrays have align
+    /// = 1.
+    ///
+    /// To fix this, any time a struct or array or even another Enum contains an Enum (union),
+    /// we calculate the GEP offsets ourselves in bytes, using gep i8, 0, n. As far as I can tell,
+    /// this is what rustc does.
+    pub fn requires_custom_alignment(&self) -> bool {
+        match self {
+            K1LlvmType::Value(_) => false,
+            K1LlvmType::Reference(_) => false,
+            K1LlvmType::Void(_) => false,
+            K1LlvmType::EnumType(_) => true,
+            K1LlvmType::StructType(_) => false,
+            K1LlvmType::ArrayType(a) => {
+                // If the array's elements don't have the 'right' alignment in LLVM,
+                // then neither will the array!
+                a.element_type.requires_custom_alignment()
+            }
+            K1LlvmType::LambdaObject(_) => false,
+        }
+    }
+
     #[track_caller]
     pub fn expect_reference(&self) -> &LlvmReferenceType<'ctx> {
         match self {
@@ -390,7 +416,7 @@ impl<'ctx> K1LlvmType<'ctx> {
             K1LlvmType::Value(value) => value.basic_type,
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
             K1LlvmType::EnumType(e) => e
-                .base_array_type
+                .envelope_type_just_bytes
                 .get_context()
                 .ptr_type(AddressSpace::default())
                 .as_basic_type_enum(),
@@ -411,7 +437,21 @@ impl<'ctx> K1LlvmType<'ctx> {
         match self {
             K1LlvmType::Value(value) => value.basic_type,
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
-            K1LlvmType::EnumType(e) => e.base_array_type.as_basic_type_enum(),
+            K1LlvmType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
+            K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
+            K1LlvmType::ArrayType(a) => a.array_type.as_basic_type_enum(),
+            K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
+            K1LlvmType::LambdaObject(c) => c.struct_type.as_basic_type_enum(),
+        }
+    }
+
+    /// For Enum, returns a synthetic struct with an `aligner` member; use this when putting
+    /// a type inside an aggregate
+    fn rich_repr_type_inner_proper_align(&self) -> BasicTypeEnum<'ctx> {
+        match self {
+            K1LlvmType::Value(value) => value.basic_type,
+            K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
+            K1LlvmType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
             K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
             K1LlvmType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
@@ -504,7 +544,10 @@ pub struct Codegen<'ctx, 'k1> {
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     strings: FxHashMap<StringId, GlobalValue<'ctx>>,
+    static_values_basics: FxHashMap<StaticValueId, BasicValueEnum<'ctx>>,
+    static_values_globals: FxHashMap<StaticValueId, GlobalValue<'ctx>>,
     debug: DebugContext<'ctx>,
+    mem: kmem::Mem<Self>,
 }
 
 struct DebugContext<'ctx> {
@@ -627,41 +670,42 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
             "MacOSX.sdk",
         );
-        let md0 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(2, false).into(),
-            ctx.metadata_string("SDK Version").into(),
-            ctx.i32_type()
-                .const_array(&[
-                    ctx.i32_type().const_int(14, false),
-                    ctx.i32_type().const_int(0, false),
-                ])
-                .into(),
-        ]);
-        let md1 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(2, false).into(),
-            ctx.metadata_string("Dwarf Version").into(),
-            ctx.i32_type().const_int(4, false).into(),
-        ]);
-        let md2 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(2, false).into(),
-            ctx.metadata_string("Debug Info Version").into(),
-            ctx.i32_type().const_int(3, false).into(),
-        ]);
+        //let md0 = ctx.metadata_node(&[
+        //    ctx.i32_type().const_int(2, false).into(),
+        //    ctx.metadata_string("SDK Version").into(),
+        //    ctx.i32_type()
+        //        .const_array(&[
+        //            ctx.i32_type().const_int(14, false),
+        //            ctx.i32_type().const_int(0, false),
+        //        ])
+        //        .into(),
+        //]);
+        //let md1 = ctx.metadata_node(&[
+        //    ctx.i32_type().const_int(2, false).into(),
+        //    ctx.metadata_string("Dwarf Version").into(),
+        //    ctx.i32_type().const_int(4, false).into(),
+        //]);
+        //let md2 = ctx.metadata_node(&[
+        //    ctx.i32_type().const_int(2, false).into(),
+        //    ctx.metadata_string("Debug Info Version").into(),
+        //    ctx.i32_type().const_int(3, false).into(),
+        //]);
         // let md3 = ctx.metadata_node(&[
         //     ctx.i32_type().const_int(1, false).into(),
         //     ctx.metadata_string("PIC Level").into(),
         //     ctx.i32_type().const_int(2, false).into(),
         // ]);
-        let md4 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(1, false).into(),
-            ctx.metadata_string("PIE Level").into(),
-            ctx.i32_type().const_int(2, false).into(),
-        ]);
-        llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
-        // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
+        //let md4 = ctx.metadata_node(&[
+        //    ctx.i32_type().const_int(1, false).into(),
+        //    ctx.metadata_string("PIE Level").into(),
+        //    ctx.i32_type().const_int(2, false).into(),
+        //]);
+        // revisit this metadata (I did it when scrambling to get debug info to show up)
+        //llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
+        //llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
+        //llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
+        //// llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
+        //llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
         let di_files: FxHashMap<FileId, DIFile> = module
             .ast
@@ -738,7 +782,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_types: RefCell::new(FxHashMap::new()),
             builtin_types,
             strings: FxHashMap::new(),
+            static_values_basics: FxHashMap::new(),
+            static_values_globals: FxHashMap::new(),
             debug: debug_context,
+            mem: kmem::Mem::make(),
         }
     }
 
@@ -756,6 +803,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let td = self.llvm_machine.get_target_data();
         let offset_bytes = td.offset_of_element(typ, field_index).unwrap();
         offset_bytes * 8
+    }
+
+    fn padding_type(&self, size_bytes: u32) -> ArrayType<'ctx> {
+        self.ctx.i8_type().array_type(size_bytes)
     }
 
     fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
@@ -1068,8 +1119,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     type_id,
                     struct_type: llvm_struct_type,
                     fields: field_types,
-                    layout,
                     di_type,
+                    layout,
                 }
                 .into())
             }
@@ -1250,7 +1301,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     );
                     variant_structs.push(EnumVariantType {
                         name: variant.name,
-                        envelope_type: self.ctx.i8_type().array_type(0),
+                        //envelope_type: self.ctx.i8_type().array_type(0),
                         variant_struct_type: variant_struct,
                         payload_type,
                         tag_value: tag_int_type.const_int(variant.tag_value.to_u64_bits(), false),
@@ -1274,13 +1325,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   - Second, padding bytes such that we're at least as large as the largest
                 //     variant, and aligned to our own alignment
 
-                let physical_type = self.ctx.i8_type().array_type(enum_layout.size);
-                let enum_size_bits = enum_layout.size_bits();
-
-                // Now that we have the physical envelope representation, we add it to each variant
-                for variant_struct in variant_structs.iter_mut() {
-                    variant_struct.envelope_type = physical_type;
-                }
+                let aligner_type = self.ctx.custom_width_int_type(enum_layout.align_bits());
+                let padding_bytes = enum_layout.size - (aligner_type.get_bit_width() / 8);
+                let padding = self.padding_type(padding_bytes);
+                let physical_type_correct_align = self.ctx.struct_type(
+                    &[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()],
+                    false,
+                );
+                let physical_type_just_bytes = self.ctx.i8_type().array_type(enum_layout.size);
 
                 let member_types: Vec<_> = variant_structs
                     .iter()
@@ -1310,7 +1362,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         &enum_name,
                         self.debug.current_file(),
                         0,
-                        enum_size_bits as u64,
+                        enum_layout.size_bits() as u64,
                         enum_layout.align_bits(),
                         0,
                         &member_types,
@@ -1322,7 +1374,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmEnumType {
                     type_id,
                     tag_type: tag_int_type,
-                    base_array_type: physical_type,
+                    envelope_type_just_bytes: physical_type_just_bytes,
+                    envelope_type_with_aligner: physical_type_correct_align,
                     variants: variant_structs,
                     di_type: debug_union_type,
                     layout: enum_layout,
@@ -1775,15 +1828,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_static_value_as_const(
         &mut self,
         static_value_id: StaticValueId,
+        depth: usize,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
-
-        if !is_llvm_const_representable(&self.k1.static_values, static_value_id) {
-            self.k1.ice(
-                "Tried to codegen a static value outside of a function context, which is not allowed",
-                None
-            )
+        if let Some(basic) = self.static_values_basics.get(&static_value_id) {
+            return Ok(*basic);
         }
+        debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
 
         let result = match self.k1.static_values.get(static_value_id) {
             StaticValue::Unit => self.builtin_types.unit_basic(),
@@ -1797,8 +1847,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
-                let string_struct = self.codegen_string_id(*string_id).unwrap();
-                string_struct.get_initializer().unwrap()
+                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
                 let llvm_type = self.codegen_type(*type_id)?;
@@ -1806,53 +1856,91 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 zero.as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
-                let mut type_fields = Vec::with_capacity(s.fields.len() as usize);
-                let mut fields_basic_values = Vec::with_capacity(s.fields.len() as usize);
-                // We actually have to specialize the LLVM struct type here because it won't allow
-                // an Opt[i64] type with a Some[i64] value
-                // This is also why we can't represent non-empty Buffers as llvm-const values
-                // We have no way to change the types, or to reference other buffers
-                for field in self.k1.static_values.get_slice(s.fields).iter() {
-                    let value = self.codegen_static_value_as_const(*field)?;
-                    type_fields.push(value.get_type());
-                    fields_basic_values.push(value);
+                // Always a packed struct, accounting for every byte.
+                let layout = self.k1.types.get_struct_layout(s.type_id);
+                let mut last_offset = 0;
+                let mut packed_values = self.mem.new_list(8);
+                for (field, field_layout) in
+                    self.k1.static_values.mem.getn(s.fields).iter().zip(layout)
+                {
+                    let padding = field_layout.offset - last_offset;
+                    if padding > 0 {
+                        // There is padding here, we have to insert it
+                        let padding_value =
+                            self.padding_type(padding).get_undef().as_basic_value_enum();
+                        packed_values.push_grow(&mut self.mem, padding_value);
+                    }
+                    let value = self.codegen_static_value_as_const(*field, depth + 1)?;
+                    packed_values.push_grow(&mut self.mem, value);
+                    let field_size = self.k1.types.get_pt_layout(&field_layout.field_t);
+                    debug_assert_eq!(self.llvm_size_info(&value.get_type()).size, field_size.size);
+                    last_offset = field_layout.offset + field_size.size;
                 }
-                let specialized_type = self.ctx.struct_type(&type_fields, false);
-                let struct_value = specialized_type.const_named_struct(&fields_basic_values);
+                let struct_value = self.ctx.const_struct(&packed_values, true);
+
+                debug_assert_eq!(
+                    self.llvm_size_info(&struct_value.get_type()).size,
+                    self.k1.types.get_layout(s.type_id).size,
+                    "Checking Size of: {}",
+                    struct_value
+                );
                 struct_value.as_basic_value_enum()
             }
             StaticValue::Enum(e) => {
+                let mut packed_values = self.mem.new_list(4);
+
                 let llvm_type = self.codegen_type(e.variant_type_id)?.expect_enum();
-
                 let variant = &llvm_type.variants[e.variant_index as usize];
-                let physical_struct = variant.variant_struct_type;
-                let enum_value = match e.payload {
-                    None => physical_struct
-                        .const_named_struct(&[variant.tag_value.as_basic_value_enum()]),
-                    Some(payload_comptime_value_id) => {
-                        let payload_value =
-                            self.codegen_static_value_as_const(payload_comptime_value_id)?;
-                        // We have to construct a unique type for this value because
-                        // if we use the variant struct, the payload will come back with
-                        // a more specific type than it, since everything is represented as its
-                        // most specific, concrete types in this static world (specifically enum values)
-                        let unique_struct_type = self.ctx.struct_type(
-                            &[llvm_type.tag_type.as_basic_type_enum(), payload_value.get_type()],
-                            false,
-                        );
 
-                        // Sanity check since we'll perform a load on this as _our_ type
-                        debug_assert_eq!(
-                            self.llvm_size_info(&unique_struct_type),
-                            self.llvm_size_info(&variant.variant_struct_type)
-                        );
-                        unique_struct_type.const_named_struct(&[
-                            variant.tag_value.as_basic_value_enum(),
-                            payload_value,
-                        ])
+                let variant_pt_id =
+                    self.k1.types.get_physical_type(e.variant_type_id).unwrap().expect_agg();
+                let variant_agg =
+                    self.k1.types.phys_types.get(variant_pt_id).agg_type.expect_enum_variant();
+                packed_values.push(variant.tag_value.as_basic_value_enum());
+                match e.payload {
+                    None => {
+                        let padding_to_end =
+                            variant_agg.envelope.size - variant_agg.tag.get_layout().size;
+                        if padding_to_end > 0 {
+                            packed_values.push(
+                                self.padding_type(padding_to_end).get_undef().as_basic_value_enum(),
+                            );
+                        }
                     }
-                };
-                enum_value.as_basic_value_enum()
+                    Some(payload) => {
+                        let tag_end = variant_agg.tag.get_layout().size;
+                        let payload_offset = variant_agg.payload_offset.unwrap();
+                        let payload_padding = payload_offset - tag_end;
+                        if payload_padding > 0 {
+                            packed_values.push(
+                                self.padding_type(payload_padding)
+                                    .get_undef()
+                                    .as_basic_value_enum(),
+                            );
+                        }
+
+                        let payload_value =
+                            self.codegen_static_value_as_const(payload, depth + 1)?;
+                        packed_values.push(payload_value);
+
+                        let payload_pt = variant_agg.payload.unwrap();
+                        let payload_size = self.k1.types.get_pt_layout(&payload_pt).size;
+                        let written_so_far = payload_offset + payload_size;
+                        let padding_to_end = variant_agg.envelope.size - written_so_far;
+                        if padding_to_end > 0 {
+                            packed_values.push(
+                                self.padding_type(padding_to_end).get_undef().as_basic_value_enum(),
+                            );
+                        }
+                    }
+                }
+
+                let struct_value = self.ctx.const_struct(&packed_values, true);
+                debug_assert_eq!(
+                    self.llvm_size_info(&struct_value.get_type()).size,
+                    llvm_type.layout.size
+                );
+                struct_value.as_basic_value_enum()
             }
             StaticValue::LinearContainer(view) => {
                 let (element_type, _) =
@@ -1860,14 +1948,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let array_value = self.codegen_static_elements_array(
                     element_type,
                     self.k1.static_values.get_slice(view.elements),
+                    depth,
                 )?;
 
                 match view.kind {
                     StaticContainerKind::View => {
-                        let data_global = self.llvm_module.add_global(
-                            array_value.get_type(),
-                            None,
-                            &format!("elems_{}", static_value_id),
+                        let element_type_layout = self.k1.types.get_layout(element_type);
+                        let data_global = self.make_global_from_value(
+                            array_value.as_basic_value_enum(),
+                            element_type_layout.align,
+                            &format!("static_elems_{}", static_value_id.as_u32()),
+                            true,
                         );
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
@@ -1885,6 +1976,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
         };
+        if depth == 0 {
+            self.static_values_basics.insert(static_value_id, result);
+        }
         Ok(result)
     }
 
@@ -1892,186 +1986,108 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         element_type: TypeId,
         elements: &[StaticValueId],
-    ) -> CodegenResult<ArrayValue<'ctx>> {
-        let element_backend_type = self.codegen_type(element_type)?;
-        let element_basic_type = element_backend_type.rich_repr_type();
-        let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
+        depth: usize,
+    ) -> CodegenResult<StructValue<'ctx>> {
+        let mut packed_values = self.mem.new_list(elements.len() as u32);
+
+        // let element_backend_type = self.codegen_type(element_type)?;
+        let element_layout = self.k1.types.get_layout(element_type);
+
         for elem in elements.iter() {
-            let elem_basic_value = self.codegen_static_value_as_const(*elem)?;
-            values.push(elem_basic_value);
-        }
-        let array_value = match element_basic_type {
-            BasicTypeEnum::ArrayType(array_type) => array_type
-                .const_array(&values.into_iter().map(|v| v.into_array_value()).collect_vec()),
-            BasicTypeEnum::FloatType(float_type) => float_type
-                .const_array(&values.into_iter().map(|v| v.into_float_value()).collect_vec()),
-            BasicTypeEnum::IntType(int_type) => {
-                int_type.const_array(&values.into_iter().map(|v| v.into_int_value()).collect_vec())
+            let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
+            packed_values.push(elem_basic_value);
+
+            // IF STRIDE != SIZE, MAKE SURE TO ADD IT! Because in K1 that's a container concern
+            // and not part of the Layout.size
+            let end_padding = element_layout.stride() - element_layout.size;
+            if end_padding > 0 {
+                let padding_value =
+                    self.padding_type(end_padding).get_undef().as_basic_value_enum();
+                packed_values.push(padding_value);
             }
-            BasicTypeEnum::PointerType(pointer_type) => pointer_type
-                .const_array(&values.into_iter().map(|v| v.into_pointer_value()).collect_vec()),
-            BasicTypeEnum::StructType(struct_type) => struct_type
-                .const_array(&values.into_iter().map(|v| v.into_struct_value()).collect_vec()),
-            BasicTypeEnum::VectorType(_) => unreachable!(),
-            BasicTypeEnum::ScalableVectorType(_) => unreachable!(),
-        };
-        Ok(array_value)
+        }
+        let array_packed_struct = self.ctx.const_struct(&packed_values, true);
+        Ok(array_packed_struct)
     }
 
-    fn codegen_static_value_as_code(
+    fn make_global_for_static_value(
+        &mut self,
+        static_value_id: StaticValueId,
+    ) -> CodegenResult<GlobalValue<'ctx>> {
+        if let Some(global) = self.static_values_globals.get(&static_value_id) {
+            return Ok(*global);
+        };
+        let struct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
+        let type_id = self.k1.static_values.get(static_value_id).get_type();
+        let layout = self.k1.types.get_layout(type_id);
+        let global = self.make_global_from_value(
+            struct_value,
+            layout.align,
+            &format!("static_{}", static_value_id.as_u32()),
+            true,
+        );
+        self.static_values_globals.insert(static_value_id, global);
+        Ok(global)
+    }
+
+    fn make_global_from_value(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        align: u32,
+        name: &str,
+        constant: bool,
+    ) -> GlobalValue<'ctx> {
+        let global = self.llvm_module.add_global(value.get_type(), None, name);
+        global.set_alignment(align);
+        global.set_unnamed_addr(true);
+        global.set_initializer(&value);
+        global.set_constant(constant);
+        global
+    }
+
+    fn codegen_static_value_canonical(
         &mut self,
         static_value_id: StaticValueId,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        debug!("codegen_static_value_as_code {}", self.k1.static_value_to_string(static_value_id));
-
-        // Invariant: If the value is_statically_representable, we cannot emit any instructions
-        //            since this value could be used in a global context
-        //            However, if it is not, we will be inside a function context, and
-        //            can emit instructions
-        let insert_block = self.builder.get_insert_block();
-        if insert_block.is_none()
-            && !is_llvm_const_representable(&self.k1.static_values, static_value_id)
-        {
-            self.k1.ice(
-                "Tried to codegen a static value outside of a function context, which is not allowed",
-                None
-            )
-        }
-
+        debug!(
+            "codegen_static_value_canonical {}",
+            self.k1.static_value_to_string(static_value_id)
+        );
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
-            StaticValue::Unit => self.builtin_types.unit_basic(),
-            StaticValue::Bool(b) => match b {
-                true => self.builtin_types.true_value.as_basic_value_enum(),
-                false => self.builtin_types.false_value.as_basic_value_enum(),
-            },
-            StaticValue::Char(byte) => {
-                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
-            }
-            StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
-            StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
+            StaticValue::Unit => self.codegen_static_value_as_const(static_value_id, 0)?,
+            StaticValue::Bool(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
+            StaticValue::Char(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
+            StaticValue::Int(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
+            StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::String(string_id) => {
-                let string_ptr = self.codegen_string_id(*string_id).unwrap();
-                string_ptr.as_basic_value_enum()
+                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                string_global.as_basic_value_enum()
             }
             StaticValue::Zero(type_id) => {
                 let llvm_type = self.codegen_type(*type_id)?;
-                let zero = llvm_type.rich_repr_type().const_zero();
-                zero.as_basic_value_enum()
-            }
-            StaticValue::Struct(s) => {
-                let llvm_type = self.codegen_type(s.type_id)?;
-
-                // We cannot use build_k1_alloca since we aren't inside a k1 function
-                // So we have to ensure we align properly ourselves
-                // I'm not worried about pushing these allocas up to the top since we
-                // only have 1 basic block anyway, we'll never branch in static values
-                let dest_ptr =
-                    self.builder.build_alloca(llvm_type.rich_repr_type(), "static_struc").unwrap();
-                dest_ptr
-                    .as_instruction()
-                    .unwrap()
-                    .set_alignment(llvm_type.rich_repr_layout().align)
-                    .unwrap();
-
-                let llvm_type = llvm_type.expect_struct();
-                for (field_index, field) in
-                    self.k1.static_values.get_slice(s.fields).iter().enumerate()
-                {
-                    let value = self.codegen_static_value_as_code(*field)?;
-                    let field_llvm_type = &llvm_type.fields[field_index];
-                    let dest_offset = self
-                        .builder
-                        .build_struct_gep(llvm_type.struct_type, dest_ptr, field_index as u32, "")
-                        .unwrap();
-                    self.store_k1_value(field_llvm_type, dest_offset, value);
-                }
-                dest_ptr.into()
-            }
-            StaticValue::Enum(e) => {
-                let llvm_type = self.codegen_type(e.variant_type_id)?;
-                let enum_ptr =
-                    self.builder.build_alloca(llvm_type.rich_repr_type(), "static_struc").unwrap();
-                enum_ptr
-                    .as_instruction()
-                    .unwrap()
-                    .set_alignment(llvm_type.rich_repr_layout().align)
-                    .unwrap();
-
-                let llvm_type = llvm_type.expect_enum();
-                let enum_variant = &llvm_type.variants[e.variant_index as usize];
-                // Store the tag_value in the first slot
-                let tag_pointer = self
-                    .builder
-                    .build_struct_gep(enum_variant.variant_struct_type, enum_ptr, 0, "")
-                    .unwrap();
-                self.builder.build_store(tag_pointer, enum_variant.tag_value).unwrap();
-
-                if let Some(payload_id) = &e.payload {
-                    let value = self.codegen_static_value_as_code(*payload_id)?;
-                    let payload_pointer = self
-                        .builder
-                        .build_struct_gep(enum_variant.variant_struct_type, enum_ptr, 1, "")
-                        .unwrap();
-                    let payload_type = enum_variant.payload_type.as_ref().unwrap();
-                    self.store_k1_value(payload_type, payload_pointer, value);
-                }
-
-                enum_ptr.into()
-            }
-            StaticValue::LinearContainer(view) => {
-                let element_type = self.k1.types.get_as_view_instance(view.type_id).unwrap();
-                let element_backend_type = self.codegen_type(element_type)?;
-                let element_basic_type = element_backend_type.rich_repr_type();
-
-                let array_type = element_basic_type.array_type(view.len() as u32);
-                let data_global = self.llvm_module.add_global(array_type, None, "");
-                data_global.set_constant(false);
-                data_global.set_unnamed_addr(true);
-                data_global.set_initializer(&array_type.const_zero());
-
-                let mut values: SV8<BasicValueEnum<'ctx>> = smallvec![];
-                for (index, elem) in
-                    self.k1.static_values.get_slice(view.elements).iter().enumerate()
-                {
-                    let elem_basic_value = self.codegen_static_value_as_code(*elem)?;
-                    let array_offset_ptr = unsafe {
-                        self.builder
-                            .build_in_bounds_gep(
-                                element_basic_type,
-                                data_global.as_pointer_value(),
-                                &[self.ctx.i32_type().const_int(index as u64, false)],
-                                "",
-                            )
-                            .unwrap()
-                    };
-                    self.store_k1_value(&element_backend_type, array_offset_ptr, elem_basic_value);
-                    values.push(elem_basic_value);
-                }
-
-                match view.kind {
-                    StaticContainerKind::Array => {
-                        data_global.as_pointer_value().as_basic_value_enum()
+                let zero_rich = llvm_type.rich_repr_type().const_zero();
+                match self.k1.types.is_aggregate_repr(*type_id) {
+                    true => {
+                        todo!(
+                            "nocommit generate a zero region global; could we have a single zero region as big as needed?"
+                        )
                     }
-                    StaticContainerKind::View => {
-                        let view_struct = self
-                            .make_view_struct(
-                                view.type_id,
-                                view.len() as u64,
-                                data_global.as_pointer_value(),
-                            )
-                            .unwrap();
-
-                        let view_ptr = self
-                            .builder
-                            .build_alloca(view_struct.get_type(), "static_view")
-                            .unwrap();
-
-                        // Ok to store an aggregate since it's known to have just the 2 fields
-                        self.builder.build_store(view_ptr, view_struct).unwrap();
-                        view_ptr.as_basic_value_enum()
-                    }
+                    false => zero_rich,
                 }
+                //zero.as_basic_value_enum()
+            }
+            StaticValue::Struct(_) => {
+                let global = self.make_global_for_static_value(static_value_id)?;
+                global.as_pointer_value().as_basic_value_enum()
+            }
+            StaticValue::Enum(_) => {
+                let global = self.make_global_for_static_value(static_value_id)?;
+                global.as_pointer_value().as_basic_value_enum()
+            }
+            StaticValue::LinearContainer(_) => {
+                let global = self.make_global_for_static_value(static_value_id)?;
+                global.as_pointer_value().as_basic_value_enum()
             }
         };
         Ok(result)
@@ -2134,7 +2150,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(global_str_struct)
     }
 
-    fn codegen_string_id(&mut self, string_id: StringId) -> CodegenResult<GlobalValue<'ctx>> {
+    fn codegen_string_id_to_global(
+        &mut self,
+        string_id: StringId,
+    ) -> CodegenResult<GlobalValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
@@ -2237,18 +2256,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let k1_type = self.codegen_type(expr_type)?;
                 let struct_ptr = self.build_k1_alloca(&k1_type, "struct_literal");
                 let struct_k1_llvm_type = k1_type.expect_struct();
-                let struct_llvm_struct = struct_k1_llvm_type.struct_type;
+                // let struct_llvm_struct = struct_k1_llvm_type.struct_type;
                 for (idx, field) in self.k1.mem.getn(struc.fields).iter().enumerate() {
                     let value = self.codegen_expr_basic_value(field.expr)?;
-                    let field_addr = self
-                        .builder
-                        .build_struct_gep(
-                            struct_llvm_struct,
-                            struct_ptr,
-                            idx as u32,
-                            &format!("{}_store_addr", self.k1.ident_str(field.name)),
-                        )
-                        .unwrap();
+                    let field_addr = self.build_struct_gep(
+                        struct_ptr,
+                        &struct_k1_llvm_type,
+                        idx as u32,
+                        &format!("{}_store_addr", self.k1.ident_str(field.name)),
+                    );
                     let field_type = &struct_k1_llvm_type.fields[idx];
                     self.store_k1_value(field_type, field_addr, value);
                 }
@@ -2257,14 +2273,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::StructFieldAccess(field_access) => {
                 let field_index = field_access.field_index;
                 let struct_llvm_type = self.codegen_type(field_access.struct_type)?.expect_struct();
-                let struct_physical_type = struct_llvm_type.struct_type;
+                // let struct_physical_type = struct_llvm_type.struct_type;
                 // Codegen the field's memory location
                 let struc = self.codegen_expr_basic_value(field_access.base)?;
                 let struct_pointer = struc.into_pointer_value();
-                let field_pointer = self
-                    .builder
-                    .build_struct_gep(struct_physical_type, struct_pointer, field_index, "")
-                    .unwrap();
+                let field_pointer =
+                    self.build_struct_gep(struct_pointer, &struct_llvm_type, field_index, "");
                 // Don't even attempt to load the value for referencing access
                 if field_access.is_reference_through() {
                     Ok(field_pointer.as_basic_value_enum().into())
@@ -2567,13 +2581,39 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmValue::BasicValue(lambda_object_ptr.as_basic_value_enum()))
             }
             TypedExpr::StaticValue(s) => {
-                let static_value = self.codegen_static_value_as_code(s.value_id)?;
+                let static_value = self.codegen_static_value_canonical(s.value_id)?;
                 Ok(static_value.into())
             }
             TypedExpr::PendingCapture(_) => {
                 panic!("Unsupported expression: {}", self.k1.expr_to_string(expr_id))
             }
         }
+    }
+
+    fn build_struct_gep(
+        &mut self,
+        ptr: PointerValue<'ctx>,
+        struct_type: &LlvmStructType<'ctx>,
+        idx: u32,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        // if struct_type.manual_field_geps {
+        //     let struct_agg_id =
+        //         self.k1.types.get_physical_type(struct_type.type_id).unwrap().expect_agg();
+        //     let offset = self.k1.types.get_struct_field_offset(struct_agg_id, idx).unwrap();
+        //     unsafe {
+        //         self.builder
+        //             .build_in_bounds_gep(
+        //                 self.ctx.i8_type(),
+        //                 ptr,
+        //                 &[self.builtin_types.ptr_sized_int.const_int(offset as u64, false)],
+        //                 name,
+        //             )
+        //             .unwrap()
+        //     }
+        // } else {
+        self.builder.build_struct_gep(struct_type.struct_type, ptr, idx, name).unwrap()
+        //}
     }
 
     #[inline(always)]
@@ -3390,7 +3430,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             else {
                                 panic!("typename should be a string")
                             };
-                            let global_value = self.codegen_string_id(*string_id)?;
+                            let global_value = self.codegen_string_id_to_global(*string_id)?;
                             global_value.as_pointer_value().as_basic_value_enum()
                         };
                         self.store_k1_value(&return_llvm_type, sret_ptr, value);
@@ -3416,7 +3456,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let type_id_int_value =
                             self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
-                        let value = self.codegen_static_value_as_code(*schema_value_id)?;
+                        let value = self.codegen_static_value_canonical(*schema_value_id)?;
                         self.store_k1_value(&return_llvm_type, sret_ptr, value);
                         self.builder.build_unconditional_branch(finish_block).unwrap();
                         cases.push((type_id_int_value, my_block));
@@ -3900,83 +3940,38 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
         let is_reference_type = maybe_reference_type.is_some();
 
-        if is_llvm_const_representable(&self.k1.static_values, initial_static_value_id) {
-            // eprintln!("{name} is const representable, is_reference_type={is_reference_type}");
-            let initialized_basic_value =
-                self.codegen_static_value_as_const(initial_static_value_id)?;
-            let llvm_global = self.llvm_module.add_global(
-                initialized_basic_value.get_type(),
-                Some(AddressSpace::default()),
-                &name,
-            );
-            llvm_global.set_constant(global.is_constant);
-            llvm_global.set_initializer(&initialized_basic_value);
-            llvm_global.set_unnamed_addr(true);
-            if self.k1.program_settings.multithreaded {
-                if global.is_tls {
-                    llvm_global.set_thread_local(true);
-                    let mode = if self.k1.program_settings.executable {
-                        ThreadLocalMode::InitialExecTLSModel
-                    } else {
-                        // We don't yet support dynamic library as a target
-                        // So all libraries can use InitialExec
-                        ThreadLocalMode::InitialExecTLSModel
-                    };
-                    llvm_global.set_thread_local_mode(Some(mode));
-                }
+        let layout = self.k1.types.get_layout(global.ty);
+        let initializer_basic_value =
+            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+        let llvm_global = self.make_global_from_value(
+            initializer_basic_value,
+            layout.align,
+            &name,
+            global.is_constant,
+        );
+        if self.k1.program_settings.multithreaded {
+            if global.is_tls {
+                llvm_global.set_thread_local(true);
+                let mode = if self.k1.program_settings.executable {
+                    ThreadLocalMode::LocalExecTLSModel
+                } else {
+                    // We don't yet support dynamic library as a target
+                    // So even libraries can use InitialExec
+                    ThreadLocalMode::InitialExecTLSModel
+                };
+                llvm_global.set_thread_local_mode(Some(mode));
             }
-            let variable_value = if is_reference_type {
-                // Direct; global is a ptr, which is the correct type
-                // This will not be 'loaded' by load_variable_value
-                VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
-            } else {
-                // Indirect; global is a ptr to the value of correct type
-                // This will be 'loaded' by load_variable_value
-                VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
-            };
-            self.variable_to_value.insert(global.variable_id, variable_value);
-        } else {
-            if !global.is_constant {
-                return failf!(
-                    global.span,
-                    "Value is too complex to use as initializer for a mutable global, because I'll never run any code at startup behind your back: {}",
-                    self.k1.static_value_to_string(initial_static_value_id)
-                );
-            }
-            // For complex static values, we create a function that returns the value
-            // And we call it wherever the static is used, probably with inlinealways
-            let global_type = self.codegen_type(global.ty)?;
-            let value_k1_llvm_type = match maybe_reference_type {
-                None => &global_type,
-                Some(_) => &global_type.expect_reference().pointee_type,
-            };
-            let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
-            let function = self.llvm_module.add_function(&name, fn_type, None);
-            let sret_param = function.get_first_param().unwrap();
-            sret_param.set_name("sret_param");
-            let sret_ptr = sret_param.into_pointer_value();
-
-            let sret_attribute =
-                self.make_sret_attribute(value_k1_llvm_type.rich_repr_type().as_any_type_enum());
-            let align_attribute =
-                self.make_align_attribute(value_k1_llvm_type.rich_repr_layout().align as u64);
-            // Function-side sret
-            function.add_attribute(AttributeLoc::Param(0), sret_attribute);
-            function.add_attribute(AttributeLoc::Param(0), align_attribute);
-
-            let block = self.ctx.append_basic_block(function, "");
-            self.builder.position_at_end(block);
-
-            // This recursively builds up the value
-            let final_value = self.codegen_static_value_as_code(initial_static_value_id)?;
-
-            self.store_k1_value(value_k1_llvm_type, sret_ptr, final_value);
-            self.builder.build_return(None).unwrap();
-
-            self.variable_to_value
-                .insert(global.variable_id, VariableValue::ByFunctionCall { function });
-            debug!("I built a static value maker function:\n{}", function);
         }
+        let variable_value = if is_reference_type {
+            // Direct; global is a ptr, which is the correct type
+            // This will not be 'loaded' by load_variable_value
+            VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
+        } else {
+            // Indirect; global is a ptr to the value of correct type
+            // This will be 'loaded' by load_variable_value
+            VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
+        };
+        self.variable_to_value.insert(global.variable_id, variable_value);
         Ok(())
     }
 
@@ -4164,33 +4159,5 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
     fn make_align_attribute(&self, align: u64) -> Attribute {
         self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), align)
-    }
-}
-
-/// If true, we codegen an LLVM global or a const struct for this value
-/// If false, we represent it as a call to a function that builds up
-/// the struct or enum or buffer using 'runtime' code, albeit entirely
-/// compile-time known, so it gets massively optimized
-fn is_llvm_const_representable(static_values: &StaticValuePool, id: StaticValueId) -> bool {
-    match static_values.get(id) {
-        StaticValue::Unit => true,
-        StaticValue::Bool(_) => true,
-        StaticValue::Char(_) => true,
-        StaticValue::Int(_) => true,
-        StaticValue::Float(_) => true,
-        StaticValue::String(_) => true,
-        StaticValue::Zero(_) => true,
-        StaticValue::Struct(s) => static_values
-            .get_slice(s.fields)
-            .iter()
-            .all(|field_id| is_llvm_const_representable(static_values, *field_id)),
-        StaticValue::Enum(e) => match e.payload {
-            None => true,
-            Some(payload_id) => is_llvm_const_representable(static_values, payload_id),
-        },
-        StaticValue::LinearContainer(cont) => static_values
-            .get_slice(cont.elements)
-            .iter()
-            .all(|elem_id| is_llvm_const_representable(static_values, *elem_id)),
     }
 }

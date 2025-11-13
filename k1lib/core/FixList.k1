@@ -81,4 +81,20 @@ ns FixList {
     self.getRef(index) <- value
   }
 
+  // nocommit 4 All of this stuff could live on an ability derived from an AsView. I mean
+  // a blanket impl for all T: AsView that supplies T.last(), t.get(), t.first(), etc
+  fn last[T, N: static uword](self: *FixList[T, N]): ?T {
+    self.asView().last()
+  }
+
+  fn pop[T, N: static uword](self: *mut FixList[T, N]): ?T {
+    switch self.last() {
+       .Some(t) -> {
+         self.used* <- self.used - 1;
+         .Some(t)
+       },
+       .None -> .None
+    }
+  }
+
 }

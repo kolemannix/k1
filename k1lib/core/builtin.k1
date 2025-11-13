@@ -587,8 +587,7 @@ ns Array {
   }
 
   fn allocate[T, N: static uword](context alloc: mem/AllocMode)(): *mut Array[T, N] {
-    let ptr = mem/allocIn(alloc, size = types/sizeOf[Array[T, N]](), align = types/alignOf[Array[T, N]]());
-    ptr as *mut Array[T, N]
+    alloc.allocT[Array[T, N]]()
   }
 
   fn memset[T, N: static uword](array: *mut Array[T, N], value: u8): unit {
@@ -711,7 +710,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   } else {
     let filename = locn.filename;
     let line = locn.line;
-    sys/printBacktrace();
+    //sys/printBacktrace();
     let s = "{msg} at {filename}:{line}\n";
     eprint(s);
     sys/exit(1)

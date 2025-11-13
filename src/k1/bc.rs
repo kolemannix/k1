@@ -649,6 +649,8 @@ impl InstKind {
     }
 }
 
+// nocommit: Stop compiling every concrete function and lambda; instead rely on the on-demand
+// system.
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
@@ -669,7 +671,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     // Set up parameters
     let param_variables = f.param_variables;
-    let mut params = b.k1.bytecode.mem.new_vec(param_variables.len());
+    let mut params = b.k1.bytecode.mem.new_list(param_variables.len());
     for (index, param_variable_id) in b.k1.mem.getn(param_variables).iter().enumerate() {
         let v = b.k1.variables.get(*param_variable_id);
         let t = b.get_physical_type(v.type_id);
@@ -810,7 +812,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
-        let mut blocks = self.k1.bytecode.mem.new_vec(self.k1.bytecode.b_blocks.len() as u32);
+        let mut blocks = self.k1.bytecode.mem.new_list(self.k1.bytecode.b_blocks.len() as u32);
         for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
             let instrs = self.k1.bytecode.mem.pushn(&b.instrs);
             let b = CompiledBlock { name: b.name, instrs };
@@ -1342,7 +1344,7 @@ fn compile_expr(
         TypedExpr::Call { call_id, return_type, .. } => {
             // task(bc): deal with clone() of Call and TypedExpr
             let call = b.k1.calls.get(call_id).clone();
-            let mut args = b.k1.bytecode.mem.new_vec(call.args.len() as u32 + 1);
+            let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
             let builtin = if let Some(function_id) = call.callee.maybe_function_id() {
                 if let Some(intrinsic) = b.k1.get_function(function_id).intrinsic_type {
                     match intrinsic {
@@ -1587,7 +1589,7 @@ fn compile_expr(
                 compile_stmt(b, None, *stmt)?;
             }
 
-            let mut arm_blocks = b.k1.bytecode.mem.new_vec(match_expr.arms.len());
+            let mut arm_blocks = b.k1.bytecode.mem.new_list(match_expr.arms.len());
             for (arm_index, _arm) in b.k1.mem.getn(match_expr.arms).iter().enumerate() {
                 let name = mformat!(b.k1.bytecode.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
                 let name_cons =
@@ -1625,7 +1627,7 @@ fn compile_expr(
             };
 
             let mut incomings: MList<CameFromCase, _> =
-                b.k1.bytecode.mem.new_vec(match_expr.arms.len());
+                b.k1.bytecode.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -1681,7 +1683,7 @@ fn compile_expr(
             let final_block_name = mformat!(b.k1.bytecode.mem, "and_end__{}", expr.as_u32());
             let final_block = b.push_block(final_block_name);
 
-            let mut incomings = b.k1.bytecode.mem.new_vec(2);
+            let mut incomings = b.k1.bytecode.mem.new_list(2);
 
             let lhs = compile_expr(b, None, and.lhs)?;
             let lhs_end_block = b.cur_block;
@@ -1712,7 +1714,7 @@ fn compile_expr(
             let final_block_name = mformat!(b.k1.bytecode.mem, "or_end__{}", expr.as_u32());
             let final_block = b.push_block(final_block_name);
 
-            let mut incomings = b.k1.bytecode.mem.new_vec(2);
+            let mut incomings = b.k1.bytecode.mem.new_list(2);
 
             let lhs = compile_expr(b, None, or.lhs)?;
             let lhs_end_block = b.cur_block;

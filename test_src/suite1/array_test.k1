@@ -14,7 +14,7 @@ fn testLiterals(): unit {
 }
 
 fn testFilled(): unit {
-  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
+  let context alloc: mem/AllocMode = .Arena;
   let buffer: Buffer[u8] = Buffer/filledIn(size = 64, value = 3);
   let array: *Array[u8, 64] = Array/filledIn(3, 64);
   let list: List[u8] = List/filledIn(size = 64, value = 3);
@@ -29,7 +29,7 @@ fn testFilled(): unit {
 }
 
 fn testArray(): unit {
-  let context alloc: mem/AllocMode = mem/AllocMode/TEMP;
+  let context alloc: mem/AllocMode = .Arena;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
   let a: *mut Array[u8, 10] = List/copyToArray(ls, 10);

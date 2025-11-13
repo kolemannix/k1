@@ -301,7 +301,7 @@ impl<Tag> Mem<Tag> {
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
-    pub fn new_vec<T>(&mut self, len: u32) -> MList<T, Tag> {
+    pub fn new_list<T>(&mut self, len: u32) -> MList<T, Tag> {
         let dst = self.push_slice_uninit(len as usize);
 
         let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
@@ -501,7 +501,7 @@ impl<T, Tag> MList<T, Tag> {
         if self.len == self.cap() {
             let new_cap = self.cap() as u32 * 2;
             eprintln!("{}:{} Growing from {} -> {}", loc.file(), loc.line(), self.cap(), new_cap);
-            let mut new_me = mem.new_vec(new_cap);
+            let mut new_me = mem.new_list(new_cap);
             new_me.extend(self.as_slice());
             new_me.push_unchecked(val);
             *self = new_me;
@@ -635,7 +635,7 @@ mod test {
     #[test]
     fn vec() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(16);
+        let mut v = arena.new_list(16);
         for i in 0..16 {
             v.push(i * 10);
         }
@@ -650,7 +650,7 @@ mod test {
     #[test]
     fn vec_extend() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(16);
+        let mut v = arena.new_list(16);
         v.extend(&[1, 2, 3, 4, 5]);
         assert_eq!(v.len(), 5);
         for i in 0..5 {
@@ -665,7 +665,7 @@ mod test {
     #[should_panic(expected = "MList is full")]
     fn vec_extend_oob() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(3);
+        let mut v = arena.new_list(3);
         v.extend(&[1, 2, 3, 4, 5]);
     }
 
@@ -673,7 +673,7 @@ mod test {
     #[should_panic(expected = "MList is full")]
     fn vec_oob() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(4);
+        let mut v = arena.new_list(4);
         for i in 0..5 {
             v.push(i * 10);
         }
@@ -692,7 +692,7 @@ mod test {
     #[test]
     fn insert() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(5);
+        let mut v = arena.new_list(5);
         v.push(1);
         v.push(2);
         v.push(4);
@@ -704,7 +704,7 @@ mod test {
     #[test]
     fn grow() {
         let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_vec(2);
+        let mut v = arena.new_list(2);
         v.push_grow(&mut arena, 1);
         v.push_grow(&mut arena, 2);
         v.push_grow(&mut arena, 3);

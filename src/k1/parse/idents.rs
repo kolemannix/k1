@@ -111,6 +111,7 @@ pub struct BuiltinIdents {
     pub line: Ident,
     pub equals: Ident,
     pub tag: Ident,
+    pub variantName: Ident,
     pub MODULE_INFO: Ident,
     pub root_module_name: Ident,
     pub core: Ident,
@@ -164,6 +165,7 @@ pub struct BuiltinIdents {
     pub Some: Ident,
     pub None: Ident,
     pub StringBuilder: Ident,
+    pub arena: Ident
 }
 
 #[allow(non_snake_case)]
@@ -296,6 +298,7 @@ impl IdentPool {
             line: intern!("line"),
             equals: intern!("equals"),
             tag: intern!("tag"),
+            variantName: intern!("variantName"),
             MODULE_INFO: intern!("MODULE_INFO"),
             root_module_name: intern!("_root"),
             core: intern!("core"),
@@ -349,6 +352,7 @@ impl IdentPool {
             Some: intern!("Some"),
             None: intern!("None"),
             StringBuilder: intern!("StringBuilder"),
+            arena: intern!("arena")
         };
 
         macro_rules! make_fn {

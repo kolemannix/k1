@@ -152,7 +152,7 @@ impl TypedProgram {
         max_len: u32,
     ) -> BlockBuilder {
         let block_scope_id = self.scopes.add_child_scope(parent_scope, scope_type, None, None);
-        BlockBuilder { statements: self.mem.new_vec(max_len), scope_id: block_scope_id, span }
+        BlockBuilder { statements: self.mem.new_list(max_len), scope_id: block_scope_id, span }
     }
 
     /// Sometimes a sub-expression of a larger construct has type `never`, for example a function argument
@@ -182,7 +182,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TypedExprId {
         let mut b =
-            BlockBuilder { statements: self.mem.new_vec(instrs.len() as u32), scope_id, span };
+            BlockBuilder { statements: self.mem.new_list(instrs.len() as u32), scope_id, span };
         for i in instrs {
             match i {
                 MatchingConditionInstr::Binding { let_stmt } => b.statements.push(*let_stmt),
