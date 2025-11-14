@@ -1,5 +1,12 @@
 New tagline? "C with typeclasses and tagged unions"
 
+IDEAS 11/13
+A let* that goes to the heap, mark/reset on function return. (function arenas)
+Similarly, put lambda environments in the (non-function) arena
+Add enum tags to the LLVM repr (they're opaque currently; this'll allow SROA to at least handle the tag stuff)
+Inline all small functions in typer or bc
+AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
+
 ## Working list
 - [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
 - [x] Adopt `ecow`'s EcoVec
@@ -38,7 +45,7 @@ New tagline? "C with typeclasses and tagged unions"
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs
-- [ ] Compile switches with no patterns or guards to LLVM switch
+- [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
 
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 
@@ -62,7 +69,7 @@ Syntax/elegance
       `impl Unwrap<Inner = u32> for i64`
 
 Simple but missing
-- [ ] Support ability constraints on generics
+- [x] Support ability constraints on generics
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] implement iterator for Array
 - [ ] Do safe integer coercions automatically

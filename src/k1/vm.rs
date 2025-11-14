@@ -187,7 +187,7 @@ impl Vm {
         let arena_to_preserve = if let Some(arena_global_id) = arena_global_id {
             if let Some(arena_value) = self.globals.get(&arena_global_id) {
                 let arena_ptr: *const k1_types::Arena = arena_value.as_ptr().cast();
-                eprintln!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
+                debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
                 let arena: k1_types::Arena = unsafe {arena_ptr.read() };
                 Some(arena)
             } else {

@@ -15,7 +15,7 @@ fn test(): unit {
   // pointer itself is uninitialized
   let p: *int = uninit;
   p := GLOB;
-  assertEquals(p as Pointer, GLOB as Pointer);
+  assertEquals(p as ptr, GLOB as ptr);
   assertEquals(p.*, 50);
 
   ()

@@ -260,7 +260,7 @@ fn run(args: View[string]): Result[i32, string] {
   };
 }
 
-fn main(argCount: u32, args: Pointer): i32 {
+fn main(argCount: u32, args: ptr): i32 {
   let args = sys/parseMainArgs(argCount, args);
   run(args).!
 }

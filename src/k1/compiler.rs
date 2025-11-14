@@ -193,8 +193,8 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub write_llvm: bool,
 
-    /// No Optimize
-    #[arg(long, default_value_t = true)]
+    /// Optimize
+    #[arg(long, default_value_t = false)]
     pub optimize: bool,
 
     /// Dump Module
@@ -315,6 +315,7 @@ pub fn compile_program(
     } else {
         None
     };
+    let start_time = std::time::Instant::now();
 
     let out_dir = out_dir.canonicalize().unwrap();
 
@@ -369,6 +370,8 @@ pub fn compile_program(
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
+    let total_elapsed_ms = start_time.elapsed().as_millis();
+        p.print_timing_info(&src_path.to_string_lossy(), total_elapsed_ms as u64, &mut std::io::stderr()).unwrap();
 
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {
@@ -480,7 +483,7 @@ pub fn write_executable(
 
     build_cmd.args(build_args);
     build_cmd.args(extra_options);
-    log::info!("Build Command: {:?}", build_cmd);
+    log::info!("Build Command: {}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {

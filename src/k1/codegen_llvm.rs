@@ -132,12 +132,6 @@ pub struct K1LlvmFunctionType<'ctx> {
     is_sret: bool,
 }
 
-#[derive(Debug, Copy, Clone)]
-struct BranchSetup<'ctx> {
-    then_block: BasicBlock<'ctx>,
-    else_block: BasicBlock<'ctx>,
-}
-
 struct StructDebugMember<'ctx, 'name> {
     name: &'name str,
     di_type: DIType<'ctx>,
@@ -178,6 +172,7 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
 struct LlvmReferenceType<'ctx> {
     type_id: TypeId,
     pointer_type: PointerType<'ctx>,
+    #[allow(unused)]
     pointee_type: Box<K1LlvmType<'ctx>>,
     di_type: DIType<'ctx>,
     layout: Layout,
@@ -331,6 +326,10 @@ impl<'ctx> K1LlvmType<'ctx> {
     /// To fix this, any time a struct or array or even another Enum contains an Enum (union),
     /// we calculate the GEP offsets ourselves in bytes, using gep i8, 0, n. As far as I can tell,
     /// this is what rustc does.
+    /// 
+    /// Note: I ended up doing something more sneaky where I synthesize a type with the proper
+    /// size and align, and no unused bits
+    #[allow(unused)]
     pub fn requires_custom_alignment(&self) -> bool {
         match self {
             K1LlvmType::Value(_) => false,
@@ -348,6 +347,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     }
 
     #[track_caller]
+    #[allow(unused)]
     pub fn expect_reference(&self) -> &LlvmReferenceType<'ctx> {
         match self {
             K1LlvmType::Reference(reference) => reference,
@@ -434,20 +434,6 @@ impl<'ctx> K1LlvmType<'ctx> {
     }
 
     fn rich_repr_type(&self) -> BasicTypeEnum<'ctx> {
-        match self {
-            K1LlvmType::Value(value) => value.basic_type,
-            K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
-            K1LlvmType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
-            K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
-            K1LlvmType::ArrayType(a) => a.array_type.as_basic_type_enum(),
-            K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
-            K1LlvmType::LambdaObject(c) => c.struct_type.as_basic_type_enum(),
-        }
-    }
-
-    /// For Enum, returns a synthetic struct with an `aligner` member; use this when putting
-    /// a type inside an aggregate
-    fn rich_repr_type_inner_proper_align(&self) -> BasicTypeEnum<'ctx> {
         match self {
             K1LlvmType::Value(value) => value.basic_type,
             K1LlvmType::Reference(pointer) => pointer.pointer_type.as_basic_type_enum(),
@@ -625,6 +611,10 @@ enum VariableValue<'ctx> {
     /// Call this function using sret to get the value of this variable
     /// Used for complex static values that cannot be built using LLVM's
     /// constant and global mechanisms
+    ///
+    /// Turns out we had the technology after all (packed structs that mix global references in
+    /// with binary data!)
+    #[allow(unused)]
     ByFunctionCall {
         function: FunctionValue<'ctx>,
     },
@@ -920,7 +910,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 .debug
                 .debug_builder
                 .create_pointer_type(
-                    "Pointer",
+                    "ptr",
                     pointee_di_type,
                     self.builtin_types.ptr_sized_int.get_bit_width() as u64,
                     self.builtin_types.ptr_sized_int.get_bit_width(),
@@ -1074,7 +1064,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             )),
             Type::Pointer => {
                 let llvm_type = self.builtin_types.ptr.as_basic_type_enum();
-                Ok(make_value_basic_type("Pointer", POINTER_TYPE_ID, llvm_type, dw_ate_address))
+                Ok(make_value_basic_type("ptr", POINTER_TYPE_ID, llvm_type, dw_ate_address))
             }
             Type::Struct(struc) => {
                 let buffer_element_type = self.k1.types.get_as_buffer_instance(type_id);
@@ -2724,18 +2714,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.k1.ice_with_span("Cast Transmute unsupported by codegen", span)
             }
         }
-    }
-
-    fn build_conditional_branch(
-        &mut self,
-        cond: IntValue<'ctx>,
-        then_name: &str,
-        else_name: &str,
-    ) -> BranchSetup<'ctx> {
-        let then_block = self.append_basic_block(then_name);
-        let else_block = self.append_basic_block(else_name);
-        self.builder.build_conditional_branch(cond, then_block, else_block).unwrap();
-        BranchSetup { then_block, else_block }
     }
 
     fn append_basic_block(&mut self, name: &str) -> BasicBlock<'ctx> {

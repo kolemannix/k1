@@ -187,7 +187,9 @@ pub enum Value {
 
 impl Value {
     const UNIT: Value = Value::byte(0);
+    #[allow(unused)]
     const FALSE: Value = Value::byte(0);
+    #[allow(unused)]
     const TRUE: Value = Value::byte(1);
     const fn byte(u8: u8) -> Value {
         Value::Imm32 { t: ScalarType::U8, data: u8 as u32 }
@@ -649,8 +651,6 @@ impl InstKind {
     }
 }
 
-// nocommit: Stop compiling every concrete function and lambda; instead rely on the on-demand
-// system.
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
 
@@ -1858,13 +1858,16 @@ fn compile_expr(
         }
         TypedExpr::Lambda(lam_expr) => {
             let l = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let function_id = l.function_id;
             let env_struct = l.environment_struct;
+            b.k1.bytecode.b_units_pending_compile.push(function_id);
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
+            b.k1.bytecode.b_units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
         TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
@@ -1888,6 +1891,7 @@ fn compile_expr(
                 "",
             );
             b.push_store(lam_obj_env_ptr_addr, Value::PtrZero, "");
+            b.k1.bytecode.b_units_pending_compile.push(fn_to_lam_obj.function_id);
             Ok(lam_obj_ptr)
         }
         TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),

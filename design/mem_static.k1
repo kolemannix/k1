@@ -10,21 +10,21 @@ ns mem {
   deftype SystemHeap = {}
 
   ability Allocator {
-    fn allocate(self: Self, size: uword, align: uword): Pointer
-    fn reallocate(self: Self, ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-    fn free(self: Self, ptr: Pointer, size: uword, align: uword): unit
+    fn allocate(self: Self, size: uword, align: uword): ptr
+    fn reallocate(self: Self, ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr
+    fn free(self: Self, ptr: ptr, size: uword, align: uword): unit
 
     fn allocStyle(): AllocStyle
   }
 
   impl Allocator for mem/SystemHeap {
-    fn allocate(self: Self, size: uword, align: uword): Pointer {
+    fn allocate(self: Self, size: uword, align: uword): ptr {
       core/mem/alloc(size, align)
     }
-    fn reallocate(self: Self, ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+    fn reallocate(self: Self, ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
       core/mem/realloc(ptr, oldSize = oldSize, align = align, newSize = newSize)
     }
-    fn free(self: Self, ptr: Pointer, size: uword, align: uword): unit {
+    fn free(self: Self, ptr: ptr, size: uword, align: uword): unit {
       core/mem/free(ptr, size, align)
     }
     fn allocStyle(): AllocStyle { .Heap }
@@ -32,13 +32,13 @@ ns mem {
 
   // These top-level functions allow for a slightly terser syntax than 'allocator.allocate()' since you can just write: mem/allocate()
   // and the context provides the allocator
-  fn allocate[A: Allocator](context alloc: A)(size: uword, align: uword): Pointer {
+  fn allocate[A: Allocator](context alloc: A)(size: uword, align: uword): ptr {
     alloc.allocate(size, align)
   }
-  fn reallocate[A: Allocator](context alloc: A)(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+  fn reallocate[A: Allocator](context alloc: A)(ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
     alloc.reallocate(ptr, oldSize, align, newSize)
   }
-  fn free[A: Allocator](context alloc: A)(ptr: Pointer, size: uword, align: uword): unit {
+  fn free[A: Allocator](context alloc: A)(ptr: ptr, size: uword, align: uword): unit {
     alloc.free(ptr, size, align)
   }
 
@@ -63,7 +63,7 @@ ns mem {
   fn bufferGrowTo[T, A: Allocator](context a: A)(self: Buffer[T]*, newCount: u64): unit {
     #if supportsRealloc[A]() {
       let newSize = bufferSizeBytes[T](newCount);
-      let realloc = a.realloc(self.dataPointer(), newSize);
+      let realloc = a.realloc(self.dataptr(), newSize);
       self <- { len: newCount, data: realloc }
     } else {
       let oldPtr = self.data;
@@ -80,7 +80,7 @@ ns mem {
 
 fn myAllocateIn[A: Allocator, T](context a: A)(size: uword): Buffer[T] {
   let ptr = if count == 0 {
-    Pointer/NULL
+    ptr/NULL
   } else {
     let sizeBytes = bufferSizeBytes[T](count);
     mem/allocate(sizeBytes, core/types/alignOf[T]())

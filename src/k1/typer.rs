@@ -2381,7 +2381,10 @@ pub struct TypedProgram {
     pub use_statuses: FxHashMap<ParsedUseId, UseStatus>,
     pub debug_level_stack: Vec<log::LevelFilter>,
     pub functions_pending_body_specialization: Vec<FunctionId>,
+
+    // Status and phases
     module_in_progress: Option<ModuleId>,
+    phase: u32,
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
@@ -2491,7 +2494,8 @@ impl TypedProgram {
 
         eprintln!("clock init");
         let init_start = std::time::Instant::now();
-        let clock = quanta::Clock::new();
+        let clock =
+            if cfg!(feature = "profile") { quanta::Clock::new() } else { quanta::Clock::mock().0 };
         eprintln!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
         let word_size = ast.config.target.word_size();
@@ -2531,6 +2535,7 @@ impl TypedProgram {
             functions_pending_body_specialization: vec![],
             ast,
             module_in_progress: None,
+            phase: 0,
             inference_context_stack: Vec::with_capacity(8),
             inference_context_extras: (0..8).map(|_| InferenceContext::make()).collect(),
             type_defn_stack: Vec::with_capacity(8),
@@ -2579,7 +2584,6 @@ impl TypedProgram {
         src_path: &Path,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
-        let total_start = self.timing.time_raw();
         eprintln!("Loading module {:?}...", src_path);
         let src_path = src_path.canonicalize().map_err(|e| {
             anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
@@ -2704,20 +2708,7 @@ impl TypedProgram {
         // }
         // self.named_types.print_size_info();
         // self.types.types.print_size_info();
-        eprintln!("typing took {}ms", typing_elapsed_ms,);
-        let total_elapsed_ms = self.timing.elapsed_ms(total_start);
-        eprintln!("module {} took {}ms", src_path_name, total_elapsed_ms);
-        eprintln!("\t{} expressions", self.exprs.len());
-        eprintln!("\t{} statements", self.stmts.len());
-        eprintln!("\t{} functions", self.functions.len());
-        eprintln!("\t{} types", self.types.type_count());
-        eprintln!("\t{} idents", self.ast.idents.len());
-        self.print_timing_info(&mut stderr()).unwrap();
-        eprintln!(
-            "\t{} instructions, {}ms bc",
-            self.bytecode.instrs.len(),
-            self.timing.total_bytecode_nanos / 1_000_000
-        );
+        eprintln!("\ttyping took {}ms", typing_elapsed_ms,);
 
         #[cfg(feature = "profile")]
         {
@@ -5158,15 +5149,33 @@ impl TypedProgram {
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            // debug!(
-            //     "compile_all_pending_bytecode {}",
-            //     self.bytecode.b_units_pending_compile.len()
-            // );
-            // for p in &self.bytecode.b_units_pending_compile {
-            //     debug!("PENDING: {}", self.function_id_to_string(*p, false));
-            // }
+            //eprintln!(
+            //    "compile_all_pending_bytecode {}",
+            //    self.bytecode.b_units_pending_compile.len()
+            //);
+            //for p in &self.bytecode.b_units_pending_compile {
+            //    eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
+            //}
             if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
-                self.eval_function_body(function_id, false)?;
+                self.eval_function_body(function_id)?;
+                let is_concrete = self.functions.get(function_id).is_concrete;
+                if !is_concrete {
+                    eprintln!("Someone's asking me to compile this non-concrete function")
+                }
+                if self.functions.get(function_id).body_block.is_none() {
+                    debug!(
+                        "Function with no body (after compile) made it into pending: {}",
+                        self.function_id_to_string(function_id, false)
+                    );
+                    continue;
+                }
+                if let Err(e) = bc::compile_function(self, function_id) {
+                    return failf!(
+                        e.span,
+                        "Failed to compile bytecode for function: {}",
+                        e.message
+                    );
+                };
             } else {
                 break;
             }
@@ -8131,16 +8140,16 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
-            let is_concrete = self.functions.get(body_function_id).is_concrete;
-            if is_concrete && !ctx.is_inference() {
-                bc::compile_function(self, body_function_id)?;
-            } else {
-                debug!(
-                    "Not compiling lowered lambda {} due to {is_concrete} {}",
-                    self.ident_str(name),
-                    ctx.is_inference()
-                );
-            }
+            // let is_concrete = self.functions.get(body_function_id).is_concrete;
+            // if is_concrete && !ctx.is_inference() {
+            //     bc::compile_function(self, body_function_id)?;
+            // } else {
+            //     debug!(
+            //         "Not compiling lowered lambda {} due to {is_concrete} {}",
+            //         self.ident_str(name),
+            //         ctx.is_inference()
+            //     );
+            // }
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
             let expr_id = self.exprs.add_tmp(TypedExpr::FunctionPointer(FunctionPointerExpr {
@@ -8267,16 +8276,16 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         });
-        let is_concrete = self.functions.get(body_function_id).is_concrete;
-        if is_concrete && !ctx.is_inference() {
-            bc::compile_function(self, body_function_id)?;
-        } else {
-            debug!(
-                "Not compiling lambda {} due to {is_concrete} {}",
-                self.ident_str(name),
-                ctx.is_inference()
-            );
-        }
+        // let is_concrete = self.functions.get(body_function_id).is_concrete;
+        // if is_concrete && !ctx.is_inference() {
+        //     bc::compile_function(self, body_function_id)?;
+        // } else {
+        //     debug!(
+        //         "Not compiling lambda {} due to {is_concrete} {}",
+        //         self.ident_str(name),
+        //         ctx.is_inference()
+        //     );
+        // }
 
         let lambda_type_id = self.types.add_lambda(
             function_type,
@@ -9592,13 +9601,8 @@ impl TypedProgram {
                         true,
                     )?;
                     let false_expr = self.synth_bool(false, binary_op.span);
-                    let and = self.synth_if_else(
-                        BOOL_TYPE_ID,
-                        lhs,
-                        rhs,
-                        false_expr,
-                        binary_op.span,
-                    );
+                    let and =
+                        self.synth_if_else(BOOL_TYPE_ID, lhs, rhs, false_expr, binary_op.span);
                     Ok(and)
                 }
             }
@@ -9614,13 +9618,7 @@ impl TypedProgram {
                     true,
                 )?;
                 let true_expr = self.synth_bool(true, binary_op.span);
-                let or = self.synth_if_else(
-                    BOOL_TYPE_ID,
-                    lhs,
-                    true_expr,
-                    rhs,
-                    binary_op.span,
-                );
+                let or = self.synth_if_else(BOOL_TYPE_ID, lhs, true_expr, rhs, binary_op.span);
                 Ok(or)
             }
             // We convert most binary ops into ability function calls by rewriting to parsed calls
@@ -10505,8 +10503,8 @@ impl TypedProgram {
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let new_function_id = self.add_function(new_function);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
-            bc::compile_function(self, new_function_id)
-                .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
+            //bc::compile_function(self, new_function_id)
+            //    .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
             new_function_id
         };
         let dyn_function = self.get_function(dyn_function_id);
@@ -11870,7 +11868,6 @@ impl TypedProgram {
         if specialized_function.body_block.is_some() {
             return Ok(());
         }
-        let is_concrete = specialized_function.is_concrete;
         let specialized_return_type = self.get_function_type(function_id).return_type;
         let specialized_function_type = specialized_function.type_id;
         let specialized_function_scope_id = specialized_function.scope;
@@ -11916,11 +11913,11 @@ impl TypedProgram {
 
         self.get_function_mut(function_id).body_block = Some(typed_body);
 
-        if is_concrete {
-            if let Err(e) = bc::compile_function(self, function_id) {
-                return failf!(e.span, "Failed to compile bytecode for function: {}", e.message);
-            }
-        }
+        //if is_concrete {
+        //    if let Err(e) = bc::compile_function(self, function_id) {
+        //        return failf!(e.span, "Failed to compile bytecode for function: {}", e.message);
+        //    }
+        //}
 
         Ok(())
     }
@@ -12550,7 +12547,7 @@ impl TypedProgram {
                 Some("string") => None,
                 Some("List") => None,
                 Some("char") => None,
-                Some("Pointer") => match fn_name_str {
+                Some("ptr") => match fn_name_str {
                     "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
                     _ => None,
                 },
@@ -13432,11 +13429,7 @@ impl TypedProgram {
 
     /// `ensure_executable`: We need to run this function statically, so we need to compile
     ///                      bytecode not just for it, but for everything it calls, recursively.
-    pub fn eval_function_body(
-        &mut self,
-        declaration_id: FunctionId,
-        ensure_executable: bool,
-    ) -> TyperResult<()> {
+    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
         if function.body_block.is_some() {
             return Ok(());
@@ -13503,20 +13496,6 @@ impl TypedProgram {
         // Add the body now
         if let Some(body_block) = body_block {
             self.get_function_mut(declaration_id).body_block = Some(body_block);
-
-            // Compile bytecode
-            if is_concrete {
-                if let Err(e) = bc::compile_function(self, declaration_id) {
-                    return failf!(
-                        e.span,
-                        "Failed to compile bytecode for function: {}",
-                        e.message
-                    );
-                };
-                if ensure_executable {
-                    self.compile_all_pending_bytecode()?;
-                }
-            }
         }
 
         if is_debug {
@@ -14041,7 +14020,7 @@ impl TypedProgram {
             let AbilityImplFunction::FunctionId(impl_fn) = *impl_fn else {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
-            if let Err(e) = self.eval_function_body(impl_fn, false) {
+            if let Err(e) = self.eval_function_body(impl_fn) {
                 self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e.clone());
                 self.report_error(e);
             }
@@ -14074,7 +14053,7 @@ impl TypedProgram {
                 if let Some(function_declaration_id) =
                     self.function_ast_mappings.get(&parsed_function_id)
                 {
-                    if let Err(e) = self.eval_function_body(*function_declaration_id, false) {
+                    if let Err(e) = self.eval_function_body(*function_declaration_id) {
                         self.report_error(e);
                     };
                 }
@@ -14626,7 +14605,7 @@ impl TypedProgram {
         self.module_in_progress = Some(module_id);
 
         // Namespace phase
-        eprintln!(">> Phase 0 declare root namespace");
+        debug!(">> Phase 0 declare root namespace");
         let root_namespace_declare_result =
             self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
 
@@ -14665,7 +14644,10 @@ impl TypedProgram {
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
                 // Phase 1
-                eprintln!(">> Phase 0.5 compile pre namespace");
+                // nocommit 4 finish or remove the sticky message attempt
+                // self.phase = 0;
+                // self.msg(ErrorLevel::Info, format_args!(""));
+                debug!(">> Phase 0.5 compile pre namespace");
                 self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
                 pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
@@ -14688,7 +14670,7 @@ impl TypedProgram {
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
         let mut err_writer = stderr();
-        eprintln!(">> Phase 1 declare namespaces and run global #meta programs");
+        debug!(">> Phase 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             bail!(
@@ -14699,7 +14681,7 @@ impl TypedProgram {
         }
 
         // Pending Type declaration phase
-        eprintln!(">> Phase 2 declare types");
+        debug!(">> Phase 2 declare types");
         let type_defn_result =
             self.declare_types_in_namespace(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_defn_result {
@@ -14713,8 +14695,10 @@ impl TypedProgram {
                 self.errors.len()
             )
         }
-        // Type evaluation phase
-        eprintln!(">> Phase 3 evaluate types");
+
+        //self.phase = 3;
+        // self.info(format_args!(""));
+        debug!(">> Phase 3 evaluate types");
         let type_eval_result =
             self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_eval_result {
@@ -14750,7 +14734,7 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        eprintln!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
+        debug!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             eprintln!(
@@ -14766,7 +14750,7 @@ impl TypedProgram {
             self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
         );
 
-        eprintln!(">> Phase 5 bodies (functions, globals, abilities)");
+        debug!(">> Phase 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
         let unresolved_uses: Vec<_> =
@@ -14791,16 +14775,11 @@ impl TypedProgram {
             )
         }
 
-        eprintln!(">> Phase 6 specialize function bodies");
+        debug!(">> Phase 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
         }
-
-        self.tmp.print_usage("tmp end");
-        self.mem.print_usage("mem end");
-        self.types.mem.print_usage("types end");
-        self.bytecode.mem.print_usage("bytecode end");
 
         Ok(())
     }
@@ -15181,7 +15160,7 @@ impl TypedProgram {
             core!("char"),
             core!("bool"),
             core!("never"),
-            core!("Pointer"),
+            core!("ptr"),
             core!("f32"),
             core!("f64"),
             core!("Buffer"),
@@ -15278,7 +15257,7 @@ impl TypedProgram {
             Type::Unit => make_variant(get_ident!(self, "Unit"), None),
             Type::Char => make_variant(get_ident!(self, "Char"), None),
             Type::Bool => make_variant(get_ident!(self, "Bool"), None),
-            Type::Pointer => make_variant(get_ident!(self, "Pointer"), None),
+            Type::Pointer => make_variant(get_ident!(self, "Ptr"), None),
             Type::Integer(integer_type) => {
                 let int_kind_enum_value =
                     TypedProgram::make_int_kind(int_kind_enum, word_enum, *integer_type);
@@ -15774,11 +15753,54 @@ impl TypedProgram {
         panic!("not yet implemented: {}", msg.as_ref())
     }
 
+    pub fn sticky_update(&self) {
+        // Sticky line
+        use std::io::Write;
+        write!(std::io::stderr(), "\r>> Phase {}", self.phase).ok();
+    }
+
+    pub fn info(&self, format_args: std::fmt::Arguments<'_>) {
+        self.msg(ErrorLevel::Info, format_args)
+    }
+
+    pub fn msg(&self, level: ErrorLevel, format_args: std::fmt::Arguments<'_>) {
+        use std::io::Write;
+        let mut err = std::io::stderr();
+
+        // Clear line
+        writeln!(err, "\r{}\r", " ".repeat(80)).ok();
+
+        write!(err, "[{}] {}", level, format_args).ok();
+
+        // Sticky line
+        write!(err, "\r>> Phase {}", self.phase).ok();
+    }
+
     // Timing
     //
-    pub fn print_timing_info(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    pub fn print_timing_info(
+        &self,
+        module_name: &str,
+        module_elapsed_ms: u64,
+        out: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
         let infer_ms = self.timing.total_infer_nanos as f64 / 1_000_000.0;
         let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
+        eprintln!("module {} took {}ms", module_name, module_elapsed_ms);
+        eprintln!("\t{} expressions", self.exprs.len());
+        eprintln!("\t{} statements", self.stmts.len());
+        eprintln!("\t{} functions", self.functions.len());
+        eprintln!("\t{} types", self.types.type_count());
+        eprintln!("\t{} idents", self.ast.idents.len());
+        eprintln!(
+            "\t{} instructions, {}ms bc",
+            self.bytecode.instrs.len(),
+            self.timing.total_bytecode_nanos / 1_000_000
+        );
+        self.tmp.print_usage("\tmem tmp used");
+        self.mem.print_usage("\tmem mem used");
+        self.types.mem.print_usage("\tmem types used");
+        self.bytecode.mem.print_usage("\tmem bytecode used");
         writeln!(
             out,
             "\t{} infers: {:.2}ms. avg: {:.2}ms ",

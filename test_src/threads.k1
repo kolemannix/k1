@@ -9,13 +9,13 @@ let MODULE_INFO: core/k1/ModuleManifest = {
 
 let* tls myvar: *mut i32 = 0;
 
-fn run(input: *mut iword): Pointer {
+fn run(input: *mut iword): ptr {
   let value = myvar.*;
   assertEquals(input.*, 42);
   myvar <- myvar.* + 1;
   input <- input.* + 1;
   assertEquals(myvar.*, 1);
-  input as Pointer
+  input as ptr
 }
 
 fn main(): i32 {
@@ -28,7 +28,7 @@ fn main(): i32 {
   std/thread/join(thread.*, output);
 
   // output returned has been incremented 
-  assertEquals(input as Pointer, output.* as Pointer);
+  assertEquals(input as ptr, output.* as ptr);
   assertEquals(output.*.*, 43);
 
   // myvar is unchanged by the thread since its threadlocal

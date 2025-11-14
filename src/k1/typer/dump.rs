@@ -190,7 +190,7 @@ impl TypedProgram {
                 FloatType::F64 => write!(w, "f64"),
             },
             Type::Bool => w.write_str("bool"),
-            Type::Pointer => w.write_str("Pointer"),
+            Type::Pointer => w.write_str("ptr"),
             Type::Struct(struc) => {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;

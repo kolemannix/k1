@@ -5,31 +5,31 @@ ns mem {
 
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
-    malloc:  *(\(uword, uword) -> Pointer),
-    zalloc:  *(\(uword, uword) -> Pointer),
-    realloc: *(\(Pointer, uword, uword, uword) -> Pointer),
-    free:    *(\(Pointer, uword, uword) -> unit),
+    malloc:  *(\(uword, uword) -> ptr),
+    zalloc:  *(\(uword, uword) -> ptr),
+    realloc: *(\(ptr, uword, uword, uword) -> ptr),
+    free:    *(\(ptr, uword, uword) -> unit),
   }
 
-  fn virtualAlloc(size: uword): Pointer {
+  fn virtualAlloc(size: uword): ptr {
     // Workaround for not having implemented virtual alloc in the VM yet.
     if k1/IS_STATIC { alloc(size, 8) } else {
       let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
       let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
       let addr = posix/mmap(
-        addr = Pointer/NULL,
+        addr = ptr/NULL,
         len = size,
         prot = rw,
         flags = privateAnon,
         fd = -1,
         offset = 0
       );
-      if addr == (posix/MAP_FAILED as Pointer) crash("mmap failed");
+      if addr == (posix/MAP_FAILED as ptr) crash("mmap failed");
       addr
     }
   }
 
-  fn virtualRelease(base: Pointer, len: uword): unit {
+  fn virtualRelease(base: ptr, len: uword): unit {
     if k1/IS_STATIC { free(base, len, 8) } else {
       let result = posix/munmap(base, len);
       if result == -1 crash("munmap of ptr {base} x {len} failed");
@@ -89,7 +89,7 @@ ns mem {
       }
     }
 
-    fn alloc(self: AllocMode, size: uword, align: uword): Pointer {
+    fn alloc(self: AllocMode, size: uword, align: uword): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/allocZeroed(size, align),
@@ -109,7 +109,7 @@ ns mem {
       }
     }
 
-    fn realloc(self: AllocMode, oldPtr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer {
+    fn realloc(self: AllocMode, oldPtr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
@@ -123,7 +123,7 @@ ns mem {
       }
     }
 
-    fn free(self: AllocMode, ptr: Pointer, size: uword, align: uword): unit {
+    fn free(self: AllocMode, ptr: ptr, size: uword, align: uword): unit {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/free(ptr, size, align),

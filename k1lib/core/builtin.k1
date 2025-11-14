@@ -25,7 +25,7 @@ deftype bool    = builtin
 /// Used to signal termination and enables control flow analysis
 deftype never   = builtin
 
-deftype Pointer = builtin
+deftype ptr = builtin
 
 deftype f32 = builtin
 deftype f64 = builtin
@@ -78,7 +78,7 @@ ns types {
     Word(either UWord, IWord),
     Float(either F32, F64),
     Bool,
-    Pointer,
+    Ptr,
     String,
     Reference({ innerTypeId: u64, mutable: bool }),
     Array({
@@ -118,12 +118,12 @@ ns types {
 
   deftype Any = {
     typeId: u64,
-    value: Pointer
+    value: ptr
   }
 
 
   fn makeAny[T](t: *T): Any {
-    { typeId: typeId[T](), value: t as Pointer }
+    { typeId: typeId[T](), value: t as ptr }
   }
 
 }
@@ -360,7 +360,7 @@ ns Buffer {
   fn equalsBits[T](self: Buffer[T], other: Buffer[T]): bool {
     if self.len == 0 and other.len == 0 true
     else if self.len != other.len       false else {
-      mem/equals(self.dataPointer(), other.dataPointer(), self.sizeBytes())
+      mem/equals(self.dataPtr(), other.dataPtr(), self.sizeBytes())
     }
   }
 }
@@ -432,22 +432,22 @@ impl Print for string {
 ns mem {
 
   // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
-  intern fn alloc(size: uword, align: uword): Pointer
-  intern fn allocZeroed(size: uword, align: uword): Pointer
-  intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-  intern fn free(ptr: Pointer, size: uword, align: uword): unit
+  intern fn alloc(size: uword, align: uword): ptr
+  intern fn allocZeroed(size: uword, align: uword): ptr
+  intern fn realloc(ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr
+  intern fn free(ptr: ptr, size: uword, align: uword): unit
 
   intern fn copy(
-    dst: Pointer,
-    src: Pointer,
+    dst: ptr,
+    src: ptr,
     count: uword
   ): unit
   intern fn set(
-    dst: Pointer,
+    dst: ptr,
     value: u8,
     count: uword
   ): unit
-  intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+  intern fn equals(p1: ptr, p2: ptr, size: uword): bool
 
   intern fn zeroed[T](): T
 
@@ -504,30 +504,30 @@ ns sys {
   intern fn exit(code: i32): never
 }
 
-ns Pointer {
-  let NULL: Pointer = 0: uword as Pointer;
+ns ptr {
+  let NULL: ptr = 0: uword as ptr;
 
-  fn isNull(self: Pointer): bool {
+  fn isNull(self: ptr): bool {
     self as uword == 0
   }
 
-  fn r[T](self: Pointer): *T { self as *T }
-  fn rw[T](self: Pointer): *mut T { self as *mut T }
+  fn r[T](self: ptr): *T { self as *T }
+  fn rw[T](self: ptr): *mut T { self as *mut T }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
-  intern fn refAtIndex[T](self: Pointer, index: uword): *mut T
+  intern fn refAtIndex[T](self: ptr, index: uword): *mut T
 
-  fn addBytes(self: Pointer, offset: uword): Pointer { 
-    (self as uword + offset) as Pointer
+  fn addBytes(self: ptr, offset: uword): ptr { 
+    (self as uword + offset) as ptr
   }
 
-  fn subBytes(self: Pointer, offset: uword): Pointer { 
-    (self as uword - offset) as Pointer
+  fn subBytes(self: ptr, offset: uword): ptr { 
+    (self as uword - offset) as ptr
   }
 
-  fn diff(self: Pointer, other: Pointer): iword {
+  fn diff(self: ptr, other: ptr): iword {
     (self as iword) - (other as iword)
   }
 
@@ -536,14 +536,14 @@ ns Pointer {
     Bitwise/bitAnd(baseAddress + mask, mask.bitNot())
   }
 
-  fn aligned(self: Pointer, alignBytes: uword): Pointer {
-    alignAddr(self as uword, alignBytes) as Pointer
+  fn aligned(self: ptr, alignBytes: uword): ptr {
+    alignAddr(self as uword, alignBytes) as ptr
   }
 
 }
 
-impl Equals for Pointer {
-  fn equals(self: Pointer, other: Pointer): bool {
+impl Equals for ptr {
+  fn equals(self: ptr, other: ptr): bool {
     self as uword == other as uword
   }
 }
@@ -579,8 +579,8 @@ ns Array {
   fn getBase[T, N: static uword](array: *mut Array[T, N]): *mut T {
     array.getRef(0)
   }
-  fn basePtr[T, N: static uword](array: *mut Array[T, N]): Pointer {
-    array as Pointer
+  fn basePtr[T, N: static uword](array: *mut Array[T, N]): ptr {
+    array as ptr
   }
   fn sizeBytes[T, N: static uword](array: Array[T, N]): uword {
     types/sizeOf[Array[T, N]]()
@@ -626,8 +626,8 @@ ns Array {
   let STDOUT: i32 = 1;
   let STDERR: i32 = 2;
 
-  extern("read") fn read(fileNo: i32, buffer: Pointer, count: uword): iword
-  extern("write") fn write(fileNo: i32, data: Pointer, count: uword): iword
+  extern("read") fn read(fileNo: i32, buffer: ptr, count: uword): iword
+  extern("write") fn write(fileNo: i32, data: ptr, count: uword): iword
   
   // These may only hold on macos; temporary until we have a bindings generation system
   let MAP_FILE   : i32 = 0x0000;
@@ -646,10 +646,10 @@ ns Array {
   // Pages may be executed.
   let PROT_EXEC: i32 = 0x4;
   let MAP_FAILED: iword = -1;
-  extern("mmap") fn mmap(addr: Pointer, len: uword, prot: i32, flags: i32, fd: i32, offset: i64): Pointer
+  extern("mmap") fn mmap(addr: ptr, len: uword, prot: i32, flags: i32, fd: i32, offset: i64): ptr
 
-  extern("munmap") fn munmap(addr: Pointer, len: uword): i32
-  // extern("posix_madvise") fn madvise(addr: Pointer, len: uword, advice: i32): i32
+  extern("munmap") fn munmap(addr: ptr, len: uword): i32
+  // extern("posix_madvise") fn madvise(addr: ptr, len: uword, advice: i32): i32
 
 }
 
@@ -658,23 +658,23 @@ ns libc {
 
   extern("exit") fn exit(code: i32): never
 
-  extern("memcmp") fn memcmp(s1: Pointer, s2: Pointer, size: uword): i32
+  extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: uword): i32
 
-  extern("malloc") fn malloc(size: uword): Pointer
-  extern("calloc") fn calloc(count: uword, size: uword): Pointer
-  extern("free") fn free(ptr: Pointer): unit
-  extern("realloc") fn realloc(ptr: Pointer, size: uword): Pointer
+  extern("malloc") fn malloc(size: uword): ptr
+  extern("calloc") fn calloc(count: uword, size: uword): ptr
+  extern("free") fn free(ptr: ptr): unit
+  extern("realloc") fn realloc(ptr: ptr, size: uword): ptr
 
   extern("__errno_location") fn errno(): *i32
 
   ns files {
     let SEEK_END: i32 = 2;
     let SEEK_SET: i32 = 0;
-    extern("fopen")  fn fopen(pathCString: Pointer, modeCString: Pointer): Pointer
-    extern("fseek")  fn fseek(fileDesc: Pointer, offset: i64, whence: i32): i32
-    extern("fread")  fn fread(buffer: Pointer, size: uword, num: uword, stream: Pointer): u64
-    extern("fclose") fn fclose(fileDesc: Pointer): i32
-    extern("ftell")  fn ftell(fileDesc: Pointer): i64
+    extern("fopen")  fn fopen(pathCString: ptr, modeCString: ptr): ptr
+    extern("fseek")  fn fseek(fileDesc: ptr, offset: i64, whence: i32): i32
+    extern("fread")  fn fread(buffer: ptr, size: uword, num: uword, stream: ptr): u64
+    extern("fclose") fn fclose(fileDesc: ptr): i32
+    extern("ftell")  fn ftell(fileDesc: ptr): i64
   }
 
 }
@@ -693,7 +693,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     let s = "exiting (nostd)\n\0";
     posix/write(
       fileNo = 1,
-      data = s.view().dataPointer(),
+      data = s.view().dataPtr(),
       count = s.view().len() - 1uword,
     );
     sys/exit(1)
@@ -701,7 +701,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     //let s = "exiting static\n\0";
     //posix/write(
     //  fileNo = 1,
-    //  data = s.buffer.data as Pointer,
+    //  data = s.buffer.data as ptr,
     //  count = s.buffer.len - 1,
     //  offset = 0
     //);

@@ -246,7 +246,7 @@ impl TypedProgram {
         let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
         let variable_id = self.variables.add(variable);
         let variable_expr =
-            self.exprs.add(TypedExpr::Variable(VariableExpr {  variable_id }), type_id, span);
+            self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
