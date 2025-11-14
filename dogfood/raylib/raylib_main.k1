@@ -18,14 +18,14 @@ ns raylib {
   deftype Rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
-  extern("InitWindow") fn init(width: i32, height: i32, name: Pointer): unit
+  extern("InitWindow") fn init(width: i32, height: i32, name: ptr): unit
   extern("CloseWindow") fn CloseWindow(): unit
   extern("WindowShouldClose") fn WindowShouldClose(): bool
 
   extern("BeginDrawing") fn BeginDrawing(): unit
   extern("EndDrawing") fn EndDrawing(): unit
   extern("ClearBackground") fn ClearBackground(color: u32): unit
-  extern("DrawText") fn DrawText(text: Pointer, posX: i32, posY: i32, color: u32): unit
+  extern("DrawText") fn DrawText(text: ptr, posX: i32, posY: i32, color: u32): unit
 
   extern("SetTargetFPS") fn SetTargetFPS(fps: i32): unit
   extern("GetFPS") fn GetFPS(): i32

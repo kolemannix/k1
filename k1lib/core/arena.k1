@@ -6,7 +6,7 @@ use core/types/alignOf
 
 // TODO: Move to <header> . <mem block> model vs separate struct
 deftype Arena = {
-  basePtr: Pointer,
+  basePtr: ptr,
   curAddr: uword,
   maxAddr: uword
 }
@@ -23,8 +23,8 @@ ns Arena {
     self.curAddr - (self.basePtr as uword)
   }
 
-  fn _virtual(usageHintMb: uword): Pointer {
-    let basePtr: Pointer = mem/virtualAlloc(gb);
+  fn _virtual(usageHintMb: uword): ptr {
+    let basePtr: ptr = mem/virtualAlloc(gb);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
     // nocommit arena advise sequential
     // posix/madvise();
@@ -32,7 +32,7 @@ ns Arena {
   }
 
   fn default(): Arena {
-    let basePtr: Pointer = if k1/IS_STATIC mem/alloc(size = 10 * mb, align = 8) else _virtual(usageHintMb = 10);
+    let basePtr: ptr = if k1/IS_STATIC mem/alloc(size = 10 * mb, align = 8) else _virtual(usageHintMb = 10);
     //let header: *mut Arena = basePtr as *mut Arena;
     //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {
@@ -57,15 +57,15 @@ ns Arena {
     }
   }
 
-  fn pushLayout(self: *mut Arena, size: uword, align: uword): Pointer {
-    let dataStart = Pointer/alignAddr(self.curAddr, align);
+  fn pushLayout(self: *mut Arena, size: uword, align: uword): ptr {
+    let dataStart = ptr/alignAddr(self.curAddr, align);
     let newEnd = dataStart + size;
     if newEnd > self.maxAddr {
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
 
     self.curAddr* <- newEnd;
-    dataStart as Pointer
+    dataStart as ptr
   }
 
   fn pushUninit[T](self: *mut Arena): *mut T {
@@ -85,7 +85,7 @@ ns Arena {
     let size = ts.buffer.sizeBytes();
     let align = types/alignOf[T]();
     let base = self.pushLayout(size, align);
-    let buffer: Buffer[T] = Buffer/fromRawPointerAndCount[T](base, ts.len());
+    let buffer: Buffer[T] = Buffer/fromPtrAndCount[T](base, ts.len());
     Buffer/copyFrom(src = ts.buffer, dst = buffer);
     buffer
   }

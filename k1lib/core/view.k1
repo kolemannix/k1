@@ -22,8 +22,8 @@ ns View {
     self.buffer
   }
 
-  fn dataPointer[T](self: View[T]): Pointer {
-    self.buffer.dataPointer()
+  fn dataPtr[T](self: View[T]): ptr {
+    self.buffer.dataPtr()
   }
 
   fn copyFromArray[T, N: static uword](array: *Array[T, N]): View[T] {

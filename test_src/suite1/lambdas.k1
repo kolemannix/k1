@@ -69,9 +69,9 @@ fn thunksTest(): unit {
 
 fn test(): unit {
 
-  assert(staticAddOne.toRef() as Pointer == staticAddOne.toRef() as Pointer);
+  assert(staticAddOne.toRef() as ptr == staticAddOne.toRef() as ptr);
 
-  assert(staticAddOne.toRef() as Pointer != staticAddTwo.toRef() as Pointer);
+  assert(staticAddOne.toRef() as ptr != staticAddTwo.toRef() as ptr);
 
   let staticAddOneVar = staticAddOne.toRef();
   let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);

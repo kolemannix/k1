@@ -69,7 +69,7 @@ ns List {
   fn copyToArray[T, N: static uword](self: List[T], count: N): *mut Array[T, N] {
     let countVal = count.fromStatic();
     assertEquals(self.len, countVal);
-    let base: Pointer = self.asBuffer().cloned().dataPointer();
+    let base: ptr = self.asBuffer().cloned().dataPtr();
     base as *mut Array[T, N]
   }
 

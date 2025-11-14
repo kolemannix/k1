@@ -33,7 +33,7 @@ fn compile(programText: string): *TfObj {
   crash("todo")
 }
 
-fn main(argc: u32, argv: Pointer): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let context alloc: mem/AllocMode = { kind: .SystemHeap };
 
   let args: View[string] = core/sys/parseMainArgs(argc, argv);

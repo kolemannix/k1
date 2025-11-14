@@ -2,7 +2,7 @@
 // All rights reserved.
 
 // TODO: CString type
-deftype alias CString = Pointer
+deftype alias CString = ptr
 ns CString { 
 }
 
@@ -132,17 +132,17 @@ ns string {
     self.substring(0, other.len()) == other
   }
 
-  fn dataPointer(self: string): Pointer {
-    self.view.dataPointer()
+  fn dataPtr(self: string): ptr {
+    self.view.dataPtr()
   }
 
-  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: Pointer, len: uword } {
-    if self.isEmpty()                  { ptr: "\0".dataPointer(), len: 0 }
-    else if self.last() is .Some('\0') { ptr: self.dataPointer(), len: self.len() - 1 }
-    else                               { ptr: self.appendChar('\0').dataPointer(), len: self.len() }
+  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: ptr, len: uword } {
+    if self.isEmpty()                  { ptr: "\0".dataPtr(), len: 0 }
+    else if self.last() is .Some('\0') { ptr: self.dataPtr(), len: self.len() - 1 }
+    else                               { ptr: self.appendChar('\0').dataPtr(), len: self.len() }
   }
 
-  fn wrapCString(cString: Pointer): string {
+  fn wrapCString(cString: ptr): string {
     let i = 0: uword;
     loop {
       let c = cString.refAtIndex[char](i);
@@ -152,14 +152,14 @@ ns string {
         i := i + 1;
       }
     };
-    let buffer = Buffer/fromRawPointerAndCount[char](
+    let buffer = Buffer/fromPtrAndCount[char](
       count = i,
       pointer = cString
     );
     wrapBuffer(buffer)
   }
 
-  fn fromCString(cString: Pointer): string {
+  fn fromCString(cString: ptr): string {
     let* chars = List/empty[char]();
     let i = 0: uword;
     loop {

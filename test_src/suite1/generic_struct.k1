@@ -58,11 +58,11 @@ fn test(): unit {
   takesPolyAuPair[_, _]({ t: some(42), u: some(true) });
 
   assert(
-    testCompile(takesPolyAuPair[Pointer, _]({ t: some(42), u: some(true) }))
+    testCompile(takesPolyAuPair[ptr, _]({ t: some(42), u: some(true) }))
     is .Some(_)
   );
   assert(
-    testCompile(takesPolyAuPair[_, Pointer]({ t: some(42), u: some(true) }))
+    testCompile(takesPolyAuPair[_, ptr]({ t: some(42), u: some(true) }))
     is .Some(_)
   );
 

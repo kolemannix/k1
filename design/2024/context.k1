@@ -7,7 +7,7 @@ type Context = __struct_combine({ symbols: Symbols }, DefaultContext)
 
 // Idea for vale-style safe pointers
 // type TrackedAllocation =  {
-//   ptr: Pointer, fingerprint: u64
+//   ptr: ptr, fingerprint: u64
 // }
 
 How do we call a function from another namespace if our context doesn't have

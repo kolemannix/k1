@@ -34,7 +34,7 @@ fn test(): unit {
   let* i32Ptr: *i32 = zeroed();
   assertEquals(i32Ptr.*, 0);
   let i32Null: *i32 = zeroed();
-  assert(i32Null as Pointer == Pointer/NULL);
+  assert(i32Null as ptr == ptr/NULL);
 
   let point: { x: u8, y: u8, z: i32 } = zeroed();
   assertEquals(point.x, 0);
