@@ -1120,7 +1120,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     if !builder_variable.indirect {
                         b.k1.ice_with_span(
                             "Expect an indirect variable for value assignment",
-                            v.span,
+                            b.k1.exprs.get_span(ass.destination),
                         )
                     };
                     let variable_value = builder_variable.value;
@@ -1170,7 +1170,8 @@ fn compile_expr(
     expr: TypedExprId,
 ) -> TyperResult<Value> {
     let prev_span = b.cur_span;
-    b.cur_span = b.k1.exprs.get_span(expr);
+    let expr_span = b.k1.exprs.get_span(expr);
+    b.cur_span = expr_span;
     let b = &mut scopeguard::guard(b, |b| b.cur_span = prev_span);
     let e = b.k1.exprs.get(expr).clone();
     let expr_type = b.k1.exprs.get_type(expr);
@@ -1307,9 +1308,9 @@ fn compile_expr(
                                 .map(|bv| format!("{} {}", bv.id, bv.value))
                                 .join("\n")
                         );
-                        b.k1.ice_with_span("Missing variable", variable_expr.span)
+                        b.k1.ice_with_span("Missing variable", expr_span)
                     };
-                    let var_type_pt_id = b.get_physical_type(variable_expr.type_id);
+                    let var_type_pt_id = b.get_physical_type(expr_type);
                     let var_value = var.value;
                     if var.indirect {
                         let loaded = load_or_copy(
@@ -1331,7 +1332,7 @@ fn compile_expr(
         }
         TypedExpr::Deref(deref) => {
             let src = compile_expr(b, None, deref.target)?;
-            let target_pt = b.get_physical_type(deref.type_id);
+            let target_pt = b.get_physical_type(expr_type);
             let loaded = load_or_copy(b, target_pt, dst, src, true, "lang deref");
             Ok(loaded)
         }
@@ -1676,69 +1677,6 @@ fn compile_expr(
                     ))
                 }
             }
-        }
-        TypedExpr::LogicalAnd(and) => {
-            let rhs_check_name = mformat!(b.k1.bytecode.mem, "and_rhs__{}", expr.as_u32());
-            let rhs_check = b.push_block(rhs_check_name);
-            let final_block_name = mformat!(b.k1.bytecode.mem, "and_end__{}", expr.as_u32());
-            let final_block = b.push_block(final_block_name);
-
-            let mut incomings = b.k1.bytecode.mem.new_list(2);
-
-            let lhs = compile_expr(b, None, and.lhs)?;
-            let lhs_end_block = b.cur_block;
-            b.push_jump_if(lhs, rhs_check, final_block, "logical and");
-            incomings.push(CameFromCase { from: lhs_end_block, value: Value::FALSE });
-
-            b.goto_block(rhs_check);
-            let rhs = compile_expr(b, None, and.rhs)?;
-            let rhs_incoming = b.cur_block;
-            incomings.push(CameFromCase { from: rhs_incoming, value: rhs });
-            b.push_jump(final_block, "");
-
-            b.goto_block(final_block);
-            let incomings_handle = b.k1.bytecode.mem.vec_to_mslice(&incomings);
-            let result_came_from = b.push_inst(
-                Inst::CameFrom {
-                    t: PhysicalType::Scalar(ScalarType::U8),
-                    incomings: incomings_handle,
-                },
-                "logical and result",
-            );
-            Ok(result_came_from.as_value())
-        }
-        TypedExpr::LogicalOr(or) => {
-            // Short-circuiting control-flow Or
-            let rhs_check_name = mformat!(b.k1.bytecode.mem, "or_rhs__{}", expr.as_u32());
-            let rhs_check = b.push_block(rhs_check_name);
-            let final_block_name = mformat!(b.k1.bytecode.mem, "or_end__{}", expr.as_u32());
-            let final_block = b.push_block(final_block_name);
-
-            let mut incomings = b.k1.bytecode.mem.new_list(2);
-
-            let lhs = compile_expr(b, None, or.lhs)?;
-            let lhs_end_block = b.cur_block;
-            b.push_jump_if(lhs, final_block, rhs_check, "logical or");
-            incomings.push(CameFromCase { from: lhs_end_block, value: Value::TRUE });
-
-            b.goto_block(rhs_check);
-            let rhs = compile_expr(b, None, or.rhs)?;
-            let rhs_incoming = b.cur_block;
-            incomings.push(CameFromCase { from: rhs_incoming, value: rhs });
-            b.push_jump(final_block, "logical or end");
-
-            b.goto_block(final_block);
-            let incomings_handle = b.k1.bytecode.mem.vec_to_mslice(&incomings);
-            let result_came_from = b
-                .push_inst(
-                    Inst::CameFrom {
-                        t: PhysicalType::Scalar(ScalarType::U8),
-                        incomings: incomings_handle,
-                    },
-                    "logical or result",
-                )
-                .as_value();
-            Ok(result_came_from)
         }
         TypedExpr::WhileLoop(w) => {
             let cond_name = mformat!(b.k1.bytecode.mem, "while_cond__{}", expr.as_u32());

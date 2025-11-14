@@ -644,7 +644,7 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
 
 impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn init_debug(
-        ctx: &'ctx Context,
+        _ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
         module: &TypedProgram,
         optimize: bool,
@@ -2070,7 +2070,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 match self.k1.types.is_aggregate_repr(*type_id) {
                     true => {
                         todo!(
-                            "nocommit generate a zero region global; could we have a single zero region as big as needed?"
+                            "generate a zero region global; could we have a single zero region as big as needed? For arrays, detect 'zero' pattern and append"
                         )
                     }
                     false => zero_rich,
@@ -2233,10 +2233,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         match expr {
             TypedExpr::Variable(ir_var) => {
                 if let Some(variable_value) = self.variable_to_value.get(&ir_var.variable_id) {
-                    let llvm_type = self.codegen_type(ir_var.type_id)?;
+                    let llvm_type = self.codegen_type(expr_type)?;
                     debug!(
                         "codegen variable {} got pointee type {:?}",
-                        self.k1.type_id_to_string(ir_var.type_id),
+                        self.k1.type_id_to_string(expr_type),
                         &llvm_type
                     );
                     Ok(self.load_variable_value(&llvm_type, *variable_value).into())
@@ -2336,67 +2336,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 }
             }
             TypedExpr::Match(match_expr) => self.codegen_match(expr_id, match_expr),
-            TypedExpr::LogicalAnd(and_expr) => {
-                let lhs = return_void!(self.codegen_expr(and_expr.lhs)?).into_int_value();
-
-                let lhs_i1 = self.bool_to_i1(lhs, "");
-                let short_circuit_branch =
-                    self.build_conditional_branch(lhs_i1, "rhs_check", "short_circuit");
-                let phi_destination = self.append_basic_block("and_result");
-
-                // label: rhs_check; lhs was true
-                self.builder.position_at_end(short_circuit_branch.then_block);
-                let rhs = return_void!(self.codegen_expr(and_expr.rhs)?).into_int_value();
-
-                // Don't forget to grab the actual incoming block in case bin_op.rhs did branching!
-                let rhs_incoming = self.builder.get_insert_block().unwrap();
-                self.builder.build_unconditional_branch(phi_destination).unwrap();
-                // return rhs
-
-                // label: short_circuit; lhs was false
-                self.builder.position_at_end(short_circuit_branch.else_block);
-                self.builder.build_unconditional_branch(phi_destination).unwrap();
-                // return lhs aka false
-
-                // label: and_result
-                self.builder.position_at_end(phi_destination);
-                let result =
-                    self.builder.build_phi(self.builtin_types.boolean, "bool_and").unwrap();
-                result.add_incoming(&[
-                    (&rhs, rhs_incoming),
-                    (&self.builtin_types.false_value, short_circuit_branch.else_block),
-                ]);
-                Ok(result.as_basic_value().into())
-            }
-            TypedExpr::LogicalOr(or_expr) => {
-                let lhs = return_void!(self.codegen_expr(or_expr.lhs)?).into_int_value();
-
-                let lhs_i1 = self.bool_to_i1(lhs, "");
-                let start_block = self.builder.get_insert_block().unwrap();
-                let short_circuit_branch =
-                    self.build_conditional_branch(lhs_i1, "or_result", "rhs_check");
-                let block_result = short_circuit_branch.then_block;
-                let block_rhs_check = short_circuit_branch.else_block;
-
-                self.builder.position_at_end(block_rhs_check);
-                let rhs = return_void!(self.codegen_expr(or_expr.rhs)?).into_int_value();
-                self.builder.build_unconditional_branch(block_result).unwrap();
-
-                self.builder.position_at_end(block_result);
-                let phi = self.builder.build_phi(self.builtin_types.boolean, "").unwrap();
-                phi.add_incoming(&[
-                    (&self.builtin_types.true_value, start_block),
-                    (&rhs.as_basic_value_enum(), block_rhs_check),
-                ]);
-
-                Ok(phi.as_basic_value().into())
-            }
             TypedExpr::WhileLoop(while_expr) => self.codegen_while_expr(while_expr),
             TypedExpr::LoopExpr(loop_expr) => self.codegen_loop_expr(loop_expr, expr_type),
             TypedExpr::Deref(deref) => {
                 let value = self.codegen_expr_basic_value(deref.target)?;
                 let value_ptr = value.into_pointer_value();
-                let pointee_ty = self.codegen_type(deref.type_id)?;
+                let pointee_ty = self.codegen_type(expr_type)?;
                 debug!(
                     "Dereference: type {} w/ llvm value {} as llvm type {}",
                     self.k1.expr_to_string_with_type(deref.target),
@@ -3508,7 +3453,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         else {
                             self.k1.ice_with_span(
                                 "Expect an indirect variable for value assignment",
-                                v.span,
+                                self.k1.exprs.get_span(assignment.destination),
                             )
                         };
                         pointer_value

@@ -966,16 +966,12 @@ pub(crate) enum TypeUnificationResult {
 #[derive(Clone)]
 pub struct VariableExpr {
     pub variable_id: VariableId,
-    pub type_id: TypeId,
-    pub span: SpanId,
 }
-impl_copy_if_small!(12, VariableExpr);
+impl_copy_if_small!(4, VariableExpr);
 
 #[derive(Clone, Copy)]
 pub struct DerefExpr {
     pub target: TypedExprId,
-    pub type_id: TypeId,
-    pub span: SpanId,
 }
 
 #[derive(Clone)]
@@ -1370,20 +1366,6 @@ pub struct TypedMatchExpr {
 }
 
 #[derive(Clone, Copy)]
-pub struct TypedLogicalAnd {
-    pub lhs: TypedExprId,
-    pub rhs: TypedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Clone, Copy)]
-pub struct TypedLogicalOr {
-    pub lhs: TypedExprId,
-    pub rhs: TypedExprId,
-    pub span: SpanId,
-}
-
-#[derive(Clone, Copy)]
 pub struct StaticConstantExpr {
     pub value_id: StaticValueId,
     pub is_typed_as_static: bool,
@@ -1410,16 +1392,6 @@ pub enum TypedExpr {
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     Match(TypedMatchExpr),
-    /// Takes 2 boolean expressions and runs the 2nd only if the first is true, returning the logical AND
-    /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
-    /// It could possibly be a macro one day, desugaring to an if/else.
-    /// Actually, it can already desugar to an if/else! nocommit(3)
-    LogicalAnd(TypedLogicalAnd),
-    /// Takes 2 boolean expressions and runs the 2nd only if the first is false, returning the logical OR
-    /// of the two. Due to its nature as a control flow construct, it has to be an expression kind
-    /// It could possibly be a macro one day, desugaring to an if/else.
-    /// Actually, it can already desugar to an if/else! nocommit(3)
-    LogicalOr(TypedLogicalOr),
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
@@ -1472,8 +1444,6 @@ impl TypedExpr {
             TypedExpr::Block(_) => "block",
             TypedExpr::Call { .. } => "call",
             TypedExpr::Match(_) => "match",
-            TypedExpr::LogicalAnd(_) => "and",
-            TypedExpr::LogicalOr(_) => "or",
             TypedExpr::WhileLoop(_) => "while_loop",
             TypedExpr::LoopExpr(_) => "loop",
             TypedExpr::EnumConstructor(_) => "enum_constructor",
@@ -1496,13 +1466,11 @@ impl TypedExpr {
             TypedExpr::Struct(_struc) => TypeId::PENDING,
             TypedExpr::StructFieldAccess(_field_access) => TypeId::PENDING,
             TypedExpr::ArrayGetElement(_ag) => TypeId::PENDING,
-            TypedExpr::Variable(var) => var.type_id,
-            TypedExpr::Deref(deref) => deref.type_id,
+            TypedExpr::Variable(_) => TypeId::PENDING,
+            TypedExpr::Deref(_) => TypeId::PENDING,
             TypedExpr::Block(_b) => TypeId::PENDING,
             TypedExpr::Call { return_type, .. } => *return_type,
             TypedExpr::Match(_match_) => TypeId::PENDING,
-            TypedExpr::LogicalAnd(_) => BOOL_TYPE_ID,
-            TypedExpr::LogicalOr(_) => BOOL_TYPE_ID,
             TypedExpr::WhileLoop(_) => TypeId::PENDING,
             TypedExpr::LoopExpr(_loop_expr) => TypeId::PENDING,
             TypedExpr::EnumConstructor(_enum_cons) => TypeId::PENDING,
@@ -1524,13 +1492,11 @@ impl TypedExpr {
             TypedExpr::Struct(_struc) => SpanId::NONE,
             TypedExpr::StructFieldAccess(_field_access) => SpanId::NONE,
             TypedExpr::ArrayGetElement(_ag) => SpanId::NONE,
-            TypedExpr::Variable(var) => var.span,
-            TypedExpr::Deref(deref) => deref.span,
+            TypedExpr::Variable(_) => SpanId::NONE,
+            TypedExpr::Deref(_) => SpanId::NONE,
             TypedExpr::Block(_b) => SpanId::NONE,
             TypedExpr::Call { span, .. } => *span,
             TypedExpr::Match(_match_) => SpanId::NONE,
-            TypedExpr::LogicalAnd(a) => a.span,
-            TypedExpr::LogicalOr(o) => o.span,
             TypedExpr::WhileLoop(_) => SpanId::NONE,
             TypedExpr::LoopExpr(_loop_expr) => SpanId::NONE,
             TypedExpr::EnumConstructor(_e) => SpanId::NONE,
@@ -2458,7 +2424,7 @@ pub struct TypedProgram {
 
     pub timing: Timing,
 
-    pub global_id_k1_arena: Option<TypedGlobalId>
+    pub global_id_k1_arena: Option<TypedGlobalId>,
 }
 
 pub struct Timing {
@@ -2604,7 +2570,7 @@ impl TypedProgram {
                 total_vm_nanos: 0,
                 total_bytecode_nanos: 0,
             },
-            global_id_k1_arena: None
+            global_id_k1_arena: None,
         }
     }
 
@@ -3834,7 +3800,8 @@ impl TypedProgram {
 
                             let _result =
                                 self.eval_type_defn(*parsed_type_defn_id, defn_info.scope)?;
-                            // nocommit: Just re-calling ourself after resolution is a hack, or is it?
+
+                            // Just re-call this function from the top now that the type exists. (hack? idk)
                             self.eval_type_application(ty_app_id, scope_id, context)
                         }
                     }
@@ -5158,7 +5125,7 @@ impl TypedProgram {
                 let typed_variable = self.variables.get(v.variable_id);
                 let Some(global_id) = typed_variable.global_id else {
                     return failf!(
-                        v.span,
+                        self.exprs.get_span(expr_id),
                         "Variable cannot be evaluated at compile time: {}",
                         self.ident_str(typed_variable.name)
                     );
@@ -5222,8 +5189,8 @@ impl TypedProgram {
         }
         let static_ctx = ctx.static_ctx.unwrap();
 
-        // nocommit(1): We need to mask access from inside a static to outside variables!
-        //              Currently we just fail in bytecode gen with "missing variable"
+        // Note: We need to mask access from inside a static to outside variables!
+        //       Currently we'll just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
@@ -6350,11 +6317,11 @@ impl TypedProgram {
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
                     Ok((variable_id, fixup_expr_id))
                 } else {
-                    let expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
-                        type_id: v.type_id,
-                        variable_id,
-                        span: variable_name_span,
-                    }));
+                    let expr = self.exprs.add(
+                        TypedExpr::Variable(VariableExpr { variable_id }),
+                        v.type_id,
+                        variable_name_span,
+                    );
                     Ok((variable_id, expr))
                 }
             }
@@ -6492,7 +6459,10 @@ impl TypedProgram {
             if is_assignment_lhs {
                 return failf!(field_access.span, "Cannot assign to variantName");
             }
-            return failf!(field_access.span, "TODO: Generate variantName() code (for only enums that it is called on!)")
+            return failf!(
+                field_access.span,
+                "TODO: Generate variantName() code (for only enums that it is called on!)"
+            );
         }
 
         // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
@@ -6844,11 +6814,11 @@ impl TypedProgram {
                 self.type_id_to_string(base_expr_type)
             )
         })?;
-        Ok(self.exprs.add_tmp(TypedExpr::Deref(DerefExpr {
-            type_id: reference_type.inner_type,
-            target: base_expr,
+        Ok(self.exprs.add(
+            TypedExpr::Deref(DerefExpr { target: base_expr }),
+            reference_type.inner_type,
             span,
-        })))
+        ))
     }
 
     #[allow(unused)]
@@ -8000,11 +7970,11 @@ impl TypedProgram {
             //       actually be a problem
             let (field_index, _env_struct_field) =
                 k1.types.get_struct_field_by_name(env_struct_type, v.name).unwrap();
-            let env_variable_expr = k1.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
-                variable_id: environment_param_variable_id,
-                type_id: env_struct_reference_type,
+            let env_variable_expr = k1.exprs.add(
+                TypedExpr::Variable(VariableExpr { variable_id: environment_param_variable_id }),
+                env_struct_reference_type,
                 span,
-            }));
+            );
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: env_variable_expr,
                 field_index: field_index as u32,
@@ -8187,11 +8157,11 @@ impl TypedProgram {
         for captured_variable_id in lambda_info.captured_variables.iter() {
             let v = self.variables.get(*captured_variable_id);
             env_field_types.push(StructTypeField { type_id: v.type_id, name: v.name });
-            let var_expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
-                type_id: v.type_id,
-                variable_id: *captured_variable_id,
+            let var_expr = self.exprs.add(
+                TypedExpr::Variable(VariableExpr { variable_id: *captured_variable_id }),
+                v.type_id,
                 span,
-            }));
+            );
             env_exprs.push(StructLiteralField { name: v.name, expr: var_expr });
         }
         let env_fields_handle = self.types.mem.vec_to_mslice(&env_field_types);
@@ -8206,6 +8176,7 @@ impl TypedProgram {
 
         let environment_struct_reference_type =
             self.types.add_reference_type(environment_struct_type, false);
+        // We decay down to POINTER so that the function calls typecheck
         let environment_param = FnParamType {
             name: self.ast.idents.b.lambda_env_var_name,
             type_id: POINTER_TYPE_ID,
@@ -8223,11 +8194,12 @@ impl TypedProgram {
         typed_params.insert(0, environment_param);
         param_variables.insert(0, environment_param_variable_id);
 
-        let environment_param_access_expr = self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
-            variable_id: param_variables[0],
-            type_id: POINTER_TYPE_ID,
-            span: body_span,
-        }));
+        // We decay down to POINTER so that the function calls typecheck
+        let environment_param_access_expr = self.exprs.add(
+            TypedExpr::Variable(VariableExpr { variable_id: param_variables[0] }),
+            POINTER_TYPE_ID,
+            body_span,
+        );
         let cast_env_param = self.synth_cast(
             environment_param_access_expr,
             environment_struct_reference_type,
@@ -9619,11 +9591,15 @@ impl TypedProgram {
                         ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         true,
                     )?;
-                    Ok(self.exprs.add_tmp(TypedExpr::LogicalAnd(TypedLogicalAnd {
+                    let false_expr = self.synth_bool(false, binary_op.span);
+                    let and = self.synth_if_else(
+                        BOOL_TYPE_ID,
                         lhs,
                         rhs,
-                        span: binary_op.span,
-                    })))
+                        false_expr,
+                        binary_op.span,
+                    );
+                    Ok(and)
                 }
             }
             K::Or => {
@@ -9637,11 +9613,15 @@ impl TypedProgram {
                     ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                     true,
                 )?;
-                Ok(self.exprs.add_tmp(TypedExpr::LogicalOr(TypedLogicalOr {
+                let true_expr = self.synth_bool(true, binary_op.span);
+                let or = self.synth_if_else(
+                    BOOL_TYPE_ID,
                     lhs,
+                    true_expr,
                     rhs,
-                    span: binary_op.span,
-                })))
+                    binary_op.span,
+                );
+                Ok(or)
             }
             // We convert most binary ops into ability function calls by rewriting to parsed calls
             // and compiling the code
@@ -9900,25 +9880,22 @@ impl TypedProgram {
                             self.ident_str(fn_call.name.name),
                             self.type_id_to_string(function_variable.type_id)
                         );
+                        // nocommit Rename Pointer to ptr in k1
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.function_id,
-                                lambda_value_expr: self.exprs.add_tmp(TypedExpr::Variable(
-                                    VariableExpr {
-                                        variable_id,
-                                        type_id: function_variable.type_id,
-                                        span: fn_call.span,
-                                    },
-                                )),
+                                lambda_value_expr: self.exprs.add(
+                                    TypedExpr::Variable(VariableExpr { variable_id }),
+                                    function_variable.type_id,
+                                    fn_call.span,
+                                ),
                                 lambda_type_id: function_variable.type_id,
                             })),
                             Type::LambdaObject(_lambda_object) => {
-                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add_tmp(
-                                    TypedExpr::Variable(VariableExpr {
-                                        variable_id,
-                                        type_id: function_variable.type_id,
-                                        span: fn_call.name.span,
-                                    }),
+                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add(
+                                    TypedExpr::Variable(VariableExpr { variable_id }),
+                                    function_variable.type_id,
+                                    fn_call.name.span,
                                 ))))
                             }
                             Type::FunctionTypeParameter(ftp) => {
@@ -9932,12 +9909,11 @@ impl TypedProgram {
                                 Ok(Either::Right(callee))
                             }
                             Type::FunctionPointer(_function_pointer) => {
-                                let function_pointer_expr =
-                                    self.exprs.add_tmp(TypedExpr::Variable(VariableExpr {
-                                        variable_id,
-                                        type_id: function_variable.type_id,
-                                        span: fn_call.name.span,
-                                    }));
+                                let function_pointer_expr = self.exprs.add(
+                                    TypedExpr::Variable(VariableExpr { variable_id }),
+                                    function_variable.type_id,
+                                    fn_call.name.span,
+                                );
                                 Ok(Either::Right(Callee::DynamicFunction { function_pointer_expr }))
                             }
                             _ => fn_not_found(),
@@ -11058,12 +11034,13 @@ impl TypedProgram {
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
                     let found = self.variables.get(matching_context_variable);
-                    final_args.push(MaybeTypedExpr::Typed(self.exprs.add_tmp(
+                    // nocommit 6: Add context ability signatures
+                    final_args.push(MaybeTypedExpr::Typed(self.exprs.add(
                         TypedExpr::Variable(VariableExpr {
                             variable_id: matching_context_variable,
-                            type_id: found.type_id,
-                            span,
                         }),
+                        found.type_id,
+                        span,
                     )));
                     final_params.push(*context_param);
                 } else {
