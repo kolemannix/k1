@@ -6,8 +6,6 @@ use meta/CodeWriter
 fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
   let* result: *mut List[char] = List/empty();
   #meta(fmtString) {
-    // nocommit(3): Preallocate and re-use the temp arena for VMs
-    // Its currently leaking anyway!
     let* code = StringBuilder/new();
     let argsTypeId = types/typeId[Args]();
     let schema = types/typeSchema(argsTypeId);

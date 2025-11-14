@@ -1,20 +1,14 @@
 fn main(): i32 { 
    #static {
      let a = mem/arena();
-     println("a is at {a as Pointer}");
-     println("a mem is at {a.basePtr}");
      a.push(123).*
    };
    #static {
      let a = mem/arena();
-     println("a is at {a as Pointer}");
-     println("a mem is at {a.basePtr}");
      a.push(456).*
    };
    #static {
      let a = mem/arena();
-     println("a is at {a as Pointer}");
-     println("a mem is at {a.basePtr}");
      a.push(456).*
    };
    core/sys/exit(0);

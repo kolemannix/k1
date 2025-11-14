@@ -141,7 +141,7 @@ impl TypedProgram {
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
         let span = self.exprs.get_span(base);
         let type_id = self.get_expr_type(base).expect_reference().inner_type;
-        self.exprs.add_tmp(TypedExpr::Deref(DerefExpr { type_id, span, target: base }))
+        self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, span)
     }
 
     pub(super) fn synth_block(
@@ -246,7 +246,7 @@ impl TypedProgram {
         let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
         let variable_id = self.variables.add(variable);
         let variable_expr =
-            self.exprs.add_tmp(TypedExpr::Variable(VariableExpr { type_id, variable_id, span }));
+            self.exprs.add(TypedExpr::Variable(VariableExpr {  variable_id }), type_id, span);
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
