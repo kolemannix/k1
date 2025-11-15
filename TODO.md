@@ -7,42 +7,6 @@ Add enum tags to the LLVM repr (they're opaque currently; this'll allow SROA to 
 Inline all small functions in typer or bc
 AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
 
-## Working list
-- [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
-- [x] Adopt `ecow`'s EcoVec
-- [x] reproduce shadow bug: only when statically run?!
-      buffer.slice: `let end = if end > self.len self.len else end;`
-- [x] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
-- [x] Optimize lambdas that don't capture to become function pointers instead
-- [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
-- [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
-- [x] Backend codegen cleanup
--  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
--  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
-    (handled by optimization passes for now)
--  [x] Upgrade to LLVM 18
-- [x] Context location params are not being propagated
-- [x] Test and fix named arguments
-- [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
-       -> Originally did the wrong way, plumbing special cases. Instead now we just only generate the crashy expr
-- [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
-      - Probably one test for failing compilation and one passing one for each major language area
-- [x] Add simple int range in stdlib
-- [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
-- [x] Conditional compile directive
-- [x] Support boolean operators in compile time expressions
-- [x] Change FieldAccess semantics to work on struct references, and copy only the field out
-      This saves copying the entire aggregate first with a Dereference instruction
-- [x] ThreadLocal globals
-- [x] LLVM Codegen callstack is too deep due to codegen_function_or_get
-- [x] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
-- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
-      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
-- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [-] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
-      This is basically an interpreter; what we have now with the vm solves this problem a bit
-      But not entirely because it only checks the code that runs!
-
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
@@ -208,6 +172,42 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Start with Equals
 - [x] Do add
 - [x] Move all the binary operations to intrinsic calls; and remove BinaryOp from the Typed AST
+
+## Working list (early 2025)
+- [x] String pool for string values, not just identifiers (will dedupe in LLVM too)
+- [x] Adopt `ecow`'s EcoVec
+- [x] reproduce shadow bug: only when statically run?!
+      buffer.slice: `let end = if end > self.len self.len else end;`
+- [x] Fix referencing match not 'eliminating' patterns on `struct*` giving unhandled pattern `.CustomHeap({ zalloc }*) -> {`
+- [x] Optimize lambdas that don't capture to become function pointers instead
+- [x] comptime #if needs to be a real node not a directive (can't parse if/else). More like `#const if` than `#if`
+- [x] string interp at end puts unnecessary empty string part: `putString(__sb_1001, "");`
+- [x] Backend codegen cleanup
+-  [x] avoid uses of aggregate *values* where we can: so routine uses of 'struct's and 'enum's
+-  [x] Move allocas to entry block. "Doing this is actually quite easy as LLVM provides functions you can use to retrieve the entry block for a function and insert instructions into it."
+    (handled by optimization passes for now)
+-  [x] Upgrade to LLVM 18
+- [x] Context location params are not being propagated
+- [x] Test and fix named arguments
+- [x] 'never' needs to work in every expression position (got close enough, might add more if one comes up)
+       -> Originally did the wrong way, plumbing special cases. Instead now we just only generate the crashy expr
+- [x] accumulate test errors and support inline test comment assertions when a line should produce a compiler error.
+      - Probably one test for failing compilation and one passing one for each major language area
+- [x] Add simple int range in stdlib
+- [x] Fix enum codegen, read Inko llvm backend (its inkwell + rust and does ABI compatible stuff https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/)
+- [x] Conditional compile directive
+- [x] Support boolean operators in compile time expressions
+- [x] Change FieldAccess semantics to work on struct references, and copy only the field out
+      This saves copying the entire aggregate first with a Dereference instruction
+- [x] ThreadLocal globals
+- [x] LLVM Codegen callstack is too deep due to codegen_function_or_get
+- [x] Switch VM stack to a single virtual allocation https://crates.io/crates/memmap2
+- [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
+      https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
+- [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
+- [-] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
+      This is basically an interpreter; what we have now with the vm solves this problem a bit
+      But not entirely because it only checks the code that runs!
 
 # General (late 2024)
 - [x] Matching push

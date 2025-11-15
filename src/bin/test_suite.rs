@@ -103,8 +103,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     std::fs::create_dir_all(&out_dir)?;
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
-        optimize: true,
-        debug: true,
+        optimize: false,
+        debug: false,
         no_std: false,
         write_llvm: true,
         dump_module: false,

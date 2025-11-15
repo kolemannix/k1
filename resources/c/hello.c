@@ -16,6 +16,8 @@ Point make_point() {
 
 int main() {
   off_t asdf;
-  void *addr = mmap(NULL, 1024, );
+  void *addr = mmap(NULL, 1024, 0);
+  POSIX_MADV_SEQUENTIAL;
+  MADV_SEQUENTIAL;
   return 0;
 }

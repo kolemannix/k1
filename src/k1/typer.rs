@@ -1138,10 +1138,8 @@ impl_copy_if_small!(12, GetEnumVariantPayload);
 #[derive(Debug, Clone)]
 pub struct GetEnumTag {
     pub enum_expr_or_reference: TypedExprId,
-    pub result_type_id: TypeId,
-    pub span: SpanId,
 }
-impl_copy_if_small!(12, GetEnumTag);
+impl_copy_if_small!(4, GetEnumTag);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumIsVariantExpr {
@@ -1297,7 +1295,6 @@ pub struct TypedCast {
 #[derive(Debug, Clone)]
 pub struct TypedReturn {
     pub value: TypedExprId,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -1305,27 +1302,21 @@ pub struct TypedBreak {
     pub value: TypedExprId,
     pub loop_scope: ScopeId,
     pub loop_type: LoopType,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct LambdaExpr {
     pub lambda_type: TypeId,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionToLambdaObjectExpr {
     pub function_id: FunctionId,
-    pub span: SpanId,
-    pub lambda_object_type_id: TypeId,
 }
 
 #[derive(Debug, Clone)]
 pub struct FunctionPointerExpr {
     pub function_id: FunctionId,
-    pub function_pointer_type: TypeId,
-    pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
@@ -1386,8 +1377,6 @@ pub enum TypedExpr {
     Block(TypedBlock),
     Call {
         call_id: CallId,
-        return_type: TypeId,
-        span: SpanId,
     },
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
@@ -1457,59 +1446,6 @@ impl TypedExpr {
             TypedExpr::FunctionToLambdaObject(_) => "function_to_lambda_object",
             TypedExpr::PendingCapture(_) => "pending_capture",
             TypedExpr::StaticValue(_) => "static_value",
-        }
-    }
-
-    // nocommit delete get_type
-    pub fn get_type(&self) -> TypeId {
-        match self {
-            TypedExpr::Struct(_struc) => TypeId::PENDING,
-            TypedExpr::StructFieldAccess(_field_access) => TypeId::PENDING,
-            TypedExpr::ArrayGetElement(_ag) => TypeId::PENDING,
-            TypedExpr::Variable(_) => TypeId::PENDING,
-            TypedExpr::Deref(_) => TypeId::PENDING,
-            TypedExpr::Block(_b) => TypeId::PENDING,
-            TypedExpr::Call { return_type, .. } => *return_type,
-            TypedExpr::Match(_match_) => TypeId::PENDING,
-            TypedExpr::WhileLoop(_) => TypeId::PENDING,
-            TypedExpr::LoopExpr(_loop_expr) => TypeId::PENDING,
-            TypedExpr::EnumConstructor(_enum_cons) => TypeId::PENDING,
-            TypedExpr::EnumGetTag(get_tag) => get_tag.result_type_id,
-            TypedExpr::EnumGetPayload(_as_variant) => TypeId::PENDING,
-            TypedExpr::Cast(_c) => TypeId::PENDING,
-            TypedExpr::Return(_ret) => NEVER_TYPE_ID,
-            TypedExpr::Break(_break) => NEVER_TYPE_ID,
-            TypedExpr::Lambda(lambda) => lambda.lambda_type,
-            TypedExpr::FunctionPointer(f) => f.function_pointer_type,
-            TypedExpr::FunctionToLambdaObject(f) => f.lambda_object_type_id,
-            TypedExpr::PendingCapture(_pc) => TypeId::PENDING,
-            TypedExpr::StaticValue(_) => TypeId::PENDING,
-        }
-    }
-
-    pub fn get_span(&self) -> SpanId {
-        match self {
-            TypedExpr::Struct(_struc) => SpanId::NONE,
-            TypedExpr::StructFieldAccess(_field_access) => SpanId::NONE,
-            TypedExpr::ArrayGetElement(_ag) => SpanId::NONE,
-            TypedExpr::Variable(_) => SpanId::NONE,
-            TypedExpr::Deref(_) => SpanId::NONE,
-            TypedExpr::Block(_b) => SpanId::NONE,
-            TypedExpr::Call { span, .. } => *span,
-            TypedExpr::Match(_match_) => SpanId::NONE,
-            TypedExpr::WhileLoop(_) => SpanId::NONE,
-            TypedExpr::LoopExpr(_loop_expr) => SpanId::NONE,
-            TypedExpr::EnumConstructor(_e) => SpanId::NONE,
-            TypedExpr::EnumGetTag(get_tag) => get_tag.span,
-            TypedExpr::EnumGetPayload(_as_variant) => SpanId::NONE,
-            TypedExpr::Cast(_c) => SpanId::NONE,
-            TypedExpr::Return(ret) => ret.span,
-            TypedExpr::Break(brk) => brk.span,
-            TypedExpr::Lambda(lambda) => lambda.span,
-            TypedExpr::FunctionPointer(f) => f.span,
-            TypedExpr::FunctionToLambdaObject(f) => f.span,
-            TypedExpr::PendingCapture(_pc) => SpanId::NONE,
-            TypedExpr::StaticValue(_) => SpanId::NONE,
         }
     }
 
@@ -2271,10 +2207,8 @@ impl TypedExprPool {
         self.exprs.len()
     }
 
-    pub fn add_tmp(&mut self, expr: TypedExpr) -> TypedExprId {
-        let type_id = expr.get_type();
-        let span = expr.get_span();
-        self.add(expr, type_id, span)
+    pub fn add_return(&mut self, return_value: TypedExprId, span: SpanId) -> TypedExprId {
+        self.add(TypedExpr::Return(TypedReturn { value: return_value }), NEVER_TYPE_ID, span)
     }
 
     pub fn add_block(
@@ -4757,8 +4691,8 @@ impl TypedProgram {
         // If we expect a lambda object and you pass a function reference... (optimized lambda)
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
             if let TypedExpr::FunctionPointer(fun_ref) = self.exprs.get(expr) {
-                let lambda_object =
-                    self.function_to_lambda_object(fun_ref.function_id, fun_ref.span);
+                let expr_span = self.exprs.get_span(expr);
+                let lambda_object = self.function_to_lambda_object(fun_ref.function_id, expr_span);
                 let lambda_object_type = self.exprs.get_type(lambda_object);
                 if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
                     return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj".into());
@@ -6759,10 +6693,12 @@ impl TypedProgram {
             return_type: block_return_type,
             span,
         });
-        let make_error_call =
-            self.exprs.add_tmp(TypedExpr::Call { call_id, return_type: block_return_type, span });
-        let return_error_expr =
-            self.exprs.add_tmp(TypedExpr::Return(TypedReturn { value: make_error_call, span }));
+        let make_error_call = self.exprs.add(TypedExpr::Call { call_id }, block_return_type, span);
+        let return_error_expr = self.exprs.add(
+            TypedExpr::Return(TypedReturn { value: make_error_call }),
+            NEVER_TYPE_ID,
+            span,
+        );
         let if_expr = self.synth_if_else(
             value_success_type,
             is_ok_call,
@@ -8140,23 +8076,13 @@ impl TypedProgram {
                 is_concrete: false,
                 dyn_fn_id: None,
             });
-            // let is_concrete = self.functions.get(body_function_id).is_concrete;
-            // if is_concrete && !ctx.is_inference() {
-            //     bc::compile_function(self, body_function_id)?;
-            // } else {
-            //     debug!(
-            //         "Not compiling lowered lambda {} due to {is_concrete} {}",
-            //         self.ident_str(name),
-            //         ctx.is_inference()
-            //     );
-            // }
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
-            let expr_id = self.exprs.add_tmp(TypedExpr::FunctionPointer(FunctionPointerExpr {
-                function_id: body_function_id,
+            let expr_id = self.exprs.add(
+                TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: body_function_id }),
                 function_pointer_type,
                 span,
-            }));
+            );
             return Ok(expr_id);
         }
 
@@ -8301,7 +8227,12 @@ impl TypedProgram {
             ctx.is_inference(),
             body_function_id
         );
-        Ok(self.exprs.add_tmp(TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id, span })))
+        Ok(self.exprs.add(
+            // Seems lambda is the only TypedExpr that is representable as only its type!
+            TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id }),
+            lambda_type_id,
+            span,
+        ))
     }
 
     fn ensure_parsed_expr_to_block(
@@ -8361,8 +8292,6 @@ impl TypedProgram {
 
         // Core loop to build up the typed, compiled match arms
         for parsed_case in parsed_cases.iter() {
-            let mut arm_patterns: SV2<TypedPatternId> =
-                SmallVec::with_capacity(parsed_case.patterns.len());
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
             for parsed_pattern_id in parsed_case.patterns.iter() {
@@ -8414,60 +8343,65 @@ impl TypedProgram {
                 if parsed_case.guard_condition_expr.is_none() {
                     all_unguarded_patterns.push((pattern, 0));
                 }
-                arm_patterns.push(pattern);
-            }
 
-            // Note: We compile the arm expression and the guard condition as many times as there are patterns, since each
-            // one has its own scope. To get around this we'd have to create only one compiled arm even for
-            // multi-pattern binding arms, and have the condition be a boolean OR of the various
-            // arms, and somehow compile in the right variables defns based on which one passed.
-            // Which isn't possible to know at compile time. So I think this is just where we are.
-            // It'd be nice to re-use the typed expr across different scopes, but we can't do that
+                // Note: We compile the arm's consequent expression and the guard condition as many times as there are patterns, since each
+                // one has its own scope. To get around this we'd have to create only one compiled arm even for
+                // multi-pattern binding arms, and have the condition be a boolean OR of the various
+                // arms, and somehow compile in the right variables defns based on which one passed.
+                // Which isn't possible to know at compile time. So I think this is just where we are.
+                // It'd be nice to re-use the typed expr across different scopes, but we can't do that
+                //
+                // The solution once again is to compile things multiple times if needed, and just make
+                // compilation fast
+                {
+                    let arm_scope_id = self.scopes.add_child_scope(
+                        match_scope_id,
+                        ScopeType::MatchArm,
+                        None,
+                        None,
+                    );
+                    let pattern_eval_ctx =
+                        arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
+                    let mut instrs = self.mem.new_list(8);
+                    self.compile_pattern_into_values(
+                        pattern,
+                        match_subject_variable.variable_expr,
+                        &mut instrs,
+                        false,
+                        pattern_eval_ctx,
+                    )?;
 
-            // nocommit: Can I just do this inside the above loop and avoid the need for the
-            // arm_patterns array?
-            for pattern in arm_patterns.into_iter() {
-                let arm_scope_id =
-                    self.scopes.add_child_scope(match_scope_id, ScopeType::MatchArm, None, None);
-                let pattern_eval_ctx = arms_ctx.with_scope(arm_scope_id).with_no_expected_type();
-                let mut instrs = self.mem.new_list(8);
-                self.compile_pattern_into_values(
-                    pattern,
-                    match_subject_variable.variable_expr,
-                    &mut instrs,
-                    false,
-                    pattern_eval_ctx,
-                )?;
+                    match parsed_case.guard_condition_expr {
+                        None => {}
+                        Some(guard_condition_expr_id) => {
+                            let guard_condition_expr = self.eval_expr(
+                                guard_condition_expr_id,
+                                pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                            )?;
+                            instrs
+                                .push(MatchingConditionInstr::Cond { value: guard_condition_expr });
+                        }
+                    };
 
-                match parsed_case.guard_condition_expr {
-                    None => {}
-                    Some(guard_condition_expr_id) => {
-                        let guard_condition_expr = self.eval_expr(
-                            guard_condition_expr_id,
-                            pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
-                        )?;
-                        instrs.push(MatchingConditionInstr::Cond { value: guard_condition_expr });
+                    // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
+                    // since the bindings are now available
+                    let consequent_expr = self.eval_expr_with_coercion(
+                        parsed_case.expression,
+                        pattern_eval_ctx.with_expected_type(expected_arm_type_id),
+                        true,
+                    )?;
+                    let consequent_expr_type = self.exprs.get_type(consequent_expr);
+
+                    if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
+                        expected_arm_type_id = Some(consequent_expr_type);
                     }
-                };
 
-                // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
-                // since the bindings are now available
-                let consequent_expr = self.eval_expr_with_coercion(
-                    parsed_case.expression,
-                    pattern_eval_ctx.with_expected_type(expected_arm_type_id),
-                    true,
-                )?;
-                let consequent_expr_type = self.exprs.get_type(consequent_expr);
-
-                if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
-                    expected_arm_type_id = Some(consequent_expr_type);
+                    let match_arm = TypedMatchArm {
+                        condition: MatchingCondition { instrs: self.mem.vec_to_mslice(&instrs) },
+                        consequent_expr,
+                    };
+                    typed_arms.push(match_arm);
                 }
-
-                let match_arm = TypedMatchArm {
-                    condition: MatchingCondition { instrs: self.mem.vec_to_mslice(&instrs) },
-                    consequent_expr,
-                };
-                typed_arms.push(match_arm);
             }
         }
 
@@ -9165,12 +9099,15 @@ impl TypedProgram {
             false,
         )?;
         let unit_break = self.synth_unit(body_span);
-        let break_expr = self.exprs.add_tmp(TypedExpr::Break(TypedBreak {
-            value: unit_break,
-            loop_scope: loop_scope_id,
-            loop_type: LoopType::Loop,
-            span: body_span,
-        }));
+        let break_expr = self.exprs.add(
+            TypedExpr::Break(TypedBreak {
+                value: unit_break,
+                loop_scope: loop_scope_id,
+                loop_type: LoopType::Loop,
+            }),
+            NEVER_TYPE_ID,
+            body_span,
+        );
         let consequent_block_id =
             self.exprs.add_block(&mut self.mem, consequent_block, UNIT_TYPE_ID);
         let if_next_loop_else_break_expr = self.synth_if_else(
@@ -9878,7 +9815,6 @@ impl TypedProgram {
                             self.ident_str(fn_call.name.name),
                             self.type_id_to_string(function_variable.type_id)
                         );
-                        // nocommit Rename Pointer to ptr in k1
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.function_id,
@@ -9993,8 +9929,7 @@ impl TypedProgram {
                 }
             }
         }
-        let return_expr =
-            self.exprs.add_tmp(TypedExpr::Return(TypedReturn { value: return_value, span }));
+        let return_expr = self.exprs.add_return(return_value, span);
         if gathered_defers.is_empty() {
             Ok(return_expr)
         } else {
@@ -10105,12 +10040,15 @@ impl TypedProgram {
                     )
                 }
 
-                Ok(Some(self.exprs.add_tmp(TypedExpr::Break(TypedBreak {
-                    value: break_value,
-                    loop_scope: enclosing_loop_scope_id,
-                    loop_type,
-                    span: call_span,
-                }))))
+                Ok(Some(self.exprs.add(
+                    TypedExpr::Break(TypedBreak {
+                        value: break_value,
+                        loop_scope: enclosing_loop_scope_id,
+                        loop_type,
+                    }),
+                    NEVER_TYPE_ID,
+                    call_span,
+                )))
             }
             "continue" => {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
@@ -10464,11 +10402,11 @@ impl TypedProgram {
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_pointer_type = self.types.add_function_pointer_type(function.type_id);
-        self.exprs.add_tmp(TypedExpr::FunctionPointer(FunctionPointerExpr {
-            function_id,
+        self.exprs.add(
+            TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
             function_pointer_type,
-            span: call_span,
-        }))
+            call_span,
+        )
     }
 
     pub fn function_to_lambda_object(
@@ -10513,12 +10451,13 @@ impl TypedProgram {
             dyn_function.type_id,
             dyn_function.parsed_id,
         );
-        let function_to_lam_obj_id =
-            self.exprs.add_tmp(TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
+        let function_to_lam_obj_id = self.exprs.add(
+            TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
                 function_id: dyn_function_id,
-                span: call_span,
-                lambda_object_type_id,
-            }));
+            }),
+            lambda_object_type_id,
+            call_span,
+        );
         function_to_lam_obj_id
     }
 
@@ -10734,11 +10673,11 @@ impl TypedProgram {
 
         let base_expr =
             if is_reference { self.synth_dereference(base_expr_id) } else { base_expr_id };
-        Ok(Some(self.exprs.add_tmp(TypedExpr::EnumGetTag(GetEnumTag {
-            enum_expr_or_reference: base_expr,
-            result_type_id: tag_type,
+        Ok(Some(self.exprs.add(
+            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference: base_expr }),
+            tag_type,
             span,
-        }))))
+        )))
     }
 
     fn handle_enum_as(
@@ -11429,7 +11368,7 @@ impl TypedProgram {
             self.handle_intrinsic(call, intrinsic_type, ctx)
         } else {
             let call_id = self.calls.add(call);
-            Ok(self.exprs.add_tmp(TypedExpr::Call { call_id, return_type: call_return_type, span }))
+            Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
         }
     }
 
@@ -12294,10 +12233,7 @@ impl TypedProgram {
                         TypedStmt::Expr(expr, _expr_type_id) => {
                             // Return this expr
                             let expr_span = self.exprs.get_span(*expr);
-                            let return_expr = self.exprs.add_tmp(TypedExpr::Return(TypedReturn {
-                                span: expr_span,
-                                value: *expr,
-                            }));
+                            let return_expr = self.exprs.add_return(*expr, expr_span);
                             let return_stmt =
                                 self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
                             stmts.push(return_stmt);
@@ -12307,11 +12243,7 @@ impl TypedProgram {
                         | TypedStmt::Require(_)
                         | TypedStmt::Defer(_) => {
                             let unit = self.synth_unit(stmt_span);
-                            let return_unit_expr =
-                                self.exprs.add_tmp(TypedExpr::Return(TypedReturn {
-                                    span: stmt_span,
-                                    value: unit,
-                                }));
+                            let return_unit_expr = self.exprs.add_return(unit, stmt_span);
                             let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
                             let return_unit_id = self.stmts.add(return_unit);
                             stmts.push(stmt_id);

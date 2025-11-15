@@ -429,11 +429,9 @@ impl TypedProgram {
         let tag_type = enum_type.tag_type;
         let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
-        let get_tag = self.exprs.add_tmp(TypedExpr::EnumGetTag(GetEnumTag {
+        let get_tag = self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
             enum_expr_or_reference,
-            result_type_id: tag_type,
-            span,
-        }));
+        }), tag_type, span);
         let variant_tag_expr = self.synth_int(variant_tag, span);
         let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
         Ok(tag_equals)

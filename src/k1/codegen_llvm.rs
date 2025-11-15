@@ -2198,7 +2198,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
         let expr = self.k1.exprs.get(expr_id);
         let expr_type = self.k1.exprs.get_type(expr_id);
-        let span = self.k1.exprs.get_span(expr_id);
+        let expr_span = self.k1.exprs.get_span(expr_id);
 
         // TODO: push debug log level for debugged exprs in codegen as well
         // #[cfg(debug_assertions)]
@@ -2218,7 +2218,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         //     }
         // });
 
-        self.set_debug_location_from_span(span);
+        self.set_debug_location_from_span(expr_span);
         debug!("codegen expr\n{}", self.k1.expr_to_string_with_type(expr_id));
         match expr {
             TypedExpr::Variable(ir_var) => {
@@ -2237,7 +2237,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             self.k1.expr_to_string(expr_id),
                             ir_var.variable_id
                         ),
-                        span,
+                        span: expr_span,
                     })
                 }
             }
@@ -2351,7 +2351,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // This is just a lexical scoping block, not a control-flow block, so doesn't need
                 // to correspond to an LLVM basic block
                 // We just need to codegen each statement and yield the result value
-                let block_value = self.codegen_block(block, span)?;
+                let block_value = self.codegen_block(block, expr_span)?;
                 Ok(block_value)
             }
             TypedExpr::Call { call_id, .. } => self.codegen_function_call(*call_id),
@@ -2432,7 +2432,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     Ok(payload_copied.into())
                 }
             }
-            TypedExpr::Cast(cast) => self.codegen_cast(expr_type, span, cast),
+            TypedExpr::Cast(cast) => self.codegen_cast(expr_type, expr_span, cast),
             TypedExpr::Return(ret) => {
                 let return_result = self.codegen_expr(ret.value)?;
                 let LlvmValue::BasicValue(return_value) = return_result else {
@@ -2484,15 +2484,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     self.codegen_function_signature(function_pointer_expr.function_id)?;
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
-                self.set_debug_location_from_span(function_pointer_expr.span);
+                self.set_debug_location_from_span(expr_span);
                 Ok(function_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
                 let function_value = self.codegen_function_signature(fn_to_lam_obj.function_id)?;
-                self.set_debug_location_from_span(fn_to_lam_obj.span);
+                self.set_debug_location_from_span(expr_span);
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
-                let lam_obj_struct_type = self.codegen_type(fn_to_lam_obj.lambda_object_type_id)?;
+                let lam_obj_struct_type = self.codegen_type(expr_type)?;
                 // lam_obj_struct_type.struct_type is equivalent to rich_value_type()
                 let lambda_object_ptr = self.build_k1_alloca(&lam_obj_struct_type, "fn2obj");
                 let lam_obj_type = lam_obj_struct_type.expect_lambda_object();
