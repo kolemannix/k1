@@ -1342,8 +1342,9 @@ fn compile_expr(
             };
             Ok(last)
         }
-        TypedExpr::Call { call_id, return_type, .. } => {
+        TypedExpr::Call { call_id } => {
             // task(bc): deal with clone() of Call and TypedExpr
+            let return_type = expr_type;
             let call = b.k1.calls.get(call_id).clone();
             let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
             let builtin = if let Some(function_id) = call.callee.maybe_function_id() {
@@ -1871,7 +1872,8 @@ fn compile_expr(
             Ok(stored)
         }
         TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
-            let obj_struct_type = b.get_physical_type(fn_to_lam_obj.lambda_object_type_id);
+            let lambda_object_type_id = expr_type;
+            let obj_struct_type = b.get_physical_type(lambda_object_type_id);
             let lam_obj_ptr = match dst {
                 Some(dst) => dst,
                 None => b.push_alloca(obj_struct_type, "lam obj storage").as_value(),

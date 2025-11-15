@@ -1,16 +1,10 @@
-fn main(): i32 { 
-   #static {
-     let a = mem/arena();
-     a.push(123).*
-   };
-   #static {
-     let a = mem/arena();
-     a.push(456).*
-   };
-   #static {
-     let a = mem/arena();
-     a.push(456).*
-   };
+fn foo(): i32 {
+  let x = { x: 2, blub: mem/new(true) };
+  x;
+  crash("foo")
+}
+fn main(): i32 {
+   foo();
    core/sys/exit(0);
 }
 

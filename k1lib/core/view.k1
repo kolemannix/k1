@@ -7,13 +7,16 @@
 // Views are read-only.
 
 // You should never modify the contents
-// of the data pointed to by a View unless you know you own the
-// backing data and are doing it on purpose
+// of the data pointed to by a View unless you know you have
+// exclusive access to the data (e.g., just created it) 
+// and never break the contract that no observable
+// view contents should ever change
 ns View {
   
   ////////////////////////
   // Constructor functions
 
+  // Only safe if you have exclusive access to buffer
   fn wrapBuffer[T](buffer: Buffer[T]): View[T] {
     { buffer }
   }
@@ -134,3 +137,54 @@ impl[T: Print] Print for View[T] {
     w.writeChar(']');
   }
 }
+
+// Eventually, we can create some abstractions like this to DRY up working
+// with these sequential containers
+//ability AsView {
+//  fn asView[T](self: Self): View[T]
+//}
+//
+//ability ViewLike {
+//  fn len[T](self: Self): uword
+//  fn getRef[T](self: Self, index: uword): *T
+//  fn get[T](self: Self, index: uword): T { self.getRef.* }
+//  fn slice[T](self: Self, start: uword, end: uword): View[T]
+//  fn take[T](self: View[T], count: uword): View[T] { self.slice(0,     count) }
+//  fn drop[T](self: View[T], count: uword): View[T] { self.slice(count, self.len()) }
+//
+//  fn isEmpty[T](self: View[T]): bool { self.len() == 0 }
+//
+//  fn nonEmpty[T](self: View[T]): bool { self.len() > 0 }
+//
+//  fn firstRef[T](self: View[T]): ?*T {
+//    if not self.isEmpty() {
+//      .Some(self.getRef(0))
+//    } else {
+//      .None
+//    }
+//  }
+//
+//  fn first[T](self: View[T]): ?T {
+//    switch self.firstRef() {
+//      .None -> .None,
+//      .Some(firstRef) -> .Some(firstRef.*)
+//    }
+//  }
+//
+//  fn lastRef[T](self: View[T]): ?*T {
+//    if not self.isEmpty() {
+//      .Some(self.getRef(self.len() - 1))
+//    } else {
+//      .None
+//    }
+//  }
+//
+//  fn last[T](self: View[T]): ?T {
+//    switch self.lastRef() {
+//      .None -> .None,
+//      .Some(lastRef) -> .Some(lastRef.*)
+//    }
+//  }
+//
+//}
+

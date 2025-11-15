@@ -14,6 +14,7 @@ mod pool;
 mod strings;
 pub mod typer;
 pub mod vm;
+pub mod lsp_support;
 //pub mod vmtw;
 
 pub const KILOBYTE: usize = 1024;

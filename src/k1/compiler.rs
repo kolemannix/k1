@@ -371,7 +371,12 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
     let total_elapsed_ms = start_time.elapsed().as_millis();
-        p.print_timing_info(&src_path.to_string_lossy(), total_elapsed_ms as u64, &mut std::io::stderr()).unwrap();
+    p.print_timing_info(
+        &src_path.to_string_lossy(),
+        total_elapsed_ms as u64,
+        &mut std::io::stderr(),
+    )
+    .unwrap();
 
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {
@@ -437,22 +442,24 @@ pub fn write_executable(
         None
     };
 
-    let mut build_args = vec![
-        // "-v",
-        if debug { "-g" } else { "" },
-        if debug { "-fsanitize=address,undefined" } else { "" },
-        if debug {
-            "-O0"
-        } else if optimize {
-            "-O3"
+    let mut build_args = vec![];
+    if debug {
+        build_args.push("-g");
+        build_args.push("-fsanitize=address,undefined");
+        build_args.push("-O0");
+    } else {
+        if optimize {
+            build_args.push("-O3")
         } else {
-            "-O0"
-        },
-        "-L",
-        llvm_lib_base.to_str().unwrap(),
-        "-I",
-        llvm_include_str,
-    ];
+            build_args.push("-gline-tables-only");
+            build_args.push("-fno-omit-frame-pointer");
+        }
+    };
+
+    build_args.push("-L");
+    build_args.push(llvm_lib_base.to_str().unwrap());
+    build_args.push("-I");
+    build_args.push(llvm_include_str);
 
     match target.target_os() {
         TargetOs::MacOs => {
@@ -483,7 +490,7 @@ pub fn write_executable(
 
     build_cmd.args(build_args);
     build_cmd.args(extra_options);
-    log::info!("Build Command: {}", build_cmd);
+    log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {

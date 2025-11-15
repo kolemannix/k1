@@ -649,7 +649,9 @@ ns Array {
   extern("mmap") fn mmap(addr: ptr, len: uword, prot: i32, flags: i32, fd: i32, offset: i64): ptr
 
   extern("munmap") fn munmap(addr: ptr, len: uword): i32
-  // extern("posix_madvise") fn madvise(addr: ptr, len: uword, advice: i32): i32
+
+  let MADV_SEQUENTIAL: i32 = 2;
+  extern("posix_madvise") fn madvise(addr: ptr, len: uword, advice: i32): i32
 
 }
 

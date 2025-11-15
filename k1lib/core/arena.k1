@@ -26,8 +26,7 @@ ns Arena {
   fn _virtual(usageHintMb: uword): ptr {
     let basePtr: ptr = mem/virtualAlloc(gb);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
-    // nocommit arena advise sequential
-    // posix/madvise();
+    posix/madvise(basePtr, usageHintMb * mb, advice = posix/MADV_SEQUENTIAL);
     basePtr
   }
 

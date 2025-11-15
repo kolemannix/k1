@@ -2,13 +2,14 @@
 // All rights reserved.
 
 use itertools::Itertools;
+use log::debug;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileProgramError;
 use k1::lex::SpanId;
-use k1::parse::ParsedProgram;
+use k1::parse::{FileId, ParsedProgram, Source};
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
@@ -47,13 +48,24 @@ fn error_to_diagnostic(ast: &ParsedProgram, span_id: SpanId, message: String) ->
         tags: None,
         data: None,
     };
-    info!("{:?}, {:?}", &diagnostic.range, &diagnostic.message);
+    debug!("{:?}, {:?}", &diagnostic.range, &diagnostic.message);
     (url, diagnostic)
 }
 
 fn source_to_uri(directory: impl AsRef<Path>, file: impl AsRef<str>) -> Url {
-    eprintln!("source_to_uri on {:?} {:?}", directory.as_ref(), file.as_ref());
+    debug!("source_to_uri on {:?} {:?}", directory.as_ref(), file.as_ref());
     Url::from_directory_path(directory.as_ref()).unwrap().join(file.as_ref()).unwrap()
+}
+
+fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Source> {
+    let path = url.path();
+    debug!("uri_to_source: {}", path);
+    let source = ast.sources.iter().find(|s| {
+        let source_path = format!("{}/{}", s.1.directory, s.1.filename);
+        info!("    source_path: {}", source_path);
+        path == source_path
+    });
+    source.map(|s| s.1)
 }
 
 enum CompiledProgram {
@@ -192,6 +204,15 @@ impl LanguageServer for Backend {
                 workspace_diagnostics: true,
                 work_done_progress_options: WorkDoneProgressOptions { work_done_progress: None },
             }));
+        res.capabilities.completion_provider = Some(CompletionOptions {
+            resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_string()]),
+            all_commit_characters: Some(vec!["\n".to_string()]),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+            completion_item: Some(CompletionOptionsCompletionItem {
+                label_details_support: Some(false),
+            }),
+        });
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
         info!("Got initialize params: {params:#?}");
@@ -218,12 +239,32 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let _ = params;
-        log::info!("Got hover");
-        Ok(Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String("Hello from the LSP!".into())),
-            range: None,
-        }))
+        let start = std::time::Instant::now();
+        let position = params.text_document_position_params;
+        let file_url = position.text_document.uri;
+        let line = position.position.line;
+        let col = position.position.character;
+        let module = self.module.lock().unwrap();
+        let CompiledProgram::Typed(k1) = &*module else {
+            info!("Parsed but not typed (when does this happen?)");
+            return Ok(None);
+        };
+        info!("hover: {}:{}:{}", file_url.path(), line, col);
+        let Some(source) = uri_to_source(&k1.ast, &file_url) else {
+            info!("Could not get source for {}", file_url.path());
+            return Ok(None);
+        };
+
+        let expr = k1::lsp_support::get_expr_at_point(k1, source.file_id, line, col);
+        let elapsed = start.elapsed();
+        info!("hover computed in {:.2?}", elapsed);
+        match expr {
+            None => Ok(None),
+            Some(expr) => Ok(Some(Hover {
+                contents: HoverContents::Scalar(MarkedString::String(expr)),
+                range: None,
+            })),
+        }
     }
 
     async fn workspace_diagnostic(
@@ -249,9 +290,35 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
-        info!("did_save file {:?}", params.text);
+        //info!("did_save file {:?}", params.text);
         self.compile();
         self.send_diagnostics().await;
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        Ok(Some(CompletionResponse::List(CompletionList {
+            is_incomplete: false,
+            items: vec![CompletionItem {
+                label: "foo".to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                detail: Some("Example completion item".to_string()),
+                label_details: None,
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: None,
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            }],
+        })))
     }
 }
 
