@@ -4,7 +4,7 @@ fn foo(): i32 {
   crash("foo")
 }
 fn main(): i32 {
-   foo();
+   #static core/libc/malloc(64);
    core/sys/exit(0);
 }
 
