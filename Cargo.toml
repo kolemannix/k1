@@ -53,6 +53,7 @@ raylib = { version = "5.0.1", optional = true}
 ecow = "0.2.3"
 memmap2 = "0.9.7"
 quanta = "0.12.6"
+libc = "0.2.177"
 
 [[bin]]
 name = "test_suite"

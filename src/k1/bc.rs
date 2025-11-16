@@ -9,7 +9,7 @@
 /// and will help make adding other backends far, far easier
 use crate::compiler::WordSize;
 use crate::kmem::MList;
-use crate::parse::NumericWidth;
+use crate::parse::{self, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, mformat};
@@ -157,12 +157,13 @@ pub enum BcBuiltin {
     CompilerMessage,
 }
 
-// Lambdas have been compiled down to just calls and args by now
 #[derive(Clone, Copy)]
 pub enum BcCallee {
     Builtin(BcBuiltin),
     Direct(FunctionId),
     Indirect(Value),
+    Extern(parse::Ident, FunctionId),
+    // No lambda call; been compiled down to just calls and args by now
 }
 
 #[derive(Clone, Copy)]
@@ -664,11 +665,6 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
 
-    let Some(body_block) = &f.body_block else {
-        return failf!(fn_span, "Function has no body to compile");
-    };
-    let body_block = *body_block;
-
     // Set up parameters
     let param_variables = f.param_variables;
     let mut params = b.k1.bytecode.mem.new_list(param_variables.len());
@@ -684,7 +680,14 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     }
     let params_handle = b.k1.bytecode.mem.vec_to_mslice(&params);
 
-    compile_block_stmts(&mut b, None, body_block)?;
+    let f = b.k1.get_function(function_id);
+    if let Some(body_block) = f.body_block {
+        compile_block_stmts(&mut b, None, body_block)?;
+    } else {
+        if !f.linkage.is_external() {
+            return failf!(fn_span, "Function has no body to compile");
+        }
+    };
 
     let unit_id = CompilableUnitId::Function(function_id);
     let unit = finalize_unit(&mut b, unit_id, params_handle, None, is_debug);
@@ -753,7 +756,7 @@ fn finalize_unit(
     is_debug: bool,
 ) -> CompiledUnit {
     let compiled_blocks = b.bake_blocks();
-    let inst_count = b.k1.bytecode.instrs.len() as u32 - b.inst_offset + 1;
+    let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
     let unit = CompiledUnit {
         unit_id,
         expr_ret_kind,
@@ -1347,9 +1350,17 @@ fn compile_expr(
             let return_type = expr_type;
             let call = b.k1.calls.get(call_id).clone();
             let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
-            let builtin = if let Some(function_id) = call.callee.maybe_function_id() {
-                if let Some(intrinsic) = b.k1.get_function(function_id).intrinsic_type {
-                    match intrinsic {
+            let maybe_function_id = call.callee.maybe_function_id();
+            let (intrinsic_op, linkage) = match maybe_function_id {
+                None => (None, None),
+                Some(f_id) => {
+                    let f = b.k1.get_function(f_id);
+                    (f.intrinsic_type, Some(f.linkage))
+                }
+            };
+            let callee = match (intrinsic_op, linkage) {
+                (Some(intrinsic), _) => {
+                    let builtin = match intrinsic {
                         IntrinsicOperation::SizeOf => unreachable!(),
                         IntrinsicOperation::SizeOfStride => unreachable!(),
                         IntrinsicOperation::AlignOf => unreachable!(),
@@ -1487,17 +1498,23 @@ fn compile_expr(
                         IntrinsicOperation::MemSet => Some(BcBuiltin::MemSet),
                         IntrinsicOperation::MemEquals => Some(BcBuiltin::MemEquals),
                         IntrinsicOperation::Exit => Some(BcBuiltin::Exit),
+                    };
+                    match builtin {
+                        Some(bi) => BcCallee::Builtin(bi),
+                        None => {
+                            b_ice!(b, "Unhandled intrinsic in bytecode: {:?}", intrinsic)
+                        }
                     }
-                } else {
-                    None
                 }
-            } else {
-                None
-            };
-            let callee = if let Some(builtin) = builtin {
-                BcCallee::Builtin(builtin)
-            } else {
-                match &call.callee {
+                (_, Some(Linkage::External { link_name })) => {
+                    let function_id = maybe_function_id.unwrap();
+                    let link_name = match link_name {
+                        None => b.k1.get_function(function_id).name,
+                        Some(link_name) => link_name
+                    };
+                    BcCallee::Extern(link_name, function_id)
+                }
+                _ => match &call.callee {
                     Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
@@ -1535,8 +1552,10 @@ fn compile_expr(
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "bc abstract call");
                     }
-                }
+                },
             };
+
+            // Add function to compile queue, and (maybe) do some inlining one day!
             if let BcCallee::Direct(function_id) = &callee {
                 match b.k1.bytecode.functions.get(*function_id) {
                     None => {
@@ -1556,6 +1575,7 @@ fn compile_expr(
                     }
                 }
             }
+
             let return_inst_kind: InstKind = b.type_to_inst_kind(return_type);
             for arg in &call.args {
                 args.push(compile_expr(b, None, *arg)?);
@@ -2718,6 +2738,9 @@ pub fn display_inst(
                 }
                 BcCallee::Indirect(callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
+                }
+                BcCallee::Extern(name, callee_fn) => {
+                    write!(w, " extern {} {}", k1.ident_str(*name), *callee_fn)?;
                 }
             };
             w.write_str("(")?;

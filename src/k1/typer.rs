@@ -5096,13 +5096,13 @@ impl TypedProgram {
                 if !is_concrete {
                     eprintln!("Someone's asking me to compile this non-concrete function")
                 }
-                if self.functions.get(function_id).body_block.is_none() {
-                    debug!(
-                        "Function with no body (after compile) made it into pending: {}",
-                        self.function_id_to_string(function_id, false)
-                    );
-                    continue;
-                }
+                // if self.functions.get(function_id).body_block.is_none() {
+                //     debug!(
+                //         "Function with no body (after compile) made it into pending: {}",
+                //         self.function_id_to_string(function_id, false)
+                //     );
+                //     continue;
+                // }
                 if let Err(e) = bc::compile_function(self, function_id) {
                     return failf!(
                         e.span,

@@ -6,6 +6,8 @@ Similarly, put lambda environments in the (non-function) arena
 Add enum tags to the LLVM repr (they're opaque currently; this'll allow SROA to at least handle the tag stuff)
 Inline all small functions in typer or bc
 AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
+- let context(impl Alloc) temp = mem/AllocMode.Arena;
+- language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs
@@ -14,11 +16,11 @@ More optimal final programs
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 
 Ideas
+- [ ] c"" string literals that are of type ptr (what about interpolation?)
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
-- [ ] c"" string literals that are of type Pointer (what about interpolation?)
 - [ ] Make demo readme / site
-- [ ] Support "base-2-shifted" enum tags by default, allowing for set-like logic on variants:
+- [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
   - [ ] First-class data-oriented design features for struct/enum setups?
@@ -29,14 +31,15 @@ Syntax/elegance
 - [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
+  - [ ] Ok now I'm really thinking about `size` and it being signed.
+  - [ ] Also: do safe integer coercions automatically
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
-      `impl Unwrap<Inner = u32> for i64`
+      `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
 Simple but missing
 - [x] Support ability constraints on generics
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] implement iterator for Array
-- [ ] Do safe integer coercions automatically
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
 
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
@@ -50,8 +53,8 @@ Simple but missing
 
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work
-- [ ] Bug: technically we should require that the blanket impl params appear in the Self type expression
-- [ ] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
+- [ ] We should require that a blanket impl's params appear in the Self type
+- [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
 ## Project: Actual modules, library vs binary compile, allow linker options
@@ -63,7 +66,7 @@ Simple but missing
   - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
   - [ ] Dependencies: local module
   - [ ] Dependencies: git url
-  - [ ] Linker options
+  - [ ] Specify linker options in manifest
   - [ ] serialize typedprogram (for 'incremental', really just cached, compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system

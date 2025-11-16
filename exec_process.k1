@@ -66,6 +66,7 @@ fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string])
 
 fn testPosix(): unit {
     println("Testing process execution...");
+    //let context(impl Alloc) temp = mem/AllocMode.Arena;
     let context temp = mem/AllocMode.Arena;
     
     // Test 1: Simple echo command

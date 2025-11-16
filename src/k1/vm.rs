@@ -6,6 +6,7 @@ use std::num::NonZeroU32;
 use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
+use libffi::middle::Cif;
 use log::debug;
 use memmap2::{MmapMut, MmapOptions};
 
@@ -114,7 +115,7 @@ pub mod k1_types {
     pub struct Arena {
         pub basePtr: *const u8,
         pub curAddr: u64,
-        pub maxAddr: u64
+        pub maxAddr: u64,
     }
 
     #[repr(C)]
@@ -188,7 +189,7 @@ impl Vm {
             if let Some(arena_value) = self.globals.get(&arena_global_id) {
                 let arena_ptr: *const k1_types::Arena = arena_value.as_ptr().cast();
                 debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-                let arena: k1_types::Arena = unsafe {arena_ptr.read() };
+                let arena: k1_types::Arena = unsafe { arena_ptr.read() };
                 Some(arena)
             } else {
                 None
@@ -714,6 +715,58 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     }};
                 }
                 let dispatch_function_id = match call.callee {
+                    BcCallee::Extern(name, function_id) => {
+                        let mut ffi_args_types = vec![];
+                        let mut ffi_args_values = vec![];
+                        let mut ffi_args_value_addrs = vec![];
+                        let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
+                            return failf!(
+                                vm.eval_span,
+                                "Externl call to uncompiled function: {}. ({} are pending)",
+                                k1.function_id_to_string(function_id, false),
+                                k1.bytecode.b_units_pending_compile.len()
+                            );
+                        };
+                        let ffi_ret_type = inst_kind_to_ffi_type(call.ret_inst_kind);
+                        for (arg_value, arg_pt) in k1
+                            .bytecode
+                            .mem
+                            .getn(call.args)
+                            .iter()
+                            .zip(k1.bytecode.mem.getn(compiled_function.fn_params))
+                        {
+                            let ffi_type = inst_kind_to_ffi_type(InstKind::Value(*arg_pt));
+                            ffi_args_types.push(ffi_type);
+                            // We need a stable-ish address to each Value here; so we push them to
+                            // a parallel collection
+                            let vm_value = resolve_value!(*arg_value);
+                            let ffi_value = vm_value.0;
+                            ffi_args_value_addrs.push(ffi_value);
+
+                            // Now we have an address to push into the actual args array
+                            let ffi_arg_value =
+                                libffi::middle::arg(ffi_args_value_addrs.last().unwrap());
+                            ffi_args_values.push(ffi_arg_value)
+                        }
+                        let name_cstr = std::ffi::CString::new(k1.ident_str(name)).unwrap();
+                        let this_process_handle =
+                            unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY) };
+                        let fn_ptr =
+                            unsafe { libc::dlsym(this_process_handle, name_cstr.as_ptr()) };
+                        if fn_ptr.is_null() {
+                            return failf!(
+                                vm.eval_span,
+                                "Could not find extern function symbol: {}",
+                                k1.ident_str(name)
+                            );
+                        }
+
+                        let cif = Cif::new(ffi_args_types, ffi_ret_type);
+                        let result: Value =
+                            unsafe { cif.call(libffi::low::CodePtr(fn_ptr), &ffi_args_values) };
+                        eprintln!("nocommit pull this all out result is: {}", result);
+                        todo!("extern call with libffi!")
+                    }
                     BcCallee::Builtin(bc_builtin) => match bc_builtin {
                         bc::BcBuiltin::TypeSchema => {
                             // intern fn typeSchema(id: u64): TypeSchema
@@ -1867,10 +1920,24 @@ fn aligned_to(ptr: *const u8, align_bytes: usize) -> *const u8 {
     unsafe { ptr.byte_add(bytes_needed) }
 }
 
+fn inst_kind_to_ffi_type(inst_kind: InstKind) -> libffi::middle::Type {
+    match inst_kind {
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => libffi::middle::Type::u8(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => libffi::middle::Type::u32(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => libffi::middle::Type::u64(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => {
+            libffi::middle::Type::pointer()
+        }
+        InstKind::Void => libffi::middle::Type::void(),
+        InstKind::Terminator => libffi::middle::Type::void(),
+        k => unimplemented!("FFI type not implemented yet: {}", k.kind_str()),
+    }
+}
+
 pub struct Stack {
     allocation: MmapMut,
     base_ptr: *const u8,
-    frames: Vec<StackFrame>,
+    frames: Vec<StackFrameRecord>,
     cursor: *const u8,
 }
 
@@ -1890,7 +1957,7 @@ pub struct RetInfo {
 }
 
 #[derive(Clone)]
-pub struct StackFrame {
+pub struct StackFrameRecord {
     index: u32,
     base_ptr: *const u8,
     inst_slice: *mut [Value],
@@ -1902,14 +1969,14 @@ pub struct StackFrame {
     ret_info: Option<RetInfo>,
 }
 
-impl StackFrame {
+impl StackFrameRecord {
     fn make(
         index: u32,
         base_ptr: *const u8,
         call_span: Option<SpanId>,
         owner: &CompiledUnit,
         ret_info: Option<RetInfo>,
-    ) -> StackFrame {
+    ) -> StackFrameRecord {
         let base =
             unsafe { base_ptr.byte_add(owner.fn_params.len() as usize * size_of::<Value>()) };
         let inst_slice =
@@ -1918,7 +1985,7 @@ impl StackFrame {
         // Frames must be 8-byte aligned
         debug_assert!((base_ptr as *const Value).is_aligned());
 
-        StackFrame {
+        StackFrameRecord {
             index,
             base_ptr,
             inst_slice,
@@ -1989,7 +2056,7 @@ impl Stack {
         self.align_to_bytes(8);
         let base_ptr = self.cursor;
 
-        let frame = StackFrame::make(index, base_ptr, call_span, owner, ret_info);
+        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info);
         let registers_size =
             size_of::<Value>() * (frame.inst_slice.len() + frame.param_count as usize);
         let registers_align = align_of::<Value>();
@@ -2000,7 +2067,7 @@ impl Stack {
         self.push_layout_uninit(registers_layout);
     }
 
-    fn pop_frame(&mut self) -> StackFrame {
+    fn pop_frame(&mut self) -> StackFrameRecord {
         let f = self.frames.pop().unwrap();
         self.cursor = f.base_ptr;
         f
@@ -2027,15 +2094,15 @@ impl Stack {
     }
 
     #[allow(unused)]
-    fn caller_frame(&self) -> &StackFrame {
+    fn caller_frame(&self) -> &StackFrameRecord {
         self.frames.get(self.caller_frame_index() as usize).unwrap()
     }
 
-    fn current_frame(&self) -> &StackFrame {
+    fn current_frame(&self) -> &StackFrameRecord {
         self.frames.last().unwrap()
     }
 
-    fn current_frame_opt(&self) -> Option<&StackFrame> {
+    fn current_frame_opt(&self) -> Option<&StackFrameRecord> {
         self.frames.last()
     }
 

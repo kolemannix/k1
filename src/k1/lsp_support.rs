@@ -17,7 +17,7 @@ pub fn get_expr_at_point(
     for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
         let span = k1.ast.spans.get(*span_id);
         if span.file_id == file {
-            if let Some((start, end)) = k1.ast.sources.get_lines_for_span(span) {
+            if let Some((start, _end)) = k1.ast.sources.get_lines_for_span(span) {
                 if start.line_index == line_index {
                     let char_index_abs = start.start_char + char_index;
                     if span.start <= char_index_abs && char_index_abs < span.end() {
