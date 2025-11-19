@@ -1,6 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use k1::compiler::CompilerConfig;
@@ -23,6 +24,8 @@ fn main() -> anyhow::Result<ExitCode> {
     log::set_max_level(log::LevelFilter::Info);
     info!("k1 repl v0.1.0");
 
+    let lib_dir_pathbuf =
+        std::env::var("K1_LIB_DIR").map(PathBuf::from).unwrap_or(PathBuf::from("k1lib"));
     let mut ast = ParsedProgram::make(
         "repl".to_string(),
         CompilerConfig {
@@ -32,6 +35,7 @@ fn main() -> anyhow::Result<ExitCode> {
                 .unwrap_or(k1::compiler::Target::LinuxIntel64),
             debug: true,
             out_dir: ".k1-out/repl".into(),
+            k1_lib_dir: lib_dir_pathbuf,
         },
     );
     let name = "repl.k1";

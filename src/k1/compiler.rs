@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::parse::{self};
 use crate::parse::{NumericWidth, write_source_location};
-use crate::typer::{ErrorLevel, TypedProgram};
+use crate::typer::{ErrorLevel, LibRefLinkType, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::info;
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-pub const MAC_SDK_VERSION: &str = "11.0.0";
+pub const MAC_SDK_VERSION: &str = "15.0.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetOs {
@@ -135,6 +135,31 @@ impl Target {
     }
 }
 
+pub fn logical_name_to_dylib_filename(
+    target_os: TargetOs,
+    link_type: LibRefLinkType,
+    logical_name: &str,
+) -> PathBuf {
+    match (target_os, link_type) {
+        (TargetOs::Linux, LibRefLinkType::Static) => {
+            Path::new(&format!("lib{}", logical_name)).with_extension("a")
+        }
+        (TargetOs::Linux, LibRefLinkType::Dynamic) => {
+            Path::new(&format!("lib{}", logical_name)).with_extension("so")
+        }
+        (TargetOs::MacOs, LibRefLinkType::Static) => {
+            Path::new(&format!("lib{}", logical_name)).with_extension("a")
+        }
+        (TargetOs::MacOs, LibRefLinkType::Dynamic) => {
+            Path::new(&format!("lib{}", logical_name)).with_extension("dylib")
+        }
+        // In Windows we'd skip the 'lib' prefix and add extension dll or lib
+        (TargetOs::Wasm, _) => {
+            panic!("Dynamic libraries are not supported on the wasm target")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     Check {
@@ -235,6 +260,7 @@ pub struct CompilerConfig {
     pub target: Target,
     pub debug: bool,
     pub out_dir: PathBuf,
+    pub k1_lib_dir: PathBuf,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -330,12 +356,20 @@ pub fn compile_program(
         .target
         .or(detect_host_target())
         .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
+
+    let lib_dir_pathbuf =
+        std::env::var("K1_LIB_DIR").map(PathBuf::from).unwrap_or(PathBuf::from("k1lib"));
+
+    let corelib_dir = lib_dir_pathbuf.join("core");
+    let stdlib_dir = lib_dir_pathbuf.join("std");
+
     let config = CompilerConfig {
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
         debug: args.debug,
         out_dir,
+        k1_lib_dir: lib_dir_pathbuf,
     };
 
     let module_name = if src_path.is_dir() {
@@ -345,11 +379,6 @@ pub fn compile_program(
     };
 
     let mut p = TypedProgram::new(module_name.clone(), config);
-
-    let lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
-    let lib_dir = Path::new(&lib_dir_string);
-    let corelib_dir = lib_dir.join("core");
-    let stdlib_dir = lib_dir.join("std");
 
     if let Err(e) = p.add_module(&corelib_dir, false) {
         write_program_dump(&p);
@@ -410,14 +439,15 @@ pub fn compile_program(
 }
 
 pub fn write_executable(
-    debug: bool,
-    target: Target,
-    k1_lib_dir: &Path,
-    out_dir: &Path,
+    k1: &TypedProgram,
     module_name: &Path,
     extra_options: &[String],
     optimize: bool,
 ) -> Result<()> {
+    let target = k1.ast.config.target;
+    let debug = k1.ast.config.debug;
+    let out_dir = &k1.ast.config.out_dir;
+    let k1_lib_dir = &k1.ast.config.k1_lib_dir;
     let clang_time = std::time::Instant::now();
 
     //opt/homebrew/opt/llvm@18/lib/libunwind.dylib
@@ -428,67 +458,79 @@ pub fn write_executable(
     let mut build_cmd = std::process::Command::new(clang_path);
     let llvm_lib_base = llvm_base.join("lib");
     let bc_name = out_dir.join(module_name.with_extension("bc"));
-    let bc_file = bc_name.to_str().unwrap();
     let out_name = out_dir.join(module_name);
-    let out_file = out_name.to_str().unwrap();
-    let k1rt_c_path = k1_lib_dir.join("k1rt.c");
-    let k1rt_backtrace_path = k1_lib_dir.join("k1rt_backtrace.c");
 
     let llvm_include_path = llvm_base.join("include");
-    let llvm_include_str = llvm_include_path.to_str().unwrap();
     let macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
     } else {
         None
     };
 
-    let mut build_args = vec![];
     if debug {
-        build_args.push("-g");
-        build_args.push("-fsanitize=address,undefined");
-        build_args.push("-O0");
+        build_cmd.arg("-g");
+        build_cmd.arg("-fsanitize=address,undefined");
+        build_cmd.arg("-O0");
     } else {
         if optimize {
-            build_args.push("-O3")
+            build_cmd.arg("-O3");
         } else {
-            build_args.push("-gline-tables-only");
-            build_args.push("-fno-omit-frame-pointer");
+            build_cmd.arg("-gline-tables-only");
+            build_cmd.arg("-fno-omit-frame-pointer");
         }
     };
 
-    build_args.push("-L");
-    build_args.push(llvm_lib_base.to_str().unwrap());
-    build_args.push("-I");
-    build_args.push(llvm_include_str);
+    build_cmd.arg("-L");
+    build_cmd.arg(llvm_lib_base.into_os_string());
+    build_cmd.arg("-I");
+    build_cmd.arg(llvm_include_path);
 
     match target.target_os() {
         TargetOs::MacOs => {
-            build_args.push(macos_version_flag.as_ref().unwrap());
-            build_args.push("--sysroot");
-            build_args.push("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
-            build_args.push("-lunwind");
+            build_cmd.arg(macos_version_flag.as_ref().unwrap());
+            build_cmd.arg("--sysroot");
+            build_cmd.arg("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
+            build_cmd.arg("-lunwind");
         }
         TargetOs::Linux => {
-            build_args.push("-lunwind");
+            build_cmd.arg("-lunwind");
             if debug {
                 // Requires: sudo apt-get install libdw-dev (or equivalent)
                 // Alternative: Use -static flag to statically link for distribution
-                build_args.push("-ldw");
-                build_args.push("-DHAVE_LIBDW");
+                build_cmd.arg("-ldw");
+                build_cmd.arg("-DHAVE_LIBDW");
             }
         }
         TargetOs::Wasm => {}
     }
 
-    build_args.extend_from_slice(&[
-        k1rt_c_path.to_str().unwrap(),
-        k1rt_backtrace_path.to_str().unwrap(),
-        bc_file,
-        "-o",
-        out_file,
-    ]);
+    // Our actual compiled LLVM bitcode!
+    build_cmd.arg(bc_name);
 
-    build_cmd.args(build_args);
+    build_cmd.arg("-o");
+    build_cmd.arg(out_name);
+
+    // Linking with libraries
+    // First, put k1lib on the search path
+    build_cmd.arg(format!("-L{}", k1_lib_dir.display()));
+    let libs_to_link = k1.all_manifest_libs();
+    for ext_lib in &libs_to_link {
+        let logical_name_str = k1.ident_str(ext_lib.name);
+        if logical_name_str == "k1rt" {
+            build_cmd.arg(PathBuf::from("k1lib").join("libk1rt.a"));
+        } else {
+            let filename = logical_name_to_dylib_filename(
+                target.target_os(),
+                ext_lib.link_type,
+                logical_name_str,
+            );
+            let path_with_libs = PathBuf::from("libs").join(filename);
+            let flag = format!("-l:{}", path_with_libs.display());
+            build_cmd.arg(flag);
+        }
+    }
+    build_cmd.arg("-Llib");
+
     build_cmd.args(extra_options);
     log::info!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
@@ -548,19 +590,8 @@ pub fn codegen_module<'ctx, 'module>(
         }
     }
 
-    let k1_lib_dir_string = std::env::var("K1_LIB_DIR").unwrap_or("k1lib".to_string());
-    let k1_lib_dir = PathBuf::from(k1_lib_dir_string);
-
     if do_write_executable {
-        write_executable(
-            args.debug,
-            typed_module.ast.config.target,
-            &k1_lib_dir,
-            out_dir,
-            &module_name_path,
-            &args.clang_options,
-            args.optimize,
-        )?;
+        write_executable(typed_module, &module_name_path, &args.clang_options, args.optimize)?;
     }
 
     if args.llvm_counts {

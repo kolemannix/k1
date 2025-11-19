@@ -1324,11 +1324,10 @@ pub struct ParsedNamespace {
     pub definitions: EcoVec<ParsedId>,
     pub id: ParsedNamespaceId,
     pub span: SpanId,
-    // TODO: Used by typer phase once full conditional definitions is implemented
-    // pub enabled_definitions: EcoVec<ParsedId>,
 }
 
-// Tiny little expression language that turns out to be necesary if you want nice rich logical
+// Tiny little expression language that turns out to be necesary
+// if you want nice rich logical
 // recursive conditional compilation; i.e.,
 // #if <cond> {
 //   fn xyz();
@@ -4016,32 +4015,26 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Linkage::Intrinsic
         } else if self.peek().kind == K::KeywordExtern {
             self.advance();
-            let external_name = if self.peek().kind == K::OpenParen {
+            let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
                 self.advance();
-                let external_name_token = self.expect_eat_token(K::STRING_DQ)?;
-                // Accessing the token chars this way achieves a partial borrow of self
-                // allowing us to intern the identifier
-                let string_text = Parser::tok_chars(
-                    &self.ast.spans,
-                    self.ast.sources.get_source(self.file_id),
-                    external_name_token,
-                );
-                let Some(string_text_trimmed) =
-                    string_text.strip_prefix("\"").and_then(|s| s.strip_suffix("\""))
-                else {
-                    return Err(error(
-                        "Internal Error: expected string prefix/suffix",
-                        external_name_token,
-                    ));
+                let ident1 = self.expect_dq_ident()?;
+                let ident2 = if let Some(_comma) = self.maybe_consume_next(K::Comma) {
+                    let ident2 = self.expect_dq_ident()?;
+                    Some(ident2)
+                } else {
+                    None
                 };
-                let ident = self.ast.idents.intern(string_text_trimmed);
+                let (lib_name, fn_name) = match ident2 {
+                    None => (None, Some(ident1)),
+                    Some(fn_name) => (Some(ident1), Some(fn_name)),
+                };
 
                 self.expect_eat_token(K::CloseParen)?;
-                Some(ident)
+                (lib_name, fn_name)
             } else {
-                None
+                (None, None)
             };
-            Linkage::External { link_name: external_name }
+            Linkage::External { lib_name, fn_name }
         } else {
             Linkage::Standard
         };
@@ -4116,6 +4109,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedFunctionId::PENDING,
         });
         Ok(Some(function_id))
+    }
+
+    fn expect_dq_ident(&mut self) -> ParseResult<Ident> {
+        let external_name_token = self.expect_eat_token(K::STRING_DQ)?;
+        // Accessing the token chars this way achieves a partial borrow of self
+        // allowing us to intern the identifier
+        let string_text = Parser::tok_chars(
+            &self.ast.spans,
+            self.ast.sources.get_source(self.file_id),
+            external_name_token,
+        );
+        let Some(string_text_trimmed) =
+            string_text.strip_prefix("\"").and_then(|s| s.strip_suffix("\""))
+        else {
+            return Err(error(
+                "Internal Error: expected string prefix/suffix",
+                external_name_token,
+            ));
+        };
+        let ident = self.ast.idents.intern(string_text_trimmed);
+        Ok(ident)
     }
 
     fn expect_type_constraint_expr(&mut self) -> ParseResult<ParsedTypeConstraintExpr> {
@@ -4816,6 +4830,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
             target: crate::compiler::detect_host_target().unwrap(),
             debug: true,
             out_dir: ".k1-out-unit-test".into(),
+            k1_lib_dir: std::path::PathBuf::from("k1lib")
         },
     );
 

@@ -16,6 +16,7 @@ fn make_test_module() -> ParsedProgram {
             target: detect_host_target().unwrap(),
             debug: true,
             out_dir: ".k1-out-parse-test".into(),
+            k1_lib_dir: std::path::PathBuf::from("k1lib"),
         },
     )
 }

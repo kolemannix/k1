@@ -79,7 +79,7 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External { link_name: Option<Ident> },
+    External { lib_name: Option<Ident>, fn_name: Option<Ident> },
     Intrinsic,
 }
 
@@ -2165,10 +2165,23 @@ pub enum ModuleRef {
     Local { path: PathBuf },
 }
 
+#[derive(Clone, Copy)]
+pub enum LibRefLinkType {
+    Static,
+    Dynamic,
+}
+
+#[derive(Clone, Copy)]
+pub struct LibRef {
+    pub name: Ident,
+    pub link_type: LibRefLinkType,
+}
+
 pub struct ModuleManifest {
-    kind: ModuleKind,
-    deps: Vec<ModuleRef>,
-    multithreading: bool,
+    pub kind: ModuleKind,
+    pub deps: Vec<ModuleRef>,
+    pub multithreading: bool,
+    pub libs: Vec<LibRef>,
 }
 
 pub struct Module {
@@ -2351,6 +2364,8 @@ pub struct TypedProgram {
     pub vm_static_stack: vm::Stack,
     pub vm_global_constant_lookups: FxHashMap<TypedGlobalId, vm::Value>,
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
+    pub vm_process_dlopen_handle: *mut std::ffi::c_void,
+    pub vm_library_dlopens: FxHashMap<Ident, *mut std::ffi::c_void>,
 
     /// Perm arena space
     pub mem: kmem::Mem<TypedProgram>,
@@ -2412,8 +2427,6 @@ impl TypedProgram {
         {
             panic!("Root namespace was taken, hmmmm");
         }
-        let vm_stack_size = crate::MEGABYTE * 10;
-        let vm_static_stack_size = crate::MEGABYTE;
         let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
         pattern_ctors.add(PatternCtor::Unit);
         pattern_ctors.add(PatternCtor::BoolFalse);
@@ -2434,10 +2447,15 @@ impl TypedProgram {
 
         let word_size = ast.config.target.word_size();
 
-        let mut vm_static_stack = vm::Stack::make(vm_stack_size);
+        let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
         let mut vm_global_constant_lookups = FxHashMap::new();
         vm_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vm::Value::ptr(addr));
+        let process_dlopen_handle =
+            unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
+        if process_dlopen_handle.is_null() {
+            panic!("Failed to get process dlopen handle");
+        }
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
@@ -2485,17 +2503,19 @@ impl TypedProgram {
             function_type_params: VPool::make_with_hint("function_type_params", 8192),
             patterns: TypedPatternPool::make(),
             pattern_ctors,
-            vm: Box::new(Some(vm::Vm::make(vm_stack_size, vm_static_stack_size))),
+            vm: Box::new(Some(vm::Vm::make())),
             vm_alts: vec![
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
-                vm::Vm::make(vm_stack_size, vm_static_stack_size),
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
             ],
             vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
+            vm_process_dlopen_handle: process_dlopen_handle,
+            vm_library_dlopens: FxHashMap::default(),
 
             mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
@@ -2592,13 +2612,22 @@ impl TypedProgram {
         }
 
         let module_manifest = if is_core {
-            ModuleManifest { kind: ModuleKind::Library, deps: vec![], multithreading: false }
+            ModuleManifest {
+                kind: ModuleKind::Library,
+                deps: vec![],
+                multithreading: false,
+                libs: vec![LibRef {
+                    name: self.ast.idents.intern("k1rt"),
+                    link_type: LibRefLinkType::Static,
+                }],
+            }
         } else {
             match self.get_module_manifest(parsed_namespace_id)? {
                 None => ModuleManifest {
                     kind: ModuleKind::Executable,
                     deps: vec![],
                     multithreading: false,
+                    libs: vec![],
                 },
                 Some(manifest) => manifest,
             }
@@ -4275,15 +4304,20 @@ impl TypedProgram {
                     2 => ModuleKind::Script,
                     i => panic!("Unecognized module kind index: {}", i),
                 };
+
+                // Maybe, one day these are the same thing
                 let deps = vec![];
+                let libs = vec![];
+
                 let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
 
-                Ok(Some(ModuleManifest { kind, deps, multithreading }))
+                Ok(Some(ModuleManifest { kind, deps, multithreading, libs }))
             }
             StaticValue::Zero(_) => Ok(Some(ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: vec![],
                 multithreading: false,
+                libs: vec![],
             })),
             _ => panic!(
                 "Expected module manifest to be a struct, got: {}",
@@ -5083,19 +5117,19 @@ impl TypedProgram {
 
     fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
         loop {
-            //eprintln!(
-            //    "compile_all_pending_bytecode {}",
-            //    self.bytecode.b_units_pending_compile.len()
-            //);
-            //for p in &self.bytecode.b_units_pending_compile {
-            //    eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
-            //}
+            // eprintln!(
+            //     "compile_all_pending_bytecode {}",
+            //     self.bytecode.b_units_pending_compile.len()
+            // );
+            // for p in &self.bytecode.b_units_pending_compile {
+            //     eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
+            // }
             if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
                 self.eval_function_body(function_id)?;
-                let is_concrete = self.functions.get(function_id).is_concrete;
-                if !is_concrete {
-                    eprintln!("Someone's asking me to compile this non-concrete function")
-                }
+                // let is_concrete = self.functions.get(function_id).is_concrete;
+                // if !is_concrete {
+                //     eprintln!("Someone's asking me to compile this non-concrete function")
+                // }
                 // if self.functions.get(function_id).body_block.is_none() {
                 //     debug!(
                 //         "Function with no body (after compile) made it into pending: {}",
@@ -5185,7 +5219,7 @@ impl TypedProgram {
                             source.filename,
                             location.line_number()
                         );
-                        let new_vm = vm::Vm::make(10 * crate::MEGABYTE, crate::MEGABYTE);
+                        let new_vm = vm::Vm::make();
                         new_vm
                     }
                     Some(alt_vm) => {
@@ -15581,6 +15615,56 @@ impl TypedProgram {
             typed_as_enum: false,
             payload: Some(static_values.add(StaticValue::Int(integer_value))),
         }
+    }
+
+    pub fn get_dlopen_handle(
+        &mut self,
+        lib_name: Ident,
+        span: SpanId,
+    ) -> TyperResult<*mut std::ffi::c_void> {
+        if let Some(handle) = self.vm_library_dlopens.get(&lib_name) {
+            return Ok(*handle);
+        }
+
+        let lib_name_str = self.ast.idents.get_name(lib_name);
+        let mut lib_path = match self.ast.config.target.target_os() {
+            crate::compiler::TargetOs::Linux => {
+                Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
+            }
+            crate::compiler::TargetOs::MacOs => {
+                Path::new(&format!("lib{}", lib_name_str)).with_extension("dylib")
+            }
+            crate::compiler::TargetOs::Wasm => {
+                return failf!(span, "Dynamic libraries are not supported on the wasm target");
+            }
+        };
+        eprintln!("cwd is: {}", std::env::current_dir().unwrap().display());
+        if lib_name_str == "k1rt" {
+            lib_path = self.ast.config.k1_lib_dir.join(lib_path)
+        } else {
+            // Assumes cwd is project root
+            lib_path = Path::new("libs").join("lib_path")
+        }
+        let c_lib_name = std::ffi::CString::new(lib_path.to_string_lossy().as_bytes()).unwrap();
+        let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
+        if handle.is_null() {
+            eprintln!(
+                "Failed to dlopen library '{}': {}",
+                lib_name_str,
+                unsafe { std::ffi::CStr::from_ptr(libc::dlerror()) }.to_string_lossy()
+            );
+            return failf!(span, "Failed to dlopen library '{}'", lib_name_str);
+        }
+        self.vm_library_dlopens.insert(lib_name, handle);
+        Ok(handle)
+    }
+
+    pub fn all_manifest_libs(&self) -> Vec<LibRef> {
+        let mut names = vec![];
+        for module in self.modules.iter() {
+            names.extend(&module.manifest.libs);
+        }
+        names
     }
 
     pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, &parse::Line) {

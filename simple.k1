@@ -3,8 +3,33 @@ fn foo(): i32 {
   x;
   crash("foo")
 }
+
+fn retu8(): u8 { 7 }
+fn reti16(): i16 { -10 }
+fn retf32(): f32 { -27.5 }
+
 fn main(): i32 {
-   #static core/libc/malloc(64);
+   let thePtr = #static { core/libc/malloc(64) as uword } ;
+   eprintln("malloc was: {thePtr}");
+
+   let theU8 = #static retu8();
+   eprintln("u8 was: {theU8}");
+   let theI16 = #static reti16();
+   eprintln("i16 was: {theI16}");
+
+   let thef32 = #static retf32();
+   eprintln("f32 was: {thef32}");
+
+   #static {
+     let* buf = Array/zeroed[char, 1024uword]();
+     let len = core/k1rt/snprintf_f64(
+       buf.basePtr(), 1024, 3.14, places = 3
+     );
+     if len < 0 crash("");
+     let chars = buf.asView().slice(0, len as uword);
+     println("CHARS: {chars}");
+   };
+
    core/sys/exit(0);
 }
 

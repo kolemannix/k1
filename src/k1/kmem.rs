@@ -167,11 +167,36 @@ impl<Tag> Mem<Tag> {
 
         Self { cursor, mmap, _marker: PhantomData }
     }
-    fn cursor_mut(&self) -> *mut u8 {
+
+    pub fn reset(&mut self, zero: bool) {
+        if zero {
+            let used = self.bytes_used();
+            unsafe {
+                core::ptr::write_bytes(self.mmap.as_mut_ptr(), 0, used);
+            }
+        }
+        self.cursor = unsafe { self.mmap.as_ptr().byte_add(8) };
+    }
+
+    /// Sends an advise_range call, effectively faulting in
+    /// all the pages you expect to use
+    pub fn will_need(&mut self, byte_count: usize) {
+        self.mmap.advise_range(memmap2::Advice::WillNeed, 0, byte_count).unwrap();
+    }
+
+    pub fn cursor(&self) -> *const u8 {
+        self.cursor
+    }
+
+    pub fn cursor_mut(&self) -> *mut u8 {
         self.cursor.cast_mut()
     }
 
-    fn base_ptr(&self) -> *const u8 {
+    pub fn set_cursor(&mut self, new_cursor: *const u8) {
+        self.set_cursor_checked(new_cursor);
+    }
+
+    pub fn base_ptr(&self) -> *const u8 {
         self.mmap.as_ptr()
     }
 
@@ -248,7 +273,27 @@ impl<Tag> Mem<Tag> {
         self.pack_handle(t_ptr)
     }
 
-    fn push_slice_uninit<T>(&mut self, len: usize) -> *mut T {
+    pub fn align_to_bytes(&mut self, align: usize) {
+        unsafe {
+            let dst = self.cursor_mut();
+            let dst = dst.byte_add(dst.align_offset(align));
+            self.set_cursor_checked(dst);
+        }
+    }
+
+    pub fn push_layout_uninit(&mut self, layout: crate::typer::Layout) -> *mut u8 {
+        unsafe {
+            let dst = self.cursor_mut();
+            let dst = dst.byte_add(dst.align_offset(layout.align as usize));
+
+            let new_cursor = dst.byte_add(layout.size as usize);
+            self.set_cursor_checked(new_cursor);
+
+            dst
+        }
+    }
+
+    pub fn push_slice_uninit<T>(&mut self, len: usize) -> *mut T {
         unsafe {
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
