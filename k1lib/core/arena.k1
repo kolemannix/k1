@@ -31,7 +31,7 @@ ns Arena {
   }
 
   fn default(): Arena {
-    let basePtr: ptr = if k1/IS_STATIC mem/alloc(size = 10 * mb, align = 8) else _virtual(usageHintMb = 10);
+    let basePtr: ptr = _virtual(usageHintMb = 10);
     //let header: *mut Arena = basePtr as *mut Arena;
     //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {

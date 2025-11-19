@@ -586,6 +586,14 @@ ns Array {
     types/sizeOf[Array[T, N]]()
   }
 
+  fn zeroed[T, N: static uword](): Array[T, N] {
+    mem/zeroed[Array[T, N]]()
+  }
+
+  fn bytes[N: static uword](): Array[u8, N] {
+    mem/zeroed[Array[u8, N]]()
+  }
+
   fn allocate[T, N: static uword](context alloc: mem/AllocMode)(): *mut Array[T, N] {
     alloc.allocT[Array[T, N]]()
   }
@@ -667,7 +675,7 @@ ns libc {
   extern("free") fn free(ptr: ptr): unit
   extern("realloc") fn realloc(ptr: ptr, size: uword): ptr
 
-  extern("__errno_location") fn errno(): *i32
+  extern("perror") fn perror(msg: ptr): unit
 
   ns files {
     let SEEK_END: i32 = 2;
@@ -700,13 +708,6 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     );
     sys/exit(1)
   } else if k1/IS_STATIC {
-    //let s = "exiting static\n\0";
-    //posix/write(
-    //  fileNo = 1,
-    //  data = s.buffer.data as ptr,
-    //  count = s.buffer.len - 1,
-    //  offset = 0
-    //);
     k1/emitCompilerMessage(locn, .Error, msg);
     sys/exit(111)
   } else {

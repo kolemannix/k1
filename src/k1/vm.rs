@@ -7,19 +7,20 @@ use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
 use libffi::middle::Cif;
+use libffi::middle::Type as FfiType;
 use log::debug;
-use memmap2::{MmapMut, MmapOptions};
 
 #[cfg(test)]
 mod vm_test;
 
 use crate::{
     bc::{
-        self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
+        self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, ProgramBytecode,
+        Value as BcValue,
     },
     compiler::WordSize,
     errf, failf, ice_span,
-    kmem::MSlice,
+    kmem::{self, MSlice},
     lex::SpanId,
     parse::{Ident, StringId},
     typer::{
@@ -212,9 +213,10 @@ impl Vm {
         self.eval_span = SpanId::NONE;
     }
 
-    pub fn make(stack_size_bytes: usize, static_size_bytes: usize) -> Self {
-        let stack = Stack::make(stack_size_bytes);
-        let static_stack = Stack::make(static_size_bytes);
+    pub fn make() -> Self {
+        let stack = Stack::make();
+        let static_stack = Stack::make();
+
         Self {
             globals: FxHashMap::with_capacity(8192),
             static_stack,
@@ -676,10 +678,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 ip += 1
             }
             Inst::Call { id } => {
-                let call = *k1.bytecode.calls.get(id);
+                let call = k1.bytecode.calls.get(id);
+                let ret_inst_kind = call.ret_inst_kind;
                 // Figure out where we're returning to
                 let return_frame_index = vm.stack.current_frame_index();
-                let (return_type, return_place) = match &call.ret_inst_kind {
+                let (return_type, return_place) = match ret_inst_kind {
                     InstKind::Value(ret_type) => {
                         let ret_place = match call.dst {
                             Some(bc_dst) => {
@@ -690,7 +693,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 frame_index: return_frame_index,
                             },
                         };
-                        (Some(*ret_type), ret_place)
+                        (Some(ret_type), ret_place)
                     }
                     InstKind::Void => (
                         None,
@@ -714,58 +717,22 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         continue 'exec;
                     }};
                 }
+                let call = k1.bytecode.calls.get(id);
+                let call_args = call.args;
                 let dispatch_function_id = match call.callee {
-                    BcCallee::Extern(name, function_id) => {
-                        let mut ffi_args_types = vec![];
-                        let mut ffi_args_values = vec![];
-                        let mut ffi_args_value_addrs = vec![];
-                        let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
-                            return failf!(
-                                vm.eval_span,
-                                "Externl call to uncompiled function: {}. ({} are pending)",
-                                k1.function_id_to_string(function_id, false),
-                                k1.bytecode.b_units_pending_compile.len()
-                            );
-                        };
-                        let ffi_ret_type = inst_kind_to_ffi_type(call.ret_inst_kind);
-                        for (arg_value, arg_pt) in k1
-                            .bytecode
-                            .mem
-                            .getn(call.args)
-                            .iter()
-                            .zip(k1.bytecode.mem.getn(compiled_function.fn_params))
-                        {
-                            let ffi_type = inst_kind_to_ffi_type(InstKind::Value(*arg_pt));
-                            ffi_args_types.push(ffi_type);
-                            // We need a stable-ish address to each Value here; so we push them to
-                            // a parallel collection
-                            let vm_value = resolve_value!(*arg_value);
-                            let ffi_value = vm_value.0;
-                            ffi_args_value_addrs.push(ffi_value);
-
-                            // Now we have an address to push into the actual args array
-                            let ffi_arg_value =
-                                libffi::middle::arg(ffi_args_value_addrs.last().unwrap());
-                            ffi_args_values.push(ffi_arg_value)
-                        }
-                        let name_cstr = std::ffi::CString::new(k1.ident_str(name)).unwrap();
-                        let this_process_handle =
-                            unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY) };
-                        let fn_ptr =
-                            unsafe { libc::dlsym(this_process_handle, name_cstr.as_ptr()) };
-                        if fn_ptr.is_null() {
-                            return failf!(
-                                vm.eval_span,
-                                "Could not find extern function symbol: {}",
-                                k1.ident_str(name)
-                            );
-                        }
-
-                        let cif = Cif::new(ffi_args_types, ffi_ret_type);
-                        let result: Value =
-                            unsafe { cif.call(libffi::low::CodePtr(fn_ptr), &ffi_args_values) };
-                        eprintln!("nocommit pull this all out result is: {}", result);
-                        todo!("extern call with libffi!")
+                    BcCallee::Extern(lib_name, name, function_id) => {
+                        let result: Value = handle_ffi_call(
+                            k1,
+                            vm,
+                            vm.stack.current_frame_index(),
+                            inst_offset,
+                            ret_inst_kind,
+                            call_args,
+                            lib_name,
+                            name,
+                            function_id,
+                        )?;
+                        builtin_return!(result)
                     }
                     BcCallee::Builtin(bc_builtin) => match bc_builtin {
                         bc::BcBuiltin::TypeSchema => {
@@ -802,9 +769,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             // intern fn allocZeroed(size: uword, align: uword): Pointer
                             let zero = bc_builtin == bc::BcBuiltin::AllocateZeroed;
                             let size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let align: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
                             let Ok(layout) = std::alloc::Layout::from_size_align(
                                 size.0 as usize,
                                 align.0 as usize,
@@ -824,13 +791,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         bc::BcBuiltin::Reallocate => {
                             // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
                             let old_ptr: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let old_size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
                             let align: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                             let new_size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 3));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 3));
                             let layout = std::alloc::Layout::from_size_align(
                                 old_size.as_usize(),
                                 align.as_usize(),
@@ -849,11 +816,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         bc::BcBuiltin::Free => {
                             // intern fn free(ptr: Pointer, size: uword, align: uword): unit
                             let ptr =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).as_ptr();
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
                             let size =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1)).as_usize();
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).as_usize();
                             let align =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2)).as_usize();
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2)).as_usize();
 
                             let layout =
                                 std::alloc::Layout::from_size_align(size as usize, align as usize)
@@ -864,21 +831,21 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         }
                         bc::BcBuiltin::MemCopy => {
                             // intern fn copy( dst: Pointer, src: Pointer, count: uword): unit
-                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
-                            let src: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                            let src: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
                             let count: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                             memcopy(src.as_ptr(), dst.as_ptr().cast_mut(), count.as_usize());
 
                             builtin_return!(Value::UNIT)
                         }
                         bc::BcBuiltin::MemSet => {
                             //intern fn set(dst: Pointer, value: u8, count: uword): unit
-                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
+                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let value: u8 =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1)).bits() as u8;
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits() as u8;
                             let count: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                             unsafe {
                                 std::ptr::write_bytes(
                                     dst.as_ptr().cast_mut(),
@@ -891,10 +858,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         }
                         bc::BcBuiltin::MemEquals => {
                             //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
-                            let p1: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
-                            let p2: Value = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                            let p1: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                            let p2: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
                             let size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
 
                             let p1_ptr = p1.as_ptr();
                             let p2_ptr = p2.as_ptr();
@@ -912,7 +879,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         }
                         bc::BcBuiltin::Exit => {
                             let exit_code =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
                             break exit_code as i32;
                         }
                         bc::BcBuiltin::CompilerMessage => {
@@ -923,10 +890,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             //  ): unit
                             // todo!()
                             let location_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0));
-                            let level_arg = resolve_value!(*k1.bytecode.mem.get_nth(call.args, 1));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                            let level_arg = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
                             let message_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 2));
+                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                             let location = unsafe {
                                 (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read()
                             };
@@ -991,17 +958,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let called_inst_offset = compiled_function.inst_offset;
                 let new_frame_index = caller_frame_index + 1;
 
-                // eprintln!(
-                //     "{}{}dispatching call [{}] to above",
-                //     bc::compiled_unit_to_string(
-                //         k1,
-                //         CompilableUnit::Function(dispatch_function_id),
-                //         true
-                //     ),
-                //     "  ".repeat(vm.stack.current_frame_index() as usize),
-                //     new_frame_index,
-                // );
-
                 // - Push a stack frame
                 vm.stack.push_new_frame(Some(vm.eval_span), compiled_function, ret_info);
                 if vm.stack.frames.len() >= 1024 {
@@ -1011,7 +967,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 debug_assert_eq!(new_frame_index, vm.stack.current_frame_index());
 
                 // Prepare the function's arguments
-                for (index, arg) in k1.bytecode.mem.getn(call.args).iter().enumerate() {
+                for (index, arg) in k1.bytecode.mem.getn(call_args).iter().enumerate() {
                     // Note: These need to execute before we push, in case they access this stack's
                     // params or instrs by index, which is basically always! The other option would
                     // be parameterizing 'resolve_value' by stack frame
@@ -1821,8 +1777,8 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
-    let string_stack_addr = k1.vm_static_stack.push_t(k1_string);
-    Value::ptr(string_stack_addr)
+    let string_stack_addr = k1.vm_static_stack.mem.push(k1_string) as *mut k1_types::K1ViewLike;
+    Value::ptr(string_stack_addr.cast())
 }
 
 fn allocate(layout: std::alloc::Layout, zero: bool) -> *mut u8 {
@@ -1915,30 +1871,95 @@ pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
     }
 }
 
-fn aligned_to(ptr: *const u8, align_bytes: usize) -> *const u8 {
-    let bytes_needed = ptr.align_offset(align_bytes);
-    unsafe { ptr.byte_add(bytes_needed) }
+#[inline(always)]
+fn handle_ffi_call(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    frame_index: u32,
+    inst_offset: u32,
+    ret_inst_kind: InstKind,
+    args: MSlice<bc::Value, ProgramBytecode>,
+    lib_name: Option<Ident>,
+    fn_name: Ident,
+    function_id: FunctionId,
+) -> TyperResult<Value> {
+    eprintln!("ffi call {}", k1.function_id_to_string(function_id, false));
+    // nocommit: Have to use Vec here since libffi::Type has `Drop` impl.
+    // Switch to libffi::low
+    // nocommit: FFI is unfinished but working!
+    let mut ffi_args_types = Vec::with_capacity(args.len() as usize);
+    let mut ffi_args_values = vm.stack.mem.new_list(args.len());
+    let mut ffi_args_value_addrs = Vec::with_capacity(args.len() as usize);
+    let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
+        return failf!(
+            vm.eval_span,
+            "External call to uncompiled function: {}. ({} are pending)",
+            k1.function_id_to_string(function_id, false),
+            k1.bytecode.b_units_pending_compile.len()
+        );
+    };
+    let ffi_ret_type = inst_kind_to_ffi_type(ret_inst_kind);
+    for (arg_value, arg_pt) in
+        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(compiled_function.fn_params))
+    {
+        let ffi_type = inst_kind_to_ffi_type(InstKind::Value(*arg_pt));
+        ffi_args_types.push(ffi_type);
+
+        // We need a stable-ish address to each Value here; so we push them to
+        // a parallel collection
+        let vm_value = resolve_value(k1, vm, frame_index, inst_offset, *arg_value);
+
+        ffi_args_value_addrs.push(vm_value.bits());
+
+        // Now we have an address to push into the actual args array
+        let ffi_arg_value = libffi::middle::arg(ffi_args_value_addrs.last().unwrap());
+        ffi_args_values.push(ffi_arg_value)
+    }
+    let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
+    let handle_for_search = match lib_name {
+        None => k1.vm_process_dlopen_handle,
+        Some(lib_name) => k1.get_dlopen_handle(lib_name, vm.eval_span)?,
+    };
+    let fn_ptr = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
+    if fn_ptr.is_null() {
+        return failf!(
+            vm.eval_span,
+            "Could not find extern function symbol: {}",
+            k1.ident_str(fn_name)
+        );
+    }
+
+    eprintln!("ffi args were: {:?}", ffi_args_value_addrs);
+    let cif = Cif::new(ffi_args_types.as_slice().iter().cloned(), ffi_ret_type);
+    let result: Value = unsafe { cif.call(libffi::low::CodePtr(fn_ptr), &ffi_args_values) };
+    eprintln!("result is: {}", result);
+    Ok(result)
 }
 
-fn inst_kind_to_ffi_type(inst_kind: InstKind) -> libffi::middle::Type {
+fn inst_kind_to_ffi_type(inst_kind: InstKind) -> FfiType {
     match inst_kind {
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => libffi::middle::Type::u8(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => libffi::middle::Type::u32(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => libffi::middle::Type::u64(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => {
-            libffi::middle::Type::pointer()
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => FfiType::u8(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U16)) => FfiType::u16(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => FfiType::u32(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => FfiType::u64(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::I8)) => FfiType::i8(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::I16)) => FfiType::i16(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::I32)) => FfiType::i32(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::I64)) => FfiType::i64(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::F32)) => FfiType::f32(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::F64)) => FfiType::f64(),
+        InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => FfiType::pointer(),
+        InstKind::Void => FfiType::void(),
+        InstKind::Terminator => FfiType::void(),
+        InstKind::Value(PhysicalType::Agg(_agg_id)) => {
+            todo!("FFI aggregates")
         }
-        InstKind::Void => libffi::middle::Type::void(),
-        InstKind::Terminator => libffi::middle::Type::void(),
-        k => unimplemented!("FFI type not implemented yet: {}", k.kind_str()),
     }
 }
 
 pub struct Stack {
-    allocation: MmapMut,
-    base_ptr: *const u8,
+    pub mem: crate::kmem::Mem<()>,
     frames: Vec<StackFrameRecord>,
-    cursor: *const u8,
 }
 
 #[derive(Clone, Copy)]
@@ -1976,12 +1997,8 @@ impl StackFrameRecord {
         call_span: Option<SpanId>,
         owner: &CompiledUnit,
         ret_info: Option<RetInfo>,
+        inst_slice: *mut [Value],
     ) -> StackFrameRecord {
-        let base =
-            unsafe { base_ptr.byte_add(owner.fn_params.len() as usize * size_of::<Value>()) };
-        let inst_slice =
-            core::ptr::slice_from_raw_parts_mut(base as *mut Value, owner.inst_count as usize);
-
         // Frames must be 8-byte aligned
         debug_assert!((base_ptr as *const Value).is_aligned());
 
@@ -2005,40 +2022,21 @@ impl StackFrameRecord {
 }
 
 impl Stack {
-    pub fn make(size: usize) -> Stack {
-        let mut mmap_options = MmapOptions::new();
-        let allocation = mmap_options.len(size).map_anon().unwrap();
-        let base_ptr = (*allocation).as_ptr();
-
-        allocation.advise(memmap2::Advice::Sequential).unwrap();
+    pub fn make() -> Stack {
+        let mut mem = kmem::Mem::make();
         let expected_values_needed = 10000;
-        allocation
-            .advise_range(
-                memmap2::Advice::WillNeed,
-                0,
-                expected_values_needed * std::mem::size_of::<Value>(),
-            )
-            .unwrap();
-
-        Self {
-            // Calls libc::munmap(ptr, len as libc::size_t) on Drop
-            allocation,
-            base_ptr,
-            frames: Vec::with_capacity(512),
-            cursor: base_ptr,
-        }
+        mem.will_need(expected_values_needed * std::mem::size_of::<Value>());
+        Self { mem, frames: Vec::with_capacity(512) }
     }
 
     pub fn reset(&mut self) {
-        let len_to_clear = self.cursor.addr() - self.base_ptr.addr();
-        if len_to_clear == 0 {
-            return;
-        }
-        self.cursor = self.base_ptr();
-        unsafe {
-            core::ptr::write_bytes(self.allocation.as_mut_ptr(), 0, len_to_clear);
-        }
+        let zero = cfg!(debug_assertions);
+        self.mem.reset(zero);
         self.frames.clear();
+    }
+
+    pub fn cursor(&self) -> *const u8 {
+        self.mem.cursor()
     }
 
     /// Frame Layout:
@@ -2053,23 +2051,22 @@ impl Stack {
         ret_info: Option<RetInfo>,
     ) {
         let index = self.frames.len() as u32;
-        self.align_to_bytes(8);
-        let base_ptr = self.cursor;
+        self.mem.align_to_bytes(8);
+        let base_ptr = self.cursor();
 
-        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info);
-        let registers_size =
-            size_of::<Value>() * (frame.inst_slice.len() + frame.param_count as usize);
-        let registers_align = align_of::<Value>();
-        let registers_layout =
-            Layout { size: registers_size as u32, align: registers_align as u32 };
-        debug_assert_eq!(registers_align, 8);
+        let param_count = owner.fn_params.len();
+        let inst_count = owner.inst_count;
+        let inst_base = unsafe { base_ptr.byte_add(param_count as usize * size_of::<Value>()) };
+        let inst_slice =
+            core::ptr::slice_from_raw_parts_mut(inst_base as *mut Value, inst_count as usize);
+        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info, inst_slice);
+        self.mem.push_slice_uninit::<Value>(param_count as usize + inst_count as usize);
         self.frames.push(frame);
-        self.push_layout_uninit(registers_layout);
     }
 
     fn pop_frame(&mut self) -> StackFrameRecord {
         let f = self.frames.pop().unwrap();
-        self.cursor = f.base_ptr;
+        self.mem.set_cursor(f.base_ptr);
         f
     }
 
@@ -2146,7 +2143,7 @@ impl Stack {
 
     #[inline]
     pub fn base_ptr(&self) -> *const u8 {
-        self.base_ptr
+        self.mem.base_ptr()
     }
 
     #[inline]
@@ -2156,138 +2153,21 @@ impl Stack {
 
     #[inline]
     pub fn end_ptr(&self) -> *const u8 {
-        self.allocation.as_ptr_range().end
+        self.mem.cursor()
     }
 
     #[inline]
     pub fn current_offset_bytes(&self) -> usize {
-        self.cursor.addr() - self.base_addr()
-    }
-
-    #[inline]
-    fn cursor_mut(&self) -> *mut u8 {
-        self.cursor as *mut u8
-    }
-
-    #[inline]
-    fn check_bounds(&self, ptr: *const u8) {
-        if self.allocation.is_empty() {
-            panic!("check_bounds on a stack with no allocation")
-        }
-        let ptr_addr = ptr.addr();
-        let base_addr = self.base_addr();
-        let end_addr = self.end_ptr().addr();
-        let oob = ptr_addr < base_addr || ptr_addr >= end_addr;
-        if oob {
-            panic!(
-                "Out of bounds access to stack frame: {} < {} < {}",
-                base_addr, ptr_addr, end_addr
-            );
-        }
-    }
-
-    pub fn push_slice(&mut self, slice: &[u8]) -> *const u8 {
-        let slice_stack_ptr = self.cursor_mut();
-        let slice_len = slice.len();
-        if cfg!(debug_assertions) {
-            self.check_bounds(unsafe { slice_stack_ptr.byte_add(slice_len) })
-        }
-
-        unsafe {
-            // Copy bytes using memcpy:
-            let dst_slice = std::slice::from_raw_parts_mut(slice_stack_ptr, slice_len);
-            // eprintln!("copy_from_slice {:?} {:?}", slice.as_ptr(), slice_stack_ptr);
-            dst_slice.copy_from_slice(slice);
-        }
-        // Would be nice to re-use the 'end' of the slice ptr
-        self.cursor = unsafe { self.cursor.byte_add(slice_len) };
-        slice_stack_ptr.cast_const()
-    }
-
-    fn align_to_bytes(&mut self, align_bytes: usize) {
-        self.cursor = aligned_to(self.cursor, align_bytes)
-    }
-
-    // pub fn push_struct_values(
-    //     &mut self,
-    //     types: &TypePool,
-    //     struct_type_id: TypeId,
-    //     members: &[Value],
-    // ) -> Value {
-    //     let struct_layout = types.get_layout(struct_type_id);
-    //     let struct_base = self.push_layout_uninit(struct_layout);
-    //
-    //     let struct_layout = &types.get_struct_layout(struct_type_id);
-    //
-    //     for (value, field_offset) in members.iter().zip(struct_layout.field_offsets.iter()) {
-    //         // Go to offset
-    //         let field_dst = unsafe { dst.byte_add(*field_offset as usize) };
-    //         store_value(types, field_dst, *value);
-    //     }
-    //
-    //     self.advance_cursor(struct_layout.size as usize);
-    //     Value::Agg { type_id: struct_type_id, ptr: struct_base }
-    // }
-
-    // pub fn push_enum(
-    //     &mut self,
-    //     types: &TypePool,
-    //     variant_type_id: TypeId,
-    //     payload_value: Option<Value>,
-    // ) -> *const u8 {
-    //     let dst = self.cursor_mut();
-    //     let (enum_base, layout) =
-    //         build_enum_at_location(dst, types, variant_type_id, payload_value);
-    //     self.advance_cursor(layout.size as usize);
-    //     enum_base
-    // }
-
-    // pub fn push_value(&mut self, types: &TypePool, value: Value) -> *const u8 {
-    //     let layout = types.get_layout(value.get_type());
-    //     self.align_to_bytes(layout.align as usize);
-    //     self.push_value_no_align(types, value)
-    // }
-
-    // We may not want to align, in case we're pushing this value as part of a packed struct.
-    // Or if our caller already aligned us
-    // pub fn push_value_no_align(&mut self, types: &TypePool, value: Value) -> *const u8 {
-    //     let dst: *mut u8 = self.cursor_mut();
-    //
-    //     let written: usize = store_value(types, dst, value);
-    //     self.advance_cursor(written);
-    //     dst.cast_const()
-    // }
-
-    pub fn advance_cursor(&mut self, count: usize) {
-        self.cursor = unsafe { self.cursor.byte_add(count) };
-    }
-
-    pub fn push_t<T: Copy>(&mut self, value: T) -> *const u8 {
-        let c = self.push_layout_uninit(Layout::from_rust_type::<T>());
-        unsafe {
-            (c as *mut T).write(value);
-        }
-        c
+        self.mem.bytes_used()
     }
 
     pub fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
-        if cfg!(debug_assertions) {
-            self.check_bounds(unsafe { self.cursor.byte_add(layout.size as usize) })
-        }
-        self.align_to_bytes(layout.align as usize);
-        let c = self.cursor_mut();
-        self.advance_cursor(layout.size as usize);
-        c
+        self.mem.push_layout_uninit(layout)
     }
 
-    #[inline]
-    pub fn push_usize(&mut self, value: usize) -> *const u8 {
-        self.push_t(value)
-    }
-
-    #[inline]
-    pub fn push_ptr_uninit(&mut self) -> *mut u8 {
-        self.push_usize(0).cast_mut()
+    pub fn push_t<T>(&mut self, t: T) -> *const u8 {
+        let r = self.mem.push(t);
+        r as *mut T as *const u8
     }
 
     pub fn frame_to_bytes(&self, frame_index: u32) -> &[u8] {
@@ -2667,12 +2547,3 @@ fn sanity_check_ptr(ptr: *const u8) {
         ptr.addr()
     );
 }
-
-//mod c_mem {
-//    use std::os::raw::{c_size_t, c_void};
-//    extern "C" {
-//        fn malloc(size: c_size_t) -> *mut c_void;
-//        fn realloc(ptr: *mut c_void, size: c_size_t) -> *mut c_void;
-//        fn free(ptr: *mut c_void);
-//    }
-//}

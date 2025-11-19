@@ -12,29 +12,27 @@ ns mem {
   }
 
   fn virtualAlloc(size: uword): ptr {
-    // Workaround for not having implemented virtual alloc in the VM yet.
-    if k1/IS_STATIC { alloc(size, 8) } else {
-      let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
-      let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
-      let addr = posix/mmap(
-        addr = ptr/NULL,
-        len = size,
-        prot = rw,
-        flags = privateAnon,
-        fd = -1,
-        offset = 0
-      );
-      if addr == (posix/MAP_FAILED as ptr) crash("mmap failed");
-      addr
-    }
+    let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
+    let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
+    let addr = posix/mmap(
+      addr = ptr/NULL,
+      len = size,
+      prot = rw,
+      flags = privateAnon,
+      fd = -1i32,
+      offset = 0
+    );
+    if addr == (posix/MAP_FAILED as ptr) {
+      libc/perror(ptr/NULL);
+      crash("mmap failed");
+    };
+    addr
   }
 
   fn virtualRelease(base: ptr, len: uword): unit {
-    if k1/IS_STATIC { free(base, len, 8) } else {
-      let result = posix/munmap(base, len);
-      if result == -1 crash("munmap of ptr {base} x {len} failed");
-      ()
-    }
+    let result = posix/munmap(base, len);
+    if result == -1 crash("munmap of ptr {base} x {len} failed");
+    ()
   }
 
   deftype AllocMode = either

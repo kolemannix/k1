@@ -162,8 +162,18 @@ pub enum BcCallee {
     Builtin(BcBuiltin),
     Direct(FunctionId),
     Indirect(Value),
-    Extern(parse::Ident, FunctionId),
+    Extern(Option<parse::Ident>, parse::Ident, FunctionId),
     // No lambda call; been compiled down to just calls and args by now
+}
+
+impl BcCallee {
+    fn known_function_id(&self) -> Option<FunctionId> {
+        match self {
+            BcCallee::Direct(fid) => Some(*fid),
+            BcCallee::Extern(_, _, fid) => Some(*fid),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -686,6 +696,8 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     } else {
         if !f.linkage.is_external() {
             return failf!(fn_span, "Function has no body to compile");
+        } else {
+            eprintln!("compiling extern function with no instructions");
         }
     };
 
@@ -1506,13 +1518,13 @@ fn compile_expr(
                         }
                     }
                 }
-                (_, Some(Linkage::External { link_name })) => {
+                (_, Some(Linkage::External { lib_name, fn_name })) => {
                     let function_id = maybe_function_id.unwrap();
-                    let link_name = match link_name {
+                    let fn_name = match fn_name {
                         None => b.k1.get_function(function_id).name,
-                        Some(link_name) => link_name
+                        Some(fn_name) => fn_name,
                     };
-                    BcCallee::Extern(link_name, function_id)
+                    BcCallee::Extern(lib_name, fn_name, function_id)
                 }
                 _ => match &call.callee {
                     Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
@@ -1556,11 +1568,11 @@ fn compile_expr(
             };
 
             // Add function to compile queue, and (maybe) do some inlining one day!
-            if let BcCallee::Direct(function_id) = &callee {
-                match b.k1.bytecode.functions.get(*function_id) {
+            if let Some(function_id) = callee.known_function_id() {
+                match b.k1.bytecode.functions.get(function_id) {
                     None => {
-                        if !b.k1.bytecode.b_units_pending_compile.contains(function_id) {
-                            b.k1.bytecode.b_units_pending_compile.push(*function_id);
+                        if !b.k1.bytecode.b_units_pending_compile.contains(&function_id) {
+                            b.k1.bytecode.b_units_pending_compile.push(function_id);
                         }
                     }
                     Some(unit) => {
@@ -2739,8 +2751,8 @@ pub fn display_inst(
                 BcCallee::Indirect(callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
                 }
-                BcCallee::Extern(name, callee_fn) => {
-                    write!(w, " extern {} {}", k1.ident_str(*name), *callee_fn)?;
+                BcCallee::Extern(lib_name, name, callee_fn) => {
+                    write!(w, " extern {} {} {}", k1.ident_str_opt(*lib_name), k1.ident_str(*name), *callee_fn)?;
                 }
             };
             w.write_str("(")?;

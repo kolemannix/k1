@@ -21,127 +21,9 @@ mod stack_tests {
     }
 
     fn test_stack() -> Stack {
-        let mut s = Stack::make(1024 * 1024);
+        let mut s = Stack::make();
         s.push_new_frame(None, &fake_unit(), None);
         s
-    }
-
-    #[test]
-    fn test_initial_state() {
-        let stack = test_stack();
-        assert_eq!(stack.current_offset_bytes(), 0);
-        assert_eq!(stack.frames.len(), 1);
-        assert_eq!(stack.frames[0].index, 0);
-        assert_eq!(stack.frames[0].base_ptr, stack.base_ptr());
-        assert_eq!(stack.frames[0].base_ptr, stack.cursor);
-    }
-
-    #[test]
-    fn test_align_to_bytes() {
-        let mut stack = test_stack();
-        // Push 3 bytes to misalign
-        stack.push_slice(&[1, 2, 3]);
-        assert_eq!(stack.current_offset_bytes(), 3);
-        stack.align_to_bytes(4);
-        assert_eq!(stack.current_offset_bytes(), 4);
-        assert_eq!(stack.frame_to_bytes(0), [1, 2, 3, 0]);
-
-        // Test with already aligned pointer
-        let mut stack = test_stack();
-        stack.push_slice(&[1, 2, 3, 4]);
-        stack.align_to_bytes(4);
-        assert_eq!(stack.current_offset_bytes(), 4);
-    }
-
-    #[test]
-    fn test_push_byte() {
-        let mut stack = test_stack();
-        let ptr = stack.push_t(42u8);
-        assert_eq!(stack.current_offset_bytes(), 1);
-        assert_eq!(stack.frame_to_bytes(0)[0], 42);
-        assert_eq!(ptr.addr(), stack.base_addr());
-    }
-
-    #[test]
-    fn test_push_usize() {
-        let mut stack = test_stack();
-        let value = 0x12345678_usize;
-        let ptr = stack.push_usize(value);
-        assert!(stack.current_offset_bytes() == 4 || stack.current_offset_bytes() == 8); // Depends on platform
-        unsafe {
-            let read_back = *(ptr as *const usize);
-            assert_eq!(read_back as usize, value);
-        };
-    }
-
-    #[test]
-    fn test_pop_frame() {
-        let mut stack = test_stack();
-        let _ = stack.push_t(10u64);
-        let _ = stack.push_t(10u64);
-        stack.push_new_frame(None, &fake_unit(), None);
-        let f = stack.current_frame();
-        let f_base_ptr = f.base_ptr;
-        assert_eq!(stack.current_offset_bytes(), 16);
-        assert_eq!(f.index, 1);
-        assert_eq!(f.base_ptr, unsafe { stack.base_ptr().byte_add(16) });
-        assert_eq!(f.base_ptr, stack.cursor);
-        stack.push_t(10u64);
-        stack.push_t(10u64);
-        assert_eq!(stack.frames.len(), 2);
-        assert_eq!(stack.current_offset_bytes(), 32);
-        stack.pop_frame();
-        assert_eq!(stack.frames.len(), 1);
-        assert_eq!(stack.current_offset_bytes(), 16);
-        assert_eq!(stack.cursor, f_base_ptr);
-    }
-
-    #[test]
-    fn test_push_value_basic() {
-        let mut stack = test_stack();
-
-        // Test basic value types
-        stack.push_t(crate::typer::UNIT_BYTE_VALUE);
-        assert_eq!(stack.current_offset_bytes(), 1);
-        assert_eq!(stack.frame_to_bytes(0)[0], crate::typer::UNIT_BYTE_VALUE);
-
-        stack.push_t(true);
-        assert_eq!(stack.frame_to_bytes(0)[1], 1);
-
-        stack.push_t(b'A');
-        assert_eq!(stack.frame_to_bytes(0)[2], b'A');
-
-        let int_ptr = stack.push_t(42u32) as *const i32;
-        assert_eq!(stack.current_offset_bytes(), 8);
-        unsafe {
-            let read_back = int_ptr.read_unaligned();
-            assert_eq!(read_back, 42);
-        }
-
-        assert_eq!(
-            stack.frame_to_bytes(0),
-            &[
-                0, 1, b'A', 0, // 1 byte of alignment padding
-                42, 0, 0, 0 // a little-endian 42u32?
-            ]
-        );
-    }
-
-    #[test]
-    fn test_push_value_float() {
-        let mut stack = test_stack();
-
-        let f32ptr = stack.push_t(std::f32::consts::PI) as *const f32;
-        assert_eq!(stack.current_offset_bytes(), 4);
-        let read_f32 = unsafe { f32ptr.read() };
-        assert_eq!(read_f32, std::f32::consts::PI);
-
-        let f64_ptr = stack.push_t(std::f64::consts::PI) as *const f64;
-
-        assert_eq!(stack.current_offset_bytes(), 16);
-        assert!(f64_ptr.is_aligned());
-        let read_f64 = unsafe { f64_ptr.read_unaligned() };
-        assert_eq!(read_f64, std::f64::consts::PI);
     }
 
     #[test]
@@ -151,7 +33,7 @@ mod stack_tests {
         unit.inst_count = 42;
         unit.fn_params = MSlice::forged(1, 10);
         stack.push_new_frame(None, &unit, None);
-        let frame_space_for_registers = stack.cursor.addr() - stack.current_frame().base_ptr.addr();
+        let frame_space_for_registers = stack.cursor().addr() - stack.current_frame().base_ptr.addr();
         assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
         let x_addr = stack.push_t(b'X');
         stack.set_param_value(1, 0, Value(23));

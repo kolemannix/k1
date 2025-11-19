@@ -10,3 +10,7 @@ k1_lsp.log*
 .aider*
 .DS_Store
 *module_dump.txt
+
+k1lib/*.o
+k1lib/*.a
+k1lib/*.dylib

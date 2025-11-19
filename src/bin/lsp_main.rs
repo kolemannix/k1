@@ -9,7 +9,7 @@ use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileProgramError;
 use k1::lex::SpanId;
-use k1::parse::{FileId, ParsedProgram, Source};
+use k1::parse::{ParsedProgram, Source};
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;

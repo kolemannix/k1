@@ -22,7 +22,7 @@ use inkwell::debug_info::{
 };
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
+use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
@@ -37,7 +37,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::compiler::WordSize;
+use crate::compiler::{WordSize, MAC_SDK_VERSION};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
@@ -3634,7 +3634,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         let llvm_name = match typed_function.linkage {
-            TyperLinkage::External { link_name: Some(link_name), .. } => {
+            TyperLinkage::External { fn_name: Some(link_name), .. } => {
                 self.k1.ident_str(link_name)
             }
             _ => &self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
@@ -3913,8 +3913,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // }
 
         // Hack to guarantee presence of required extern declarations
+        // nocommit: Figure out why these were here; document exact reason or remove
         for (id, function) in self.k1.function_iter() {
-            if let TyperLinkage::External { link_name: Some(link_name) } = function.linkage {
+            if let TyperLinkage::External { fn_name: Some(link_name), .. } = function.linkage {
                 match self.k1.ident_str(link_name) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
                         self.codegen_function_signature(id)?;
@@ -3968,10 +3969,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
         // I use this explicit triple to avoid an annoying warning log on mac.
-        // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
-        // let triple = TargetTriple::create(triple_str);
+        let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
+        let triple = TargetTriple::create(triple_str);
+        // let triple = TargetMachine::get_default_triple();
 
-        let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).unwrap();
         let machine = target
             .create_target_machine(
