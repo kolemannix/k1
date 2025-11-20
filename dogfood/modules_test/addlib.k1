@@ -1,11 +1,22 @@
 let MODULE_INFO: core/k1/ModuleManifest = {
-  name: "moduletest",
   kind: .Executable,
-  dependencies: ["k1/stdlib", "./sublib"]
-}
+  deps: [],
+  multithreading: false,
+  libs: ["mul"]
+};
+
+extern("mul", "myMul") fn myMul(x: int, y: int): int
+
+// nocommit
+let x: 1024 = #static {
+  println("Scripting time");
+  myMul(32,32)
+};
 
 fn main(): i32 {
-  let i = subsy/sub(30, 1);
+  // let i = subsy/sub(30, 1);
+  let i = myMul(4, 3);
   println("Hello, modules! {i}");
+  println("32*32 is {x}");
   0
 }

@@ -183,6 +183,7 @@ impl InferenceContext {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StaticExecContext {
+    #[allow(unused)]
     is_metaprogram: bool,
     /// If a `return` is used, what type is expected
     /// This is needed because `return` usually looks at the
@@ -2144,11 +2145,6 @@ pub struct TypedModuleBuffers {
     int_parse: String,
 }
 
-pub struct VmExecuteResult {
-    pub type_id: TypeId,
-    pub static_value_id: StaticValueId,
-}
-
 nz_u32_id!(ModuleId);
 
 pub const MODULE_ID_CORE: ModuleId = ModuleId::ONE;
@@ -2173,7 +2169,7 @@ pub enum LibRefLinkType {
 
 #[derive(Clone, Copy)]
 pub struct LibRef {
-    pub name: Ident,
+    pub name: StringId,
     pub link_type: LibRefLinkType,
 }
 
@@ -2617,12 +2613,17 @@ impl TypedProgram {
                 deps: vec![],
                 multithreading: false,
                 libs: vec![LibRef {
-                    name: self.ast.idents.intern("k1rt"),
+                    name: self.ast.strings.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
                 }],
             }
         } else {
-            match self.get_module_manifest(parsed_namespace_id)? {
+            let manifest_result = self.get_module_manifest(parsed_namespace_id);
+            if let Err(e) = manifest_result {
+                self.report_error(e);
+                bail!("Failed to compile module manifest")
+            }
+            match manifest_result.unwrap() {
                 None => ModuleManifest {
                     kind: ModuleKind::Executable,
                     deps: vec![],
@@ -4286,7 +4287,7 @@ impl TypedProgram {
                 expected_type_id: Some(type_id),
                 static_ctx: Some(StaticExecContext {
                     is_metaprogram: false,
-                    expected_return_type: None,
+                    expected_return_type: Some(type_id),
                 }),
                 global_defn_name: None,
                 flags: EvalExprFlags::empty(),
@@ -4294,7 +4295,14 @@ impl TypedProgram {
             &[],
         )?;
 
-        match self.static_values.get(manifest_result.static_value_id) {
+        let manifest_value = self.static_values.get(manifest_result);
+        if let Err(msg) =
+            self.check_types(type_id, manifest_value.get_type(), Scopes::ROOT_SCOPE_ID)
+        {
+            return failf!(manifest_global.span, "Module manifest type mismatch: {}", msg);
+        }
+
+        match manifest_value {
             StaticValue::Struct(value) => {
                 let value_fields = self.static_values.mem.getn(value.fields);
                 let kind = self.static_values.get(value_fields[0]).as_enum().unwrap();
@@ -4302,16 +4310,25 @@ impl TypedProgram {
                     0 => ModuleKind::Library,
                     1 => ModuleKind::Executable,
                     2 => ModuleKind::Script,
-                    i => panic!("Unecognized module kind index: {}", i),
+                    i => panic!("Unrecognized module kind index: {}", i),
                 };
 
-                // Maybe, one day these are the same thing
+                // Maybe, one day libs and deps are the same thing
+                // Currently, though, no common needs
                 let deps = vec![];
-                let libs = vec![];
 
                 let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
 
-                Ok(Some(ModuleManifest { kind, deps, multithreading, libs }))
+                let libs = self.static_values.get(value_fields[3]).as_view().unwrap();
+                let mut lib_refs = vec![];
+                for lib in self.static_values.get_slice(libs.elements) {
+                    // Grab the strings out for now. Eventually we can maybe just
+                    // mmap this thing.
+                    let string_id = self.static_values.get(*lib).as_string().unwrap();
+                    lib_refs.push(LibRef { name: string_id, link_type: LibRefLinkType::Static })
+                }
+
+                Ok(Some(ModuleManifest { kind, deps, multithreading, libs: lib_refs }))
             }
             StaticValue::Zero(_) => Ok(Some(ModuleManifest {
                 kind: ModuleKind::Library,
@@ -4321,7 +4338,7 @@ impl TypedProgram {
             })),
             _ => panic!(
                 "Expected module manifest to be a struct, got: {}",
-                self.static_value_to_string(manifest_result.static_value_id)
+                self.static_value_to_string(manifest_result)
             ),
         }
     }
@@ -5157,14 +5174,13 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
-    ) -> TyperResult<VmExecuteResult> {
+    ) -> TyperResult<StaticValueId> {
         if ctx.is_inference() {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
                 "#static cannot be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
             );
         }
-        let static_ctx = ctx.static_ctx.unwrap();
 
         // Note: We need to mask access from inside a static to outside variables!
         //       Currently we'll just fail in bytecode gen with "missing variable"
@@ -5173,15 +5189,9 @@ impl TypedProgram {
         let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
-        let required_type_id = self.exprs.get_type(expr);
-        let output_type_id =
-            if static_ctx.is_metaprogram { STRING_TYPE_ID } else { required_type_id };
 
         if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, ctx.scope_id)? {
-            return Ok(VmExecuteResult {
-                type_id: required_type_id,
-                static_value_id: shortcut_value_id,
-            });
+            return Ok(shortcut_value_id);
         }
 
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
@@ -5198,7 +5208,7 @@ impl TypedProgram {
 
         let static_value_id = execution_result?;
 
-        Ok(VmExecuteResult { type_id: output_type_id, static_value_id })
+        Ok(static_value_id)
     }
 
     fn execute_static_expr(
@@ -5206,7 +5216,7 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
-    ) -> TyperResult<VmExecuteResult> {
+    ) -> TyperResult<StaticValueId> {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let span = self.ast.get_expr_span(parsed_expr);
@@ -5242,6 +5252,7 @@ impl TypedProgram {
             debug!("Restoring alt VM to pool");
             self.vm_alts.push(vm);
         }
+
         res
     }
 
@@ -5272,9 +5283,7 @@ impl TypedProgram {
             })),
             &[],
         )?;
-        let StaticValue::Bool(condition_bool) =
-            self.static_values.get(vm_cond_result.static_value_id)
-        else {
+        let StaticValue::Bool(condition_bool) = self.static_values.get(vm_cond_result) else {
             let cond_span = self.ast.get_expr_span(cond);
             return failf!(cond_span, "Condition is not a boolean");
         };
@@ -5343,16 +5352,16 @@ impl TypedProgram {
         };
         let typed_global = self.globals.get(global_id);
         let scope_id = typed_global.parent_scope;
-        let type_id = typed_global.ty;
+        let declared_type = typed_global.ty;
 
         let is_referencing = parsed_global.is_referencing;
-        let type_to_check = if is_referencing {
-            let Type::Reference(r) = self.types.get(type_id) else {
+        let expected_type = if is_referencing {
+            let Type::Reference(r) = self.types.get(declared_type) else {
                 return failf!(parsed_global.span, "Global references must have a reference type");
             };
             r.inner_type
         } else {
-            type_id
+            declared_type
         };
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
@@ -5360,30 +5369,50 @@ impl TypedProgram {
 
         let ctx = EvalExprContext {
             scope_id,
-            expected_type_id: Some(type_to_check),
+            expected_type_id: Some(expected_type),
             static_ctx: Some(StaticExecContext {
                 is_metaprogram: false,
-                expected_return_type: Some(type_to_check),
+                expected_return_type: Some(expected_type),
             }),
             global_defn_name: Some(global_name),
             flags: EvalExprFlags::empty(),
         };
-        let vm_result = self.execute_static_expr(value_expr_id, ctx, &[])?;
+        let StaticExecutionResult::TypedExpr(static_expr_id) = self.eval_static_expr_and_exec(
+            value_expr_id,
+            ParsedStaticExpr {
+                base_expr: value_expr_id,
+                kind: ParsedStaticBlockKind::Value,
+                is_definition: false,
+                condition_if_definition: None,
+                parameter_names: SliceHandle::empty(),
+                span: parsed_global.span,
+            },
+            ctx,
+        )?
+        else {
+            ice_span!(self, global_span, "Expected a typed expr from static execution")
+        };
+        let TypedExpr::StaticValue(sce) = self.exprs.get(static_expr_id) else {
+            ice_span!(self, global_span, "Got a non-static expr")
+        };
+        let static_value_id = sce.value_id;
 
-        if let Err(msg) = self.check_types(
-            type_to_check,
-            self.static_values.get(vm_result.static_value_id).get_type(),
-            scope_id,
-        ) {
-            return failf!(
-                global_span,
-                "Type mismatch for global {}: {}",
-                self.ident_str(global_name),
-                msg
-            );
+        match self.check_expr_type(expected_type, static_expr_id, scope_id) {
+            CheckExprTypeResult::Ok => {}
+            CheckExprTypeResult::Err(msg) => {
+                return failf!(
+                    global_span,
+                    "Type mismatch for global {}: {}",
+                    self.ident_str(global_name),
+                    msg
+                );
+            }
+            CheckExprTypeResult::Coerce(typed_expr_id, cow) => {
+                panic!("Global would be coerced {cow}!")
+            }
         }
 
-        self.globals.get_mut(global_id).initial_value = Some(vm_result.static_value_id);
+        self.globals.get_mut(global_id).initial_value = Some(static_value_id);
 
         Ok(())
     }
@@ -7359,15 +7388,15 @@ impl TypedProgram {
         }
 
         let kind = stat.kind;
-        let expected_type_for_execution = match kind {
+        let (expected_type_for_execution, expected_is_static) = match kind {
             ParsedStaticBlockKind::Value => match ctx.expected_type_id {
-                None => None,
+                None => (None, false),
                 Some(expected_type_id) => match self.types.get_no_follow_static(expected_type_id) {
-                    Type::Static(s) => Some(s.inner_type_id),
-                    _ => Some(expected_type_id),
+                    Type::Static(s) => (Some(s.inner_type_id), true),
+                    _ => (Some(expected_type_id), false),
                 },
             },
-            ParsedStaticBlockKind::Metaprogram => Some(STRING_TYPE_ID),
+            ParsedStaticBlockKind::Metaprogram => (Some(STRING_TYPE_ID), false),
         };
         let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
@@ -7435,10 +7464,16 @@ impl TypedProgram {
         )?;
 
         match kind {
+            ParsedStaticBlockKind::Value => {
+                let expr = if expected_is_static {
+                    self.add_static_value_expr(vm_result, span)
+                } else {
+                    self.add_static_constant_expr(vm_result, span)
+                };
+                Ok(StaticExecutionResult::TypedExpr(expr))
+            }
             ParsedStaticBlockKind::Metaprogram => {
-                let StaticValue::String(string_id) =
-                    self.static_values.get(vm_result.static_value_id)
-                else {
+                let StaticValue::String(string_id) = self.static_values.get(vm_result) else {
                     return failf!(span, "#meta block did not evaluate to a string");
                 };
                 let emitted_string = self.ast.strings.get_string(*string_id);
@@ -7474,8 +7509,9 @@ impl TypedProgram {
                     //        and for this
                     //        This could be rolled in with `is_generic_pass` ->
                     //        If its not generic pass, provide specialization info payload
-                    // TODO: if specializing, say what the types are. I think this is actually
-                    // really important debugging context
+                    // TODO: if specializing, print what the types are at the top of the file.
+                    //       this is actually really important debugging context
+                    // TODO: stem source.filename too
                     let generated_filename =
                         format!("meta_{}_{}.k1", source.filename, line.line_number());
 
@@ -7530,11 +7566,6 @@ impl TypedProgram {
                         }
                     }
                 }
-            }
-            ParsedStaticBlockKind::Value => {
-                let static_value_expr_id =
-                    self.add_static_value_expr(vm_result.static_value_id, span);
-                Ok(StaticExecutionResult::TypedExpr(static_value_expr_id))
             }
         }
     }
@@ -12230,6 +12261,7 @@ impl TypedProgram {
             let expected_type = if is_last { ctx.expected_type_id } else { None };
 
             let coerce = expected_type.is_some();
+            debug!("eval_stmt {index} with type {}", self.type_id_to_string_opt(expected_type));
             let Some(stmt_id) =
                 self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce)?
             else {
@@ -12322,6 +12354,8 @@ impl TypedProgram {
             BlockBuilder { scope_id: block_scope, statements: stmts, span: block.span },
             last_expr_type,
         );
+        //eprintln!("  finished block with type:\n{}", self.expr_to_string_with_type(id));
+        //eprintln!("  last_expr_type was: {}", self.type_id_to_string(last_expr_type));
         Ok(id)
     }
 
@@ -15643,14 +15677,14 @@ impl TypedProgram {
             lib_path = self.ast.config.k1_lib_dir.join(lib_path)
         } else {
             // Assumes cwd is project root
-            lib_path = Path::new("libs").join("lib_path")
+            lib_path = Path::new("libs").join(lib_path)
         }
         let c_lib_name = std::ffi::CString::new(lib_path.to_string_lossy().as_bytes()).unwrap();
         let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
         if handle.is_null() {
             eprintln!(
                 "Failed to dlopen library '{}': {}",
-                lib_name_str,
+                lib_path.display(),
                 unsafe { std::ffi::CStr::from_ptr(libc::dlerror()) }.to_string_lossy()
             );
             return failf!(span, "Failed to dlopen library '{}'", lib_name_str);

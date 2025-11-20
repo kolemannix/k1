@@ -6,12 +6,11 @@ use std::num::NonZeroU32;
 use ahash::HashMapExt;
 use colored::Colorize;
 use fxhash::FxHashMap;
-use libffi::middle::Cif;
-use libffi::middle::Type as FfiType;
 use log::debug;
 
 #[cfg(test)]
 mod vm_test;
+mod vm_ffi;
 
 use crate::{
     bc::{
@@ -721,7 +720,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let call_args = call.args;
                 let dispatch_function_id = match call.callee {
                     BcCallee::Extern(lib_name, name, function_id) => {
-                        let result: Value = handle_ffi_call(
+                        let result: Value = vm_ffi::handle_ffi_call(
                             k1,
                             vm,
                             vm.stack.current_frame_index(),
@@ -1868,92 +1867,6 @@ pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
     match t {
         PhysicalType::Scalar(st) => load_scalar(st, ptr),
         PhysicalType::Agg(_) => Value::ptr(ptr),
-    }
-}
-
-#[inline(always)]
-fn handle_ffi_call(
-    k1: &mut TypedProgram,
-    vm: &mut Vm,
-    frame_index: u32,
-    inst_offset: u32,
-    ret_inst_kind: InstKind,
-    args: MSlice<bc::Value, ProgramBytecode>,
-    lib_name: Option<Ident>,
-    fn_name: Ident,
-    function_id: FunctionId,
-) -> TyperResult<Value> {
-    eprintln!("ffi call {}", k1.function_id_to_string(function_id, false));
-    // nocommit: Have to use Vec here since libffi::Type has `Drop` impl.
-    // Switch to libffi::low
-    // nocommit: FFI is unfinished but working!
-    let mut ffi_args_types = Vec::with_capacity(args.len() as usize);
-    let mut ffi_args_values = vm.stack.mem.new_list(args.len());
-    let mut ffi_args_value_addrs = Vec::with_capacity(args.len() as usize);
-    let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
-        return failf!(
-            vm.eval_span,
-            "External call to uncompiled function: {}. ({} are pending)",
-            k1.function_id_to_string(function_id, false),
-            k1.bytecode.b_units_pending_compile.len()
-        );
-    };
-    let ffi_ret_type = inst_kind_to_ffi_type(ret_inst_kind);
-    for (arg_value, arg_pt) in
-        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(compiled_function.fn_params))
-    {
-        let ffi_type = inst_kind_to_ffi_type(InstKind::Value(*arg_pt));
-        ffi_args_types.push(ffi_type);
-
-        // We need a stable-ish address to each Value here; so we push them to
-        // a parallel collection
-        let vm_value = resolve_value(k1, vm, frame_index, inst_offset, *arg_value);
-
-        ffi_args_value_addrs.push(vm_value.bits());
-
-        // Now we have an address to push into the actual args array
-        let ffi_arg_value = libffi::middle::arg(ffi_args_value_addrs.last().unwrap());
-        ffi_args_values.push(ffi_arg_value)
-    }
-    let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
-    let handle_for_search = match lib_name {
-        None => k1.vm_process_dlopen_handle,
-        Some(lib_name) => k1.get_dlopen_handle(lib_name, vm.eval_span)?,
-    };
-    let fn_ptr = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
-    if fn_ptr.is_null() {
-        return failf!(
-            vm.eval_span,
-            "Could not find extern function symbol: {}",
-            k1.ident_str(fn_name)
-        );
-    }
-
-    eprintln!("ffi args were: {:?}", ffi_args_value_addrs);
-    let cif = Cif::new(ffi_args_types.as_slice().iter().cloned(), ffi_ret_type);
-    let result: Value = unsafe { cif.call(libffi::low::CodePtr(fn_ptr), &ffi_args_values) };
-    eprintln!("result is: {}", result);
-    Ok(result)
-}
-
-fn inst_kind_to_ffi_type(inst_kind: InstKind) -> FfiType {
-    match inst_kind {
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => FfiType::u8(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U16)) => FfiType::u16(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => FfiType::u32(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => FfiType::u64(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::I8)) => FfiType::i8(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::I16)) => FfiType::i16(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::I32)) => FfiType::i32(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::I64)) => FfiType::i64(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::F32)) => FfiType::f32(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::F64)) => FfiType::f64(),
-        InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => FfiType::pointer(),
-        InstKind::Void => FfiType::void(),
-        InstKind::Terminator => FfiType::void(),
-        InstKind::Value(PhysicalType::Agg(_agg_id)) => {
-            todo!("FFI aggregates")
-        }
     }
 }
 

@@ -479,10 +479,11 @@ ns k1 {
 
   deftype ModuleManifest = {
     kind: ModuleKind,
-    deps: string,
+    deps: View[string],
 
     // Primary module settings
-    multithreading: bool
+    multithreading: bool,
+    libs: View[string],
   }
 
 }

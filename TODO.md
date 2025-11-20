@@ -64,10 +64,10 @@ Simple but missing
   - [x] Module manifests somewhere
   - [x] Library vs Binary
   - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-  - [ ] Dependencies: local module
-  - [ ] Dependencies: git url
-  - [ ] Specify linker options in manifest
-  - [ ] serialize typedprogram (for 'incremental', really just cached, compilation)
+  - [x] Dependencies: local module
+  - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
+  - [ ] serialize typedprogram at each module completion (for incremental compilation)
+  - [ ] Support ".c" sources; compiles your c and adds it to the main compilation unit
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker

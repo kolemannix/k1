@@ -129,6 +129,13 @@ impl StaticValue {
             _ => None,
         }
     }
+
+    pub fn as_string(&self) -> Option<StringId> {
+        match self {
+            StaticValue::String(s) => Some(*s),
+            _ => None,
+        }
+    }
 }
 
 impl DepHash<StaticValuePool> for StaticValue {

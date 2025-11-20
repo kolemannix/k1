@@ -29,6 +29,10 @@ ns View {
     self.buffer.dataPtr()
   }
 
+  fn empty[T](): View[T] {
+    { buffer: Buffer/empty[T]() }
+  }
+
   fn copyFromArray[T, N: static uword](array: *Array[T, N]): View[T] {
     let buffer = Buffer/copyFromArray[T, N](array);
     { buffer }

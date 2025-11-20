@@ -513,11 +513,12 @@ pub fn write_executable(
     // Linking with libraries
     // First, put k1lib on the search path
     build_cmd.arg(format!("-L{}", k1_lib_dir.display()));
+    build_cmd.arg("-Llibs");
     let libs_to_link = k1.all_manifest_libs();
     for ext_lib in &libs_to_link {
-        let logical_name_str = k1.ident_str(ext_lib.name);
+        let logical_name_str = k1.get_string(ext_lib.name);
         if logical_name_str == "k1rt" {
-            build_cmd.arg(PathBuf::from("k1lib").join("libk1rt.a"));
+            build_cmd.arg(k1_lib_dir.join("libk1rt.a"));
         } else {
             let filename = logical_name_to_dylib_filename(
                 target.target_os(),
@@ -525,11 +526,10 @@ pub fn write_executable(
                 logical_name_str,
             );
             let path_with_libs = PathBuf::from("libs").join(filename);
-            let flag = format!("-l:{}", path_with_libs.display());
-            build_cmd.arg(flag);
+            // let flag = format!("-l{}", path_with_libs.display());
+            build_cmd.arg(path_with_libs);
         }
     }
-    build_cmd.arg("-Llib");
 
     build_cmd.args(extra_options);
     log::info!("Build Command: {:?}", build_cmd);

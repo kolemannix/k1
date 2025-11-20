@@ -696,8 +696,6 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     } else {
         if !f.linkage.is_external() {
             return failf!(fn_span, "Function has no body to compile");
-        } else {
-            eprintln!("compiling extern function with no instructions");
         }
     };
 
@@ -2752,7 +2750,13 @@ pub fn display_inst(
                     write!(w, " indirect {}", *callee_inst)?;
                 }
                 BcCallee::Extern(lib_name, name, callee_fn) => {
-                    write!(w, " extern {} {} {}", k1.ident_str_opt(*lib_name), k1.ident_str(*name), *callee_fn)?;
+                    write!(
+                        w,
+                        " extern {} {} {}",
+                        k1.ident_str_opt(*lib_name),
+                        k1.ident_str(*name),
+                        *callee_fn
+                    )?;
                 }
             };
             w.write_str("(")?;

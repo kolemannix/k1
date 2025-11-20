@@ -165,7 +165,7 @@ pub struct BuiltinIdents {
     pub Some: Ident,
     pub None: Ident,
     pub StringBuilder: Ident,
-    pub arena: Ident
+    pub arena: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -352,7 +352,7 @@ impl IdentPool {
             Some: intern!("Some"),
             None: intern!("None"),
             StringBuilder: intern!("StringBuilder"),
-            arena: intern!("arena")
+            arena: intern!("arena"),
         };
 
         macro_rules! make_fn {
@@ -361,8 +361,8 @@ impl IdentPool {
             };
         }
 
-        let List_withCapacity = make_fn!(&[b.List], b.withCapacity);
-        let List_push = make_fn!(&[b.List], intern!("push"));
+        let List_withCapacity = make_fn!(&[b.core, b.List], b.withCapacity);
+        let List_push = make_fn!(&[b.core, b.List], intern!("push"));
         let Iterator_next = make_fn!(&[b.Iterator], b.next);
         let Iterator_sizeHint = make_fn!(&[b.Iterator], intern!("sizeHint"));
 
@@ -390,16 +390,16 @@ impl IdentPool {
         let Try_getOk: QIdent = make_fn!(&[b.Try], intern!("getOk"));
         let Try_getError: QIdent = make_fn!(&[b.Try], intern!("getError"));
 
-        let Buffer__allocate: QIdent = make_fn!(&[b.Buffer], intern!("_allocate"));
-        let Buffer_set: QIdent = make_fn!(&[b.Buffer], intern!("set"));
+        let Buffer__allocate: QIdent = make_fn!(&[b.core, b.Buffer], intern!("_allocate"));
+        let Buffer_set: QIdent = make_fn!(&[b.core, b.Buffer], intern!("set"));
 
         let Array_set: QIdent = make_fn!(&[b.Array], intern!("set"));
 
         let mem_zeroed: QIdent = make_fn!(&[b.mem], intern!("zeroed"));
 
-        let View_wrapBuffer: QIdent = make_fn!(&[b.View], intern!("wrapBuffer"));
+        let View_wrapBuffer: QIdent = make_fn!(&[b.core, b.View], intern!("wrapBuffer"));
 
-        let Equals_equals: QIdent = make_fn!(&[b.Equals], b.equals);
+        let Equals_equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
 
         let Add_add: QIdent = make_fn!(&[b.Add], b.add);
         let Sub_sub: QIdent = make_fn!(&[b.Sub], b.sub);
