@@ -74,11 +74,11 @@ fn test(): unit {
   };
   assertEquals[int](enum1, 42);
 
-  let fieldPtrTest: int = (#static {
+  let fieldPtrTest: int = #static {
     let* x = 21;
     let s = { ptr: x };
     s.ptr.*
-  }).fromStatic();
+  };
   assertEquals(fieldPtrTest, 21);
 
 
@@ -148,7 +148,7 @@ fn test(): unit {
     let xs = [1,2,3,4,5];
     xs.asView()
   };
-  assertEquals(view.fromStatic(), [1,2,3,4,5].asView());
+  assertEquals(view, [1,2,3,4,5].asView());
   #static {
     let* l = List/wrapBuffer(Buffer/copyFromView(INT_VIEW));
     l.push(9);

@@ -37,7 +37,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::compiler::{WordSize, MAC_SDK_VERSION};
+use crate::compiler::{MAC_SDK_VERSION, WordSize};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
@@ -326,7 +326,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     /// To fix this, any time a struct or array or even another Enum contains an Enum (union),
     /// we calculate the GEP offsets ourselves in bytes, using gep i8, 0, n. As far as I can tell,
     /// this is what rustc does.
-    /// 
+    ///
     /// Note: I ended up doing something more sneaky where I synthesize a type with the proper
     /// size and align, and no unused bits
     #[allow(unused)]
@@ -3634,9 +3634,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         let llvm_name = match typed_function.linkage {
-            TyperLinkage::External { fn_name: Some(link_name), .. } => {
-                self.k1.ident_str(link_name)
-            }
+            TyperLinkage::External { fn_name: Some(link_name), .. } => self.k1.ident_str(link_name),
             _ => &self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
         };
 
@@ -3913,7 +3911,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // }
 
         // Hack to guarantee presence of required extern declarations
-        // nocommit: Figure out why these were here; document exact reason or remove
+        // These are all functions that we look up by name in the LLVM module, instead of by
+        // function id via k1. To fix, track or allow lookup of their function ids
         for (id, function) in self.k1.function_iter() {
             if let TyperLinkage::External { fn_name: Some(link_name), .. } = function.linkage {
                 match self.k1.ident_str(link_name) {

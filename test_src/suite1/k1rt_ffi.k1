@@ -1,0 +1,12 @@
+fn testFfi(): unit {
+  let s = #static {
+    let* buf = Array/zeroed[char, 1024uword]();
+    let len = core/k1rt/snprintf_f64(
+      buf.basePtr(), 1024, 3.14, places = 3
+    );
+    if len < 0 crash("");
+    let chars = buf.asView().slice(0, len as uword);
+    string/fromView(chars)
+  };
+  assertEquals(s, "3.140")
+}
