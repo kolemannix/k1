@@ -998,7 +998,7 @@ pub struct EnumVariantLayout {
     pub payload: Option<PhysicalType>,
     pub payload_offset: Option<u32>,
     pub envelope: Layout,
-} 
+}
 
 #[derive(Clone, Copy)]
 pub enum AggType {
@@ -1918,6 +1918,10 @@ impl TypePool {
     // I wanna return a slice but with what backing memory?
     pub fn get_struct_layout(&self, struct_type_id: TypeId) -> SV4<StructField> {
         let struct_agg_id = self.get_physical_type(struct_type_id).unwrap().expect_agg();
+        self.get_agg_struct_layout(struct_agg_id)
+    }
+
+    pub fn get_agg_struct_layout(&self, struct_agg_id: PhysicalTypeId) -> SV4<StructField> {
         match self.phys_types.get(struct_agg_id).agg_type {
             AggType::Struct1(t) => smallvec![StructField { offset: 0, field_t: t }],
             AggType::Struct { fields } => self.mem.getn_sv4(fields),

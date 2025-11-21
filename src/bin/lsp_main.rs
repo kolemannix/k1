@@ -295,7 +295,7 @@ impl LanguageServer for Backend {
         self.send_diagnostics().await;
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {
         Ok(Some(CompletionResponse::List(CompletionList {
             is_incomplete: false,
             items: vec![CompletionItem {

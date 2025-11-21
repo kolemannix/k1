@@ -27,7 +27,7 @@ macro_rules! fuckit {
 }
 
 use core::mem::{align_of, size_of};
-use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
+use std::{marker::PhantomData, num::NonZeroU32, ops::{Deref, DerefMut}};
 /// Use 'Tag' to meaningfully identify the arena to help
 /// prevent mixups
 pub struct Mem<Tag = ()> {
@@ -642,6 +642,12 @@ impl<T, Tag> Deref for MList<T, Tag> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.as_slice()
+    }
+}
+
+impl<T, Tag> DerefMut for MList<T, Tag> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_slice_mut()
     }
 }
 

@@ -4821,16 +4821,19 @@ pub fn lex_text(
 
 #[cfg(test)]
 pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
+    use std::path::PathBuf;
+
     let program_name = source.filename.split('.').next().unwrap().to_string();
     let mut ast = ParsedProgram::make(
         program_name,
         CompilerConfig {
+            src_path: PathBuf::from("test.k1"),
             is_test_build: false,
             no_std: true,
             target: crate::compiler::detect_host_target().unwrap(),
             debug: true,
             out_dir: ".k1-out-unit-test".into(),
-            k1_lib_dir: std::path::PathBuf::from("k1lib")
+            k1_lib_dir: std::path::PathBuf::from("k1lib"),
         },
     );
 
