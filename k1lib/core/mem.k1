@@ -5,13 +5,13 @@ ns mem {
 
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
-    malloc:  *(\(uword, uword) -> ptr),
-    zalloc:  *(\(uword, uword) -> ptr),
-    realloc: *(\(ptr, uword, uword, uword) -> ptr),
-    free:    *(\(ptr, uword, uword) -> unit),
+    malloc:  *(\(size, size) -> ptr),
+    zalloc:  *(\(size, size) -> ptr),
+    realloc: *(\(ptr, size, size, size) -> ptr),
+    free:    *(\(ptr, size, size) -> unit),
   }
 
-  fn virtualAlloc(size: uword): ptr {
+  fn virtualAlloc(size: size): ptr {
     let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
     let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
     let addr = posix/mmap(
@@ -29,7 +29,7 @@ ns mem {
     addr
   }
 
-  fn virtualRelease(base: ptr, len: uword): unit {
+  fn virtualRelease(base: ptr, len: size): unit {
     let result = posix/munmap(base, len);
     if result == -1 crash("munmap of ptr {base} x {len} failed");
     ()
@@ -87,7 +87,7 @@ ns mem {
       }
     }
 
-    fn alloc(self: AllocMode, size: uword, align: uword): ptr {
+    fn alloc(self: AllocMode, size: size, align: size): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/allocZeroed(size, align),
@@ -107,7 +107,7 @@ ns mem {
       }
     }
 
-    fn realloc(self: AllocMode, oldPtr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
+    fn realloc(self: AllocMode, oldPtr: ptr, oldSize: size, align: size, newSize: size): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
@@ -121,7 +121,7 @@ ns mem {
       }
     }
 
-    fn free(self: AllocMode, ptr: ptr, size: uword, align: uword): unit {
+    fn free(self: AllocMode, ptr: ptr, size: size, align: size): unit {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/free(ptr, size, align),
@@ -152,7 +152,7 @@ ns mem {
 
   let* tls arena: *mut Arena = zeroed();
 
-  deftype alias ALLOC_STACK_MAX = 128uword
+  deftype alias ALLOC_STACK_MAX = 128
   let* tls allocStack: *mut FixList[AllocMode, ALLOC_STACK_MAX] = { 
     let* s = zeroed[FixList[AllocMode, ALLOC_STACK_MAX]]();
     s.push(.Arena);

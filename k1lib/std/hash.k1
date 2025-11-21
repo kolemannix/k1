@@ -18,17 +18,17 @@ let MODULE_INFO: core/k1/ModuleManifest = core/mem/zeroed();
 
 deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
 deftype HashMap[V] = {
-  size: uword,
+  size: size,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
   entries: List[Entry[V]],
 }
 
-fn fnv1a_hash(key: string): uword {
-  let FNV_PRIME: uword = 1099511628211;
-  let FNV_OFFSET: uword = 14695981039346656037;
+fn fnv1a_hash(key: string): u64 {
+  let FNV_PRIME: u64 = 1099511628211;
+  let FNV_OFFSET: u64 = 14695981039346656037;
   let hash_value = FNV_OFFSET;
   for c in key do {
-    hash_value := Bitwise/xor(hash_value, c as u8 as uword);
+    hash_value := Bitwise/xor(hash_value, c as u8 as u64);
     hash_value := hash_value * FNV_PRIME;
   };
   hash_value
@@ -36,7 +36,7 @@ fn fnv1a_hash(key: string): uword {
 
 ns HashMap {
 
-  fn _make[V](cap: uword): HashMap[V] {
+  fn _make[V](cap: size): HashMap[V] {
     { size: 0, entries: List/filled(cap, .None) }
   }
 
@@ -47,7 +47,7 @@ ns HashMap {
   fn grow[V](self: *mut HashMap[V]): unit {
     let origSize = self.size;
     let oldEntries = self.entries;
-    let newCap = if oldEntries.cap() == 0 1: uword else oldEntries.cap() * 2;
+    let newCap = if oldEntries.cap() == 0 1 else oldEntries.cap() * 2;
 
     let newMap = _make[V](newCap);
     self <- newMap;
@@ -60,13 +60,13 @@ ns HashMap {
     assertEquals(origSize, self.size)
   }
 
-  fn _computeIndex[V](self: *HashMap[V], key: string): uword {
+  fn _computeIndex[V](self: *HashMap[V], key: string): size {
     let hash = fnv1a_hash(key);
-    let index = hash % self.entries.len;
-    index
+    let index = hash % (self.entries.len as u64);
+    index as size
   }
 
-  fn _probe[V](self: *mut HashMap[V], startIndex: uword): *mut Entry[V] {
+  fn _probe[V](self: *mut HashMap[V], startIndex: size): *mut Entry[V] {
     let probeIndex = startIndex;
     loop {
       probeIndex := probeIndex + 1;

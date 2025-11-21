@@ -5,10 +5,10 @@ fn listFill(): int {
   assert(xs.cap() == 0);
   assert(xs.len == 0);
 
-  let i = 0: uword;
+  let i = 0;
   while i < 5 {
     assert(xs.len == i);
-    xs.push(i as int);
+    xs.push(i);
     i := i + 1;
   };
   assert(xs.len == 5);

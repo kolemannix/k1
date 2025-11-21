@@ -1,33 +1,33 @@
-deftype SpillList[T, N: static uword] = either Inline(FixList[T, N]), Spilled(List[T])
+deftype SpillList[T, N: static size] = either Inline(FixList[T, N]), Spilled(List[T])
 ns SpillList {
 
-  fn new[T, N: static uword](): SpillList[T, N] {
+  fn new[T, N: static int](): SpillList[T, N] {
     .Inline(mem/zeroed[FixList[T, N]]())
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use
-  fn clear[T, N: static uword](self: *mut SpillList[T, N]): unit {
+  fn clear[T, N: static size](self: *mut SpillList[T, N]): unit {
     switch self {
       .Inline(fixlist)* -> fixlist.clear(),
       .Spilled(list)* -> list.clear()
     }
   }
 
-  fn len[T, N: static uword](self: SpillList[T, N]): uword {
+  fn len[T, N: static size](self: SpillList[T, N]): size {
     switch self {
       .Inline(fixlist) -> fixlist.len(),
       .Spilled(list) -> list.len,
     }
   }
 
-  fn asView[T, N: static uword](self: *SpillList[T, N]): View[T] {
+  fn asView[T, N: static size](self: *SpillList[T, N]): View[T] {
     switch self {
       .Spilled(list)* -> list.asView(),
       .Inline(fixlist)* -> fixlist.asView()
     }
   }
 
-  fn _spill[T, N: static uword](fixlist: *mut FixList[T, N]): List[T] {
+  fn _spill[T, N: static size](fixlist: *mut FixList[T, N]): List[T] {
     let* list = List/withCapacityIn[T](context .Current)(fixlist.cap() * 2);
 
     let srcBuffer = fixlist.asBuffer();
@@ -37,7 +37,7 @@ ns SpillList {
     list.*
   }
 
-  fn push[T, N: static uword](self: *mut SpillList[T, N], t: T): unit {
+  fn push[T, N: static size](self: *mut SpillList[T, N], t: T): unit {
     switch self {
       .Spilled(list)* -> { list.push(t) },
       .Inline(fixlist)* -> {
@@ -53,7 +53,7 @@ ns SpillList {
     }
   }
 
-  fn pushN[T, N: static uword](self: *mut SpillList[T, N], ts: View[T]): unit {
+  fn pushN[T, N: static size](self: *mut SpillList[T, N], ts: View[T]): unit {
     switch self {
       .Spilled(list)* -> { list.appendView(ts) },
       .Inline(fixlist)* -> {
@@ -70,13 +70,13 @@ ns SpillList {
     }
   }
 
-  fn pushString[N: static uword](self: *mut SpillList[u8, N], s: string): unit {
+  fn pushString[N: static size](self: *mut SpillList[u8, N], s: string): unit {
     self.pushN[u8, N](s.viewBytes())
   }
 
 }
 
-impl[T, N: static uword] Print for SpillList[T, N] {
+impl[T, N: static size] Print for SpillList[T, N] {
   fn printTo[W: Writer](self: Self, w: W): unit {
      switch self {
        .Inline(fix) -> {
@@ -90,7 +90,7 @@ impl[T, N: static uword] Print for SpillList[T, N] {
   }
 }
 
-impl[N: static uword] Writer for *mut SpillList[u8, N] {
+impl[N: static size] Writer for *mut SpillList[u8, N] {
   fn writeByte(self: Self, b: u8): unit {
     self.push(b)
   }

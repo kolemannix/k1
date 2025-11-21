@@ -10,21 +10,21 @@ ns mem {
   deftype SystemHeap = {}
 
   ability Allocator {
-    fn allocate(self: Self, size: uword, align: uword): ptr
-    fn reallocate(self: Self, ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr
-    fn free(self: Self, ptr: ptr, size: uword, align: uword): unit
+    fn allocate(self: Self, size: size, align: size): ptr
+    fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr
+    fn free(self: Self, ptr: ptr, size: size, align: size): unit
 
     fn allocStyle(): AllocStyle
   }
 
   impl Allocator for mem/SystemHeap {
-    fn allocate(self: Self, size: uword, align: uword): ptr {
+    fn allocate(self: Self, size: size, align: size): ptr {
       core/mem/alloc(size, align)
     }
-    fn reallocate(self: Self, ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
+    fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
       core/mem/realloc(ptr, oldSize = oldSize, align = align, newSize = newSize)
     }
-    fn free(self: Self, ptr: ptr, size: uword, align: uword): unit {
+    fn free(self: Self, ptr: ptr, size: size, align: size): unit {
       core/mem/free(ptr, size, align)
     }
     fn allocStyle(): AllocStyle { .Heap }
@@ -32,13 +32,13 @@ ns mem {
 
   // These top-level functions allow for a slightly terser syntax than 'allocator.allocate()' since you can just write: mem/allocate()
   // and the context provides the allocator
-  fn allocate[A: Allocator](context alloc: A)(size: uword, align: uword): ptr {
+  fn allocate[A: Allocator](context alloc: A)(size: size, align: size): ptr {
     alloc.allocate(size, align)
   }
-  fn reallocate[A: Allocator](context alloc: A)(ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr {
+  fn reallocate[A: Allocator](context alloc: A)(ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
     alloc.reallocate(ptr, oldSize, align, newSize)
   }
-  fn free[A: Allocator](context alloc: A)(ptr: ptr, size: uword, align: uword): unit {
+  fn free[A: Allocator](context alloc: A)(ptr: ptr, size: size, align: size): unit {
     alloc.free(ptr, size, align)
   }
 
@@ -78,7 +78,7 @@ ns mem {
 
 }
 
-fn myAllocateIn[A: Allocator, T](context a: A)(size: uword): Buffer[T] {
+fn myAllocateIn[A: Allocator, T](context a: A)(size: size): Buffer[T] {
   let ptr = if count == 0 {
     ptr/NULL
   } else {
@@ -89,9 +89,9 @@ fn myAllocateIn[A: Allocator, T](context a: A)(size: uword): Buffer[T] {
   { len: count, data }
 }
 
-fn myFilledIn[A: Allocator, T](context a: A)(b: Buffer[T], size: uword, value: T): Buffer[T] {
+fn myFilledIn[A: Allocator, T](context a: A)(b: Buffer[T], size: size, value: T): Buffer[T] {
   let buf: Buffer[T] = myAllocateIn[A, T](size);
-  let i = 0: uword;
+  let i = 0: size;
   while i < size {
     buf.set(i, value);
     i := i + 1;

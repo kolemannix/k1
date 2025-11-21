@@ -7,26 +7,26 @@ use core/types/alignOf
 // TODO: Move to <header> . <mem block> model vs separate struct
 deftype Arena = {
   basePtr: ptr,
-  curAddr: uword,
-  maxAddr: uword
+  curAddr: ptr,
+  maxAddr: ptr
 }
 ns Arena {
-  let kb: uword = 1024;
-  let mb: uword = 1048576;
-  let gb: uword = 1073741824;
+  let kb: size = 1024;
+  let mb: size = 1048576;
+  let gb: size = 1073741824;
 
-  fn regionSizeBytes(self: Arena): uword {
-    self.maxAddr - (self.basePtr as uword)
+  fn regionSizeBytes(self: Arena): size {
+    self.maxAddr.diff(self.basePtr)
   }
 
-  fn usedBytes(self: Arena): uword {
-    self.curAddr - (self.basePtr as uword)
+  fn usedBytes(self: Arena): size {
+    self.curAddr.diff(self.basePtr)
   }
 
-  fn _virtual(usageHintMb: uword): ptr {
+  fn _virtual(usageHintMb: size): ptr {
     let basePtr: ptr = mem/virtualAlloc(gb);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
-    posix/madvise(basePtr, usageHintMb * mb, advice = posix/MADV_SEQUENTIAL);
+    posix/madvise(basePtr, (usageHintMb * mb) as c_sizet, advice = posix/MADV_SEQUENTIAL);
     basePtr
   }
 
@@ -36,8 +36,8 @@ ns Arena {
     //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {
       basePtr: basePtr,
-      curAddr: basePtr as uword,
-      maxAddr: basePtr.addBytes(gb) as uword
+      curAddr: basePtr,
+      maxAddr: basePtr.addBytes(gb)
     }
   }
 
@@ -48,7 +48,7 @@ ns Arena {
   fn reset(self: *mut Arena, clear: bool): unit {
     let usedBytes = self.usedBytes();
     println("[arena] Resetting {usedBytes / kb}KiB");
-    self.curAddr* <- (self.basePtr as uword);
+    self.curAddr* <- self.basePtr;
 
     if clear {
       println("mem/set clear {self.basePtr} 0 {usedBytes}");
@@ -56,15 +56,15 @@ ns Arena {
     }
   }
 
-  fn pushLayout(self: *mut Arena, size: uword, align: uword): ptr {
-    let dataStart = ptr/alignAddr(self.curAddr, align);
-    let newEnd = dataStart + size;
-    if newEnd > self.maxAddr {
+  fn pushLayout(self: *mut Arena, size: size, align: size): ptr {
+    let dataStart = self.curAddr.aligned(align);
+    let newEnd = dataStart.addBytes(size);
+    if newEnd as usize > self.maxAddr as usize {
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
 
     self.curAddr* <- newEnd;
-    dataStart as ptr
+    dataStart
   }
 
   fn pushUninit[T](self: *mut Arena): *mut T {
@@ -94,7 +94,7 @@ ns Arena {
     string/wrapBuffer(data)
   }
 
-  fn pushList[T](self: *mut Arena, cap: uword): List[T] {
+  fn pushList[T](self: *mut Arena, cap: size): List[T] {
     List/withCapacityIn(context .CustomArena(self))(cap)
   }
 

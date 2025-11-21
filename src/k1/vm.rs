@@ -25,7 +25,6 @@ use crate::typer::{
     TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
 };
 use crate::{
-    compiler::WordSize,
     errf, failf, ice_span,
     kmem::{self, MSlice},
     lex::SpanId,
@@ -392,12 +391,12 @@ impl Value {
         match int {
             TypedIntValue::U8(v) => Value::u8(v),
             TypedIntValue::U16(v) => Value::u16(v),
-            TypedIntValue::U32(v) | TypedIntValue::UWord32(v) => Value::u32(v),
-            TypedIntValue::U64(v) | TypedIntValue::UWord64(v) => Value::u64(v),
+            TypedIntValue::U32(v) => Value::u32(v),
+            TypedIntValue::U64(v) => Value::u64(v),
             TypedIntValue::I8(v) => Value::i8(v),
             TypedIntValue::I16(v) => Value::i16(v),
-            TypedIntValue::I32(v) | TypedIntValue::IWord32(v) => Value::i32(v),
-            TypedIntValue::I64(v) | TypedIntValue::IWord64(v) => Value::i64(v),
+            TypedIntValue::I32(v) => Value::i32(v),
+            TypedIntValue::I64(v) => Value::i64(v),
         }
     }
 
@@ -408,14 +407,10 @@ impl Value {
             IntegerType::U16 => TypedIntValue::U16(u64 as u16),
             IntegerType::U32 => TypedIntValue::U32(u64 as u32),
             IntegerType::U64 => TypedIntValue::U64(u64),
-            IntegerType::UWord(WordSize::W32) => TypedIntValue::UWord32(u64 as u32),
-            IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(u64),
             IntegerType::I8 => TypedIntValue::I8(u64 as i8),
             IntegerType::I16 => TypedIntValue::I16(u64 as i16),
             IntegerType::I32 => TypedIntValue::I32(u64 as i32),
             IntegerType::I64 => TypedIntValue::I64(u64 as i64),
-            IntegerType::IWord(WordSize::W32) => TypedIntValue::IWord32(u64 as i32),
-            IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(u64 as i64),
         }
     }
 
@@ -463,6 +458,10 @@ impl Value {
             FloatType::F32 => TypedFloatValue::F32(self.as_f32()),
             FloatType::F64 => TypedFloatValue::F64(self.as_f64()),
         }
+    }
+
+    pub fn as_u32(&self) -> u32 {
+        self.0 as u32
     }
 }
 
@@ -1453,7 +1452,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::BitShiftLeft { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
-                let rhs = resolve_value!(rhs).bits();
+                let rhs = resolve_value!(rhs).as_u32();
                 use std::ops::Shl;
                 let result = casted_uop!(width, shl, lhs, rhs);
 
@@ -1462,7 +1461,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
-                let rhs = resolve_value!(rhs).bits();
+                let rhs = resolve_value!(rhs).as_u32();
                 use std::ops::Shr;
                 let result = casted_uop!(width, shr, lhs, rhs);
 
@@ -1471,7 +1470,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::BitSignedShiftRight { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
-                let rhs = resolve_value!(rhs).bits();
+                let rhs = resolve_value!(rhs).as_u32();
                 use std::ops::Shr;
                 let result = casted_iop!(width, shr, lhs, rhs);
 

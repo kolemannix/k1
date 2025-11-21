@@ -22,7 +22,7 @@ fn testConstraints(): unit {
   assertEquals(types/typeId[typeOf(x).A](), types/typeId[int]());
   assertEquals(
     testCompile({ inner: some(4) }: ConstrainedBox[int, ?bool]),
-    .Some("Provided type B := Opt[bool] does implement required ability Unwrap, but the implementation parameter Inner is wrong: Expected type was iword but the actual implementation uses bool")
+    .Some("Provided type B := Opt[bool] does implement required ability Unwrap, but the implementation parameter Inner is wrong: Expected type was i64 but the actual implementation uses bool")
   );
   ()
 }

@@ -11,7 +11,7 @@ use core/types/TypeSchema
 deftype Point = { x: i32, y: i32 }
 
 // Generic function to test type substitution with Arrays
-fn getArrayInfo[T](): { elementName: string, fiveSize: uword, tenSize: uword } {
+fn getArrayInfo[T](): { elementName: string, fiveSize: size, tenSize: size } {
   {
     elementName: typeName(typeId[T]()),
     fiveSize: sizeOf[Array[T, 5]](),

@@ -357,12 +357,8 @@ impl TypedProgram {
         self.add_static_constant_expr(int_value_id, span)
     }
 
-    pub(super) fn synth_uword(&mut self, value: usize, span: SpanId) -> TypedExprId {
-        let value = match self.target_word_size() {
-            WordSize::W32 => TypedIntValue::UWord32(value as u32),
-            WordSize::W64 => TypedIntValue::UWord64(value as u64),
-        };
-        self.synth_int(value, span)
+    pub(super) fn synth_i64(&mut self, value: i64, span: SpanId) -> TypedExprId {
+        self.synth_int(TypedIntValue::I64(value), span)
     }
 
     pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
@@ -429,9 +425,11 @@ impl TypedProgram {
         let tag_type = enum_type.tag_type;
         let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
-        let get_tag = self.exprs.add(TypedExpr::EnumGetTag(GetEnumTag {
-            enum_expr_or_reference,
-        }), tag_type, span);
+        let get_tag = self.exprs.add(
+            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference }),
+            tag_type,
+            span,
+        );
         let variant_tag_expr = self.synth_int(variant_tag, span);
         let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
         Ok(tag_equals)

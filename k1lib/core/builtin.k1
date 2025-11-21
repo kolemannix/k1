@@ -10,12 +10,22 @@ deftype u8  = builtin
 deftype u16 = builtin
 deftype u32 = builtin
 deftype u64 = builtin
-deftype uword = builtin
+deftype alias uint = u64
 deftype i8  = builtin
 deftype i16 = builtin
 deftype i32 = builtin
 deftype i64 = builtin
-deftype iword = builtin
+deftype alias int = i64
+
+deftype alias size = i64
+deftype alias usize = u64
+// TODO: Incorporate this instead of a 64-bit align type
+deftype alias align = u16
+
+deftype alias c_sizet = u64
+deftype alias c_ssizet = i64
+deftype alias c_int = i32
+deftype alias c_long = i64
 
 deftype unit    = builtin
 deftype char    = builtin
@@ -30,11 +40,11 @@ deftype ptr = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
-deftype Buffer[T] = { len: uword, data: *mut T }
+deftype Buffer[T] = { len: size, data: *mut T }
 
 deftype View[T] = { buffer: Buffer[T] }
 
-deftype List[T] = { len: uword, buffer: Buffer[T] }
+deftype List[T] = { len: size, buffer: Buffer[T] }
 deftype string = { view: View[char] }
 
 deftype Opt[T] = either None, Some(T)
@@ -47,8 +57,6 @@ deftype Ordering = either Less, Equal, Greater
 
 deftype Result[T, E] = either Ok(T), Err(E)
 
-deftype alias int = iword
-deftype alias uint = uword
 deftype alias byte = u8
 
 ns types {
@@ -69,13 +77,12 @@ ns types {
     U8(u8), U16(u16), U32(u32), U64(u64),
     I8(i8), I16(i16), I32(i32), I64(i64)
 
-  deftype Layout = { size: uword, align: uword }
+  deftype Layout = { size: u32, align: u32 }
 
   deftype TypeSchema = (either
     Unit,
     Char,
     Int(IntKind),
-    Word(either UWord, IWord),
     Float(either F32, F64),
     Bool,
     Ptr,
@@ -83,13 +90,13 @@ ns types {
     Reference({ innerTypeId: u64, mutable: bool }),
     Array({
       elementTypeId: u64,
-      size: ?uword
+      size: ?int
     }),
     Struct({
       fields: View[{
         name: string,
         typeId: u64,
-        offset: uword
+        offset: size
       }],
     }),
     Either({
@@ -97,7 +104,7 @@ ns types {
       variants: View[{
         name: string,
         tag: IntValue,
-        payload: ?{ typeId: u64, offset: uword }
+        payload: ?{ typeId: u64, offset: size }
       }],
     }),
     Variant({
@@ -179,8 +186,8 @@ ability Bitwise {
   fn bitOr(self: Self, other: Self): Self
   fn xor(self: Self, other: Self): Self
 
-  fn shiftLeft(self: Self, count: uword): Self
-  fn shiftRight(self: Self, count: uword): Self
+  fn shiftLeft(self: Self, count: u32): Self
+  fn shiftRight(self: Self, count: u32): Self
 }
 
 ability Add { fn add(self: Self, rhs: Self): Self }
@@ -204,8 +211,6 @@ impl Add for i8  {   intern fn add(self: Self, rhs: Self): Self }
 impl Add for i16 {   intern fn add(self: Self, rhs: Self): Self }
 impl Add for i32 {   intern fn add(self: Self, rhs: Self): Self }
 impl Add for i64 {   intern fn add(self: Self, rhs: Self): Self }
-impl Add for uword { intern fn add(self: Self, rhs: Self): Self }
-impl Add for iword { intern fn add(self: Self, rhs: Self): Self }
 
 impl Sub for u8  {   intern fn sub(self: Self, rhs: Self): Self }
 impl Sub for u16 {   intern fn sub(self: Self, rhs: Self): Self }
@@ -215,8 +220,6 @@ impl Sub for i8  {   intern fn sub(self: Self, rhs: Self): Self }
 impl Sub for i16 {   intern fn sub(self: Self, rhs: Self): Self }
 impl Sub for i32 {   intern fn sub(self: Self, rhs: Self): Self }
 impl Sub for i64 {   intern fn sub(self: Self, rhs: Self): Self }
-impl Sub for uword { intern fn sub(self: Self, rhs: Self): Self }
-impl Sub for iword { intern fn sub(self: Self, rhs: Self): Self }
 
 impl Mul for u8    { intern fn mul(self: Self, rhs: Self): Self }
 impl Mul for u16   { intern fn mul(self: Self, rhs: Self): Self }
@@ -226,8 +229,6 @@ impl Mul for i8    { intern fn mul(self: Self, rhs: Self): Self }
 impl Mul for i16   { intern fn mul(self: Self, rhs: Self): Self }
 impl Mul for i32   { intern fn mul(self: Self, rhs: Self): Self }
 impl Mul for i64   { intern fn mul(self: Self, rhs: Self): Self }
-impl Mul for uword { intern fn mul(self: Self, rhs: Self): Self }
-impl Mul for iword { intern fn mul(self: Self, rhs: Self): Self }
   
 impl Div for u8    { intern fn div(self: Self, rhs: Self): Self }
 impl Div for u16   { intern fn div(self: Self, rhs: Self): Self }
@@ -237,8 +238,6 @@ impl Div for i8    { intern fn div(self: Self, rhs: Self): Self }
 impl Div for i16   { intern fn div(self: Self, rhs: Self): Self }
 impl Div for i32   { intern fn div(self: Self, rhs: Self): Self }
 impl Div for i64   { intern fn div(self: Self, rhs: Self): Self }
-impl Div for uword { intern fn div(self: Self, rhs: Self): Self }
-impl Div for iword { intern fn div(self: Self, rhs: Self): Self }
 
 impl Rem for u8    { intern fn rem(self: Self, rhs: Self): Self }
 impl Rem for u16   { intern fn rem(self: Self, rhs: Self): Self }
@@ -248,8 +247,6 @@ impl Rem for i8    { intern fn rem(self: Self, rhs: Self): Self }
 impl Rem for i16   { intern fn rem(self: Self, rhs: Self): Self }
 impl Rem for i32   { intern fn rem(self: Self, rhs: Self): Self }
 impl Rem for i64   { intern fn rem(self: Self, rhs: Self): Self }
-impl Rem for uword { intern fn rem(self: Self, rhs: Self): Self }
-impl Rem for iword { intern fn rem(self: Self, rhs: Self): Self }
 
 ability ScalarCmp {
   fn lt(self: Self, other: Self): bool
@@ -282,12 +279,6 @@ impl ScalarCmp for u64 {
   intern fn gt(self: Self, other: Self): bool
   intern fn ge(self: Self, other: Self): bool
 }
-impl ScalarCmp for uword {
-  intern fn lt(self: Self, other: Self): bool
-  intern fn le(self: Self, other: Self): bool
-  intern fn gt(self: Self, other: Self): bool
-  intern fn ge(self: Self, other: Self): bool
-}
 impl ScalarCmp for i8 {
   intern fn lt(self: Self, other: Self): bool
   intern fn le(self: Self, other: Self): bool
@@ -307,12 +298,6 @@ impl ScalarCmp for i32 {
   intern fn ge(self: Self, other: Self): bool
 }
 impl ScalarCmp for i64 {
-  intern fn lt(self: Self, other: Self): bool
-  intern fn le(self: Self, other: Self): bool
-  intern fn gt(self: Self, other: Self): bool
-  intern fn ge(self: Self, other: Self): bool
-}
-impl ScalarCmp for iword {
   intern fn lt(self: Self, other: Self): bool
   intern fn le(self: Self, other: Self): bool
   intern fn gt(self: Self, other: Self): bool
@@ -342,9 +327,9 @@ ability Try[impl T, impl E] {
 
 ability Iterator[impl Item] {
   fn next(self: *mut Self): ?Item
-  fn sizeHint(self: *Self): { atLeast: uword, atMost: ?uword }
-  fn advanceBy(self: *mut Self, n: uword): unit
-  fn nth(self: *mut Self, n: uword): ?Item
+  fn sizeHint(self: *Self): { atLeast: size, atMost: ?size }
+  fn advanceBy(self: *mut Self, n: size): unit
+  fn nth(self: *mut Self, n: size): ?Item
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
@@ -432,22 +417,22 @@ impl Print for string {
 ns mem {
 
   // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
-  intern fn alloc(size: uword, align: uword): ptr
-  intern fn allocZeroed(size: uword, align: uword): ptr
-  intern fn realloc(ptr: ptr, oldSize: uword, align: uword, newSize: uword): ptr
-  intern fn free(ptr: ptr, size: uword, align: uword): unit
+  intern fn alloc(size: size, align: size): ptr
+  intern fn allocZeroed(size: size, align: size): ptr
+  intern fn realloc(ptr: ptr, oldSize: size, align: size, newSize: size): ptr
+  intern fn free(ptr: ptr, size: size, align: size): unit
 
   intern fn copy(
     dst: ptr,
     src: ptr,
-    count: uword
+    count: int
   ): unit
   intern fn set(
     dst: ptr,
     value: u8,
-    count: uword
+    count: int
   ): unit
-  intern fn equals(p1: ptr, p2: ptr, size: uword): bool
+  intern fn equals(p1: ptr, p2: ptr, size: int): bool
 
   intern fn zeroed[T](): T
 
@@ -492,9 +477,9 @@ ns k1 {
 // Core sizing intrinsics
 
 ns types {
-  intern fn sizeOf[T](): uword
-  intern fn sizeOfStride[T](): uword
-  intern fn alignOf[T](): uword
+  intern fn sizeOf[T](): int
+  intern fn sizeOfStride[T](): int
+  intern fn alignOf[T](): int
 }
 
 ns compiler {
@@ -506,10 +491,10 @@ ns sys {
 }
 
 ns ptr {
-  let NULL: ptr = 0: uword as ptr;
+  let NULL: ptr = 0 as ptr;
 
   fn isNull(self: ptr): bool {
-    self as uword == 0
+    self as int == 0
   }
 
   fn r[T](self: ptr): *T { self as *T }
@@ -518,34 +503,34 @@ ns ptr {
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
-  intern fn refAtIndex[T](self: ptr, index: uword): *mut T
+  intern fn refAtIndex[T](self: ptr, index: int): *mut T
 
-  fn addBytes(self: ptr, offset: uword): ptr { 
-    (self as uword + offset) as ptr
+  fn addBytes(self: ptr, offset: int): ptr { 
+    (self as int + offset) as ptr
   }
 
-  fn subBytes(self: ptr, offset: uword): ptr { 
-    (self as uword - offset) as ptr
+  fn subBytes(self: ptr, offset: int): ptr { 
+    (self as int - offset) as ptr
   }
 
-  fn diff(self: ptr, other: ptr): iword {
-    (self as iword) - (other as iword)
+  fn diff(self: ptr, other: ptr): int {
+    (self as int) - (other as int)
   }
 
-  fn alignAddr(baseAddress: uword, alignBytes: uword): uword {
+  fn alignAddr(baseAddress: size, alignBytes: size): int {
     let mask = alignBytes - 1;
     Bitwise/bitAnd(baseAddress + mask, mask.bitNot())
   }
 
-  fn aligned(self: ptr, alignBytes: uword): ptr {
-    alignAddr(self as uword, alignBytes) as ptr
+  fn aligned(self: ptr, alignBytes: int): ptr {
+    alignAddr(self as int, alignBytes) as ptr
   }
 
 }
 
 impl Equals for ptr {
   fn equals(self: ptr, other: ptr): bool {
-    self as uword == other as uword
+    self as int == other as int
   }
 }
 
@@ -561,68 +546,65 @@ impl Equals for u8 { intern fn equals(self: u8, other: u8): bool }
 impl Equals for u16 { intern fn equals(self: u16, other: u16): bool }
 impl Equals for u32 { intern fn equals(self: u32, other: u32): bool }
 impl Equals for u64 { intern fn equals(self: u64, other: u64): bool }
-impl Equals for uword { intern fn equals(self: Self, other: Self): bool }
 
 impl Equals for i8 { intern fn equals(self: i8, other: i8): bool }
 impl Equals for i16 { intern fn equals(self: i16, other: i16): bool }
 impl Equals for i32 { intern fn equals(self: i32, other: i32): bool }
 impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
-impl Equals for iword { intern fn equals(self: Self, other: Self): bool }
 
 impl Equals for char { intern fn equals(self: char, other: char): bool }
 
 fn discard[T](t: T): unit { () }
 
 ns Array {
-  fn getBaseRead[T, N: static uword](array: *Array[T, N]): *T {
+  fn getBaseRead[T, N: static int](array: *Array[T, N]): *T {
     array.getRef(0)
   }
-  fn getBase[T, N: static uword](array: *mut Array[T, N]): *mut T {
+  fn getBase[T, N: static int](array: *mut Array[T, N]): *mut T {
     array.getRef(0)
   }
-  fn basePtr[T, N: static uword](array: *mut Array[T, N]): ptr {
+  fn basePtr[T, N: static int](array: *mut Array[T, N]): ptr {
     array as ptr
   }
-  fn sizeBytes[T, N: static uword](array: Array[T, N]): uword {
+  fn sizeBytes[T, N: static int](array: Array[T, N]): int {
     types/sizeOf[Array[T, N]]()
   }
 
-  fn zeroed[T, N: static uword](): Array[T, N] {
+  fn zeroed[T, N: static int](): Array[T, N] {
     mem/zeroed[Array[T, N]]()
   }
 
-  fn bytes[N: static uword](): Array[u8, N] {
+  fn bytes[N: static int](): Array[u8, N] {
     mem/zeroed[Array[u8, N]]()
   }
 
-  fn allocate[T, N: static uword](context alloc: mem/AllocMode)(): *mut Array[T, N] {
+  fn allocate[T, N: static int](context alloc: mem/AllocMode)(): *mut Array[T, N] {
     alloc.allocT[Array[T, N]]()
   }
 
-  fn memset[T, N: static uword](array: *mut Array[T, N], value: u8): unit {
+  fn memset[T, N: static int](array: *mut Array[T, N], value: u8): unit {
     mem/set(dst = array.basePtr(), value = value, count = array.sizeBytes())
   }
 
-  fn set[T, N: static uword](array: *mut Array[T, N], index: uword, value: T): unit {
+  fn set[T, N: static int](array: *mut Array[T, N], index: int, value: T): unit {
     array.getRef(index) <- value
   }
 
-  fn filledIn[T, N: static uword](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[T, N] {
+  fn filledIn[T, N: static int](context alloc: mem/AllocMode)(t: T, n: N): *mut Array[T, N] {
     let arrayUninit = allocate[T, N]();
-    let i = 0uword;
+    let i = 0;
     while i < n.fromStatic() {
       arrayUninit.getRef(i) <- t;
-      i := i + 1uword;
+      i := i + 1;
     };
     arrayUninit
   }
 
-  fn asBuffer[T, N: static uword](array: *mut Array[T, N]): Buffer[T] {
-    let len: uword = array.len();
-    { len, data: array.getBase() }
+  fn asBuffer[T, N: static int](array: *mut Array[T, N]): Buffer[T] {
+    { len: array.len(), data: array.getBase() }
   }
 
-  fn asView[T, N: static uword](array: *Array[T, N]): View[T] {
+  fn asView[T, N: static int](array: *Array[T, N]): View[T] {
     let tempBuffer = array.toMut.asBuffer();
     View/wrapBuffer(tempBuffer)
   }
@@ -635,32 +617,32 @@ ns Array {
   let STDOUT: i32 = 1;
   let STDERR: i32 = 2;
 
-  extern("read") fn read(fileNo: i32, buffer: ptr, count: uword): iword
-  extern("write") fn write(fileNo: i32, data: ptr, count: uword): iword
+  extern("read") fn read(fileNo: c_int, buffer: ptr, count: c_sizet): i64
+  extern("write") fn write(fileNo: c_int, data: ptr, count: c_sizet): i64
   
   // These may only hold on macos; temporary until we have a bindings generation system
-  let MAP_FILE   : i32 = 0x0000;
-  let MAP_SHARED : i32 = 0x0001;
-  let MAP_PRIVATE: i32 = 0x0002;
-  let MAP_FIXED  : i32 = 0x0010;
+  let MAP_FILE   : c_int = 0x0000;
+  let MAP_SHARED : c_int = 0x0001;
+  let MAP_PRIVATE: c_int = 0x0002;
+  let MAP_FIXED  : c_int = 0x0010;
   // MAP_ANONYMOUS = 0x20 on Linux, but MAP_ANON = 0x1000 on macOS.
-  let MAP_ANON   : i32 = (if k1/OS_MACOS 0x1000 else 0x20);
+  let MAP_ANON   : c_int = (if k1/OS_MACOS 0x1000 else 0x20);
 
   // Pages may not be accessed.
-  let PROT_NONE: i32 = 0x0;
+  let PROT_NONE: c_int = 0x0;
   // Pages may be read.
-  let PROT_READ: i32 = 0x1;
+  let PROT_READ: c_int = 0x1;
   // Pages may be written.
-  let PROT_WRITE: i32 = 0x2;
+  let PROT_WRITE: c_int = 0x2;
   // Pages may be executed.
-  let PROT_EXEC: i32 = 0x4;
-  let MAP_FAILED: iword = -1;
-  extern("mmap") fn mmap(addr: ptr, len: uword, prot: i32, flags: i32, fd: i32, offset: i64): ptr
+  let PROT_EXEC: c_int = 0x4;
+  let MAP_FAILED: i64 = -1;
+  extern("mmap") fn mmap(addr: ptr, len: size, prot: i32, flags: c_int, fd: c_int, offset: size): ptr
 
-  extern("munmap") fn munmap(addr: ptr, len: uword): i32
+  extern("munmap") fn munmap(addr: ptr, len: size): i32
 
   let MADV_SEQUENTIAL: i32 = 2;
-  extern("posix_madvise") fn madvise(addr: ptr, len: uword, advice: i32): i32
+  extern("posix_madvise") fn madvise(addr: ptr, len: c_sizet, advice: c_int): c_int
 
 }
 
@@ -669,12 +651,12 @@ ns libc {
 
   extern("exit") fn exit(code: i32): never
 
-  extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: uword): i32
+  extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: size): i32
 
-  extern("malloc") fn malloc(size: uword): ptr
-  extern("calloc") fn calloc(count: uword, size: uword): ptr
+  extern("malloc") fn malloc(size: size): ptr
+  extern("calloc") fn calloc(count: int, size: size): ptr
   extern("free") fn free(ptr: ptr): unit
-  extern("realloc") fn realloc(ptr: ptr, size: uword): ptr
+  extern("realloc") fn realloc(ptr: ptr, size: size): ptr
 
   extern("perror") fn perror(msg: ptr): unit
 
@@ -683,9 +665,9 @@ ns libc {
     let SEEK_SET: i32 = 0;
     extern("fopen")  fn fopen(pathCString: ptr, modeCString: ptr): ptr
     extern("fseek")  fn fseek(fileDesc: ptr, offset: i64, whence: i32): i32
-    extern("fread")  fn fread(buffer: ptr, size: uword, num: uword, stream: ptr): u64
-    extern("fclose") fn fclose(fileDesc: ptr): i32
-    extern("ftell")  fn ftell(fileDesc: ptr): i64
+    extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): c_sizet
+    extern("fclose") fn fclose(fileDesc: ptr): c_int
+    extern("ftell")  fn ftell(fileDesc: ptr): c_long
   }
 
 }
@@ -705,7 +687,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     posix/write(
       fileNo = 1,
       data = s.view().dataPtr(),
-      count = s.view().len() - 1uword,
+      count = (s.view().len() - 1) as c_sizet,
     );
     sys/exit(1)
   } else if k1/IS_STATIC {
@@ -714,14 +696,14 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
   } else {
     let filename = locn.filename;
     let line = locn.line;
-    //sys/printBacktrace();
+    sys/printBacktrace();
     let s = "{msg} at {filename}:{line}\n";
     eprint(s);
     sys/exit(1)
   }
 }
 
-fn crashBounds(context locn: compiler/SourceLocation)(size: uword, index: uword, msg: string): never {
+fn crashBounds(context locn: compiler/SourceLocation)(size: size, index: size, msg: string): never {
   crash("{msg}: {index} >= {size}")
 }
 

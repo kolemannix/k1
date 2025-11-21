@@ -15,7 +15,7 @@ fn bufferFilled(): unit {
   assert(not buf.isEmpty());
   assert(buf.nonEmpty());
 
-  let i = 0: uword;
+  let i = 0;
   while i < 5 {
     assert(buf.get(i) == 42);
     i := i + 1;
@@ -45,9 +45,9 @@ fn bufferFirstLast(): unit {
 
 fn bufferSlice(): unit {
   let buf = Buffer/filled(5, 0);
-  let i = 0: uword;
+  let i = 0;
   while i < 5 {
-    buf.set(i, i as int);
+    buf.set(i, i);
     i := i + 1;
   };
 
@@ -60,9 +60,9 @@ fn bufferSlice(): unit {
 
 fn bufferTakeDrop(): unit {
   let buf = Buffer/filled(5, 0);
-  let i = 0: uword;
+  let i = 0;
   while i < 5 {
-    buf.set(i, i as int);
+    buf.set(i, i);
     i := i + 1;
   };
 

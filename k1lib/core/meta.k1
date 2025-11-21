@@ -55,7 +55,7 @@ ns meta {
     code.line(`ns {name} {{`);
 
     // begin fn get
-    code.line(`  fn get(self: {name}, index: uword): {tt} {{`);
+    code.line(`  fn get(self: {name}, index: size): {tt} {{`);
     code.line(`    let* ret: *mut {tt} = mem/zeroed();`);
     for f in fields do {
       code.line(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);`)

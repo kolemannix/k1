@@ -9,7 +9,7 @@ let MODULE_INFO: core/k1/ModuleManifest = {
 
 let* tls myvar: *mut i32 = 0;
 
-fn run(input: *mut iword): ptr {
+fn run(input: *mut int): ptr {
   let value = myvar.*;
   assertEquals(input.*, 42);
   myvar <- myvar.* + 1;

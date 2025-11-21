@@ -45,7 +45,7 @@ use smallvec::{SmallVec, smallvec};
 use scopes::*;
 use types::*;
 
-use crate::compiler::{CompilerConfig, WordSize};
+use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, BinaryOpKind, FileId, ForExpr, ForExprType, Ident, IdentSlice, NamedTypeArg,
@@ -1245,7 +1245,7 @@ pub enum CastType {
     ReferenceToReference,
     PointerToReference,
     ReferenceToPointer,
-    /// Destination type can only be uword and iword
+    /// Destination type can only be u64 and i64
     PointerToWord,
     WordToPointer,
     FloatExtend,
@@ -2447,8 +2447,6 @@ impl TypedProgram {
             if cfg!(feature = "profile") { quanta::Clock::new() } else { quanta::Clock::mock().0 };
         debug!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
-        let word_size = ast.config.target.word_size();
-
         let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
         let mut vm_global_constant_lookups = FxHashMap::new();
@@ -2523,7 +2521,7 @@ impl TypedProgram {
             mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: bc::ProgramBytecode::make(32768, word_size),
+            bytecode: bc::ProgramBytecode::make(32768),
 
             timing: Timing {
                 clock,
@@ -2672,7 +2670,8 @@ impl TypedProgram {
         }
 
         let type_start = self.timing.clock.raw();
-        let module_id = self.run_on_module(module_name, parsed_namespace_id, module_manifest, module_dir)?;
+        let module_id =
+            self.run_on_module(module_name, parsed_namespace_id, module_manifest, module_dir)?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
@@ -3057,18 +3056,10 @@ impl TypedProgram {
                     U16_TYPE_ID => Type::Integer(IntegerType::U16),
                     U32_TYPE_ID => Type::Integer(IntegerType::U32),
                     U64_TYPE_ID => Type::Integer(IntegerType::U64),
-                    UWORD_TYPE_ID => {
-                        let word_size = self.ast.config.target.word_size();
-                        Type::Integer(IntegerType::UWord(word_size))
-                    }
                     I8_TYPE_ID => Type::Integer(IntegerType::I8),
                     I16_TYPE_ID => Type::Integer(IntegerType::I16),
                     I32_TYPE_ID => Type::Integer(IntegerType::I32),
                     I64_TYPE_ID => Type::Integer(IntegerType::I64),
-                    IWORD_TYPE_ID => {
-                        let word_size = self.ast.config.target.word_size();
-                        Type::Integer(IntegerType::IWord(word_size))
-                    }
                     _ => return failf!(*span, "Unknown builtin type id '{}'", defn_type_id),
                 };
                 self.types.resolve_unresolved(defn_type_id, type_value, None);
@@ -3159,12 +3150,12 @@ impl TypedProgram {
 
                 let size_type_id = match self.ast.type_exprs.get(arr.size_expr).clone() {
                     ParsedTypeExpr::StaticLiteral(parsed_literal) => {
-                        // For array sizes, we want numeric literals to be interpreted as uword
+                        // For array sizes, we want numeric literals to be interpreted as size (i64)
                         let (static_value_id, inner_type_id) = self
                             .literal_to_static_value_and_type(
                                 &parsed_literal,
                                 scope_id,
-                                Some(UWORD_TYPE_ID),
+                                Some(I64_TYPE_ID),
                             )?;
                         let static_type =
                             StaticType { inner_type_id, value_id: Some(static_value_id) };
@@ -3179,10 +3170,10 @@ impl TypedProgram {
                 let Some(static_type) = self.types.get_static_type_of_type(size_type_id) else {
                     return failf!(arr.span, "Array size must be a static type");
                 };
-                if static_type.inner_type_id != UWORD_TYPE_ID {
+                if static_type.inner_type_id != I64_TYPE_ID {
                     return failf!(
                         arr.span,
-                        "Array size must be a uword; got {}",
+                        "Array size must be an int; got {}",
                         self.type_id_to_string(static_type.inner_type_id)
                     );
                 }
@@ -3545,7 +3536,7 @@ impl TypedProgram {
             }
             ParsedLiteral::Numeric(numeric) => {
                 // Parse the numeric literal and determine its type and value
-                // Use the expected type hint if provided (e.g., uword for array sizes)
+                // Use the expected type hint if provided (e.g., i64 for array sizes)
                 let eval_context =
                     EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
                 let num_static_value_id = self.eval_numeric_value(numeric.span, eval_context)?;
@@ -3568,10 +3559,6 @@ impl TypedProgram {
                 t
             }
         }
-    }
-
-    pub fn target_word_size(&self) -> WordSize {
-        self.ast.config.target.word_size()
     }
 
     /// Temporary home for our type operators until I decide on syntax
@@ -4234,11 +4221,11 @@ impl TypedProgram {
 
     /// Based on the 'size_type' of an array, determine what its concrete count is
     /// Size type can be a type parameter, in which case its 0
-    /// But it can also be a known static uword, in which case its the value of it
+    /// But it can also be a known static size (i64), in which case its the value of it
     pub fn get_concrete_count_of_array(&self, size_type: TypeId) -> Option<u64> {
         match self.get_value_of_static_type(size_type) {
-            Some(sv) => sv.as_uword().map(|s| s as u64),
-            None => None,
+            Some(StaticValue::Int(TypedIntValue::I64(i))) => Some(*i as u64),
+            _ => None,
         }
     }
 
@@ -6153,16 +6140,18 @@ impl TypedProgram {
                     "u16" => IntegerType::U16,
                     "u32" => IntegerType::U32,
                     "u64" => IntegerType::U64,
-                    "uword" => IntegerType::UWord(self.target_word_size()),
+                    "uint" => IntegerType::U64,
+                    "usize" => IntegerType::U64,
                     "i8" => IntegerType::I8,
                     "i16" => IntegerType::I16,
                     "i32" => IntegerType::I32,
                     "i64" => IntegerType::I64,
-                    "iword" => IntegerType::IWord(self.target_word_size()),
+                    "int" => IntegerType::I64,
+                    "size" => IntegerType::I64,
                     _ => {
                         return Err(errf!(
                             span,
-                            "Invalid integer suffix '{}'; expected u8, u16, u32, u64, uword, i8, i16, i32, i64, iword",
+                            "Invalid integer suffix '{}'; expected u8, u16, u32, u64, uint, usize, i8, i16, i32, i64, int, size",
                             suffix
                         ));
                     }
@@ -6190,19 +6179,17 @@ impl TypedProgram {
                 _ => t,
             }),
         };
-        let default_int_type = IntegerType::IWord(self.target_word_size());
-        let expected_int_type = suffix_int_type.unwrap_or_else(|| match expected_type_id {
+        let default_int_type = IntegerType::I64;
+        let expected_int_type = suffix_int_type.unwrap_or(match expected_type_id {
             None => default_int_type,
             Some(U8_TYPE_ID) => IntegerType::U8,
             Some(U16_TYPE_ID) => IntegerType::U16,
             Some(U32_TYPE_ID) => IntegerType::U32,
             Some(U64_TYPE_ID) => IntegerType::U64,
-            Some(UWORD_TYPE_ID) => IntegerType::UWord(self.target_word_size()),
             Some(I8_TYPE_ID) => IntegerType::I8,
             Some(I16_TYPE_ID) => IntegerType::I16,
             Some(I32_TYPE_ID) => IntegerType::I32,
             Some(I64_TYPE_ID) => IntegerType::I64,
-            Some(IWORD_TYPE_ID) => IntegerType::IWord(self.target_word_size()),
             Some(_other) => {
                 // Parse as default and let typechecking fail
                 default_int_type
@@ -6222,14 +6209,10 @@ impl TypedProgram {
                 IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
                 IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
-                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, hex_base, offset),
-                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, hex_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
                 IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
                 IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
-                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, hex_base, offset),
-                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, hex_base, offset),
             };
             value.map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))
         } else if num_to_parse.starts_with("0b") {
@@ -6240,14 +6223,10 @@ impl TypedProgram {
                 IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
                 IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
-                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, bin_base, offset),
-                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, bin_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
                 IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
                 IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
-                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, bin_base, offset),
-                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, bin_base, offset),
             };
             value.map_err(|e| make_error(format!("Invalid binary {expected_int_type}: {e}"), span))
         } else {
@@ -6258,14 +6237,10 @@ impl TypedProgram {
                 IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
                 IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
                 IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
-                IntegerType::UWord(WordSize::W32) => parse_int!(UWord32, u32, dec_base, offset),
-                IntegerType::UWord(WordSize::W64) => parse_int!(UWord64, u64, dec_base, offset),
                 IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
                 IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
                 IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
                 IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
-                IntegerType::IWord(WordSize::W32) => parse_int!(IWord32, i32, dec_base, offset),
-                IntegerType::IWord(WordSize::W64) => parse_int!(IWord64, i64, dec_base, offset),
             };
             value.map_err(|e| {
                 errf!(
@@ -7276,7 +7251,7 @@ impl TypedProgram {
             }
         };
         let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-        let count_expr = self.synth_uword(element_count, span);
+        let count_expr = self.synth_i64(element_count as i64, span);
         let make_dest_coll = match list_kind {
             ContainerKind::List => self.synth_typed_call_typed_args(
                 self.ast.idents.f.List_withCapacity.with_span(span),
@@ -7317,7 +7292,7 @@ impl TypedProgram {
 
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
         for (index, element_value_expr) in elements.iter().enumerate() {
-            let index_expr = self.synth_uword(index, span);
+            let index_expr = self.synth_i64(index as i64, span);
             let push_call = match list_kind {
                 ContainerKind::List => self.synth_typed_call_typed_args(
                     self.ast.idents.f.List_push.with_span(span),
@@ -7334,7 +7309,7 @@ impl TypedProgram {
                     false,
                 )?,
                 ContainerKind::Array(array_type_id) => {
-                    // fn set[T, N: static uword](array: Array[T, N]*, index: uword, value: T): unit
+                    // fn set[T, N: static size](array: Array[T, N]*, index: size, value: T): unit
                     let size_type = self.types.get(array_type_id).as_array().unwrap().size_type;
                     self.synth_typed_call_typed_args(
                         self.ast.idents.f.Array_set.with_span(span),
@@ -8866,10 +8841,10 @@ impl TypedProgram {
                     }
                 }
                 Type::Pointer => match from_integer_type {
-                    IntegerType::UWord(_) | IntegerType::IWord(_) => Ok(CastType::WordToPointer),
+                    IntegerType::U64 | IntegerType::I64 => Ok(CastType::WordToPointer),
                     _ => failf!(
                         cast.span,
-                        "Cannot cast integer '{}' to Pointer (must be uword)",
+                        "Cannot cast integer '{}' to Pointer (must be word-sized (64-bit))",
                         from_integer_type
                     ),
                 },
@@ -8881,12 +8856,10 @@ impl TypedProgram {
                         | IntegerType::U16
                         | IntegerType::U32
                         | IntegerType::U64 => Ok(CastType::IntegerUnsignedToFloat),
-                        IntegerType::UWord(_) => Ok(CastType::IntegerUnsignedToFloat),
                         IntegerType::I8 => Ok(CastType::IntegerSignedToFloat),
                         IntegerType::I16 => Ok(CastType::IntegerSignedToFloat),
                         IntegerType::I32 => Ok(CastType::IntegerSignedToFloat),
                         IntegerType::I64 => Ok(CastType::IntegerSignedToFloat),
-                        IntegerType::IWord(_) => Ok(CastType::IntegerSignedToFloat),
                     }
                 }
                 _ => failf!(
@@ -8948,8 +8921,8 @@ impl TypedProgram {
             },
             Type::Pointer => match self.types.get(target_type) {
                 Type::Reference(_refer) => Ok(CastType::PointerToReference),
-                Type::Integer(IntegerType::UWord(_)) => Ok(CastType::PointerToWord),
-                Type::Integer(IntegerType::IWord(_)) => Ok(CastType::PointerToWord),
+                Type::Integer(IntegerType::U64) => Ok(CastType::PointerToWord),
+                Type::Integer(IntegerType::I64) => Ok(CastType::PointerToWord),
                 _ => failf!(
                     cast.span,
                     "Cannot cast Pointer to '{}'",
@@ -9033,7 +9006,7 @@ impl TypedProgram {
         let outer_for_expr_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, None, None);
 
-        let zero_expr = self.synth_uword(0, for_expr.body_block.span);
+        let zero_expr = self.synth_i64(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
             self.ast.idents.b.itIndex,
             zero_expr,
@@ -9121,7 +9094,7 @@ impl TypedProgram {
                     field_index: 0,
                     access_kind: FieldAccessKind::ValueToValue,
                 }),
-                UWORD_TYPE_ID,
+                SIZE_TYPE_ID,
                 iterable_span,
             );
             let synth_function_call = self.synth_typed_call_typed_args(
@@ -9195,7 +9168,7 @@ impl TypedProgram {
         self.push_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
 
         // Append the index increment to the body block
-        let one_expr = self.synth_uword(1, iterable_span);
+        let one_expr = self.synth_i64(1, iterable_span);
         let add_operation = self.synth_add_call(
             index_variable.variable_expr,
             one_expr,
@@ -10173,7 +10146,7 @@ impl TypedProgram {
                         let unit = self.synth_unit(span);
                         self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
                     }
-                    Some(s) => self.synth_uword(s as usize, span),
+                    Some(s) => self.synth_i64(s as i64, span),
                 };
                 Ok(Either::Left(array_length))
             }
@@ -10183,9 +10156,9 @@ impl TypedProgram {
                 }
                 let index_arg = self.ast.p_call_args.get_nth(call.args, 1);
                 let index_expr =
-                    self.eval_expr(index_arg.value, ctx.with_expected_type(Some(UWORD_TYPE_ID)))?;
+                    self.eval_expr(index_arg.value, ctx.with_expected_type(Some(SIZE_TYPE_ID)))?;
                 let index_expr = self
-                    .check_and_coerce_expr(UWORD_TYPE_ID, index_expr, ctx.scope_id)
+                    .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id)
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
                 let is_referencing = n == self.ast.idents.b.getRef;
@@ -10214,9 +10187,8 @@ impl TypedProgram {
                 };
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get_type(static_index_expr);
-                    if let Some(index_usize) = self
-                        .get_value_of_static_type(static_index_type)
-                        .and_then(|sv| sv.as_uword())
+                    if let Some(index_usize) =
+                        self.get_value_of_static_type(static_index_type).and_then(|sv| sv.as_size())
                     {
                         if let Some(concrete_size) = array_type.concrete_count {
                             if index_usize as u64 >= concrete_size {
@@ -11574,7 +11546,7 @@ impl TypedProgram {
                     IntrinsicOperation::AlignOf => layout.align as u64,
                     _ => unreachable!(),
                 };
-                Ok(self.synth_int(TypedIntValue::UWord64(value_bytes), span))
+                Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
             }
             _ => self.ice(format!("Unexpected intrinsic in type phase: {:?}", intrinsic), None),
         }
@@ -11971,8 +11943,8 @@ impl TypedProgram {
         }
         // If we specialized on something generic, but we don't accept or return it in our
         // signature, we won't catch it by checking the signature!
-        // Example: fn typeOnly[T: static uword](): unit
-        // If specialized on static[uword, <none>], wouldn't have any generics in its signature
+        // Example: fn typeOnly[T: static u32](): unit
+        // If specialized on static[u32, <none>], wouldn't have any generics in its signature
         if let Some(spec_info) = function.specialization_info {
             for t in self.named_types.get_slice(spec_info.type_arguments) {
                 if self.types.type_variable_counts.get(t.type_id).is_abstract() {
@@ -15158,7 +15130,6 @@ impl TypedProgram {
             QIdent { path: root_ns, name: self.ast.idents.b.core, span }, // use _root/core;
             QIdent { path: root_ns, name: self.ast.idents.b.std, span },  // use _root/std;
             core!("u8"),
-            core!("u8"),
             core!("u16"),
             core!("u32"),
             core!("u64"),
@@ -15166,8 +15137,11 @@ impl TypedProgram {
             core!("i16"),
             core!("i32"),
             core!("i64"),
-            core!("uword"),
-            core!("iword"),
+            core!("byte"),
+            core!("int"),
+            core!("uint"),
+            core!("size"),
+            core!("usize"),
             core!("unit"),
             core!("char"),
             core!("bool"),
@@ -15185,9 +15159,6 @@ impl TypedProgram {
             core!("none"),
             core!("Ordering"),
             core!("Result"),
-            core!("int"),
-            core!("uint"),
-            core!("byte"),
             core!("Equals"),
             core!("Writer"),
             core!("Print"),
@@ -15248,10 +15219,6 @@ impl TypedProgram {
         let int_kind_enum =
             self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
         let get_schema_variant = |ident| type_schema.variant_by_name(ident).unwrap();
-        let word_enum = self
-            .types
-            .get(get_schema_variant(get_ident!(self, "Word")).payload.unwrap())
-            .expect_enum();
         let make_variant = |name: Ident, payload: Option<StaticValueId>| {
             let v = get_schema_variant(name);
             StaticEnum {
@@ -15271,8 +15238,7 @@ impl TypedProgram {
             Type::Bool => make_variant(get_ident!(self, "Bool"), None),
             Type::Pointer => make_variant(get_ident!(self, "Ptr"), None),
             Type::Integer(integer_type) => {
-                let int_kind_enum_value =
-                    TypedProgram::make_int_kind(int_kind_enum, word_enum, *integer_type);
+                let int_kind_enum_value = TypedProgram::make_int_kind(int_kind_enum, *integer_type);
 
                 let payload_value_id =
                     self.static_values.add(StaticValue::Enum(int_kind_enum_value));
@@ -15294,7 +15260,7 @@ impl TypedProgram {
                     self.types.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
                     self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
-                // { name: string), typeId: u64, offset: uword }
+                // { name: string), typeId: u64, offset: size }
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: MList<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_list(struct_type.fields.len());
@@ -15308,15 +15274,13 @@ impl TypedProgram {
 
                     let type_id_value_id = self.static_values.add_type_id_int_value(f.type_id);
                     let offset_u32 = struct_layout[index].offset;
-                    let offset_value_id = self
-                        .static_values
-                        .add(StaticValue::Int(TypedIntValue::UWord64(offset_u32 as u64)));
+                    let offset_value_id = self.static_values.add_size(offset_u32 as i64);
                     let field_struct_fields = self.static_values.mem.pushn(&[
                         // name: string
                         name_string_value_id,
                         // typeId: u64
                         type_id_value_id,
-                        // offset: uword
+                        // offset: size
                         offset_value_id,
                     ]);
                     field_values.push(
@@ -15359,18 +15323,18 @@ impl TypedProgram {
                 let array_type = *array_type;
                 let array_schema_payload_type_id =
                     get_schema_variant(get_ident!(self, "Array")).payload.unwrap();
-                // { elementTypeId: u64, size: uword }
+                // { elementTypeId: u64, size: size }
                 let element_type_id_value_id =
                     self.static_values.add_type_id_int_value(array_type.element_type);
                 self.register_type_metainfo(array_type.element_type, span);
 
                 let maybe_concrete_size_value_id = match array_type.concrete_count {
                     None => None,
-                    Some(size) => Some(self.static_values.add_int(TypedIntValue::UWord64(size))),
+                    Some(size) => Some(self.static_values.add_size(to_k1_size_u64(size))),
                 };
-                let option_uword = self.synth_optional_type(UWORD_TYPE_ID);
+                let option_size = self.synth_optional_type(SIZE_TYPE_ID);
                 let size_value_id =
-                    self.synth_static_option(option_uword, maybe_concrete_size_value_id);
+                    self.synth_static_option(option_size, maybe_concrete_size_value_id);
 
                 let payload_struct_id = self.static_values.add_struct_from_slice(
                     array_schema_payload_type_id,
@@ -15386,9 +15350,9 @@ impl TypedProgram {
                 let variant_struct_type_id =
                     self.types.get_as_view_instance(variants_view_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
-                let tag_type_value_id = self.static_values.add(StaticValue::Enum(
-                    TypedProgram::make_int_kind(int_kind_enum, word_enum, tag_type),
-                ));
+                let tag_type_value_id = self
+                    .static_values
+                    .add(StaticValue::Enum(TypedProgram::make_int_kind(int_kind_enum, tag_type)));
                 let mut variant_values =
                     self.static_values.mem.new_list(typed_enum.variants.len() as u32);
                 for variant in typed_enum.variants.clone().iter() {
@@ -15425,10 +15389,9 @@ impl TypedProgram {
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id, span);
 
+                            let offset = self.types.enum_variant_payload_offset_bytes(variant);
                             let payload_offset_value_id =
-                                self.static_values.add(StaticValue::Int(TypedIntValue::UWord64(
-                                    self.types.enum_variant_payload_offset_bytes(variant) as u64,
-                                )));
+                                self.static_values.add_size(to_k1_size_usize(offset));
                             let payload_info_struct_id = self.static_values.add_struct_from_slice(
                                 payload_info_struct_id,
                                 &[type_id_value_id, payload_offset_value_id],
@@ -15449,7 +15412,7 @@ impl TypedProgram {
                             name_value_id,
                             // tag: IntValue,
                             tag_value_id,
-                            // payload: { typeId: u64, offset: uword }?,
+                            // payload: { typeId: u64, offset: size }?,
                             payload_info_value_id,
                         ],
                     ))
@@ -15611,11 +15574,7 @@ impl TypedProgram {
         let _ = self.get_type_name(type_id);
     }
 
-    fn make_int_kind(
-        int_kind_enum: &TypedEnum,
-        word_enum: &TypedEnum,
-        integer_type: IntegerType,
-    ) -> StaticEnum {
+    fn make_int_kind(int_kind_enum: &TypedEnum, integer_type: IntegerType) -> StaticEnum {
         let int_kind_variant = match integer_type {
             IntegerType::U8 => int_kind_enum.variant_by_index(0),
             IntegerType::U16 => int_kind_enum.variant_by_index(1),
@@ -15625,8 +15584,6 @@ impl TypedProgram {
             IntegerType::I16 => int_kind_enum.variant_by_index(5),
             IntegerType::I32 => int_kind_enum.variant_by_index(6),
             IntegerType::I64 => int_kind_enum.variant_by_index(7),
-            IntegerType::UWord(_) => word_enum.variant_by_index(0),
-            IntegerType::IWord(_) => word_enum.variant_by_index(1),
         };
         StaticEnum {
             variant_type_id: int_kind_variant.my_type_id,
@@ -15646,14 +15603,10 @@ impl TypedProgram {
             TypedIntValue::U16(_) => int_value_enum.variant_by_index(1),
             TypedIntValue::U32(_) => int_value_enum.variant_by_index(2),
             TypedIntValue::U64(_) => int_value_enum.variant_by_index(3),
-            TypedIntValue::UWord32(_) => unreachable!(),
-            TypedIntValue::UWord64(_) => unreachable!(),
             TypedIntValue::I8(_) => int_value_enum.variant_by_index(4),
             TypedIntValue::I16(_) => int_value_enum.variant_by_index(5),
             TypedIntValue::I32(_) => int_value_enum.variant_by_index(6),
             TypedIntValue::I64(_) => int_value_enum.variant_by_index(7),
-            TypedIntValue::IWord32(_) => unreachable!(),
-            TypedIntValue::IWord64(_) => unreachable!(),
         };
         StaticEnum {
             variant_type_id: variant.my_type_id,
@@ -15880,6 +15833,22 @@ impl TypedProgram {
         writeln!(out, "\t{:.2}ms vm", vm_ms)?;
         Ok(())
     }
+}
+
+fn to_k1_size_u64(value: u64) -> i64 {
+    let v = value as i64;
+    if v < 0 {
+        panic!("Negative k1 size: {value}");
+    };
+    v
+}
+
+fn to_k1_size_usize(value: usize) -> i64 {
+    let v = value as i64;
+    if v < 0 {
+        panic!("Negative k1 size: {value}");
+    };
+    v
 }
 
 #[cfg(test)]

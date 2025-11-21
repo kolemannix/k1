@@ -15,30 +15,30 @@ ns List {
     withCapacity[T](0)
   }
 
-  fn len[T](self: List[T]): uword { self.len }
-  fn cap[T](self: List[T]): uword { self.buffer.len }
+  fn len[T](self: List[T]): size { self.len }
+  fn cap[T](self: List[T]): size { self.buffer.len }
 
-  fn filled[T](size: uword, value: T): List[T] {
+  fn filled[T](size: size, value: T): List[T] {
     let buffer = Buffer/filled(size, value);
     { len: size, buffer: buffer }
   }
 
-  fn filledIn[T](context mode: mem/AllocMode)(size: uword, value: T): List[T] {
+  fn filledIn[T](context mode: mem/AllocMode)(size: size, value: T): List[T] {
     let buffer = Buffer/filledIn(size, value);
     { len: size, buffer: buffer }
   }
 
-  fn withCapacity[T](cap: uword): List[T] {
+  fn withCapacity[T](cap: size): List[T] {
     let buffer = Buffer/_allocate[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn withCapacityIn[T](context mode: mem/AllocMode)(cap: uword): List[T] {
+  fn withCapacityIn[T](context mode: mem/AllocMode)(cap: size): List[T] {
     let buffer = Buffer/_allocateIn[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: *mut List[T], count: uword): unit {
+  fn reserve[T](self: *mut List[T], count: size): unit {
     if self.cap() >= count { return(()) };
     self.buffer*._growTo[T](context .Current)(count);
     assertdbg(self.buffer.len == count);
@@ -66,7 +66,7 @@ ns List {
     self.asBuffer().cloned()
   }
 
-  fn copyToArray[T, N: static uword](self: List[T], count: N): *mut Array[T, N] {
+  fn copyToArray[T, N: static size](self: List[T], count: N): *mut Array[T, N] {
     let countVal = count.fromStatic();
     assertEquals(self.len, countVal);
     let base: ptr = self.asBuffer().cloned().dataPtr();
@@ -76,35 +76,35 @@ ns List {
   // The possibly-uninitialized backing buffer of this List
   fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
 
-  fn getRef[T](self: *mut List[T], index: uword): *mut T {
-    if index >= self.len {
+  fn getRef[T](self: *mut List[T], index: size): *mut T {
+    if index < 0 or index >= self.len {
       crash("List index out of bounds: {index} >= {self.len}")
     };
     self.buffer.getRefUnchecked[T](index)
   }
 
-  fn set[T](self: *mut List[T], index: uword, elem: T): unit {
+  fn set[T](self: *mut List[T], index: size, elem: T): unit {
     if index >= self.len {
       crash("List index out of bounds: {index} >= {self.len}")
     };
     self.buffer.set(index, elem);
   }
 
-  fn get[T](self: List[T], index: uword): T {
+  fn get[T](self: List[T], index: size): T {
     if index >= self.len {
       crash("List index out of bounds: {index} >= {self.len}")
     };
     self.buffer.get(index)
   }
 
-  fn getOpt[T](self: List[T], index: uword): ?T {
+  fn getOpt[T](self: List[T], index: size): ?T {
     if index >= self.len {
       .None
     } else .Some(self.buffer.get(index))
   }
 
   fn _grow[T](context mode: mem/AllocMode)(self: *mut List[T]): unit {
-    let newCap: uword = if self.buffer.isEmpty() {
+    let newCap: size = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       let elemSize = core/types/sizeOf[T]();
       if elemSize >= 1024 1 else 8
@@ -134,7 +134,7 @@ ns List {
     self.pushIn[T](context .Current)(elem)
   }
 
-  fn slice[T](self: List[T], start: uword, end: uword): Buffer[T] {
+  fn slice[T](self: List[T], start: size, end: size): Buffer[T] {
     if self.len == 0 return(Buffer/empty[T]());
     if end > self.len { crash("List slice end out of bounds: {end}") };
     self.buffer.slice(start, end)
@@ -176,8 +176,8 @@ ns List {
   }
 
   fn reverse[T](self: *mut List[T]): unit {
-    let i = 0uword;
-    while (i < (self.len / 2uword)) {
+    let i = 0;
+    while (i < (self.len / 2)) {
       let j = self.len - i - 1;
       self.swap(i, j);
       i := i + 1;
@@ -205,7 +205,7 @@ ns List {
     self.appendBuffer(other.innerBuffer())
   }
 
-  fn swap[T](self: *mut List[T], indexA: uword, indexB: uword): unit {
+  fn swap[T](self: *mut List[T], indexA: size, indexB: size): unit {
     if indexA == indexB { return() };
     if indexA >= self.len {
       crash("List index out of bounds: {indexA} >= {self.len}")
@@ -238,7 +238,7 @@ ns List {
     left.sort();
     right.sort();
   
-    let i: uword = 0;
+    let i = 0;
     for item in left.* do {
       input.set(i, item);
       i := i + 1;

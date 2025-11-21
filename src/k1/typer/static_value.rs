@@ -116,13 +116,6 @@ impl StaticValue {
         }
     }
 
-    pub fn as_uword(&self) -> Option<usize> {
-        match self {
-            StaticValue::Int(int) => int.as_uword(),
-            _ => None,
-        }
-    }
-
     pub fn as_view(&self) -> Option<&StaticContainer> {
         match self {
             StaticValue::LinearContainer(view) => Some(view),
@@ -133,6 +126,14 @@ impl StaticValue {
     pub fn as_string(&self) -> Option<StringId> {
         match self {
             StaticValue::String(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    #[doc(alias = "as_i64")]
+    pub(crate) fn as_size(&self) -> Option<i64> {
+        match self {
+            StaticValue::Int(TypedIntValue::I64(size)) => Some(*size),
             _ => None,
         }
     }
@@ -300,6 +301,13 @@ impl StaticValuePool {
 
     pub fn add_int(&mut self, value: TypedIntValue) -> StaticValueId {
         self.add(StaticValue::Int(value))
+    }
+
+    pub fn add_size(&mut self, size: i64) -> StaticValueId {
+        if size < 0 {
+            panic!("Size cannot be negative: {}", size);
+        };
+        self.add(StaticValue::Int(TypedIntValue::I64(size)))
     }
 
     pub fn add_view(&mut self, view_type_id: TypeId, elements: StaticValueSlice) -> StaticValueId {

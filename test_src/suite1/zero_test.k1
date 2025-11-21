@@ -21,8 +21,8 @@ fn test(): unit {
   assertEquals(vi32, 0);
   assertEquals(vi64, 0);
 
-  let vword: iword = zeroed();
-  let vuword: uword = zeroed();
+  let vword: i64 = zeroed();
+  let vuword: u64 = zeroed();
   assertEquals(vword, 0);
   assertEquals(vuword, 0);
 

@@ -1,9 +1,9 @@
 ns meta_defns;
 
-#meta "let n: uword = 255;"
-#meta "let x: uword = 256;"
+#meta "let n: u64 = 255;"
+#meta "let x: u64 = 256;"
 
-#meta "fn isPow2(x: uword): bool {{ (x - 1) | Bitwise/bitAnd(x) == 0 }"
+#meta "fn isPow2(x: u64): bool {{ (x - 1) | Bitwise/bitAnd(x) == 0 }"
 
 #meta {
   let name1 = "1";

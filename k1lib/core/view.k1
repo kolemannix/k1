@@ -33,7 +33,7 @@ ns View {
     { buffer: Buffer/empty[T]() }
   }
 
-  fn copyFromArray[T, N: static uword](array: *Array[T, N]): View[T] {
+  fn copyFromArray[T, N: static size](array: *Array[T, N]): View[T] {
     let buffer = Buffer/copyFromArray[T, N](array);
     { buffer }
   }
@@ -46,23 +46,23 @@ ns View {
     { buffer: self.buffer.clonedIn() }
   }
 
-  fn len[T](self: View[T]): uword { self.buffer.len }
+  fn len[T](self: View[T]): size { self.buffer.len }
 
-  fn getRef[T](self: View[T], index: uword): *T {
+  fn getRef[T](self: View[T], index: size): *T {
     self.buffer.getRefRead[T](index)
   }
 
-  fn get[T](self: View[T], index: uword): T {
+  fn get[T](self: View[T], index: size): T {
     let tRef = self.getRef(index);
     tRef.*
   }
 
-  fn slice[T](self: View[T], start: uword, end: uword): View[T] {
+  fn slice[T](self: View[T], start: size, end: size): View[T] {
     { buffer: self.buffer.slice(start, end) }
   }
 
-  fn take[T](self: View[T], count: uword): View[T] { self.slice(0,     count) }
-  fn drop[T](self: View[T], count: uword): View[T] { self.slice(count, self.len()) }
+  fn take[T](self: View[T], count: size): View[T] { self.slice(0,     count) }
+  fn drop[T](self: View[T], count: size): View[T] { self.slice(count, self.len()) }
 
   fn isEmpty[T](self: View[T]): bool {
     self.len() == 0
@@ -149,12 +149,12 @@ impl[T: Print] Print for View[T] {
 //}
 //
 //ability ViewLike {
-//  fn len[T](self: Self): uword
-//  fn getRef[T](self: Self, index: uword): *T
-//  fn get[T](self: Self, index: uword): T { self.getRef.* }
-//  fn slice[T](self: Self, start: uword, end: uword): View[T]
-//  fn take[T](self: View[T], count: uword): View[T] { self.slice(0,     count) }
-//  fn drop[T](self: View[T], count: uword): View[T] { self.slice(count, self.len()) }
+//  fn len[T](self: Self): size
+//  fn getRef[T](self: Self, index: size): *T
+//  fn get[T](self: Self, index: size): T { self.getRef.* }
+//  fn slice[T](self: Self, start: size, end: size): View[T]
+//  fn take[T](self: View[T], count: size): View[T] { self.slice(0,     count) }
+//  fn drop[T](self: View[T], count: size): View[T] { self.slice(count, self.len()) }
 //
 //  fn isEmpty[T](self: View[T]): bool { self.len() == 0 }
 //

@@ -66,7 +66,7 @@ w.writeString("\"{f.name}\":");
     .Bool -> {
       code.line(`w.writeString(if {name} "true": string else "false");`)
     },
-    .Word(_) or .Int(_) -> code.line(`{name}.printTo(w);`),
+    .Int(_) -> code.line(`{name}.printTo(w);`),
     .Either(_) -> {
       let tName = types/typeName(typeId);
       crash("Cannot yet create a JSON writer for either: {tName}")
