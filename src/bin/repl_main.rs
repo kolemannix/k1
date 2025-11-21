@@ -26,9 +26,12 @@ fn main() -> anyhow::Result<ExitCode> {
 
     let lib_dir_pathbuf =
         std::env::var("K1_LIB_DIR").map(PathBuf::from).unwrap_or(PathBuf::from("k1lib"));
+    let cwd = std::env::current_dir().unwrap();
+    let name = "repl.k1";
     let mut ast = ParsedProgram::make(
         "repl".to_string(),
         CompilerConfig {
+            src_path: cwd.join(name),
             is_test_build: false,
             no_std: false,
             target: k1::compiler::detect_host_target()
@@ -38,9 +41,7 @@ fn main() -> anyhow::Result<ExitCode> {
             k1_lib_dir: lib_dir_pathbuf,
         },
     );
-    let name = "repl.k1";
     let file_id = 0;
-    let cwd = std::env::current_dir().unwrap();
 
     let mut line = String::with_capacity(1024);
     loop {

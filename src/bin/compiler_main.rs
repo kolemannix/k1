@@ -39,7 +39,7 @@ fn run() -> anyhow::Result<ExitCode> {
     // log::set_max_level(log::LevelFilter::Debug);
     log::set_max_level(log::LevelFilter::Info);
     let args = Args::parse();
-    info!("{:#?}", args);
+    log::debug!("{:#?}", args);
 
     info!("k1 Compiler v0.1.0");
 

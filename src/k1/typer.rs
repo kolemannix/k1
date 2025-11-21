@@ -2163,7 +2163,11 @@ pub enum ModuleRef {
 
 #[derive(Clone, Copy)]
 pub enum LibRefLinkType {
+    /// Will result in a normal linker flag passed to search by just logical name
+    Default,
+    /// Will result in an explicit filepath passed to linker at module's libs/
     Static,
+    /// Will result in an explicit filepath passed to linker at module's libs/
     Dynamic,
 }
 
@@ -2183,6 +2187,7 @@ pub struct ModuleManifest {
 pub struct Module {
     pub id: ModuleId,
     pub name: Ident,
+    pub home_dir: PathBuf,
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
@@ -2362,6 +2367,7 @@ pub struct TypedProgram {
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
     pub vm_process_dlopen_handle: *mut std::ffi::c_void,
     pub vm_library_dlopens: FxHashMap<Ident, *mut std::ffi::c_void>,
+    pub vm_ffi_functions: FxHashMap<FunctionId, libffi::raw::ffi_cif>,
 
     /// Perm arena space
     pub mem: kmem::Mem<TypedProgram>,
@@ -2435,11 +2441,11 @@ impl TypedProgram {
         pattern_ctors.add(PatternCtor::TypeVariable);
         pattern_ctors.add(PatternCtor::FunctionPointer);
 
-        eprintln!("clock init");
+        debug!("clock init");
         let init_start = std::time::Instant::now();
         let clock =
             if cfg!(feature = "profile") { quanta::Clock::new() } else { quanta::Clock::mock().0 };
-        eprintln!("clock calibration done in {}ms", init_start.elapsed().as_millis());
+        debug!("clock calibration done in {}ms", init_start.elapsed().as_millis());
 
         let word_size = ast.config.target.word_size();
 
@@ -2511,7 +2517,8 @@ impl TypedProgram {
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
             vm_process_dlopen_handle: process_dlopen_handle,
-            vm_library_dlopens: FxHashMap::default(),
+            vm_library_dlopens: FxHashMap::with_capacity(32),
+            vm_ffi_functions: FxHashMap::with_capacity(64),
 
             mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
@@ -2549,7 +2556,7 @@ impl TypedProgram {
             debug_assert_eq!(self.modules.next_id(), MODULE_ID_CORE);
         }
 
-        let (parent_dir, mut files_to_compile) = crate::compiler::discover_source_files(&src_path);
+        let (module_dir, mut files_to_compile) = crate::compiler::discover_source_files(&src_path);
         if is_core {
             let builtin_index = files_to_compile
                 .iter()
@@ -2557,7 +2564,7 @@ impl TypedProgram {
                 .unwrap();
             files_to_compile.swap(0, builtin_index);
         };
-        let directory_string = parent_dir.to_str().unwrap().to_string();
+        let directory_string = module_dir.to_str().unwrap().to_string();
         let parse_start = self.timing.time_raw();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
@@ -2612,6 +2619,9 @@ impl TypedProgram {
                 kind: ModuleKind::Library,
                 deps: vec![],
                 multithreading: false,
+                // TODO: Programmer just specifies the path; I didn't like the 'libs/' thing anyway
+                //       as it feels inflexible. If extension included, it'll be static. If no
+                //       slashes, libs/, if slashes
                 libs: vec![LibRef {
                     name: self.ast.strings.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
@@ -2662,7 +2672,7 @@ impl TypedProgram {
         }
 
         let type_start = self.timing.clock.raw();
-        let module_id = self.run_on_module(module_name, parsed_namespace_id, module_manifest)?;
+        let module_id = self.run_on_module(module_name, parsed_namespace_id, module_manifest, module_dir)?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
@@ -5407,7 +5417,7 @@ impl TypedProgram {
                     msg
                 );
             }
-            CheckExprTypeResult::Coerce(typed_expr_id, cow) => {
+            CheckExprTypeResult::Coerce(_, cow) => {
                 panic!("Global would be coerced {cow}!")
             }
         }
@@ -14600,6 +14610,7 @@ impl TypedProgram {
         module_name: Ident,
         module_root_parsed_namespace: ParsedNamespaceId,
         manifest: ModuleManifest,
+        home_dir: PathBuf,
     ) -> anyhow::Result<ModuleId> {
         let module_id = self.modules.next_id();
         self.module_in_progress = Some(module_id);
@@ -14622,6 +14633,7 @@ impl TypedProgram {
         let real_module_id = self.modules.add(Module {
             id: module_id,
             name: module_name,
+            home_dir,
             manifest,
             namespace_id: typed_namespace_id,
             namespace_scope_id: root_namespace_scope_id,
@@ -15661,7 +15673,7 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_name(lib_name);
-        let mut lib_path = match self.ast.config.target.target_os() {
+        let lib_filename: PathBuf = match self.ast.config.target.target_os() {
             crate::compiler::TargetOs::Linux => {
                 Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
             }
@@ -15673,12 +15685,15 @@ impl TypedProgram {
             }
         };
         eprintln!("cwd is: {}", std::env::current_dir().unwrap().display());
-        if lib_name_str == "k1rt" {
-            lib_path = self.ast.config.k1_lib_dir.join(lib_path)
+        eprintln!("src_path is: {}", self.ast.config.src_path.display());
+        let lib_path = if lib_name_str == "k1rt" {
+            self.ast.config.k1_lib_dir.join(lib_filename)
         } else {
-            // Assumes cwd is project root
-            lib_path = Path::new("libs").join(lib_path)
-        }
+            let mut lib_path = self.ast.config.src_path.clone();
+            lib_path.push("libs");
+            lib_path.push(lib_filename);
+            lib_path
+        };
         let c_lib_name = std::ffi::CString::new(lib_path.to_string_lossy().as_bytes()).unwrap();
         let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
         if handle.is_null() {

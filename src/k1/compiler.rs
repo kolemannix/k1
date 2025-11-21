@@ -135,24 +135,29 @@ impl Target {
     }
 }
 
+pub const LIBS_DIR_NAME: &str = "libs";
+
 pub fn logical_name_to_dylib_filename(
+    module_libs_dir: &Path,
     target_os: TargetOs,
     link_type: LibRefLinkType,
     logical_name: &str,
 ) -> PathBuf {
     match (target_os, link_type) {
         (TargetOs::Linux, LibRefLinkType::Static) => {
-            Path::new(&format!("lib{}", logical_name)).with_extension("a")
+            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("a"))
         }
         (TargetOs::Linux, LibRefLinkType::Dynamic) => {
-            Path::new(&format!("lib{}", logical_name)).with_extension("so")
+            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("so"))
         }
+        (TargetOs::Linux, LibRefLinkType::Default) => PathBuf::from(logical_name),
         (TargetOs::MacOs, LibRefLinkType::Static) => {
-            Path::new(&format!("lib{}", logical_name)).with_extension("a")
+            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("a"))
         }
         (TargetOs::MacOs, LibRefLinkType::Dynamic) => {
-            Path::new(&format!("lib{}", logical_name)).with_extension("dylib")
+            module_libs_dir.join(Path::new(&format!("lib{}", logical_name)).with_extension("dylib"))
         }
+        (TargetOs::MacOs, LibRefLinkType::Default) => PathBuf::from(logical_name),
         // In Windows we'd skip the 'lib' prefix and add extension dll or lib
         (TargetOs::Wasm, _) => {
             panic!("Dynamic libraries are not supported on the wasm target")
@@ -162,18 +167,22 @@ pub fn logical_name_to_dylib_filename(
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
+    #[clap(alias = "c")]
     Check {
         /// File
         file: PathBuf,
     },
+    #[clap(alias = "b")]
     Build {
         /// File
         file: PathBuf,
     },
+    #[clap(alias = "r")]
     Run {
         /// File
         file: PathBuf,
     },
+    #[clap(alias = "t")]
     Test {
         /// File
         file: PathBuf,
@@ -255,6 +264,7 @@ impl Args {
 
 #[derive(Debug, Clone)]
 pub struct CompilerConfig {
+    pub src_path: PathBuf,
     pub is_test_build: bool,
     pub no_std: bool,
     pub target: Target,
@@ -296,13 +306,9 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
         src_dir
     };
 
-    let src_filter: &dyn Fn(&Path) -> bool = if !is_dir {
-        &|p: &Path| *p == *src_path
-    } else {
-        &|p: &Path| p.extension().is_some_and(|ext| ext == "k1")
-    };
-
-    let dir_entries = {
+    let src_filter: &dyn Fn(&Path) -> bool =
+        &|p: &Path| p.extension().is_some_and(|ext| ext == "k1");
+    let dir_entries = if is_dir {
         let mut ents = fs::read_dir(&src_dir)
             .unwrap()
             .filter_map(|item| item.ok())
@@ -311,7 +317,10 @@ pub fn discover_source_files(src_path: &Path) -> (PathBuf, Vec<PathBuf>) {
             .collect::<Vec<_>>();
         ents.sort_by_key(|ent| ent.file_name().unwrap().to_os_string());
         ents
+    } else {
+        vec![src_path.to_owned()]
     };
+
     (src_dir, dir_entries)
 }
 
@@ -345,7 +354,7 @@ pub fn compile_program(
 
     let out_dir = out_dir.canonicalize().unwrap();
 
-    let src_path = &args
+    let src_path = args
         .file()
         .canonicalize()
         .unwrap_or_else(|_| panic!("Failed to load source path: {:?}", args.file()));
@@ -363,19 +372,20 @@ pub fn compile_program(
     let corelib_dir = lib_dir_pathbuf.join("core");
     let stdlib_dir = lib_dir_pathbuf.join("std");
 
+    let module_name = if src_path.is_dir() {
+        src_path.file_name().unwrap().to_str().unwrap().to_string()
+    } else {
+        src_path.file_stem().unwrap().to_str().unwrap().to_string()
+    };
+
     let config = CompilerConfig {
+        src_path: src_path.clone(),
         is_test_build: args.command.is_test(),
         no_std: args.no_std,
         target,
         debug: args.debug,
         out_dir,
         k1_lib_dir: lib_dir_pathbuf,
-    };
-
-    let module_name = if src_path.is_dir() {
-        src_path.file_name().unwrap().to_str().unwrap().to_string()
-    } else {
-        src_path.file_stem().unwrap().to_str().unwrap().to_string()
     };
 
     let mut p = TypedProgram::new(module_name.clone(), config);
@@ -394,7 +404,7 @@ pub fn compile_program(
         }
     }
 
-    if let Err(e) = p.add_module(src_path, true) {
+    if let Err(e) = p.add_module(&src_path, true) {
         write_program_dump(&p);
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
@@ -513,7 +523,13 @@ pub fn write_executable(
     // Linking with libraries
     // First, put k1lib on the search path
     build_cmd.arg(format!("-L{}", k1_lib_dir.display()));
-    build_cmd.arg("-Llibs");
+    let home_dir = if k1.ast.config.src_path.is_dir() {
+        &k1.ast.config.src_path
+    } else {
+        k1.ast.config.src_path.parent().unwrap()
+    };
+    let module_libs_dir = home_dir.join(LIBS_DIR_NAME);
+    build_cmd.arg(format!("-L{}", module_libs_dir.display()));
     let libs_to_link = k1.all_manifest_libs();
     for ext_lib in &libs_to_link {
         let logical_name_str = k1.get_string(ext_lib.name);
@@ -521,18 +537,20 @@ pub fn write_executable(
             build_cmd.arg(k1_lib_dir.join("libk1rt.a"));
         } else {
             let filename = logical_name_to_dylib_filename(
+                &module_libs_dir,
                 target.target_os(),
                 ext_lib.link_type,
                 logical_name_str,
             );
-            let path_with_libs = PathBuf::from("libs").join(filename);
-            // let flag = format!("-l{}", path_with_libs.display());
-            build_cmd.arg(path_with_libs);
+            match ext_lib.link_type {
+                LibRefLinkType::Default => build_cmd.arg(format!("-l{}", filename.display())),
+                _ => build_cmd.arg(filename),
+            };
         }
     }
 
     build_cmd.args(extra_options);
-    log::info!("Build Command: {:?}", build_cmd);
+    eprintln!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {
@@ -541,7 +559,7 @@ pub fn write_executable(
     }
 
     let elapsed = clang_time.elapsed();
-    info!("codegen phase 'link optimized executable' took {}ms", elapsed.as_millis());
+    info!("link executable took {}ms", elapsed.as_millis());
     Ok(())
 }
 

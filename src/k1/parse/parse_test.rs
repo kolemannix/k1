@@ -11,6 +11,7 @@ fn make_test_module() -> ParsedProgram {
     ParsedProgram::make(
         "unit_test".to_string(),
         CompilerConfig {
+            src_path: std::path::PathBuf::from("test_module.k1"),
             is_test_build: false,
             no_std: true,
             target: detect_host_target().unwrap(),

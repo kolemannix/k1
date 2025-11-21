@@ -8,29 +8,28 @@ use colored::Colorize;
 use fxhash::FxHashMap;
 use log::debug;
 
+mod vm_ffi;
 #[cfg(test)]
 mod vm_test;
-mod vm_ffi;
 
+use crate::bc::{
+    self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
+};
+use crate::typer::types::{
+    self, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
+    ScalarType, Type, TypeId, TypePool,
+};
+use crate::typer::{
+    FunctionId, Layout, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
+    StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
+    TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
+};
 use crate::{
-    bc::{
-        self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, ProgramBytecode,
-        Value as BcValue,
-    },
     compiler::WordSize,
     errf, failf, ice_span,
     kmem::{self, MSlice},
     lex::SpanId,
     parse::{Ident, StringId},
-    typer::{
-        FunctionId, Layout, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
-        StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-        TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
-        types::{
-            self, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType,
-            STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
-        },
-    },
 };
 
 macro_rules! vm_ice {
