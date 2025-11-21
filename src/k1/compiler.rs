@@ -8,7 +8,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::parse::{self};
-use crate::parse::{NumericWidth, write_source_location};
+use crate::parse::{write_source_location};
 use crate::typer::{ErrorLevel, LibRefLinkType, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
@@ -41,11 +41,11 @@ impl TargetOs {
 }
 
 pub fn detect_host_target() -> Option<Target> {
-    let (arch, word_size) = match std::env::consts::ARCH {
-        "x86" => (Arch::Intel, WordSize::W32),
-        "x86_64" => (Arch::Intel, WordSize::W64),
-        "arm" => (Arch::Arm, WordSize::W32),
-        "aarch64" => (Arch::Arm, WordSize::W64),
+    let arch = match std::env::consts::ARCH {
+        "x86" => return None,
+        "x86_64" => Arch::Intel,
+        "arm" => return None,
+        "aarch64" => Arch::Arm,
         _ => return None,
     };
     let os = match std::env::consts::OS {
@@ -53,37 +53,7 @@ pub fn detect_host_target() -> Option<Target> {
         "macos" => Some(TargetOs::MacOs),
         _ => None,
     };
-    Target::from(arch, word_size, os)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WordSize {
-    W32,
-    W64,
-}
-
-impl WordSize {
-    pub const fn width(&self) -> NumericWidth {
-        match self {
-            WordSize::W32 => NumericWidth::B32,
-            WordSize::W64 => NumericWidth::B64,
-        }
-    }
-
-    pub fn from_width(w: NumericWidth) -> WordSize {
-        match w {
-            NumericWidth::B32 => WordSize::W32,
-            NumericWidth::B64 => WordSize::W64,
-            w => panic!("Invalid word size: {w:?}"),
-        }
-    }
-
-    pub const fn bits(&self) -> u32 {
-        match self {
-            WordSize::W32 => 32,
-            WordSize::W64 => 64,
-        }
-    }
+    Target::from(arch, os)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,37 +70,30 @@ pub enum Arch {
 pub enum Target {
     LinuxIntel64,
     MacOsArm64,
-    Wasm32,
+    Wasm64,
 }
 
 impl Target {
-    pub fn from(arch: Arch, word_size: WordSize, os: Option<TargetOs>) -> Option<Self> {
-        match (arch, word_size, os) {
-            (Arch::Intel, WordSize::W64, Some(TargetOs::Linux)) => Some(Target::LinuxIntel64),
-            (Arch::Arm, WordSize::W64, Some(TargetOs::MacOs)) => Some(Target::MacOsArm64),
-            (Arch::Wasm, WordSize::W32, Some(TargetOs::Wasm)) => Some(Target::Wasm32),
+    pub fn from(arch: Arch, os: Option<TargetOs>) -> Option<Self> {
+        match (arch, os) {
+            (Arch::Intel, Some(TargetOs::Linux)) => Some(Target::LinuxIntel64),
+            (Arch::Arm, Some(TargetOs::MacOs)) => Some(Target::MacOsArm64),
+            (Arch::Wasm, Some(TargetOs::Wasm)) => Some(Target::Wasm64),
             _ => None,
-        }
-    }
-    pub fn word_size(&self) -> WordSize {
-        match self {
-            Target::LinuxIntel64 => WordSize::W64,
-            Target::MacOsArm64 => WordSize::W64,
-            Target::Wasm32 => WordSize::W32,
         }
     }
     pub fn target_os(&self) -> TargetOs {
         match self {
             Target::LinuxIntel64 => TargetOs::Linux,
             Target::MacOsArm64 => TargetOs::MacOs,
-            Target::Wasm32 => TargetOs::Wasm,
+            Target::Wasm64 => TargetOs::Wasm,
         }
     }
     pub fn arch(&self) -> Arch {
         match self {
             Target::LinuxIntel64 => Arch::Intel,
             Target::MacOsArm64 => Arch::Arm,
-            Target::Wasm32 => Arch::Wasm,
+            Target::Wasm64 => Arch::Wasm,
         }
     }
 }

@@ -13,10 +13,10 @@ ns IntRangeIterator {
 
   fn position(self: IntRangeIterator): int { self.range.start + self.offset }
   fn size(self: IntRangeIterator): int { self.range.end - self.range.start }
-  fn stepBy(self: *mut IntRangeIterator, n: uint): bool { 
-    let nextPos = self.position() + (n as int);
+  fn stepBy(self: *mut IntRangeIterator, n: size): bool { 
+    let nextPos = self.position() + n;
     if nextPos >= self.range.end false else {
-      self.offset* <- self.offset + (n as int);
+      self.offset* <- self.offset + n;
       true
     }
   }
@@ -35,15 +35,15 @@ impl Iterator[Item = int] for IntRangeIterator {
        .Some(current)
      }
   }
-  fn sizeHint(self: *Self): { atLeast: uint, atMost: ?uint } {
+  fn sizeHint(self: *Self): { atLeast: size, atMost: ?size } {
     let remaining = self.range.end - self.position();
-    { atLeast: remaining as uint, atMost: .Some(remaining as uint) }
+    { atLeast: remaining, atMost: .Some(remaining) }
   }
-  fn advanceBy(self: *mut Self, n: uint): unit {
+  fn advanceBy(self: *mut Self, n: size): unit {
     self.stepBy(n);
     ()
   }
-  fn nth(self: *mut Self, n: uint): ?int {
+  fn nth(self: *mut Self, n: size): ?size {
     self.stepBy(n); 
     self.next()
   }

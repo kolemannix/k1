@@ -7,7 +7,6 @@
 /// But I currently think there's going to be a lot of value
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
-use crate::compiler::WordSize;
 use crate::kmem::MList;
 use crate::parse::{self, NumericWidth};
 use crate::typer::scopes::ScopeId;
@@ -63,12 +62,10 @@ pub enum CompilableUnitId {
     Expr(TypedExprId),
 }
 
-pub struct BcModuleConfig {
-    pub word_size: WordSize,
-}
+pub struct BcModuleConfig {}
 
 impl ProgramBytecode {
-    pub fn make(instr_count_hint: usize, word_size: WordSize) -> Self {
+    pub fn make(instr_count_hint: usize) -> Self {
         let function_count_hint = instr_count_hint / 32;
         ProgramBytecode {
             mem: kmem::Mem::make(),
@@ -78,7 +75,7 @@ impl ProgramBytecode {
             functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
             calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
             exprs: FxHashMap::new(),
-            module_config: BcModuleConfig { word_size },
+            module_config: BcModuleConfig {},
             b_blocks: vec![],
             b_variables: vec![],
             b_loops: FxHashMap::default(),
@@ -944,10 +941,8 @@ impl<'k1> Builder<'k1> {
         match int_value {
             TypedIntValue::U8(i) => Value::Imm32 { t: ScalarType::U8, data: *i as u32 },
             TypedIntValue::U16(i) => Value::Imm32 { t: ScalarType::U16, data: *i as u32 },
-            TypedIntValue::U32(i) | TypedIntValue::UWord32(i) => {
-                Value::Imm32 { t: ScalarType::U32, data: *i }
-            }
-            TypedIntValue::U64(i) | TypedIntValue::UWord64(i) => {
+            TypedIntValue::U32(i) => Value::Imm32 { t: ScalarType::U32, data: *i },
+            TypedIntValue::U64(i) => {
                 if *i <= u32::MAX as u64 {
                     Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
                 } else {
@@ -957,10 +952,10 @@ impl<'k1> Builder<'k1> {
             }
             TypedIntValue::I8(i) => Value::byte(*i as u8),
             TypedIntValue::I16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
-            TypedIntValue::I32(i) | TypedIntValue::IWord32(i) => {
+            TypedIntValue::I32(i) => {
                 Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
             }
-            TypedIntValue::I64(i) | TypedIntValue::IWord64(i) => {
+            TypedIntValue::I64(i) => {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
                     Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as i32 as u32)
                 } else {

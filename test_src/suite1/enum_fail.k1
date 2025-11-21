@@ -6,6 +6,6 @@ fn test(): unit {
   let result = testCompile(.A(true): E);
   assertEquals(
     result,
-    .Some("Variant payload type mismatch: Expected iword but got bool")
+    .Some("Variant payload type mismatch: Expected i64 but got bool")
   );
 }

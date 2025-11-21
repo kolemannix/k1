@@ -71,31 +71,30 @@ pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
 pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
 pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
 pub const U64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
-pub const UWORD_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
-pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
-pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
-pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
-pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
-pub const IWORD_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
+pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
+pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
+pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
+pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
+pub const SIZE_TYPE_ID: TypeId = I64_TYPE_ID;
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
-pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
-pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
-pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
-pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
-pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
-pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
+pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
+pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
+pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
+pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
+pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
+pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
+pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
 
-pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(24).unwrap());
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Debug, Clone)]
@@ -194,12 +193,10 @@ pub enum IntegerType {
     U16,
     U32,
     U64,
-    UWord(WordSize),
     I8,
     I16,
     I32,
     I64,
-    IWord(WordSize),
 }
 
 impl Display for IntegerType {
@@ -209,12 +206,10 @@ impl Display for IntegerType {
             Self::U16 => write!(f, "u16"),
             Self::U32 => write!(f, "u32"),
             Self::U64 => write!(f, "u64"),
-            Self::UWord(_) => write!(f, "uword"),
             Self::I8 => write!(f, "i8"),
             Self::I16 => write!(f, "i16"),
             Self::I32 => write!(f, "i32"),
             Self::I64 => write!(f, "i64"),
-            Self::IWord(_) => write!(f, "iword"),
         }
     }
 }
@@ -226,12 +221,10 @@ impl IntegerType {
             Self::U16 => U16_TYPE_ID,
             Self::U32 => U32_TYPE_ID,
             Self::U64 => U64_TYPE_ID,
-            Self::UWord(_) => UWORD_TYPE_ID,
             Self::I8 => I8_TYPE_ID,
             Self::I16 => I16_TYPE_ID,
             Self::I32 => I32_TYPE_ID,
             Self::I64 => I64_TYPE_ID,
-            Self::IWord(_) => IWORD_TYPE_ID,
         }
     }
 
@@ -241,14 +234,13 @@ impl IntegerType {
             Self::U16 | Self::I16 => NumericWidth::B16,
             Self::U32 | Self::I32 => NumericWidth::B32,
             Self::U64 | Self::I64 => NumericWidth::B64,
-            Self::UWord(word_size) | Self::IWord(word_size) => word_size.width(),
         }
     }
 
     pub fn is_signed(&self) -> bool {
         match self {
-            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::UWord(_) => false,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::IWord(_) => true,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 => false,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 => true,
         }
     }
 
@@ -258,14 +250,10 @@ impl IntegerType {
             IntegerType::U16 => TypedIntValue::U16(0),
             IntegerType::U32 => TypedIntValue::U32(0),
             IntegerType::U64 => TypedIntValue::U64(0),
-            IntegerType::UWord(WordSize::W32) => TypedIntValue::UWord32(0),
-            IntegerType::UWord(WordSize::W64) => TypedIntValue::UWord64(0),
             IntegerType::I8 => TypedIntValue::I8(0),
             IntegerType::I16 => TypedIntValue::I16(0),
             IntegerType::I32 => TypedIntValue::I32(0),
             IntegerType::I64 => TypedIntValue::I64(0),
-            IntegerType::IWord(WordSize::W32) => TypedIntValue::IWord32(0),
-            IntegerType::IWord(WordSize::W64) => TypedIntValue::IWord64(0),
         }
     }
 
@@ -275,14 +263,10 @@ impl IntegerType {
             IntegerType::U16 => ScalarType::U16,
             IntegerType::U32 => ScalarType::U32,
             IntegerType::U64 => ScalarType::U64,
-            IntegerType::UWord(WordSize::W32) => ScalarType::U32,
-            IntegerType::UWord(WordSize::W64) => ScalarType::U64,
             IntegerType::I8 => ScalarType::I8,
             IntegerType::I16 => ScalarType::I16,
             IntegerType::I32 => ScalarType::I32,
             IntegerType::I64 => ScalarType::I64,
-            IntegerType::IWord(WordSize::W32) => ScalarType::I32,
-            IntegerType::IWord(WordSize::W64) => ScalarType::I64,
         }
     }
 }

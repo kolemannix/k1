@@ -1,6 +1,6 @@
 ns ability_default_fns;
 
-let* I32_SPEC_COUNTER: *mut uword = 0;
+let* I32_SPEC_COUNTER: *mut int = 0;
 
 ability Increment {
   fn inc(self: Self): Self

@@ -23,7 +23,7 @@ fn test(): unit {
   let p2: PointAlias = { x: 0, y: 0 };
   assertEquals(
     testCompile(p2.sum()),
-    Opt.Some("Method 'sum' does not exist on type: '{{ x: iword, y: iword }'")
+    Opt.Some("Method 'sum' does not exist on type: '{{ x: i64, y: i64 }'")
   );
 
   ()

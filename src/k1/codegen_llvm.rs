@@ -37,14 +37,14 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::compiler::{MAC_SDK_VERSION, WordSize};
+use crate::compiler::MAC_SDK_VERSION;
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
     BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, FnParamType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID,
     I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo,
-    TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID, UWORD_TYPE_ID,
+    TypeId, U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
 };
 use crate::typer::{
     AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
@@ -494,9 +494,6 @@ struct BuiltinTypes<'ctx> {
 impl<'ctx> BuiltinTypes<'ctx> {
     pub fn unit_basic(&self) -> BasicValueEnum<'ctx> {
         self.unit_value.as_basic_value_enum()
-    }
-    pub fn uword(&self) -> IntType<'ctx> {
-        self.ptr_sized_int
     }
 }
 
@@ -996,16 +993,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.ctx.i64_type().as_basic_type_enum(),
                 dw_ate_unsigned,
             )),
-            Type::Integer(IntegerType::UWord(w)) => {
-                let llvm_type = self.builtin_types.ptr_sized_int;
-                assert_eq!(llvm_type.get_bit_width(), w.width().bits());
-                Ok(make_value_basic_type(
-                    "uword",
-                    UWORD_TYPE_ID,
-                    llvm_type.as_basic_type_enum(),
-                    dw_ate_unsigned,
-                ))
-            }
             Type::Integer(IntegerType::I8) => Ok(make_value_basic_type(
                 "i8",
                 I8_TYPE_ID,
@@ -1030,16 +1017,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.ctx.i64_type().as_basic_type_enum(),
                 dw_ate_signed,
             )),
-            Type::Integer(IntegerType::IWord(w)) => {
-                let llvm_type = self.builtin_types.ptr_sized_int;
-                assert_eq!(llvm_type.get_bit_width(), w.width().bits());
-                Ok(make_value_basic_type(
-                    "iword",
-                    UWORD_TYPE_ID,
-                    llvm_type.as_basic_type_enum(),
-                    dw_ate_signed,
-                ))
-            }
             Type::Float(float_type) => {
                 let llvm_type = match float_type {
                     FloatType::F32 => self.ctx.f32_type(),
@@ -1154,7 +1131,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         },
                     ),
                     pointee_type: Box::new(placeholder_pointee),
-                    layout: Layout::from_scalar_bits(self.word_size().bits()),
+                    layout: Layout::from_scalar_bits(
+                        self.builtin_types.ptr_sized_int.get_bit_width(),
+                    ),
                 }
                 .into())
             }
@@ -1168,7 +1147,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     di_type: self
                         .debug
                         .create_pointer_type(&format!("reference_{}", type_id), inner_debug_type),
-                    layout: Layout::from_scalar_bits(self.word_size().bits()),
+                    layout: Layout::from_scalar_bits(
+                        self.builtin_types.ptr_sized_int.get_bit_width(),
+                    ),
                 }
                 .into())
             }
@@ -2164,7 +2145,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let buffer_type = self.codegen_type(buffer_type_id)?.expect_struct();
         let buffer_struct_type = buffer_type.struct_type;
         let buffer_struct_value = buffer_struct_type.const_named_struct(&[
-            self.builtin_types.uword().const_int(len, false).as_basic_value_enum(),
+            self.builtin_types.ptr_sized_int.const_int(len, false).as_basic_value_enum(),
             data.as_basic_value_enum(),
         ]);
         Ok(buffer_struct_value)
@@ -2936,7 +2917,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     #[allow(unused)]
     fn const_string_ptr(&self, string: &str, name: &str) -> PointerValue<'ctx> {
         let char_data = self.ctx.const_string(string.as_bytes(), false);
-        let length_value = self.builtin_types.uword().const_int(string.len() as u64, false);
+        let length_value = self.builtin_types.ptr_sized_int.const_int(string.len() as u64, false);
         let char_data_global =
             self.llvm_module.add_global(char_data.get_type(), None, &format!("{name}_data"));
         char_data_global.set_initializer(&char_data);
@@ -4071,10 +4052,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_value = unsafe { engine.run_function(llvm_function.function_value, &[]) };
         let res: u64 = return_value.as_int(true);
         Ok(res)
-    }
-
-    pub fn word_size(&self) -> WordSize {
-        self.k1.ast.config.target.word_size()
     }
 
     fn make_sret_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {

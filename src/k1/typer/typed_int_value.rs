@@ -3,70 +3,17 @@
 
 use std::fmt::{Display, Formatter};
 
-use super::{IntegerType, TypeId, WordSize};
+use super::{IntegerType, TypeId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypedIntValue {
     U8(u8),
     U16(u16),
     U32(u32),
     U64(u64),
-    UWord32(u32),
-    UWord64(u64),
     I8(i8),
     I16(i16),
     I32(i32),
     I64(i64),
-    IWord32(i32),
-    IWord64(i64),
-}
-
-#[macro_export]
-macro_rules! int_binop {
-    ($self:expr, $other:expr, $method:ident) => {
-        match ($self, $other) {
-            (TypedIntValue::U8(a), TypedIntValue::U8(b)) => TypedIntValue::U8(a.$method(*b)),
-            (TypedIntValue::U16(a), TypedIntValue::U16(b)) => TypedIntValue::U16(a.$method(*b)),
-            (TypedIntValue::U32(a), TypedIntValue::U32(b)) => TypedIntValue::U32(a.$method(*b)),
-            (TypedIntValue::U64(a), TypedIntValue::U64(b)) => TypedIntValue::U64(a.$method(*b)),
-            (TypedIntValue::UWord32(a), TypedIntValue::UWord32(b)) => {
-                TypedIntValue::UWord32(a.$method(*b))
-            }
-            (TypedIntValue::UWord64(a), TypedIntValue::UWord64(b)) => {
-                TypedIntValue::UWord64(a.$method(*b))
-            }
-            (TypedIntValue::I8(a), TypedIntValue::I8(b)) => TypedIntValue::I8(a.$method(*b)),
-            (TypedIntValue::I16(a), TypedIntValue::I16(b)) => TypedIntValue::I16(a.$method(*b)),
-            (TypedIntValue::I32(a), TypedIntValue::I32(b)) => TypedIntValue::I32(a.$method(*b)),
-            (TypedIntValue::I64(a), TypedIntValue::I64(b)) => TypedIntValue::I64(a.$method(*b)),
-            (TypedIntValue::IWord32(a), TypedIntValue::IWord32(b)) => {
-                TypedIntValue::IWord32(a.$method(*b))
-            }
-            (TypedIntValue::IWord64(a), TypedIntValue::IWord64(b)) => {
-                TypedIntValue::IWord64(a.$method(*b))
-            }
-            _ => panic!("mismatched int binop types"),
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! int_shift {
-    ($self:expr, $count:expr, $method:ident) => {
-        match $self {
-            TypedIntValue::U8(a) => TypedIntValue::U8(a.$method($count)),
-            TypedIntValue::U16(a) => TypedIntValue::U16(a.$method($count)),
-            TypedIntValue::U32(a) => TypedIntValue::U32(a.$method($count)),
-            TypedIntValue::U64(a) => TypedIntValue::U64(a.$method($count)),
-            TypedIntValue::UWord32(a) => TypedIntValue::UWord32(a.$method($count)),
-            TypedIntValue::UWord64(a) => TypedIntValue::UWord64(a.$method($count)),
-            TypedIntValue::I8(a) => TypedIntValue::I8(a.$method($count)),
-            TypedIntValue::I16(a) => TypedIntValue::I16(a.$method($count)),
-            TypedIntValue::I32(a) => TypedIntValue::I32(a.$method($count)),
-            TypedIntValue::I64(a) => TypedIntValue::I64(a.$method($count)),
-            TypedIntValue::IWord32(a) => TypedIntValue::IWord32(a.$method($count)),
-            TypedIntValue::IWord64(a) => TypedIntValue::IWord64(a.$method($count)),
-        }
-    };
 }
 
 impl TypedIntValue {
@@ -76,14 +23,10 @@ impl TypedIntValue {
             TypedIntValue::U16(_) => "u16",
             TypedIntValue::U32(_) => "u32",
             TypedIntValue::U64(_) => "u64",
-            TypedIntValue::UWord32(_) => "uword",
-            TypedIntValue::UWord64(_) => "uword",
             TypedIntValue::I8(_) => "i8",
             TypedIntValue::I16(_) => "i16",
             TypedIntValue::I32(_) => "i32",
             TypedIntValue::I64(_) => "i64",
-            TypedIntValue::IWord32(_) => "iword",
-            TypedIntValue::IWord64(_) => "iword",
         }
     }
 
@@ -99,30 +42,11 @@ impl TypedIntValue {
             TypedIntValue::U16(x) => TypedIntValue::U16(x.not()),
             TypedIntValue::U32(x) => TypedIntValue::U32(x.not()),
             TypedIntValue::U64(x) => TypedIntValue::U64(x.not()),
-            TypedIntValue::UWord32(x) => TypedIntValue::UWord32(x.not()),
-            TypedIntValue::UWord64(x) => TypedIntValue::UWord64(x.not()),
             TypedIntValue::I8(x) => TypedIntValue::I8(x.not()),
             TypedIntValue::I16(x) => TypedIntValue::I16(x.not()),
             TypedIntValue::I32(x) => TypedIntValue::I32(x.not()),
             TypedIntValue::I64(x) => TypedIntValue::I64(x.not()),
-            TypedIntValue::IWord32(x) => TypedIntValue::IWord32(x.not()),
-            TypedIntValue::IWord64(x) => TypedIntValue::IWord64(x.not()),
         }
-    }
-
-    pub fn bit_and(&self, other: &Self) -> Self {
-        use std::ops::BitAnd;
-        int_binop!(self, other, bitand)
-    }
-
-    pub fn bit_or(&self, other: &Self) -> Self {
-        use std::ops::BitOr;
-        int_binop!(self, other, bitor)
-    }
-
-    pub fn bit_xor(&self, other: &Self) -> Self {
-        use std::ops::BitXor;
-        int_binop!(self, other, bitxor)
     }
 
     pub fn to_u64_bits(&self) -> u64 {
@@ -131,14 +55,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as u64,
             TypedIntValue::U32(v) => *v as u64,
             TypedIntValue::U64(v) => *v,
-            TypedIntValue::UWord32(v) => *v as u64,
-            TypedIntValue::UWord64(v) => *v,
             TypedIntValue::I8(v) => *v as u64,
             TypedIntValue::I16(v) => *v as u64,
             TypedIntValue::I32(v) => *v as u64,
             TypedIntValue::I64(v) => *v as u64,
-            TypedIntValue::IWord32(v) => *v as u64,
-            TypedIntValue::IWord64(v) => *v as u64,
         }
     }
 
@@ -149,14 +69,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as u32,
             TypedIntValue::U32(v) => *v,
             TypedIntValue::U64(v) => *v as u32,
-            TypedIntValue::UWord32(v) => *v,
-            TypedIntValue::UWord64(v) => *v as u32,
             TypedIntValue::I8(v) => *v as u32,
             TypedIntValue::I16(v) => *v as u32,
             TypedIntValue::I32(v) => *v as u32,
             TypedIntValue::I64(v) => *v as u32,
-            TypedIntValue::IWord32(v) => *v as u32,
-            TypedIntValue::IWord64(v) => *v as u32,
         }
     }
 
@@ -167,14 +83,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v,
             TypedIntValue::U32(v) => *v as u16,
             TypedIntValue::U64(v) => *v as u16,
-            TypedIntValue::UWord32(v) => *v as u16,
-            TypedIntValue::UWord64(v) => *v as u16,
             TypedIntValue::I8(v) => *v as u16,
             TypedIntValue::I16(v) => *v as u16,
             TypedIntValue::I32(v) => *v as u16,
             TypedIntValue::I64(v) => *v as u16,
-            TypedIntValue::IWord32(v) => *v as u16,
-            TypedIntValue::IWord64(v) => *v as u16,
         }
     }
 
@@ -185,14 +97,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as u8,
             TypedIntValue::U32(v) => *v as u8,
             TypedIntValue::U64(v) => *v as u8,
-            TypedIntValue::UWord32(v) => *v as u8,
-            TypedIntValue::UWord64(v) => *v as u8,
             TypedIntValue::I8(v) => *v as u8,
             TypedIntValue::I16(v) => *v as u8,
             TypedIntValue::I32(v) => *v as u8,
             TypedIntValue::I64(v) => *v as u8,
-            TypedIntValue::IWord32(v) => *v as u8,
-            TypedIntValue::IWord64(v) => *v as u8,
         }
     }
 
@@ -202,14 +110,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as i32,
             TypedIntValue::U32(v) => *v as i32,
             TypedIntValue::U64(v) => *v as i32,
-            TypedIntValue::UWord32(v) => *v as i32,
-            TypedIntValue::UWord64(v) => *v as i32,
             TypedIntValue::I8(v) => *v as i32,
             TypedIntValue::I16(v) => *v as i32,
             TypedIntValue::I32(v) => *v,
             TypedIntValue::I64(v) => *v as i32,
-            TypedIntValue::IWord32(v) => *v,
-            TypedIntValue::IWord64(v) => *v as i32,
         }
     }
 
@@ -219,14 +123,10 @@ impl TypedIntValue {
             TypedIntValue::U16(v) => *v as i64,
             TypedIntValue::U32(v) => *v as i64,
             TypedIntValue::U64(v) => *v as i64,
-            TypedIntValue::UWord32(v) => *v as i64,
-            TypedIntValue::UWord64(v) => *v as i64,
             TypedIntValue::I8(v) => *v as i64,
             TypedIntValue::I16(v) => *v as i64,
             TypedIntValue::I32(v) => *v as i64,
             TypedIntValue::I64(v) => *v,
-            TypedIntValue::IWord32(v) => *v as i64,
-            TypedIntValue::IWord64(v) => *v,
         }
     }
 
@@ -236,14 +136,10 @@ impl TypedIntValue {
             TypedIntValue::U16(_) => IntegerType::U16,
             TypedIntValue::U32(_) => IntegerType::U32,
             TypedIntValue::U64(_) => IntegerType::U64,
-            TypedIntValue::UWord32(_) => IntegerType::UWord(WordSize::W32),
-            TypedIntValue::UWord64(_) => IntegerType::UWord(WordSize::W64),
             TypedIntValue::I8(_) => IntegerType::I8,
             TypedIntValue::I16(_) => IntegerType::I16,
             TypedIntValue::I32(_) => IntegerType::I32,
             TypedIntValue::I64(_) => IntegerType::I64,
-            TypedIntValue::IWord32(_) => IntegerType::IWord(WordSize::W32),
-            TypedIntValue::IWord64(_) => IntegerType::IWord(WordSize::W64),
         }
     }
 
@@ -252,23 +148,11 @@ impl TypedIntValue {
             TypedIntValue::I8(_)
             | TypedIntValue::I16(_)
             | TypedIntValue::I32(_)
-            | TypedIntValue::I64(_)
-            | TypedIntValue::IWord32(_)
-            | TypedIntValue::IWord64(_) => true,
+            | TypedIntValue::I64(_) => true,
             TypedIntValue::U8(_)
             | TypedIntValue::U16(_)
             | TypedIntValue::U32(_)
-            | TypedIntValue::U64(_)
-            | TypedIntValue::UWord32(_)
-            | TypedIntValue::UWord64(_) => false,
-        }
-    }
-
-    pub fn expect_uword(&self) -> usize {
-        match self {
-            TypedIntValue::UWord64(v) => *v as usize,
-            TypedIntValue::UWord32(v) => *v as usize,
-            _ => unreachable!(),
+            | TypedIntValue::U64(_) => false,
         }
     }
 
@@ -276,14 +160,6 @@ impl TypedIntValue {
         match self {
             TypedIntValue::U64(v) => *v,
             _ => unreachable!(),
-        }
-    }
-
-    pub fn as_uword(&self) -> Option<usize> {
-        match self {
-            TypedIntValue::UWord64(v) => Some(*v as usize),
-            TypedIntValue::UWord32(v) => Some(*v as usize),
-            _ => None,
         }
     }
 }
@@ -336,14 +212,10 @@ impl Display for TypedIntValue {
             TypedIntValue::U16(v) => write!(f, "{}u16", v),
             TypedIntValue::U32(v) => write!(f, "{}u32", v),
             TypedIntValue::U64(v) => write!(f, "{}u64", v),
-            TypedIntValue::UWord32(v) => write!(f, "{}uword", v),
-            TypedIntValue::UWord64(v) => write!(f, "{}uword", v),
             TypedIntValue::I8(v) => write!(f, "{}i8", v),
             TypedIntValue::I16(v) => write!(f, "{}i16", v),
             TypedIntValue::I32(v) => write!(f, "{}i32", v),
             TypedIntValue::I64(v) => write!(f, "{}i64", v),
-            TypedIntValue::IWord32(v) => write!(f, "{}iword", v),
-            TypedIntValue::IWord64(v) => write!(f, "{}iword", v),
         }
     }
 }

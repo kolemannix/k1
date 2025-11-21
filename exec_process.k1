@@ -15,9 +15,9 @@ extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
 
 // Convert View[string] to null-terminated **char array for execve  
 fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): **char {
-    let totalArgs = 1 + (args.len() as iword) + 1; // program + args + null terminator
+    let totalArgs = 1 + args.len() + 1; // program + args + null terminator
     let argv = alloc.alloc(
-      size = (totalArgs as uword) * types/sizeOf[ptr](),
+      size = totalArgs * types/sizeOf[ptr](),
       align = types/alignOf[ptr]()
     ) as **char;
     
@@ -27,7 +27,7 @@ fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): 
     argv_ptr <- progCStr.ptr;
     
     // Set arguments
-    let i: uword = 0;
+    let i = 0;
     while i < args.len() {
         let argCStr = args.get(i).toCString();
         let arg_slot = ptr/refAtIndex[ptr](argv as ptr, i + 1);
@@ -36,7 +36,7 @@ fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): 
     };
     
     // Null terminate
-    let null_slot = ptr/refAtIndex[ptr](argv as ptr, (totalArgs - 1) as uword);
+    let null_slot = ptr/refAtIndex[ptr](argv as ptr, totalArgs - 1);
     null_slot <- ptr/NULL;
     
     argv

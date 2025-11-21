@@ -6,18 +6,18 @@
 // |used|10 items  |
 // +----+----------+
 // 0    4
-deftype FixList[T, N: static uword] = { used: u32, data: Array[T, N] }
+deftype FixList[T, N: static size] = { used: u32, data: Array[T, N] }
 ns FixList {
-  fn cap[T, N: static uword](self: FixList[T, N]): uword { self.data.len() }
-  fn len[T, N: static uword](self: FixList[T, N]): uword { self.used as uword }
+  fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
+  fn len[T, N: static size](self: FixList[T, N]): size { self.used as size }
 
-  fn clear[T, N: static uword](self: *mut FixList[T, N]): unit {
+  fn clear[T, N: static size](self: *mut FixList[T, N]): unit {
     #if k1/DEBUG self.data*.memset(0xCD);
     self.used* <- 0
   }
 
-  fn push[T, N: static uword](self: *mut FixList[T, N], value: T): unit {
-    let used: uword = self.len();
+  fn push[T, N: static size](self: *mut FixList[T, N], value: T): unit {
+    let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used as u32 + 1;
@@ -27,8 +27,8 @@ ns FixList {
     }
   }
 
-  fn tryPush[T, N: static uword](self: *mut FixList[T, N], value: T): Result[unit, unit] {
-    let used: uword = self.len();
+  fn tryPush[T, N: static size](self: *mut FixList[T, N], value: T): Result[unit, unit] {
+    let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used as u32 + 1;
@@ -38,7 +38,7 @@ ns FixList {
     }
   }
 
-  fn tryPushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): Result[unit, unit] {
+  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): Result[unit, unit] {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
@@ -52,24 +52,24 @@ ns FixList {
     }
   }
 
-  fn pushN[T, N: static uword](self: *mut FixList[T, N], values: View[T]): unit {
+  fn pushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): unit {
     let result = self.tryPushN[T, N](values);
     if result is .Err(msg) crash("FixList out of space")
   }
 
-  fn asBuffer[T, N: static uword](self: *mut FixList[T, N]): Buffer[T] {
+  fn asBuffer[T, N: static size](self: *mut FixList[T, N]): Buffer[T] {
     self.data*.asBuffer().slice(0, self.len())
   }
 
-  fn asView[T, N: static uword](self: *FixList[T, N]): View[T] {
+  fn asView[T, N: static size](self: *FixList[T, N]): View[T] {
     self.data*.asView().slice(0, self.len())
   }
 
-  fn get[T, N: static uword](self: *FixList[T, N], index: uword): T {
+  fn get[T, N: static size](self: *FixList[T, N], index: size): T {
     self.toMut.getRef(index).*
   }
 
-  fn getRef[T, N: static uword](self: *mut FixList[T, N], index: uword): *mut T {
+  fn getRef[T, N: static size](self: *mut FixList[T, N], index: size): *mut T {
     if index < self.len() {
       self.data*.getRef(index)
     } else {
@@ -77,15 +77,15 @@ ns FixList {
     }
   }
 
-  fn set[T, N: static uword](self: *mut FixList[T, N], index: uword, value: T): unit {
+  fn set[T, N: static size](self: *mut FixList[T, N], index: size, value: T): unit {
     self.getRef(index) <- value
   }
 
-  fn last[T, N: static uword](self: *FixList[T, N]): ?T {
+  fn last[T, N: static size](self: *FixList[T, N]): ?T {
     self.asView().last()
   }
 
-  fn pop[T, N: static uword](self: *mut FixList[T, N]): ?T {
+  fn pop[T, N: static size](self: *mut FixList[T, N]): ?T {
     switch self.last() {
        .Some(t) -> {
          self.used* <- self.used - 1;

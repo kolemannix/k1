@@ -33,14 +33,14 @@ fn testArray(): unit {
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
   let a: *mut Array[u8, 10] = List/copyToArray(ls, 10);
-  for core/IntRange/upTo(a.len() as iword) do {
-    if it % 2 == 0 { a.getRef(it as uword) <- 1 };
+  for core/IntRange/upTo(a.len()) do {
+    if it % 2 == 0 { a.getRef(it) <- 1 };
   };
-  for core/IntRange/upTo(a.len() as iword) do {
+  for core/IntRange/upTo(a.len()) do {
     if it % 2 == 0 {
-      assertEquals(a.get(it as uword), 1);
+      assertEquals(a.get(it), 1);
     } else {
-      assertEquals(a.get(it as uword), 3);
+      assertEquals(a.get(it), 3);
     }
   };
 

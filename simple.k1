@@ -2,9 +2,9 @@
 //  3 * 4
 //};
 
-let x2: 12iword = { 3 * 4 };
-let x3: 12iword = #static { 3 * 4 };
-let x3: 12iword = #static 3 * 4;
+let x2: 12 = { 3 * 4 };
+let x3: 12 = #static { 3 * 4 };
+let x3: 12 = #static 3 * 4;
 
 let y: string = #static {
   let a = "asd";
