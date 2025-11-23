@@ -2,24 +2,24 @@
 //  3 * 4
 //};
 
-let x2: 12 = { 3 * 4 };
-let x3: 12 = #static { 3 * 4 };
-let x3: 12 = #static 3 * 4;
-
-let y: string = #static {
-  let a = "asd";
-  a.concat("f")
-};
-let y2: "asdf" = #static {
-  let a = "asd";
-  a.concat("f")
-};
-
 fn main(): i32 {
-   let i: "a" = #static "a";
-   let i2: string = #static "a";
-   let i3: "a" = "a";
-   0
+
+  // Signed widen
+  let x: u8 = 3;
+  let x2: u64 = x;
+  assertEquals(x2, 3);
+
+  // Unsigned widen
+  let x: i16 = 3;
+  let x2: i64 = x;
+  assertEquals(x2, 3);
+
+  // Unsigned widen to signed
+  let x: u32 = 3;
+  let x2: i64 = x;
+  assertEquals(x2, 3);
+  
+  0
 }
 
 // I think it compiles to a struct literal; { fmtStr: string, arg1: <t1>, arg2: <t2>, etc, etc, etc }

@@ -1,3 +1,5 @@
+> For the joy of programming
+
 New tagline? "C with typeclasses and tagged unions"
 
 IDEAS 11/13
@@ -12,29 +14,30 @@ AbilitySignature as context variable kind in addition to Type (enables context W
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
-
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 
-Ideas
+Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
+- [ ] userland: CCompatString which is a valid c string with prefixed length
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
-- [ ] Make demo readme / site
 - [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
   - [ ] First-class data-oriented design features for struct/enum setups?
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
       'shared' chunks vs union chunk, AoS or AoSoA by default...
-
-Syntax/elegance
-- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
- - [ ] Also need positional format args as well (probably just our userland printf finished out)
-- [ ] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
-  - [ ] Ok now I'm really thinking about `size` and it being signed.
-  - [ ] Also: do safe integer coercions automatically
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
+
+Syntax/elegance
+- [ ] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
+      to produce a very strong name for this concept
+- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+ - [ ] Also need positional format args as well (probably just our userland printf finished out)
+- [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
+  - [x] Ok now I'm really thinking about `size` and it being signed.
+  - [x] Also: do safe integer coercions automatically
 
 Simple but missing
 - [x] Support ability constraints on generics
@@ -90,9 +93,9 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Static Improvements
 - [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
-- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] 'Type predicate' functions as type bounds
 
 ## Project: aarch64 struct passing ABI
@@ -112,8 +115,10 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 
 ## Project: More LSP features
-- [ ] Hover
+- [x] Hover first pass
+- [ ] Hover much better
 - [ ] Go-to
+- [ ] Completion
 
 ## Project: VM for `static` execution
 - [x] vm: static execution

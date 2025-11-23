@@ -1588,16 +1588,31 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy)]
+pub enum VariableKind {
+    FnParam(FunctionId),
+    Let(TypedStmtId),
+    Global(TypedGlobalId),
+}
+
+#[derive(Clone)]
 pub struct Variable {
     pub name: Ident,
     pub type_id: TypeId,
     pub owner_scope: ScopeId,
-    pub global_id: Option<TypedGlobalId>,
     pub flags: VariableFlags,
+    pub usage_count: u32,
+    pub kind: VariableKind,
 }
 
 impl Variable {
+    pub fn global_id(&self) -> Option<TypedGlobalId> {
+        match self.kind {
+            VariableKind::Global(global_id) => Some(global_id),
+            _ => None,
+        }
+    }
+
     pub fn reassigned(&self) -> bool {
         self.flags.contains(VariableFlags::Reassigned)
     }
@@ -2307,6 +2322,7 @@ pub struct TypedProgram {
     pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
+    pub warnings: Vec<TyperError>,
     pub namespaces: Namespaces,
     pub abilities: VPool<TypedAbility, AbilityId>,
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
@@ -2471,7 +2487,8 @@ impl TypedProgram {
             type_schemas: FxHashMap::new(),
             type_names: FxHashMap::new(),
             scopes,
-            errors: Vec::new(),
+            errors: vec![],
+            warnings: vec![],
             namespaces,
             abilities: VPool::make_with_hint("abilities", 2048),
             ability_impls: VPool::make_with_hint("ability_impls", 4096),
@@ -4773,6 +4790,63 @@ impl TypedProgram {
             }
         }
 
+        if let Type::Integer(expected_int) = self.types.get(expected) {
+            if let Type::Integer(actual_int) = self.types.get(actual_type_id) {
+                return {
+                    let needs_widen = expected_int.width() > actual_int.width();
+                    // Let's do auto widening when signedness doesnt change
+                    // And also unsigned -> signed widening
+                    if needs_widen {
+                        match (expected_int.is_signed(), actual_int.is_signed()) {
+                            (true, true) => {
+                                let widened = self.synth_cast(
+                                    expr,
+                                    expected,
+                                    CastType::IntegerCast(IntegerCastDirection::Extend),
+                                    None,
+                                );
+                                CheckExprTypeResult::Coerce(widened, "widen signed".into())
+                            }
+                            (false, false) => {
+                                let widened = self.synth_cast(
+                                    expr,
+                                    expected,
+                                    CastType::IntegerCast(IntegerCastDirection::Extend),
+                                    None,
+                                );
+                                CheckExprTypeResult::Coerce(widened, "widen unsigned".into())
+                            }
+                            (false, true) => {
+                                // Could lose signedness if negative; no no
+                                CheckExprTypeResult::Err("widen signed->unsigned".into())
+                            }
+                            (true, false) => {
+                                let widened = self.synth_cast(
+                                    expr,
+                                    expected,
+                                    CastType::IntegerCast(IntegerCastDirection::Extend),
+                                    None,
+                                );
+                                let to_signed = self.synth_cast(
+                                    widened,
+                                    expected,
+                                    CastType::IntegerCast(IntegerCastDirection::SignChange),
+                                    None,
+                                );
+                                CheckExprTypeResult::Coerce(
+                                    to_signed,
+                                    "widen->unsigned->signed".into(),
+                                )
+                            }
+                        }
+                    } else {
+                        // We never truncate automatically, or change signedness without extension
+                        CheckExprTypeResult::Err("incompatible integer types".into())
+                    }
+                };
+            }
+        }
+
         // Auto-deref: We only do this if the expected type is not a reference at all. Meaning,
         // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
         // This rule won't help you or do anything for nested references
@@ -5096,7 +5170,7 @@ impl TypedProgram {
             TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
             TypedExpr::Variable(v) => {
                 let typed_variable = self.variables.get(v.variable_id);
-                let Some(global_id) = typed_variable.global_id else {
+                let Some(global_id) = typed_variable.global_id() else {
                     return failf!(
                         self.exprs.get_span(expr_id),
                         "Variable cannot be evaluated at compile time: {}",
@@ -5313,8 +5387,9 @@ impl TypedProgram {
             name: global_name,
             type_id,
             owner_scope: scope_id,
-            global_id: Some(global_id),
+            kind: VariableKind::Global(global_id),
             flags: VariableFlags::empty(),
+            usage_count: 0,
         });
         let actual_global_id = self.globals.add(TypedGlobal {
             variable_id,
@@ -6280,7 +6355,7 @@ impl TypedProgram {
                 let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
                     let variable_is_above_lambda =
                         self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
-                    let variable_is_global = self.variables.get(variable_id).global_id.is_some();
+                    let variable_is_global = self.variables.get(variable_id).global_id().is_some();
 
                     let is_capture = variable_is_above_lambda && !variable_is_global;
                     debug!("{}, is_capture={is_capture}", self.ident_str(variable.name.name));
@@ -6313,6 +6388,7 @@ impl TypedProgram {
                         v.type_id,
                         variable_name_span,
                     );
+                    self.variables.get_mut(variable_id).usage_count += 1;
                     Ok((variable_id, expr))
                 }
             }
@@ -7970,6 +8046,7 @@ impl TypedProgram {
                 env_struct_reference_type,
                 span,
             );
+            k1.variables.get_mut(environment_param_variable_id).usage_count += 1;
             let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
                 base: env_variable_expr,
                 field_index: field_index as u32,
@@ -8055,8 +8132,9 @@ impl TypedProgram {
                 name,
                 type_id: typed_arg.type_id,
                 owner_scope: lambda_scope_id,
-                global_id: None,
+                kind: VariableKind::FnParam(FunctionId::PENDING),
                 flags: VariableFlags::empty(),
+                usage_count: 0,
             });
             lambda_scope.add_variable(name, variable_id);
             param_variables.push(variable_id)
@@ -8108,7 +8186,11 @@ impl TypedProgram {
             }));
 
             self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
-            let body_function_id = self.add_function(TypedFunction {
+            let body_function_id = self.functions.next_id();
+            for v in param_variables.iter() {
+                self.variables.get_mut(*v).kind = VariableKind::FnParam(body_function_id)
+            }
+            self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
                 param_variables: self.mem.vec_to_mslice(&param_variables),
@@ -8169,12 +8251,14 @@ impl TypedProgram {
             is_lambda_env: true,
             span: body_span,
         };
+        let body_function_id = self.functions.next_id();
         let environment_param_variable_id = self.variables.add(Variable {
             name: environment_param.name,
             type_id: POINTER_TYPE_ID,
             owner_scope: lambda_scope_id,
-            global_id: None,
+            kind: VariableKind::FnParam(body_function_id),
             flags: VariableFlags::empty(),
+            usage_count: 0,
         });
         typed_params.insert(0, environment_param);
         param_variables.insert(0, environment_param_variable_id);
@@ -8233,7 +8317,7 @@ impl TypedProgram {
             is_lambda: true,
         }));
 
-        let body_function_id = self.add_function(TypedFunction {
+        let actual_body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
             param_variables: self.mem.vec_to_mslice(&param_variables),
@@ -8252,16 +8336,7 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         });
-        // let is_concrete = self.functions.get(body_function_id).is_concrete;
-        // if is_concrete && !ctx.is_inference() {
-        //     bc::compile_function(self, body_function_id)?;
-        // } else {
-        //     debug!(
-        //         "Not compiling lambda {} due to {is_concrete} {}",
-        //         self.ident_str(name),
-        //         ctx.is_inference()
-        //     );
-        // }
+        debug_assert_eq!(actual_body_function_id, body_function_id);
 
         let lambda_type_id = self.types.add_lambda(
             function_type,
@@ -10467,14 +10542,16 @@ impl TypedProgram {
         } else {
             let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
             let mut new_function = function.clone();
+            let new_function_id = self.functions.next_id();
 
             let empty_env_variable = self.variables.add(Variable {
                 name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
                 // Wrong scope, and its not actually added, but we know its not used
                 owner_scope: new_function.scope,
-                global_id: None,
+                kind: VariableKind::FnParam(new_function_id),
                 flags: VariableFlags::empty(),
+                usage_count: 0,
             });
             let mut new_variables = self.mem.new_list(new_function.param_variables.len() + 1);
             new_variables.push(empty_env_variable);
@@ -10486,7 +10563,8 @@ impl TypedProgram {
             new_function.type_id = new_function_type;
             let old_name = self.ident_str(new_function.name);
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
-            let new_function_id = self.add_function(new_function);
+            let actual_new_function_id = self.add_function(new_function);
+            debug_assert_eq!(actual_new_function_id, new_function_id);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
             //bc::compile_function(self, new_function_id)
             //    .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
@@ -11732,6 +11810,7 @@ impl TypedProgram {
             function_type_arguments,
             generic_function.signature(),
         );
+        let specialized_function_id = self.functions.next_id();
         debug!(
             "specialized function type: {}",
             self.type_id_to_string(specialized_function_type_id)
@@ -11776,8 +11855,9 @@ impl TypedProgram {
                 type_id: specialized_param_type.type_id,
                 name,
                 owner_scope: spec_fn_scope,
-                global_id: None,
+                kind: VariableKind::FnParam(specialized_function_id),
                 flags,
+                usage_count: 0,
             });
             if specialized_param_type.is_context {
                 self.scopes.add_context_variable(
@@ -11823,7 +11903,8 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         };
-        let specialized_function_id = self.add_function(specialized_function);
+        let actual_specialized_function_id = self.add_function(specialized_function);
+        debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
         let is_concrete = self.get_function(specialized_function_id).is_concrete;
 
         self.scopes
@@ -12054,12 +12135,14 @@ impl TypedProgram {
                 let mut flags = VariableFlags::empty();
 
                 flags.set(VariableFlags::Context, parsed_let.is_context());
+                let stmt_id = self.stmts.next_id();
                 let variable_id = self.variables.add(Variable {
                     name: parsed_let.name,
                     type_id: variable_type,
                     owner_scope: ctx.scope_id,
-                    global_id: None,
+                    kind: VariableKind::Let(stmt_id),
                     flags,
+                    usage_count: 0,
                 });
                 let val_def_stmt = TypedStmt::Let(LetStmt {
                     variable_type,
@@ -12078,7 +12161,7 @@ impl TypedProgram {
                 } else {
                     self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
                 }
-                let stmt_id = self.stmts.add(val_def_stmt);
+                self.stmts.add_expected_id(val_def_stmt, stmt_id);
                 Ok(Some(stmt_id))
             }
             ParsedStmt::Require(require) => {
@@ -13227,8 +13310,9 @@ impl TypedProgram {
                 name: fn_param.name,
                 type_id,
                 owner_scope: fn_scope_id,
-                global_id: None,
                 flags: if is_context { VariableFlags::Context } else { VariableFlags::empty() },
+                usage_count: 0,
+                kind: VariableKind::FnParam(FunctionId::PENDING),
             };
 
             let variable_id = self_.variables.add(variable);
@@ -13353,13 +13437,15 @@ impl TypedProgram {
             is_lambda: false,
         }));
 
-        let function_id = self_.functions.next_id();
-
         let type_params_handle = self_.named_types.add_slice_copy(&type_params);
         let function_type_params_handle =
             self_.function_type_params.add_slice_copy(&function_type_params);
+        let function_id = self_.functions.next_id();
+        for v in param_variables.iter() {
+            self_.variables.get_mut(*v).kind = VariableKind::FnParam(function_id);
+        }
         let param_variables_handle = self_.mem.vec_to_mslice(&param_variables);
-        let actual_function_id = self_.add_function(TypedFunction {
+        let function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
             param_variables: param_variables_handle,
@@ -13377,7 +13463,6 @@ impl TypedProgram {
             is_concrete: false,
             dyn_fn_id: None,
         });
-        debug_assert!(actual_function_id == function_id);
 
         if resolvable_by_name {
             if !self_.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
@@ -13409,8 +13494,6 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
-    /// `ensure_executable`: We need to run this function statically, so we need to compile
-    ///                      bytecode not just for it, but for everything it calls, recursively.
     pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
         if function.body_block.is_some() {
@@ -15711,6 +15794,11 @@ impl TypedProgram {
     }
 
     // Errors and logging
+
+    pub fn report_warning(&mut self, e: TyperError) {
+        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        self.warnings.push(e);
+    }
 
     pub fn report_error(&mut self, e: TyperError) {
         self.write_error(&mut std::io::stderr(), &e).unwrap();

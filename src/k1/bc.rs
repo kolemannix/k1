@@ -1242,7 +1242,7 @@ fn compile_expr(
         }
         TypedExpr::Variable(variable_expr) => {
             let variable = b.k1.variables.get(variable_expr.variable_id);
-            match variable.global_id {
+            match variable.global_id() {
                 Some(global_id) => {
                     // Globals are pretty complex. We always generate an instruction
                     // representing the **address** of the global, because they are always
