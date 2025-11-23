@@ -11,6 +11,9 @@ ns List {
   ///////////////////////////
   // Construction functions
 
+  // nocommit: why doesnt this `use` work
+  // use core/mem/AllocMode
+
   fn empty[T](): List[T] {
     withCapacity[T](0)
   }
@@ -38,9 +41,9 @@ ns List {
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: *mut List[T], count: size): unit {
+  fn reserve[T](self: *mut List[T], alloc: mem/AllocMode, count: size): unit {
     if self.cap() >= count { return(()) };
-    self.buffer*._growTo[T](context .Current)(count);
+    self.buffer*._growTo[T](context alloc)(count);
     assertdbg(self.buffer.len == count);
   }
 
@@ -111,7 +114,7 @@ ns List {
     } else {
       self.cap() * 2
     };
-    self.reserve(newCap);
+    self.reserve(mode, newCap);
     ()
   }
 
@@ -195,7 +198,7 @@ ns List {
   }
 
   fn appendBuffer[T](self: *mut List[T], other: Buffer[T]): unit {
-    self.reserve(self.len + other.len);
+    self.reserve(.Current, self.len + other.len);
     let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
     Buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;
@@ -268,7 +271,7 @@ ns List {
       b.writeString(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
-        b.writeChar('\n');
+        b.writeString(sep);
       }
     };
     b.build()

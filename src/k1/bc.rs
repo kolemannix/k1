@@ -673,13 +673,13 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     b.cur_span = fn_span;
 
     // Set up parameters
-    let param_variables = f.param_variables;
+    let param_variables = f.params;
     let mut params = b.k1.bytecode.mem.new_list(param_variables.len());
-    for (index, param_variable_id) in b.k1.mem.getn(param_variables).iter().enumerate() {
-        let v = b.k1.variables.get(*param_variable_id);
+    for (index, param) in b.k1.mem.getn(param_variables).iter().enumerate() {
+        let v = b.k1.variables.get(param.variable_id);
         let t = b.get_physical_type(v.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
-            id: *param_variable_id,
+            id: param.variable_id,
             value: Value::FnParam { t, index: index as u32 },
             indirect: false,
         });

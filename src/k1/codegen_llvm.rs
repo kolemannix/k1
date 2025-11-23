@@ -3158,10 +3158,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function: &TypedFunction,
         index: usize,
     ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
-        let variable_id = self.k1.mem.get_nth(function.param_variables, index);
+        let param = self.k1.mem.get_nth(function.params, index);
         let fn_type = self.k1.types.get(function.type_id).expect_function();
         let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
-        let variable_value = self.variable_to_value.get(variable_id).unwrap();
+        let variable_value = self.variable_to_value.get(&param.variable_id).unwrap();
         let basic_value =
             self.load_variable_value(&self.codegen_type(param_type.type_id)?, *variable_value);
         Ok(basic_value.into())
@@ -3725,14 +3725,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
-            let variable_id = *self.k1.mem.get_nth(typed_function.param_variables, i - sret_offset);
+            let typed_param_record =
+                self.k1.mem.get_nth(typed_function.params, i - sret_offset);
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.k1.ast.idents.get("ret").unwrap(),
                     type_id: function_type.return_type,
                     is_context: false,
                     is_lambda_env: false,
-                    span: self.k1.ast.get_span_for_id(typed_function.parsed_id),
                 }
             } else {
                 self.k1.types.mem.get_nth(function_type.physical_params, i - sret_offset)
@@ -3747,7 +3747,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             );
             param.set_name(param_name);
 
-            self.set_debug_location_from_span(typed_param.span);
+            self.set_debug_location_from_span(typed_param_record.span);
             let di_local_variable = self.debug.debug_builder.create_parameter_variable(
                 self.debug.current_scope(),
                 param_name,
@@ -3770,9 +3770,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.k1.ident_str(typed_function.name),
                 function_id,
                 param_name,
-                variable_id
+                typed_param_record.variable_id
             );
-            self.variable_to_value.insert(variable_id, VariableValue::Direct { value: param });
+            self.variable_to_value.insert(typed_param_record.variable_id, VariableValue::Direct { value: param });
         }
         match typed_function.intrinsic_type {
             Some(intrinsic_type) => {

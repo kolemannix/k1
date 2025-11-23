@@ -66,7 +66,7 @@ ns types {
   intern fn typeName(id: u64): string
 
   fn getTypeName[T](): string { typeName(typeId[T]()) }
-  fn getTypeNameOfVal[T](t: T): string { typeName(typeId[T]()) }
+  fn getTypeNameOfVal[T](_t: T): string { typeName(typeId[T]()) }
   fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
 
   // DO NOT REORDER VARIANTS
@@ -538,7 +538,7 @@ ns bool {
   intern fn negated(self: bool): bool
 }
 
-impl Equals for unit { fn equals(self: unit, other: unit): bool { true } }
+impl Equals for unit { fn equals(_self: unit, _other: unit): bool { true } }
 
 impl Equals for bool { intern fn equals(self: bool, other: bool): bool }
 
@@ -554,7 +554,7 @@ impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
 
 impl Equals for char { intern fn equals(self: char, other: char): bool }
 
-fn discard[T](t: T): unit { () }
+fn discard[T](_t: T): unit { () }
 
 ns Array {
   fn getBaseRead[T, N: static int](array: *Array[T, N]): *T {
@@ -566,7 +566,7 @@ ns Array {
   fn basePtr[T, N: static int](array: *mut Array[T, N]): ptr {
     array as ptr
   }
-  fn sizeBytes[T, N: static int](array: Array[T, N]): int {
+  fn sizeBytes[T, N: static int](_array: Array[T, N]): int {
     types/sizeOf[Array[T, N]]()
   }
 
@@ -677,8 +677,8 @@ fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
 }
 
 fn assertdbg(context locn: compiler/SourceLocation)(value: bool): unit {
-  #if k1/DEBUG
-    if not value { crash("ASSERT FAILED") };
+  #if k1/DEBUG { if not value { crash("ASSERT FAILED") } }
+  else         { locn; value; () }
 }
 
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {
