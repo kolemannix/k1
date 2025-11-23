@@ -77,11 +77,15 @@ ns string {
     fromView(self.view.concat(other.view))
   }
 
-  fn appendChar(self: string, c: char): string {
+  fn appendCharIn(context alloc: mem/AllocMode)(self: string, c: char): string {
     let newLength = self.len() + 1;
-    let newBuffer = self.view.innerBuffer()._enlargedClone(newLength);
+    let newBuffer = self.view.innerBuffer()._enlargedCloneIn(newLength);
     newBuffer.set(self.len(), c);
     wrapBuffer(newBuffer)
+  }
+
+  fn appendChar(self: string, c: char): string {
+    appendCharIn(context .Current)(self, c)
   }
 
   fn splitByChar(self: string, delim: char): List[string] {
@@ -139,7 +143,7 @@ ns string {
   fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: ptr, len: size } {
     if self.isEmpty()                  { ptr: "\0".dataPtr(), len: 0 }
     else if self.last() is .Some('\0') { ptr: self.dataPtr(), len: self.len() - 1 }
-    else                               { ptr: self.appendChar('\0').dataPtr(), len: self.len() }
+    else                               { ptr: self.appendCharIn('\0').dataPtr(), len: self.len() }
   }
 
   fn wrapCString(cString: ptr): string {

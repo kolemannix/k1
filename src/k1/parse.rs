@@ -1851,7 +1851,7 @@ pub fn write_source_location(
 
     // If the span is longer than the line, just highlight the whole line
     let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
-    let thingies = "^".repeat(highlight_length).red();
+    let thingies = "^".repeat(highlight_length).color(color);
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let line_start = line.line_index as i32 - context_lines as i32 / 2;
     let line_end = line_start + context_lines as i32;

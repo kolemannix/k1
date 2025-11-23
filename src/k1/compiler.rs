@@ -7,8 +7,8 @@ use std::io::Write;
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
+use crate::parse::write_source_location;
 use crate::parse::{self};
-use crate::parse::{write_source_location};
 use crate::typer::{ErrorLevel, LibRefLinkType, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
@@ -373,6 +373,9 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
     let total_elapsed_ms = start_time.elapsed().as_millis();
+    if !p.non_errors.is_empty() {
+        eprintln!("Completed with {} warnings", p.non_errors.len());
+    }
     p.print_timing_info(
         &src_path.to_string_lossy(),
         total_elapsed_ms as u64,

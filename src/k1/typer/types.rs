@@ -305,7 +305,6 @@ pub struct FnParamType {
     pub type_id: TypeId,
     pub is_context: bool,
     pub is_lambda_env: bool,
-    pub span: SpanId,
 }
 
 #[derive(Clone)]

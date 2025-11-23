@@ -833,11 +833,17 @@ impl FunctionSignature {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct TypedFunctionParam {
+    pub variable_id: VariableId,
+    pub span: SpanId,
+}
+
 #[derive(Clone)]
 pub struct TypedFunction {
     pub name: Ident,
     pub scope: ScopeId,
-    pub param_variables: MSlice<VariableId, TypedProgram>,
+    pub params: MSlice<TypedFunctionParam, TypedProgram>,
     pub type_params: NamedTypeSlice,
     pub function_type_params: SliceHandle<FunctionTypeParamId>,
     pub body_block: Option<TypedExprId>,
@@ -1553,8 +1559,8 @@ pub struct TyperError {
 }
 
 impl TyperError {
-    fn make(message: impl AsRef<str>, span: SpanId) -> TyperError {
-        TyperError { message: message.as_ref().to_owned(), span, level: ErrorLevel::Error }
+    fn make(message: impl AsRef<str>, span: SpanId, level: ErrorLevel) -> TyperError {
+        TyperError { message: message.as_ref().to_owned(), span, level }
     }
 }
 
@@ -1867,7 +1873,11 @@ impl IntrinsicOperation {
 }
 
 pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
-    TyperError::make(message.as_ref(), span)
+    TyperError::make(message.as_ref(), span, ErrorLevel::Error)
+}
+
+pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
+    TyperError::make(message.as_ref(), span, ErrorLevel::Warn)
 }
 
 pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> {
@@ -1891,6 +1901,16 @@ macro_rules! errf {
         {
             let s: String = format!($($format_args),*);
             $crate::typer::make_error(&s, $span)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! warnf {
+    ($span:expr, $($format_args:expr),* $(,)?) => {
+        {
+            let s: String = format!($($format_args),*);
+            $crate::typer::make_warning(&s, $span)
         }
     };
 }
@@ -2322,7 +2342,7 @@ pub struct TypedProgram {
     pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
-    pub warnings: Vec<TyperError>,
+    pub non_errors: Vec<TyperError>,
     pub namespaces: Namespaces,
     pub abilities: VPool<TypedAbility, AbilityId>,
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
@@ -2488,7 +2508,7 @@ impl TypedProgram {
             type_names: FxHashMap::new(),
             scopes,
             errors: vec![],
-            warnings: vec![],
+            non_errors: vec![],
             namespaces,
             abilities: VPool::make_with_hint("abilities", 2048),
             ability_impls: VPool::make_with_hint("ability_impls", 4096),
@@ -2645,7 +2665,7 @@ impl TypedProgram {
         } else {
             let manifest_result = self.get_module_manifest(parsed_namespace_id);
             if let Err(e) = manifest_result {
-                self.report_error(e);
+                self.report(e);
                 bail!("Failed to compile module manifest")
             }
             match manifest_result.unwrap() {
@@ -3413,7 +3433,6 @@ impl TypedProgram {
 
                 for (index, param) in fun_type.params.iter().enumerate() {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
-                    let span = self.ast.get_type_expr_span(*param);
 
                     let name = match index {
                         0 => self.ast.idents.b.param_0,
@@ -3432,7 +3451,6 @@ impl TypedProgram {
                         name,
                         is_context: false,
                         is_lambda_env: false,
-                        span,
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
@@ -3603,14 +3621,13 @@ impl TypedProgram {
                 };
                 let inner =
                     self.eval_type_expr_ext(fn_type_expr_id, scope_id, context.descended())?;
-                let inner_span = self.ast.get_type_expr_span(fn_type_expr_id);
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
                         ty_app.span,
                         "Expected function type, or eventually, ability name, for dyn"
                     );
                 }
-                let new_function_type = self.add_lambda_env_to_function_type(inner, inner_span);
+                let new_function_type = self.add_lambda_env_to_function_type(inner);
                 let lambda_object_type = self.types.add_lambda_object(
                     &self.ast.idents,
                     new_function_type,
@@ -4145,7 +4162,6 @@ impl TypedProgram {
                         type_id: new_param_type,
                         is_context: param.is_context,
                         is_lambda_env: param.is_lambda_env,
-                        span: param.span,
                     };
                     new_params.push(new_param);
                 }
@@ -5331,7 +5347,7 @@ impl TypedProgram {
         if let Some(condition_expr) = cond {
             match self.execute_static_bool(condition_expr, EvalExprContext::make(scope_id)) {
                 Err(e) => {
-                    self.report_error(e);
+                    self.report(e);
                     false
                 }
                 Ok(b) => b,
@@ -8119,14 +8135,13 @@ impl TypedProgram {
                 type_id: arg_type_id,
                 is_context: false,
                 is_lambda_env: false,
-                span: arg.span,
             });
         }
 
         let mut param_variables = self.mem.new_list(lambda_arguments.len() as u32 + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
-        for typed_arg in typed_params.iter() {
+        for (typed_arg, parsed_arg) in typed_params.iter().zip(lambda_arguments.iter()) {
             let name = typed_arg.name;
             let variable_id = self.variables.add(Variable {
                 name,
@@ -8137,7 +8152,7 @@ impl TypedProgram {
                 usage_count: 0,
             });
             lambda_scope.add_variable(name, variable_id);
-            param_variables.push(variable_id)
+            param_variables.push(TypedFunctionParam { variable_id, span: parsed_arg.span })
         }
 
         // Coerce parsed expr to block, call eval_block with needs_terminator = true
@@ -8153,6 +8168,10 @@ impl TypedProgram {
             if let Err(msg) = self.check_types(expected_return_type, body_type, ctx.scope_id) {
                 return failf!(body_span, "Lambda returns incorrect type: {msg}");
             }
+        }
+
+        for param in param_variables.iter() {
+            self.warn_variable_usage_counts("Lambda parameter", param.variable_id, param.span);
         }
 
         let return_type = match body_type {
@@ -8188,12 +8207,12 @@ impl TypedProgram {
             self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
             let body_function_id = self.functions.next_id();
             for v in param_variables.iter() {
-                self.variables.get_mut(*v).kind = VariableKind::FnParam(body_function_id)
+                self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
             }
             self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
-                param_variables: self.mem.vec_to_mslice(&param_variables),
+                params: self.mem.vec_to_mslice(&param_variables),
                 type_params: SliceHandle::empty(),
                 function_type_params: SliceHandle::empty(),
                 body_block: Some(body_expr_id),
@@ -8249,7 +8268,6 @@ impl TypedProgram {
             type_id: POINTER_TYPE_ID,
             is_context: false,
             is_lambda_env: true,
-            span: body_span,
         };
         let body_function_id = self.functions.next_id();
         let environment_param_variable_id = self.variables.add(Variable {
@@ -8261,11 +8279,14 @@ impl TypedProgram {
             usage_count: 0,
         });
         typed_params.insert(0, environment_param);
-        param_variables.insert(0, environment_param_variable_id);
+        param_variables.insert(
+            0,
+            TypedFunctionParam { variable_id: environment_param_variable_id, span: body_span },
+        );
 
         // We decay down to POINTER so that the function calls typecheck
         let environment_param_access_expr = self.exprs.add(
-            TypedExpr::Variable(VariableExpr { variable_id: param_variables[0] }),
+            TypedExpr::Variable(VariableExpr { variable_id: param_variables[0].variable_id }),
             POINTER_TYPE_ID,
             body_span,
         );
@@ -8320,7 +8341,7 @@ impl TypedProgram {
         let actual_body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            param_variables: self.mem.vec_to_mslice(&param_variables),
+            params: self.mem.vec_to_mslice(&param_variables),
             type_params: SliceHandle::empty(),
             function_type_params: SliceHandle::empty(),
             body_block: Some(body_expr_id),
@@ -9919,25 +9940,29 @@ impl TypedProgram {
                 } else {
                     // Function lookup failed, now we deal with lower priority 'callable' things
                     // Such as lambda objects or function pointers
-                    let fn_not_found = || {
-                        failf!(
-                            call_span,
-                            "Function not found: '{}'",
-                            self.ident_str(fn_call.name.name)
-                        )
-                    };
+                    macro_rules! fn_not_found {
+                        () => {
+                            failf!(
+                                call_span,
+                                "Function not found: '{}'",
+                                self.ident_str(fn_call.name.name)
+                            )
+                        };
+                    }
                     if !fn_call.name.path.is_empty() {
-                        return fn_not_found();
+                        return fn_not_found!();
                     }
                     if let Some((variable_id, _scope_id)) =
                         self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
                     {
+                        self.variables.get_mut(variable_id).usage_count += 1;
                         let function_variable = self.variables.get(variable_id);
                         debug!(
                             "Variable {} has type {}",
                             self.ident_str(fn_call.name.name),
                             self.type_id_to_string(function_variable.type_id)
                         );
+
                         match self.types.get(function_variable.type_id) {
                             Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
                                 function_id: lambda_type.function_id,
@@ -9973,10 +9998,10 @@ impl TypedProgram {
                                 );
                                 Ok(Either::Right(Callee::DynamicFunction { function_pointer_expr }))
                             }
-                            _ => fn_not_found(),
+                            _ => fn_not_found!(),
                         }
                     } else {
-                        fn_not_found()
+                        fn_not_found!()
                     }
                 }
             }
@@ -10553,13 +10578,15 @@ impl TypedProgram {
                 flags: VariableFlags::empty(),
                 usage_count: 0,
             });
-            let mut new_variables = self.mem.new_list(new_function.param_variables.len() + 1);
-            new_variables.push(empty_env_variable);
-            new_variables.extend(self.mem.getn(new_function.param_variables));
-            new_function.param_variables = self.mem.vec_to_mslice(&new_variables);
+            let mut new_variables = self.mem.new_list(new_function.params.len() + 1);
+            new_variables.push(TypedFunctionParam {
+                variable_id: empty_env_variable,
+                span: function_defn_span,
+            });
+            new_variables.extend(self.mem.getn(new_function.params));
+            new_function.params = self.mem.vec_to_mslice(&new_variables);
 
-            let new_function_type =
-                self.add_lambda_env_to_function_type(new_function.type_id, function_defn_span);
+            let new_function_type = self.add_lambda_env_to_function_type(new_function.type_id);
             new_function.type_id = new_function_type;
             let old_name = self.ident_str(new_function.name);
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
@@ -10586,11 +10613,7 @@ impl TypedProgram {
         function_to_lam_obj_id
     }
 
-    fn add_lambda_env_to_function_type(
-        &mut self,
-        function_type_id: TypeId,
-        span: SpanId,
-    ) -> TypeId {
+    fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {
         let function_type = self.types.get(function_type_id).as_function().unwrap();
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
@@ -10603,7 +10626,6 @@ impl TypedProgram {
             type_id: empty_env_struct_ref,
             is_context: false,
             is_lambda_env: true,
-            span,
         });
         new_params.extend(self.types.mem.getn(physical_params));
 
@@ -11104,6 +11126,7 @@ impl TypedProgram {
                         found.type_id,
                         span,
                     )));
+                    self.variables.get_mut(matching_context_variable).usage_count += 1;
                     final_params.push(*context_param);
                 } else {
                     let is_source_loc = context_param.type_id == COMPILER_SOURCE_LOC_TYPE_ID;
@@ -11778,7 +11801,7 @@ impl TypedProgram {
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
-        let generic_function_param_variables = generic_function.param_variables;
+        let generic_function_param_variables = generic_function.params;
         let generic_function_scope = generic_function.scope;
 
         for existing_specialization in &generic_function.child_specializations {
@@ -11839,7 +11862,7 @@ impl TypedProgram {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
-        let mut param_variables: MList<VariableId, _> =
+        let mut param_variables =
             self.mem.new_list(specialized_function_type.physical_params.len());
         for (specialized_param_type, generic_param) in self
             .types
@@ -11848,7 +11871,7 @@ impl TypedProgram {
             .iter()
             .zip(self.mem.getn(generic_function_param_variables))
         {
-            let name = self.variables.get(*generic_param).name;
+            let name = self.variables.get(generic_param.variable_id).name;
             let mut flags = VariableFlags::empty();
             flags.set(VariableFlags::Context, specialized_param_type.is_context);
             let variable_id = self.variables.add(Variable {
@@ -11868,7 +11891,7 @@ impl TypedProgram {
                 );
             }
             self.scopes.add_variable(spec_fn_scope, name, variable_id);
-            param_variables.push(variable_id)
+            param_variables.push(TypedFunctionParam { variable_id, span: generic_param.span })
         }
         let specialization_info = SpecializationInfo {
             parent_function: generic_function_id,
@@ -11886,7 +11909,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: specialized_name_ident,
             scope: spec_fn_scope,
-            param_variables: self.mem.vec_to_mslice(&param_variables),
+            params: self.mem.vec_to_mslice(&param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
@@ -13119,6 +13142,7 @@ impl TypedProgram {
         let parsed_function_span = parsed_function.span;
         let parsed_function_params = &parsed_function.params;
         let parsed_function_context_params = &parsed_function.context_params;
+        let signature_span = parsed_function.signature_span;
         let parsed_type_params = &parsed_function.type_params;
 
         let is_ability_decl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_none());
@@ -13230,7 +13254,7 @@ impl TypedProgram {
         // Process parameters
         let param_count = parsed_function_context_params.len() + parsed_function_params.len();
         let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count as u32);
-        let mut param_variables = self_.mem.new_list(param_count as u32);
+        let mut params = self_.mem.new_list(param_count as u32);
         for (idx, fn_param) in
             parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
         {
@@ -13321,9 +13345,8 @@ impl TypedProgram {
                 type_id,
                 is_context,
                 is_lambda_env: false,
-                span: fn_param.span,
             });
-            param_variables.push(variable_id);
+            params.push(TypedFunctionParam { variable_id, span: fn_param.span });
             if is_context {
                 let inserted = self_.scopes.add_context_variable(
                     fn_scope_id,
@@ -13380,13 +13403,13 @@ impl TypedProgram {
                     let values = param_types[1].type_id == POINTER_TYPE_ID;
                     if !count {
                         return failf!(
-                            param_types[0].span,
+                            params[0].span,
                             "First parameter must be {}",
                             self_.type_id_to_string(U32_TYPE_ID)
                         );
                     } else if !values {
                         return failf!(
-                            param_types[1].span,
+                            params[1].span,
                             "Second parameter must be {}",
                             self_.type_id_to_string(POINTER_TYPE_ID)
                         );
@@ -13394,7 +13417,7 @@ impl TypedProgram {
                 }
                 n => {
                     return failf!(
-                        param_types[0].span,
+                        signature_span,
                         "main must take exactly 0 or 2 parameters, got {}",
                         n
                     );
@@ -13441,14 +13464,14 @@ impl TypedProgram {
         let function_type_params_handle =
             self_.function_type_params.add_slice_copy(&function_type_params);
         let function_id = self_.functions.next_id();
-        for v in param_variables.iter() {
-            self_.variables.get_mut(*v).kind = VariableKind::FnParam(function_id);
+        for v in params.iter() {
+            self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
-        let param_variables_handle = self_.mem.vec_to_mslice(&param_variables);
+        let param_variables_handle = self_.mem.vec_to_mslice(&params);
         let function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
-            param_variables: param_variables_handle,
+            params: param_variables_handle,
             type_params: type_params_handle,
             function_type_params: function_type_params_handle,
             body_block: None,
@@ -13472,7 +13495,7 @@ impl TypedProgram {
                     "Function name {} is taken",
                     self_.ident_str(parsed_function_name)
                 );
-                self_.report_error(error);
+                self_.report(error);
             }
         };
 
@@ -13543,6 +13566,7 @@ impl TypedProgram {
                         // until the types and static values are provided
                         .with_is_generic_pass(is_generic),
                 )?;
+
                 if let Err(msg) =
                     self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
                 {
@@ -13558,8 +13582,18 @@ impl TypedProgram {
                 }
             }
         };
-        // Add the body now
+
         if let Some(body_block) = body_block {
+            let f = self.functions.get(declaration_id);
+            for param_variable in self.mem.getn(f.params).iter() {
+                self.warn_variable_usage_counts(
+                    "Parameter",
+                    param_variable.variable_id,
+                    param_variable.span,
+                );
+            }
+
+            // Set the function's body
             self.get_function_mut(declaration_id).body_block = Some(body_block);
         }
 
@@ -13568,6 +13602,21 @@ impl TypedProgram {
             self.pop_debug_level();
         }
         Ok(())
+    }
+
+    fn warn_variable_usage_counts(
+        &mut self,
+        kind_name: &str,
+        variable_id: VariableId,
+        span: SpanId,
+    ) {
+        let v = self.variables.get(variable_id);
+        if v.usage_count == 0 {
+            let var_name_str = self.ident_str(v.name);
+            if !var_name_str.starts_with("_") {
+                self.report(warnf!(span, "{} is never used: {}", kind_name, var_name_str));
+            }
+        }
     }
 
     fn compile_ability_definition(
@@ -14087,7 +14136,7 @@ impl TypedProgram {
             };
             if let Err(e) = self.eval_function_body(impl_fn) {
                 self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e.clone());
-                self.report_error(e);
+                self.report(e);
             }
         }
 
@@ -14103,7 +14152,7 @@ impl TypedProgram {
         match def {
             ParsedId::Use(parsed_use_id) => {
                 if let Err(e) = self.eval_use_definition(scope_id, parsed_use_id) {
-                    self.report_error(e)
+                    self.report(e)
                 }
             }
             ParsedId::Namespace(namespace) => {
@@ -14111,7 +14160,7 @@ impl TypedProgram {
             }
             ParsedId::Global(global_id) => {
                 if let Err(e) = self.eval_global_body(global_id) {
-                    self.report_error(e)
+                    self.report(e)
                 };
             }
             ParsedId::Function(parsed_function_id) => {
@@ -14119,7 +14168,7 @@ impl TypedProgram {
                     self.function_ast_mappings.get(&parsed_function_id)
                 {
                     if let Err(e) = self.eval_function_body(*function_declaration_id) {
-                        self.report_error(e);
+                        self.report(e);
                     };
                 }
             }
@@ -14131,7 +14180,7 @@ impl TypedProgram {
             }
             ParsedId::AbilityImpl(ability_impl) => {
                 if let Err(e) = self.compile_ability_impl_bodies(ability_impl, scope_id) {
-                    self.report_error(e);
+                    self.report(e);
                 };
             }
             ParsedId::StaticDefn(static_expr_id) => {
@@ -14160,7 +14209,7 @@ impl TypedProgram {
                         if let Err(e) =
                             self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx)
                         {
-                            self.report_error(e);
+                            self.report(e);
                         };
                     }
                 }
@@ -14276,7 +14325,7 @@ impl TypedProgram {
             }
             if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
                 if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
-                    self.report_error(e);
+                    self.report(e);
                 }
             }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
@@ -14306,7 +14355,7 @@ impl TypedProgram {
                         self.scopes.get_scope_mut(namespace_scope_id).add_type(name, type_id);
                     if !added {
                         let span = parsed_type_defn.span;
-                        self.report_error(errf!(span, "Type {} exists", self.ident_str(name)));
+                        self.report(errf!(span, "Type {} exists", self.ident_str(name)));
                     }
 
                     // Detect builtin types and store their IDs for fast lookups
@@ -14338,12 +14387,12 @@ impl TypedProgram {
                     .get_scope_mut(namespace_scope_id)
                     .add_pending_ability_defn(name, parsed_ability_id);
                 if !added {
-                    self.report_error(errf!(span, "Ability {} exists", self.ident_str(name)));
+                    self.report(errf!(span, "Ability {} exists", self.ident_str(name)));
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
                 if let Err(e) = self.declare_types_in_namespace(namespace_id, skip_defns) {
-                    self.report_error(e);
+                    self.report(e);
                 }
             }
         }
@@ -14367,12 +14416,12 @@ impl TypedProgram {
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 if let Err(e) = self.eval_type_defn(*type_defn_id, namespace_scope_id) {
                     self.type_defn_stack.clear();
-                    self.report_error(e);
+                    self.report(e);
                 };
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
                 if let Err(e) = self.eval_namespace_type_eval_phase(*namespace_id, skip_defns) {
-                    self.report_error(e);
+                    self.report(e);
                 }
             }
         }
@@ -14399,7 +14448,7 @@ impl TypedProgram {
                 }
                 ParsedId::Global(constant_id) => {
                     if let Err(e) = self.declare_global(constant_id, namespace_scope_id) {
-                        self.report_error(e);
+                        self.report(e);
                     }
                 }
                 ParsedId::Function(parsed_function_id) => {
@@ -14409,7 +14458,7 @@ impl TypedProgram {
                         None,
                         namespace_id,
                     ) {
-                        self.report_error(e);
+                        self.report(e);
                     }
                 }
                 ParsedId::TypeDefn(_type_defn_id) => {
@@ -14419,12 +14468,12 @@ impl TypedProgram {
                     if let Err(e) =
                         self.compile_ability_definition(parsed_ability_id, namespace_scope_id)
                     {
-                        self.report_error(e)
+                        self.report(e)
                     };
                 }
                 ParsedId::AbilityImpl(ability_impl) => {
                     if let Err(e) = self.declare_ability_impl(ability_impl, namespace_scope_id) {
-                        self.report_error(e)
+                        self.report(e)
                     }
                 }
                 ParsedId::StaticDefn(_) => {
@@ -14568,7 +14617,7 @@ impl TypedProgram {
                         namespace_scope_id,
                         skip_defns,
                     ) {
-                        self.report_error(e)
+                        self.report(e)
                     }
                 }
                 ParsedId::StaticDefn(static_expr_id) => {
@@ -14610,7 +14659,7 @@ impl TypedProgram {
                     let newly_parsed_defns =
                         match self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx) {
                             Err(e) => {
-                                self.report_error(e);
+                                self.report(e);
                                 eco_vec![]
                             }
                             Ok(StaticExecutionResult::Definitions(defns)) => defns,
@@ -14627,7 +14676,7 @@ impl TypedProgram {
                             if let Err(e) =
                                 self.declare_namespace_recursive(ns, namespace_scope_id, skip_defns)
                             {
-                                self.report_error(e)
+                                self.report(e)
                             };
                         }
                     }
@@ -14676,7 +14725,7 @@ impl TypedProgram {
             self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
 
         if let Err(e) = root_namespace_declare_result {
-            self.report_error(e);
+            self.report(e);
             bail!(
                 "{} failed namespace declaration phase with {} errors",
                 self.program_name(),
@@ -15797,12 +15846,17 @@ impl TypedProgram {
 
     pub fn report_warning(&mut self, e: TyperError) {
         self.write_error(&mut std::io::stderr(), &e).unwrap();
-        self.warnings.push(e);
+        self.non_errors.push(e);
     }
 
-    pub fn report_error(&mut self, e: TyperError) {
+    pub fn report(&mut self, e: TyperError) {
         self.write_error(&mut std::io::stderr(), &e).unwrap();
-        self.errors.push(e);
+        match e.level {
+            ErrorLevel::Error => {
+                self.errors.push(e);
+            }
+            ErrorLevel::Warn | ErrorLevel::Info | ErrorLevel::Hint => self.non_errors.push(e),
+        }
     }
 
     pub fn write_error(
