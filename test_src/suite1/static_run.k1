@@ -1,6 +1,26 @@
 ns static_run;
 let INT_VIEW: View[int] = [1,2,3,4,5];
 
+let i2: 12 = { 3 * 4 };
+let i3: 12 = #static { 3 * 4 };
+let i4: 12 = #static 3 * 4;
+
+let s1: string = #static {
+  let a = "asd";
+  a.concat("f")
+};
+let s2: "asdf" = #static {
+  let a = "asd";
+  a.concat("f")
+};
+
+fn staticsAndCoercion(): i32 {
+   let i: "a" = #static "a";
+   let i2: string = #static "a";
+   let i3: "a" = "a";
+   0
+}
+
 fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }

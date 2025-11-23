@@ -94,6 +94,21 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         id
     }
 
+    pub fn add_expected_id(&mut self, t: T, expected_id: Index) -> Index {
+        let id = self.next_id();
+
+        #[cfg(debug_assertions)]
+        if id != expected_id {
+            panic!("VPool add_expected_id: expected id {}, got {}", std::convert::Into::<NonZeroU32>::into(expected_id), id.into());
+        }
+
+        self.set(id, t);
+
+        self.set_len_checked(self.len + 1);
+
+        id
+    }
+
     pub fn add_slice_from_iter(&mut self, items: impl Iterator<Item = T>) -> SliceHandle<Index> {
         let id = self.next_id();
         let mut count: u32 = 0;

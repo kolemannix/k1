@@ -243,17 +243,28 @@ impl TypedProgram {
         flags.set(VariableFlags::UserHidden, !no_mangle);
         let reassignable = !is_referencing && is_mutable;
         flags.set(VariableFlags::Reassigned, reassignable);
-        let variable = Variable { name: new_ident, owner_scope, type_id, global_id: None, flags };
+        let defn_stmt = self.stmts.next_id();
+        let variable = Variable {
+            name: new_ident,
+            owner_scope,
+            type_id,
+            kind: VariableKind::Let(defn_stmt),
+            flags,
+            usage_count: 0,
+        };
         let variable_id = self.variables.add(variable);
         let variable_expr =
             self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
-        let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
-            variable_id,
-            variable_type: type_id,
-            initializer: Some(initializer_id),
-            is_referencing,
-            span,
-        }));
+        self.stmts.add_expected_id(
+            TypedStmt::Let(LetStmt {
+                variable_id,
+                variable_type: type_id,
+                initializer: Some(initializer_id),
+                is_referencing,
+                span,
+            }),
+            defn_stmt,
+        );
         let parsed_expr = self.ast.exprs.add_expression(
             ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
             false,
