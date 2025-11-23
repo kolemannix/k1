@@ -2,23 +2,11 @@
 //  3 * 4
 //};
 
+fn foo(unused: u8): int {
+  42
+}
+
 fn main(): i32 {
-
-  // Signed widen
-  let x: u8 = 3;
-  let x2: u64 = x;
-  assertEquals(x2, 3);
-
-  // Unsigned widen
-  let x: i16 = 3;
-  let x2: i64 = x;
-  assertEquals(x2, 3);
-
-  // Unsigned widen to signed
-  let x: u32 = 3;
-  let x2: i64 = x;
-  assertEquals(x2, 3);
-  
   0
 }
 

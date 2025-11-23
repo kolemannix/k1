@@ -70,6 +70,22 @@ fn test(): unit {
   let g: u64 = 18446744073709551615u64;
   let h: i64 = -9223372036854775808i64;
 
+  // Coercions
+  // Signed widen
+  let x: u8 = 3;
+  let x2: u64 = x;
+  assertEquals(x2, 3);
+
+  // Unsigned widen
+  let x: i16 = 3;
+  let x2: i64 = x;
+  assertEquals(x2, 3);
+
+  // Unsigned widen to signed
+  let x: u32 = 3;
+  let x2: i64 = x;
+  assertEquals(x2, 3);
+
   ()
 
 }
