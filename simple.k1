@@ -4,7 +4,15 @@
 
 ns bar {
   use foo/core/Test
-  fn doIt(t: Test): Test { Test/default }
+  fn doIt(t: Test): Test { 
+    before();
+    Test/default
+  }
+  use secret/before
+}
+
+ns secret {
+  fn before(): unit { () }
 }
 
 ns foo {

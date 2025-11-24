@@ -578,7 +578,7 @@ impl Scopes {
                 // Discard because 'use's should shadow
                 let _ = self.add_function(scope_id, name_to_use, function_id);
             }
-            UseableSymbolId::Constant(variable_id) => {
+            UseableSymbolId::Global(variable_id) => {
                 self.add_variable(scope_id, name_to_use, variable_id);
             }
             UseableSymbolId::Type { type_id, companion_namespace } => {
@@ -698,7 +698,7 @@ pub struct UseableSymbol {
 #[derive(Debug, Clone, Copy)]
 pub enum UseableSymbolId {
     Function(FunctionId),
-    Constant(VariableId),
+    Global(VariableId),
     Type { type_id: TypeId, companion_namespace: Option<NamespaceId> },
     Namespace(NamespaceId),
     Ability(AbilityId, NamespaceId),

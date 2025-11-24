@@ -2150,7 +2150,7 @@ pub struct Symbol {
 
 #[derive(Debug, Clone, Copy)]
 pub enum UseStatus {
-    Unresolved,
+    Unresolved(ScopeId),
     Resolved(UseableSymbol),
 }
 
@@ -2158,7 +2158,7 @@ impl UseStatus {
     pub fn is_resolved(&self) -> bool {
         match self {
             UseStatus::Resolved(_) => true,
-            UseStatus::Unresolved => false,
+            UseStatus::Unresolved(_) => false,
         }
     }
 }
@@ -14150,11 +14150,8 @@ impl TypedProgram {
         skip_defns: &[ParsedId],
     ) {
         match def {
-            ParsedId::Use(parsed_use_id) => {
-                // nocommit return and see if unused
-                if let Err(e) = self.eval_use_definition(scope_id, parsed_use_id) {
-                    self.report(e)
-                }
+            ParsedId::Use(_) => {
+                // Uses are all resolved by now
             }
             ParsedId::Namespace(namespace) => {
                 self.compile_ns_body(namespace, skip_defns);
@@ -14236,19 +14233,20 @@ impl TypedProgram {
             return Ok(());
         }
         debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
-        let resolution =
-            if let Some(symbol) = self.find_useable_symbol(scope_id, &parsed_use.target)? {
-                self.scopes.add_use_binding(
-                    scope_id,
-                    symbol,
-                    parsed_use.alias.unwrap_or(parsed_use.target.name),
-                );
-                eprintln!("Inserting resolved use of {:?}", symbol);
-                UseStatus::Resolved(symbol)
-            } else {
-                eprintln!("Inserting unresolved use");
-                UseStatus::Unresolved
-            };
+        let resolution = if let Some(symbol) =
+            self.find_useable_symbol(scope_id, &parsed_use.target)?
+        {
+            self.scopes.add_use_binding(
+                scope_id,
+                symbol,
+                parsed_use.alias.unwrap_or(parsed_use.target.name),
+            );
+            debug!("Inserting resolved use of {:?}", symbol);
+            UseStatus::Resolved(symbol)
+        } else {
+            debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
+            UseStatus::Unresolved(scope_id)
+        };
 
         self.use_statuses.insert(parsed_use_id, resolution);
         Ok(())
@@ -14293,7 +14291,7 @@ impl TypedProgram {
         {
             Ok(Some(UseableSymbol {
                 source_scope: scope_id_to_search,
-                id: UseableSymbolId::Constant(variable_id),
+                id: UseableSymbolId::Global(variable_id),
             }))
         } else if let Some(ability_id) = scope_to_search.find_ability(name.name) {
             let namespace_id = self.abilities.get(ability_id).namespace_id;
@@ -14322,7 +14320,7 @@ impl TypedProgram {
     ) {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let ns = self.namespaces.get(namespace_id);
-        eprintln!("declare_types_in_namespace {}", self.ident_str(ns.name));
+        debug!("declare_types_in_namespace {}", self.ident_str(ns.name));
         let namespace_scope_id = ns.scope_id;
         let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
         for &parsed_definition_id in parsed_definitions.iter() {
@@ -14400,7 +14398,7 @@ impl TypedProgram {
     fn resolve_uses_in_namespace_recursively(&mut self, parsed_namespace_id: ParsedNamespaceId) {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let ns = self.namespaces.get(namespace_id);
-        eprintln!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
+        debug!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
         let namespace_scope_id = ns.scope_id;
         let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
 
@@ -14877,6 +14875,26 @@ impl TypedProgram {
             )
         }
 
+        // Now that functions are declared, another pass for unresolved uses
+        let unresolved_uses =
+            self.tmp.pushn_iter(self.use_statuses.iter().filter_map(|(id, status)| match status {
+                UseStatus::Unresolved(scope_id) => Some((*id, *scope_id)),
+                UseStatus::Resolved(_) => None,
+            }));
+        for (unresolved_use, scope_id) in self.tmp.getn(unresolved_uses) {
+            self.eval_use_definition(*scope_id, *unresolved_use)?;
+            let resolved = self.use_statuses.get(unresolved_use).unwrap().is_resolved();
+            if !resolved {
+                let parsed_use = self.ast.uses.get_use(*unresolved_use);
+                let error = errf!(
+                    parsed_use.span,
+                    "Unresolved use of {}",
+                    self.ident_str(parsed_use.target.name)
+                );
+                self.report(error)
+            }
+        }
+
         debug_assert!(self.abilities.get(EQUALS_ABILITY_ID).name == get_ident!(self, "Equals"));
         debug_assert!(self.abilities.get(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
         debug_assert!(
@@ -14886,20 +14904,6 @@ impl TypedProgram {
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
-        let unresolved_uses: Vec<_> =
-            self.use_statuses.iter().filter(|use_status| !use_status.1.is_resolved()).collect();
-        if !unresolved_uses.is_empty() {
-            for (parsed_use_id, _status) in &unresolved_uses {
-                let parsed_use = self.ast.uses.get_use(**parsed_use_id);
-                let error = errf!(
-                    parsed_use.span,
-                    "Unresolved use of {}",
-                    self.ident_str(parsed_use.target.name)
-                );
-                self.write_error(&mut err_writer, &error)?;
-                self.errors.push(error)
-            }
-        }
         if !self.errors.is_empty() {
             bail!(
                 "Module {} failed typechecking with {} errors",
@@ -15786,8 +15790,8 @@ impl TypedProgram {
                 return failf!(span, "Dynamic libraries are not supported on the wasm target");
             }
         };
-        eprintln!("cwd is: {}", std::env::current_dir().unwrap().display());
-        eprintln!("src_path is: {}", self.ast.config.src_path.display());
+        debug!("cwd is: {}", std::env::current_dir().unwrap().display());
+        debug!("src_path is: {}", self.ast.config.src_path.display());
         let lib_path = if lib_name_str == "k1rt" {
             self.ast.config.k1_lib_dir.join(lib_filename)
         } else {
