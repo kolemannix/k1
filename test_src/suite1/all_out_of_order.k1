@@ -26,3 +26,30 @@ fn test(): unit {
 deftype MyString = { s: string }
 
 deftype Foo = { name: string }
+
+ns bar {
+  // Type with NS used before defined
+  use foo/core/Test
+  fn doIt(t: Test): Test { 
+    // before called
+    before();
+    Test/default
+  }
+  // before imported (below where called)
+  use secret/before
+}
+
+ns secret {
+  // before defined (below where imported and called)
+  fn before(): unit { () }
+}
+
+ns foo {
+  ns core {
+    deftype Test = either A, B
+    ns Test {
+      let default: Test = .A;
+    }
+  }
+}
+
