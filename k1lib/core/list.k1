@@ -11,8 +11,7 @@ ns List {
   ///////////////////////////
   // Construction functions
 
-  // nocommit: why doesnt this `use` work
-  // use core/mem/AllocMode
+  use mem/AllocMode
 
   fn empty[T](): List[T] {
     withCapacity[T](0)
@@ -26,7 +25,7 @@ ns List {
     { len: size, buffer: buffer }
   }
 
-  fn filledIn[T](context mode: mem/AllocMode)(size: size, value: T): List[T] {
+  fn filledIn[T](context mode: AllocMode)(size: size, value: T): List[T] {
     let buffer = Buffer/filledIn(size, value);
     { len: size, buffer: buffer }
   }
@@ -36,12 +35,12 @@ ns List {
     { len: 0, buffer: buffer }
   }
 
-  fn withCapacityIn[T](context mode: mem/AllocMode)(cap: size): List[T] {
+  fn withCapacityIn[T](context mode: AllocMode)(cap: size): List[T] {
     let buffer = Buffer/_allocateIn[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: *mut List[T], alloc: mem/AllocMode, count: size): unit {
+  fn reserve[T](self: *mut List[T], alloc: AllocMode, count: size): unit {
     if self.cap() >= count { return(()) };
     self.buffer*._growTo[T](context alloc)(count);
     assertdbg(self.buffer.len == count);
@@ -106,7 +105,7 @@ ns List {
     } else .Some(self.buffer.get(index))
   }
 
-  fn _grow[T](context mode: mem/AllocMode)(self: *mut List[T]): unit {
+  fn _grow[T](context mode: AllocMode)(self: *mut List[T]): unit {
     let newCap: size = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       let elemSize = core/types/sizeOf[T]();
@@ -123,7 +122,7 @@ ns List {
     { len: self.len, buffer: newBuffer }
   }
 
-  fn pushIn[T](context mode: mem/AllocMode)(self: *mut List[T], elem: T): unit {
+  fn pushIn[T](context mode: AllocMode)(self: *mut List[T], elem: T): unit {
     let startLength = self.len;
     if startLength == self.*.cap() {
       self._grow();
