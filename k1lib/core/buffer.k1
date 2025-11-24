@@ -35,15 +35,12 @@ ns Buffer {
   }
 
   fn wrapArray[T, N: static size](array: *mut Array[T, N]): Buffer[T] {
-    let base = array.getBase();
     let l = array.len();
     let wrapped = fromRefAndCount(l, array.getBase());
     wrapped
   }
 
   fn copyFromArray[T, N: static size](array: *Array[T, N]): Buffer[T] {
-    let base = array.getBaseRead();
-    let l = array.len();
     let wrapped = wrapArray[T, N](array.toMut);
     wrapped.cloned();
   }
