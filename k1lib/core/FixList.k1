@@ -46,7 +46,6 @@ ns FixList {
       self.used* <- needed as u32;
       .Ok(())
     } else {
-      let typename = types/getTypeName[typeOf(self).value]();
       .Err(())
       //.Err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
     }

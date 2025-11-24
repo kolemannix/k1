@@ -39,7 +39,6 @@ ns meta {
   fn defineSoA[T](name: string): string {
     let structTypeId = types/typeId[T]();
     let tt = "typeFromId({structTypeId})";
-    let schema = types/typeSchema(structTypeId);
     require types/typeSchema(structTypeId) is .Struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");
     if fields.isEmpty() { crash("Input struct must have at least one field") };

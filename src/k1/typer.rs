@@ -12437,6 +12437,16 @@ impl TypedProgram {
             }
         }
 
+        for stmt in stmts.iter() {
+            if let TypedStmt::Let(let_stmt) = self.stmts.get(*stmt) {
+                self.warn_variable_usage_counts(
+                    "Local variable",
+                    let_stmt.variable_id,
+                    let_stmt.span,
+                );
+            }
+        }
+
         let id = self.exprs.add_block(
             &mut self.mem,
             BlockBuilder { scope_id: block_scope, statements: stmts, span: block.span },
@@ -14233,20 +14243,19 @@ impl TypedProgram {
             return Ok(());
         }
         debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
-        let resolution = if let Some(symbol) =
-            self.find_useable_symbol(scope_id, &parsed_use.target)?
-        {
-            self.scopes.add_use_binding(
-                scope_id,
-                symbol,
-                parsed_use.alias.unwrap_or(parsed_use.target.name),
-            );
-            debug!("Inserting resolved use of {:?}", symbol);
-            UseStatus::Resolved(symbol)
-        } else {
-            debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
-            UseStatus::Unresolved(scope_id)
-        };
+        let resolution =
+            if let Some(symbol) = self.find_useable_symbol(scope_id, &parsed_use.target)? {
+                self.scopes.add_use_binding(
+                    scope_id,
+                    symbol,
+                    parsed_use.alias.unwrap_or(parsed_use.target.name),
+                );
+                debug!("Inserting resolved use of {:?}", symbol);
+                UseStatus::Resolved(symbol)
+            } else {
+                debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
+                UseStatus::Unresolved(scope_id)
+            };
 
         self.use_statuses.insert(parsed_use_id, resolution);
         Ok(())

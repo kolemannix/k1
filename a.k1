@@ -1,5 +1,0 @@
-fn test(): i32 {
-  let a: 1 = #debug 1;
-  //let a: 5 = 1;
-  0
-}

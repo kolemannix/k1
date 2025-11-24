@@ -14,6 +14,14 @@ fn foo(context env: string)(_unused: u8, usedTwice: f32): int {
   x + 1
 }
 
+fn myLets(): unit {
+  let x = 4;
+  let y = {
+    let foo = 12;
+    12
+  };
+}
+
 fn main(): i32 {
   \(x: int, _y: int) x + x;
 
