@@ -1630,7 +1630,7 @@ impl Variable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypedGlobal {
     pub variable_id: VariableId,
     pub parsed_expr: ParsedExprId,
@@ -2733,6 +2733,11 @@ impl TypedProgram {
             for (k, v) in exprs_by_kind_sorted.iter() {
                 eprintln!("\t\t{}: {}", k, v);
             }
+        }
+
+        // nocommit allocation
+        for g in self.globals.iter().cloned().collect_vec() {
+            self.warn_variable_usage_counts("Global", g.variable_id, g.span);
         }
 
         Ok(module_id)

@@ -5,7 +5,7 @@ use core/types/sizeOfStride
 use core/types/alignOf
 use core/types/typeId
 
-fn doIt(foo: bool, bar: u32): u32 {
+fn doIt(_foo: bool, _bar: u32): u32 {
   32
 }
 
