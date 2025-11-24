@@ -2,28 +2,6 @@
 //  3 * 4
 //};
 
-ns bar {
-  use foo/core/Test
-  fn doIt(t: Test): Test { 
-    before();
-    Test/default
-  }
-  use secret/before
-}
-
-ns secret {
-  fn before(): unit { () }
-}
-
-ns foo {
-  ns core {
-    deftype Test = either A, B
-    ns Test {
-      let default: Test = .A;
-    }
-  }
-}
-
 fn myassert(context locn: core/compiler/SourceLocation)(value: bool): unit {
   if not value { crash("ASSERT FAILED") };
 }
@@ -37,7 +15,7 @@ fn foo(context env: string)(_unused: u8, usedTwice: f32): int {
 }
 
 fn main(): i32 {
-  \(x: int, y: int) x + x;
+  \(x: int, _y: int) x + x;
 
   let context env: string = "stuff_in_env";
   foo(3, 3.14);

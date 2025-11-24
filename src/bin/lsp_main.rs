@@ -23,11 +23,22 @@ use tracing::info;
 //
 //impl LspError for TyperError {}
 
-fn error_to_diagnostic(ast: &ParsedProgram, span_id: SpanId, message: String) -> (Url, Diagnostic) {
+fn error_to_diagnostic(
+    ast: &ParsedProgram,
+    message: String,
+    level: ErrorLevel,
+    span_id: SpanId,
+) -> (Url, Diagnostic) {
     let span = ast.spans.get(span_id);
     let (start_line, end_line) = ast.get_lines_for_span_id(span_id).unwrap();
     let source = ast.sources.get_source(span.file_id);
     let url = source_to_uri(&source.directory, &source.filename);
+    let severity = match level {
+        ErrorLevel::Error => DiagnosticSeverity::ERROR,
+        ErrorLevel::Warn => DiagnosticSeverity::WARNING,
+        ErrorLevel::Info => DiagnosticSeverity::INFORMATION,
+        ErrorLevel::Hint => DiagnosticSeverity::HINT,
+    };
     let diagnostic = Diagnostic {
         range: Range {
             start: Position {
@@ -39,10 +50,10 @@ fn error_to_diagnostic(ast: &ParsedProgram, span_id: SpanId, message: String) ->
                 character: span.end() - end_line.start_char,
             },
         },
-        severity: Some(DiagnosticSeverity::ERROR),
+        severity: Some(severity),
         code: None,
         code_description: None,
-        source: Some("k1".to_string()),
+        source: Some(ast.name.clone()),
         message,
         related_information: None,
         tags: None,
@@ -113,7 +124,14 @@ impl Backend {
                 parsed_module
                     .errors
                     .iter()
-                    .map(|e| error_to_diagnostic(parsed_module, e.span(), e.to_string()))
+                    .map(|e| {
+                        error_to_diagnostic(
+                            parsed_module,
+                            e.message().to_string(),
+                            ErrorLevel::Error,
+                            e.span(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -128,7 +146,13 @@ impl Backend {
                 module
                     .errors
                     .iter()
-                    .map(|e| error_to_diagnostic(&module.ast, e.span, e.message.clone())),
+                    .map(|e| error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)),
+            );
+            all_errors.extend(
+                module
+                    .non_errors
+                    .iter()
+                    .map(|e| error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)),
             )
         };
         all_errors
