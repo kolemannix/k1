@@ -121,7 +121,6 @@ pub struct Scopes {
     /// The actual function that a scope appears within is a very important thing to know
     pub enclosing_functions: VPool<ScopeEnclosingFunctions, ScopeId>,
     /// SCOPES SoA POOLS END
-
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
@@ -703,6 +702,17 @@ pub enum UseableSymbolId {
     Type { type_id: TypeId, companion_namespace: Option<NamespaceId> },
     Namespace(NamespaceId),
     Ability(AbilityId, NamespaceId),
+}
+
+impl UseableSymbolId {
+    pub fn namespace_id(&self) -> Option<NamespaceId> {
+        match self {
+            UseableSymbolId::Type { companion_namespace, .. } => *companion_namespace,
+            UseableSymbolId::Namespace(ns_id) => Some(*ns_id),
+            UseableSymbolId::Ability(_, ns_id) => Some(*ns_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

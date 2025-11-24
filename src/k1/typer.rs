@@ -14151,6 +14151,7 @@ impl TypedProgram {
     ) {
         match def {
             ParsedId::Use(parsed_use_id) => {
+                // nocommit return and see if unused
                 if let Err(e) = self.eval_use_definition(scope_id, parsed_use_id) {
                     self.report(e)
                 }
@@ -14225,27 +14226,31 @@ impl TypedProgram {
         scope_id: ScopeId,
         parsed_use_id: ParsedUseId,
     ) -> TyperResult<()> {
-        let parsed_use = self.ast.uses.get_use(parsed_use_id);
+        let parsed_use = *self.ast.uses.get_use(parsed_use_id);
         let status_entry = self.use_statuses.get(&parsed_use_id);
         let is_fulfilled = match status_entry {
-            Some(se) if se.is_resolved() => true,
+            Some(use_status) if use_status.is_resolved() => true,
             _ => false,
         };
-        if !is_fulfilled {
-            debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
+        if is_fulfilled {
+            return Ok(());
+        }
+        debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
+        let resolution =
             if let Some(symbol) = self.find_useable_symbol(scope_id, &parsed_use.target)? {
                 self.scopes.add_use_binding(
                     scope_id,
                     symbol,
                     parsed_use.alias.unwrap_or(parsed_use.target.name),
                 );
-                self.use_statuses.insert(parsed_use_id, UseStatus::Resolved(symbol));
-                debug!("Inserting resolved use of {:?}", symbol);
+                eprintln!("Inserting resolved use of {:?}", symbol);
+                UseStatus::Resolved(symbol)
             } else {
-                self.use_statuses.insert(parsed_use_id, UseStatus::Unresolved);
-                debug!("Inserting unresolved use");
-            }
-        }
+                eprintln!("Inserting unresolved use");
+                UseStatus::Unresolved
+            };
+
+        self.use_statuses.insert(parsed_use_id, resolution);
         Ok(())
     }
 
@@ -14310,23 +14315,19 @@ impl TypedProgram {
     // This means finding all the type declarations in the namespace and registering their names,
     // as well as ability defns, which are like types, and registering their names
     // then recursing down into child namespaces and doing the same
-    fn declare_types_in_namespace(
+    fn declare_types_in_parsed_namespace(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
-    ) -> TyperResult<()> {
+    ) {
         let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
-        let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
-        for &parsed_definition_id in
-            self.ast.namespaces.get(parsed_namespace_id).definitions.clone().iter()
-        {
+        let ns = self.namespaces.get(namespace_id);
+        eprintln!("declare_types_in_namespace {}", self.ident_str(ns.name));
+        let namespace_scope_id = ns.scope_id;
+        let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
+        for &parsed_definition_id in parsed_definitions.iter() {
             if skip_defns.contains(&parsed_definition_id) {
                 continue;
-            }
-            if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
-                if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
-                    self.report(e);
-                }
             }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id);
@@ -14391,12 +14392,28 @@ impl TypedProgram {
                 }
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                if let Err(e) = self.declare_types_in_namespace(namespace_id, skip_defns) {
+                self.declare_types_in_parsed_namespace(namespace_id, skip_defns);
+            }
+        }
+    }
+
+    fn resolve_uses_in_namespace_recursively(&mut self, parsed_namespace_id: ParsedNamespaceId) {
+        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let ns = self.namespaces.get(namespace_id);
+        eprintln!("resolve_uses_in_namespace {}", self.ident_str(ns.name));
+        let namespace_scope_id = ns.scope_id;
+        let parsed_definitions = self.ast.namespaces.get(parsed_namespace_id).definitions.clone();
+
+        for &parsed_definition_id in parsed_definitions.iter() {
+            if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
+                if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
                     self.report(e);
                 }
             }
+            if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
+                self.resolve_uses_in_namespace_recursively(namespace_id);
+            }
         }
-        Ok(())
     }
 
     fn eval_namespace_type_eval_phase(
@@ -14573,8 +14590,8 @@ impl TypedProgram {
     ) -> TyperResult<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
 
-        let namespace_id = if let Some(existing) =
-            self.scopes.find_namespace(parent_scope, ast_namespace.name)
+        let direct_parent = self.scopes.get_scope(parent_scope);
+        let namespace_id = if let Some(existing) = direct_parent.find_namespace(ast_namespace.name)
         {
             if self.module_in_progress.unwrap()
                 != self.namespaces.get(existing).owner_module.unwrap()
@@ -14786,7 +14803,7 @@ impl TypedProgram {
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
         let mut err_writer = stderr();
-        debug!(">> Phase 1 declare namespaces and run global #meta programs");
+        debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             bail!(
@@ -14797,13 +14814,8 @@ impl TypedProgram {
         }
 
         // Pending Type declaration phase
-        debug!(">> Phase 2 declare types");
-        let type_defn_result =
-            self.declare_types_in_namespace(module_root_parsed_namespace, skip_defns);
-        if let Err(e) = type_defn_result {
-            self.write_error(&mut err_writer, &e)?;
-            self.errors.push(e);
-        }
+        debug!(">> Pass 2 declare types");
+        self.declare_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             bail!(
                 "{} failed type definition phase with {} errors",
@@ -14812,9 +14824,14 @@ impl TypedProgram {
             )
         }
 
+        self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
+        if !self.errors.is_empty() {
+            bail!("{} failed resolving uses with {} errors", self.program_name(), self.errors.len())
+        }
+
         //self.phase = 3;
         // self.info(format_args!(""));
-        debug!(">> Phase 3 evaluate types");
+        debug!(">> Pass 3 evaluate types");
         let type_eval_result =
             self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
         if let Err(e) = type_eval_result {
@@ -14850,7 +14867,7 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        debug!(">> Phase 4 declare rest of definitions (functions, globals, abilities)");
+        debug!(">> Pass 4 declare rest of definitions (functions, globals, abilities)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         if !self.errors.is_empty() {
             eprintln!(
@@ -14866,7 +14883,7 @@ impl TypedProgram {
             self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
         );
 
-        debug!(">> Phase 5 bodies (functions, globals, abilities)");
+        debug!(">> Pass 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
         let unresolved_uses: Vec<_> =
@@ -14891,7 +14908,7 @@ impl TypedProgram {
             )
         }
 
-        debug!(">> Phase 6 specialize function bodies");
+        debug!(">> Pass 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
         if !self.errors.is_empty() {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
