@@ -58,8 +58,8 @@ fn optElseOperator(): unit {
 
 fn blanketImpls(): unit {
   assert(some(4) == some(4));
-  assert(some(2).unwrap() == 2);
-  assert(some(true).unwrap() != false);
+  assert(some(2).getValue() == 2);
+  assert(some(true).getValue() != false);
 }
 
 fn test(): unit {

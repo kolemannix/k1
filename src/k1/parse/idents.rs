@@ -131,7 +131,6 @@ pub struct BuiltinIdents {
     pub Iterator: Ident,
     pub Iterable: Ident,
     pub Opt: Ident,
-    pub Unwrap: Ident,
     pub Try: Ident,
     pub Buffer: Ident,
     pub mem: Ident,
@@ -175,12 +174,10 @@ pub struct BuiltinFunctions {
     pub Iterator_next: QIdent,
     pub Iterator_sizeHint: QIdent,
     pub Iterable_iterator: QIdent,
-    pub Unwrap_hasValue: QIdent,
-    pub Unwrap_unwrap: QIdent,
     pub Opt_isSome: QIdent,
     pub Opt_get: QIdent,
     pub Try_isOk: QIdent,
-    pub Try_getOk: QIdent,
+    pub Try_getValue: QIdent,
     pub Try_getError: QIdent,
     pub bool_negated: QIdent,
     pub bool_and: QIdent,
@@ -316,7 +313,6 @@ impl IdentPool {
             meta: intern!("meta"),
             pre: intern!("pre"),
             Opt: intern!("Opt"),
-            Unwrap: intern!("Unwrap"),
             Try: intern!("Try"),
             Buffer: intern!("Buffer"),
             mem: intern!("mem"),
@@ -368,9 +364,6 @@ impl IdentPool {
 
         let Iterable_iterator = make_fn!(&[b.Iterable], intern!("iterator"));
 
-        let Unwrap_hasValue = make_fn!(&[b.Unwrap], b.hasValue);
-        let Unwrap_unwrap = make_fn!(&[b.Unwrap], intern!("unwrap"));
-
         let Opt_isSome = make_fn!(&[b.Opt], intern!("isSome"));
         let Opt_get = make_fn!(&[b.Opt], b.get);
 
@@ -387,7 +380,7 @@ impl IdentPool {
         let core_string_wrapList = make_fn!(&[b.core, intern!("string")], intern!("wrapList"));
 
         let Try_isOk: QIdent = make_fn!(&[b.Try], intern!("isOk"));
-        let Try_getOk: QIdent = make_fn!(&[b.Try], intern!("getOk"));
+        let Try_getValue: QIdent = make_fn!(&[b.Try], intern!("getValue"));
         let Try_getError: QIdent = make_fn!(&[b.Try], intern!("getError"));
 
         let Buffer__allocate: QIdent = make_fn!(&[b.core, b.Buffer], intern!("_allocate"));
@@ -423,12 +416,10 @@ impl IdentPool {
             Iterator_next,
             Iterator_sizeHint,
             Iterable_iterator,
-            Unwrap_hasValue,
-            Unwrap_unwrap,
             Opt_isSome,
             Opt_get,
             Try_isOk,
-            Try_getOk,
+            Try_getValue,
             Try_getError,
             bool_negated,
             bool_and,

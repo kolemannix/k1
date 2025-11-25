@@ -19,8 +19,8 @@ fn testSizeOf(): unit {
 
 fn testFnTypeInfo(): unit {
   assertEquals(typeId[doIt.return](), typeId[u32]());
-  assertEquals(typeId[doIt.foo](), typeId[bool]());
-  assertEquals(typeId[doIt.bar](), typeId[doIt.return]());
+  assertEquals(typeId[doIt._foo](), typeId[bool]());
+  assertEquals(typeId[doIt._bar](), typeId[doIt.return]());
 }
 
 fn test(): unit {

@@ -16,7 +16,7 @@ fn enumPayload(): unit {
     ()
   } else crash("");
   assert(a is .A);
-  assert(a.asA().hasValue());
+  assert(a.asA().isOk());
 
   if b is .B(x) {
     assert(x == 'x');
@@ -34,7 +34,7 @@ fn enumPayload(): unit {
 
 deftype MyResult[T, E] = either Ok(T), Err(E)
 ns MyResult {
-  fn myUnwrap[T, E](self: MyResult[T, E]): T {
+  fn myGet[T, E](self: MyResult[T, E]): T {
     self.asOk().!.value
   }
   fn show[T: Print, E: Print](self: MyResult[T, E]): string {
@@ -52,9 +52,9 @@ fn genericEnum(): unit {
     let x1Ok = x1.asOk().!;
 
     // This tests type inference for enums
-    assert(MyResult/myUnwrap(x1) == -3);
-    assert(x1.myUnwrap() == -3);
-    assert(x1Ok.myUnwrap() == -3);
+    assert(MyResult/myGet(x1) == -3);
+    assert(x1.myGet() == -3);
+    assert(x1Ok.myGet() == -3);
 
     // Shows that we can talk about the payload type
     let b: MyResult[int, string].Ok.value = 42;

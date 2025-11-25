@@ -45,8 +45,8 @@ fn test(): unit {
 
   assert("123".toInt().! == 123);
   assert("-123".toInt().! == -123);
-  assert(not "--".toInt().hasValue());
-  assert(not "123a".toInt().hasValue());
+  assert(not "--".toInt().isOk());
+  assert(not "123a".toInt().isOk());
   assert("12399999".toInt().! == 12399999);
 
   escape();
