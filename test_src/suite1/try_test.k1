@@ -10,11 +10,11 @@ fn canFailInt(): Result[int, Error] { .Ok(42) }
 fn canFailBool(): Result[bool, Error] { .Ok(false) }
 
 impl Try[T = int, E = Error] for Foo {
-  fn makeError(e: E): Self   { { a: false } }
-  fn makeOk(t: T): Self { { a: true  } }
+  fn error(e: E): Self   { { a: false } }
+  fn value(t: T): Self { { a: true  } }
 
   fn isOk(self: Self): bool { self.a }
-  fn getOk(self: Self): T  { 3 }
+  fn getValue(self: Self): T  { 3 }
   fn getError(self: Self): E { "FooError" }
 }
 

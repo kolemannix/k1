@@ -1,0 +1,30 @@
+deftype A = bitfield(u8) { F1: 1, F2: 1, F3: 1, U5: 5 }
+
+#meta bitfield(u8, { F1: 1, F2: 1, F3: 1, U5: 1 })
+#meta bitfield(u8, { F1: size, F2: size, F3: size, U5: size })
+
+
+// Manually encoded
+00 
+^ upper bit = rounded
+ ^ lower bit = even-sided
+deftype Shape = either(u8)
+  Circle({ radius: i32 }) = 0b11,
+  Oval({ radiusx: i32, radiusy: i32}) = 0b10,
+  Square({ len: i32 }) = 0b01,
+  Rect({ lenx: i32, leny: i32 }) = 0b00
+
+deftype Shape = either(
+  tag_type = u32,
+  common = { name: string },
+  flags = [rounded, even]
+) {
+  Circle({ radius: i32 }, [rounded, even]),
+  Oval({ radiusx: i32, radiusy: i32}, [rounded]),
+  Square({ len: i32 }, ),
+  Rect({ lenx: i32, leny: i32 })
+}
+
+  x: Shape
+  x.rounded >>
+  x.tag & 0b00000010 == 0b00000010

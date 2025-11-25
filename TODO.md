@@ -26,13 +26,16 @@ Non-major Ideas
       either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
   - [ ] First-class data-oriented design features for struct/enum setups?
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
-      'shared' chunks vs union chunk, AoS or AoSoA by default...
+      
+      'shared' payload type, AoS or AoSoA by default...
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
 Syntax/elegance
 - [ ] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept
+- [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [ ] Fix the builtin `for` ... `yield`. What about for ... push, but with
 - [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
@@ -86,7 +89,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
-- [ ] Auto-Arena sugar using scopes? In functions or loops or lexical scopes?
 - [ ] transmute function (for struct ABI workarounds right now)
 
 ## Project: Ability objects; dyn[<ability expr>]
@@ -102,7 +104,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: x86-64 struct passing ABI
 
 ## Introduce Warnings
-- [ ] Unused var
+- [x] Unused var
 - [ ] Unused type bound
 - [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
     - `if self.slots.get(probe_index) is None {`

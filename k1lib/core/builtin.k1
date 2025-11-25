@@ -308,21 +308,14 @@ ability Comparable {
   fn compare(self: Self, other: Self): Ordering
 }
 
-ability Unwrap[impl Inner] {
-  fn hasValue(self: Self): bool
-  fn unwrap(self: Self): Inner
-  fn make(inner: Inner): Self
-}
-
 ability Try[impl T, impl E] {
-  // DO NOT REORDER `try` internal operation expects
-  // makeError to be first! (FIXME)
-  fn makeError(e: E): Self
-  fn makeOk(t: T): Self
+  // DO NOT REORDER `try` internal operation expects error to be first! (FIXME)
+  fn error(e: E): Self
+  fn value(t: T): Self
 
   fn isOk(self: Self): bool
   fn getError(self: Self): E
-  fn getOk(self: Self): T
+  fn getValue(self: Self): T
 }
 
 ability Iterator[impl Item] {

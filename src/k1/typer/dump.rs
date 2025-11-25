@@ -883,6 +883,9 @@ impl TypedProgram {
             PatternCtor::Pointer => writ.write_str("<ptr>"),
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
             PatternCtor::FunctionPointer => writ.write_str("fn*"),
+            PatternCtor::LambdaObject => writ.write_str("dyn[fn ...]"),
+            PatternCtor::Buffer => writ.write_str("buffer"),
+            PatternCtor::View => writ.write_str("view"),
             PatternCtor::Array => writ.write_str("<array>"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;

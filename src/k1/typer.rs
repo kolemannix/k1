@@ -113,10 +113,9 @@ pub const DIV_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
 pub const REM_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
 pub const SCALAR_CMP_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
 pub const COMPARABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const UNWRAP_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const TRY_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const TRY_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ITERATOR_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
@@ -378,6 +377,9 @@ impl PatternCtorId {
 
     pub const TYPE_VARIABLE: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
     pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
+    pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
+    pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
+    pub const VIEW: PatternCtorId = PatternCtorId::from_u32(13).unwrap();
 }
 
 /// Used for analyzing pattern matching
@@ -400,6 +402,9 @@ pub enum PatternCtor {
     /// think of a good name means we shouldn't, probably
     TypeVariable,
     FunctionPointer,
+    LambdaObject,
+    Buffer,
+    View,
     /// In the future, we should do real array patterns since length is statically known
     Array,
     Reference(PatternCtorId),
@@ -2476,6 +2481,9 @@ impl TypedProgram {
         pattern_ctors.add(PatternCtor::Pointer);
         pattern_ctors.add(PatternCtor::TypeVariable);
         pattern_ctors.add(PatternCtor::FunctionPointer);
+        pattern_ctors.add(PatternCtor::LambdaObject);
+        pattern_ctors.add(PatternCtor::Buffer);
+        pattern_ctors.add(PatternCtor::View);
 
         debug!("clock init");
         let init_start = std::time::Instant::now();
@@ -6664,7 +6672,7 @@ impl TypedProgram {
                             "Cannot use referencing access with optional chaining"
                         );
                     }
-                    // TODO: This can be re-written in terms of 'Unwrap' if we supply a
+                    // TODO: This can be re-written in terms of 'Try' if we supply a
                     //           'wrap' function that wraps (optional Some equivalent)
                     // It doesn't really support chaining yet, kinda useless so I also won't make it ability-based yet
                     // See coalescing_v2.wip for plan
@@ -6814,7 +6822,7 @@ impl TypedProgram {
             false,
         )?;
         let get_ok_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getOk.with_span(span),
+            self.ast.idents.f.Try_getValue.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
@@ -6866,14 +6874,10 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
         let operand_type = self.exprs.get_type(operand_expr);
-        let _unwrap_impl = self.expect_ability_implementation(
-            operand_type,
-            UNWRAP_ABILITY_ID,
-            ctx.scope_id,
-            span,
-        )?;
+        let _try_impl =
+            self.expect_ability_implementation(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Unwrap_unwrap.with_span(span),
+            self.ast.idents.f.Try_getValue.with_span(span),
             &[],
             &[operand_expr],
             ctx,
@@ -9159,8 +9163,9 @@ impl TypedProgram {
             iterator_next_call,
             loop_scope_id,
         );
-        let next_unwrap_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Unwrap_unwrap.with_span(iterable_span),
+        #[allow(non_snake_case)]
+        let next_getValue_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.Try_getValue.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
             ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
@@ -9168,7 +9173,7 @@ impl TypedProgram {
         )?;
         let binding_variable = self.synth_variable_defn_visible(
             binding_ident,
-            next_unwrap_call,
+            next_getValue_call,
             consequent_block.scope_id,
         );
         let body_block = self.eval_block(
@@ -9748,25 +9753,25 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
-        // LHS must implement Unwrap and RHS must be its contained type
+        // LHS must implement Try and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
-        let unwrap_impl = self
-            .expect_ability_implementation(lhs_type, UNWRAP_ABILITY_ID, ctx.scope_id, span)
+        let try_impl = self
+            .expect_ability_implementation(lhs_type, TRY_ABILITY_ID, ctx.scope_id, span)
             .map_err(|e| {
                 errf!(
                     span,
-                    "'?' operator can only be used on a type that implements `Unwrap`. {}",
+                    "'?' operator can only be used on a type that implements `Try`. {}",
                     e.message,
                 )
             })?;
-        let unwrap_impl = self.ability_impls.get(unwrap_impl.full_impl_id);
-        let output_type = self.named_types.get_nth(unwrap_impl.impl_arguments, 0).type_id;
+        let try_impl = self.ability_impls.get(try_impl.full_impl_id);
+        let output_type = self.named_types.get_nth(try_impl.impl_arguments, 0).type_id;
 
         let rhs = self.eval_expr(rhs, ctx.with_expected_type(Some(output_type)))?;
         let rhs_type = self.exprs.get_type(rhs);
         if let Err(msg) = self.check_types(output_type, rhs_type, ctx.scope_id) {
-            return failf!(span, "RHS value incompatible with `Unwrap` output of LHS: {}", msg);
+            return failf!(span, "RHS value incompatible with `Try` output of LHS: {}", msg);
         }
         let mut coalesce_block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
         let lhs_variable = self.synth_variable_defn_simple(
@@ -9776,14 +9781,14 @@ impl TypedProgram {
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
         let lhs_has_value = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Unwrap_hasValue.with_span(span),
+            self.ast.idents.f.Try_isOk.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
             false,
         )?;
         let lhs_get_expr = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Unwrap_unwrap.with_span(span),
+            self.ast.idents.f.Try_getValue.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
@@ -13886,7 +13891,7 @@ impl TypedProgram {
             {
                 return failf!(
                     blanket_impl_param.span,
-                    "Duplicate generic impl parameter name: {}",
+                    "Duplicate blanket impl parameter name: {}",
                     self.ident_str(blanket_impl_param.name)
                 );
             }
@@ -14002,7 +14007,11 @@ impl TypedProgram {
             let added =
                 self.scopes.get_scope_mut(impl_scope_id).add_type(impl_param.name, arg_type);
             if !added {
-                panic!("shit")
+                return failf!(
+                    matching_arg.span,
+                    "Variable name collision: {}",
+                    self.ident_str(impl_param.name)
+                );
             }
             impl_arguments.push(NameAndType { name: impl_param.name, type_id: arg_type })
         }
@@ -15050,9 +15059,33 @@ impl TypedProgram {
         field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
         span_id: SpanId,
     ) {
+        eprintln!("generate_ctors_for_type: {}", self.type_id_to_string(type_id));
         #[inline]
         fn alive(ctor: PatternCtorId) -> PatternCtorTrialEntry {
             PatternCtorTrialEntry { ctor, alive: true }
+        }
+        fn handle_enum_variant(
+            k1: &mut TypedProgram,
+            dst: &mut Vec<PatternCtorTrialEntry>,
+            field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
+            span_id: SpanId,
+            v: &TypedEnumVariant,
+        ) {
+            match v.payload.as_ref() {
+                None => dst.push(alive(
+                    k1.pattern_ctors.add(PatternCtor::Enum { variant_name: v.name, inner: None }),
+                )),
+                Some(payload) => {
+                    let prev_len = dst.len();
+                    k1.generate_constructors_for_type(*payload, dst, field_ctors_buf, span_id);
+                    for payload_pattern_id in dst[prev_len..].iter_mut() {
+                        payload_pattern_id.ctor = k1.pattern_ctors.add(PatternCtor::Enum {
+                            variant_name: v.name,
+                            inner: Some(payload_pattern_id.ctor),
+                        })
+                    }
+                }
+            }
         }
         if type_id == STRING_TYPE_ID {
             dst.push(alive(PatternCtorId::STRING));
@@ -15086,34 +15119,29 @@ impl TypedProgram {
                 }
             }
             Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
+            Type::EnumVariant(v) => {
+                handle_enum_variant(self, dst, field_ctors_buf, span_id, &v.clone())
+            }
             Type::Enum(enum_type) => {
                 for v in enum_type.variants.clone().iter() {
-                    match v.payload.as_ref() {
-                        None => dst.push(alive(
-                            self.pattern_ctors
-                                .add(PatternCtor::Enum { variant_name: v.name, inner: None }),
-                        )),
-                        Some(payload) => {
-                            let prev_len = dst.len();
-                            self.generate_constructors_for_type(
-                                *payload,
-                                dst,
-                                field_ctors_buf,
-                                span_id,
-                            );
-                            for payload_pattern_id in dst[prev_len..].iter_mut() {
-                                payload_pattern_id.ctor =
-                                    self.pattern_ctors.add(PatternCtor::Enum {
-                                        variant_name: v.name,
-                                        inner: Some(payload_pattern_id.ctor),
-                                    })
-                            }
-                        }
-                    }
+                    handle_enum_variant(self, dst, field_ctors_buf, span_id, v)
                 }
             }
             Type::Struct(struc) => {
                 debug_assert!(type_id != STRING_TYPE_ID);
+
+                // This hides a bug with recursive types, but oh well
+                match self.types.get_as_container_instance(type_id) {
+                    Some((_, ContainerKind::Buffer)) => {
+                        dst.push(alive(PatternCtorId::BUFFER));
+                        return;
+                    }
+                    Some((_, ContainerKind::View)) => {
+                        dst.push(alive(PatternCtorId::VIEW));
+                        return;
+                    }
+                    _ => {}
+                }
                 let field_count = struc.fields.len();
                 for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
                     let prev_len = dst.len();
@@ -15203,6 +15231,9 @@ impl TypedProgram {
             }
             Type::Function(_f) => {
                 debug!("function is probably unmatchable");
+            }
+            Type::LambdaObject(_) => {
+                dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
             _ => self
                 .write_error(
@@ -15332,7 +15363,6 @@ impl TypedProgram {
             core!("Show"),
             core!("Bitwise"),
             core!("Comparable"),
-            core!("Unwrap"),
             core!("Try"),
             core!("Iterator"),
             core!("Iterable"),
