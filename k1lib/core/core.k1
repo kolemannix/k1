@@ -10,14 +10,14 @@ fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T
 ns iter {
 
   fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): ?T {
-    for iterable do {
+    for iterable {
       if pred(it) return(.Some(it))
     };
     .None
   }
 
   fn position[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): ?size {
-    for iterable do {
+    for iterable {
       if it == needle return(.Some(itIndex))
     };
     .None
@@ -28,12 +28,12 @@ ns iter {
   }
 
   fn forall[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
-    for iterable do { if not pred(it) return(false) };
+    for iterable { if not pred(it) return(false) };
     true
   }
 
   fn exists[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
-    for iterable do {
+    for iterable {
       if pred(it) return(true)
     };
     false
@@ -127,9 +127,7 @@ ns sys {
       count = argCount as size,
       pointer = args
     );
-    let strings = for cstr in buf yield {
-      string/wrapCString(cstr)
-    };
+    let strings = List/fromMap(buf, \cstr. string/wrapCString(cstr));
     strings.asView()
   }
 
@@ -152,14 +150,15 @@ ns sys {
 
 ns files {
 
-  // nocommit(4): This is a mess switch to posix or something
   fn readToString(context alloc: mem/AllocMode)(path: string): string {
-    let filenameCString = path.toCString();
+    let filenameCString = path.toCString(context .Arena)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     if file.isNull() {
       crash("fopen failed: `{path}`");
     };
+    defer libc/files/fclose(file);
+
     libc/files/fseek(file, 0, libc/files/SEEK_END);
     let fileSizeBytes = libc/files/ftell(file);
     let buf = alloc.alloc(size = fileSizeBytes, align = 1);
@@ -169,7 +168,6 @@ ns files {
     let string = string/wrapBuffer(
       Buffer/fromPtrAndCount(count = fileSizeBytes, pointer = buf)
     );
-    libc/files/fclose(file);
 
     alloc.free(ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
 

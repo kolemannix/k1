@@ -21,7 +21,7 @@ fn main(): i32 {
     blue: 14
   };
   let goodGamesSum: u64 = 0;
-  for line in input.splitByChar('\n') do {
+  for line in input.splitByChar('\n') {
     let id = itIndex + 1;
     let line = line.splitByChar(':').get(1);
     let isGoodGame = true;
@@ -38,7 +38,7 @@ fn main(): i32 {
         };
         { amount: amount, color: color }
       };
-      for value in values do {
+      for value in values {
         let colorSupply = switch value.color {
           .Red -> supply.red,
           .Green -> supply.green,

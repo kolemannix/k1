@@ -11,7 +11,8 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::{bc, vm};
+use crate::typer::dump::K1DisplayArgs;
+use crate::{bc, k1_format, k1_format_user, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{MHandle, MList, MSlice, Mem};
+use crate::kmem::{MHandle, MList, MSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -48,14 +49,14 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, ForExprType, Ident, IdentSlice, NamedTypeArg,
-    NamedTypeArgId, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
-    ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedCast, ParsedExpr, ParsedExprId,
-    ParsedFunctionId, ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral,
-    ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram,
-    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
+    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, NamedTypeArg, NamedTypeArgId,
+    NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind,
+    ParsedCall, ParsedCallArg, ParsedCast, ParsedExpr, ParsedExprId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
+    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
@@ -2743,10 +2744,9 @@ impl TypedProgram {
             }
         }
 
-        // nocommit allocation
-        for g in self.globals.iter().cloned().collect_vec() {
-            self.warn_variable_usage_counts("Global", g.variable_id, g.span);
-        }
+        // for g in self.globals.iter().cloned().collect_vec() {
+        //     self.warn_variable_usage_counts("Global", g.variable_id, g.span);
+        // }
 
         Ok(module_id)
     }
@@ -2759,6 +2759,18 @@ impl TypedProgram {
     /// Retrieve the current inference context
     fn ictx_mut(&mut self) -> &mut InferenceContext {
         self.inference_context_stack.last_mut().unwrap()
+    }
+
+    /// Skip the borrow checker, only when we must, to get access
+    /// to the tmp arena without exclusive access to the TypedProgram
+    #[allow(clippy::mut_from_ref)]
+    #[allow(invalid_reference_casting)]
+    fn get_tmp_unsafe(&self) -> &mut kmem::Mem<MemTmp> {
+        unsafe {
+            let ptr = &self.tmp as *const Mem<MemTmp>;
+            let ptr_mut: *mut Mem<MemTmp> = ptr.cast_mut();
+            &mut *ptr_mut
+        }
     }
 
     fn ictx_push(&mut self) {
@@ -4637,9 +4649,10 @@ impl TypedProgram {
         expected: &StructType,
         actual: &StructType,
         scope_id: ScopeId,
-    ) -> Result<(), String> {
+    ) -> Result<(), MStr<MemTmp>> {
         if expected.fields.len() != actual.fields.len() {
-            return Err(format!(
+            return Err(k1_format_user!(
+                self,
                 "expected struct with {} fields, got {}",
                 expected.fields.len(),
                 actual.fields.len()
@@ -4654,17 +4667,19 @@ impl TypedProgram {
         {
             trace!("typechecking struct field {:?}", expected_field);
             if actual_field.name != expected_field.name {
-                return Err(format!(
+                return Err(k1_format_user!(
+                    self,
                     "expected field name {} but got {}",
-                    self.ident_str(expected_field.name),
-                    self.ident_str(actual_field.name)
+                    expected_field.name,
+                    actual_field.name
                 ));
             }
             self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(
                 |msg| {
-                    format!(
+                    k1_format_user!(
+                        self,
                         "Struct type mismatch on field '{}': {}",
-                        self.ident_str(actual_field.name),
+                        actual_field.name,
                         msg
                     )
                 },
@@ -4905,7 +4920,7 @@ impl TypedProgram {
             }
         };
 
-        CheckExprTypeResult::Err(msg)
+        CheckExprTypeResult::Err(msg.to_string())
     }
 
     pub fn check_and_coerce_expr(
@@ -4951,7 +4966,7 @@ impl TypedProgram {
         expected: TypeId,
         actual: TypeId,
         scope_id: ScopeId,
-    ) -> Result<(), String> {
+    ) -> Result<(), MStr<MemTmp>> {
         debug!(
             "typecheck: {} <: {}",
             self.type_id_to_string(actual).blue(),
@@ -4984,23 +4999,20 @@ impl TypedProgram {
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                         let generic = self.types.get(spec1.generic_parent).expect_generic();
                         let param = self.named_types.get_nth(generic.params, index);
-                        let base_msg = format!(
-                            "Expected {}, but got {}",
-                            self.type_id_to_string(expected),
-                            self.type_id_to_string(actual),
+                        let msg = k1_format_user!(
+                            self,
+                            "Expected {} but got {}: Param '{}' is incorrect: {}",
+                            expected,
+                            actual,
+                            param.name,
+                            msg.as_str(),
                         );
-                        let detail =
-                            format!("Param '{}' is incorrect: {}", self.ident_str(param.name), msg);
-                        return Err(format!("{base_msg}: {detail}"));
+                        return Err(msg);
                     }
                 }
                 Ok(())
             } else {
-                Err(format!(
-                    "Expected {}, but got {}",
-                    self.type_id_to_string(expected),
-                    self.type_id_to_string(actual),
-                ))
+                Err(k1_format_user!(self, "Expected {}, but got {}", expected, actual))
             };
         }
 
@@ -5036,7 +5048,8 @@ impl TypedProgram {
                         if exp_ref.mutable == act_ref.mutable {
                             Ok(())
                         } else {
-                            Err(format!(
+                            Err(k1_format_user!(
+                                self,
                                 "References differ in mutability. expected {} but got {}",
                                 if exp_ref.mutable { "write" } else { "read" },
                                 if act_ref.mutable { "write" } else { "read" }
@@ -5045,11 +5058,9 @@ impl TypedProgram {
                     }
                 }
             }
-            (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => Err(format!(
-                "expected enum {} but got enum {}",
-                self.type_id_to_string(expected),
-                self.type_id_to_string(actual)
-            )),
+            (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => {
+                Err(k1_format_user!(self, "expected enum {} but got enum {}", expected, actual))
+            }
             (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
                 // This requires some more consideration, we need to actually insert a cast
                 // instruction to make the physical types exactly the same?
@@ -5058,26 +5069,29 @@ impl TypedProgram {
                 if actual_variant.enum_type_id == expected {
                     Ok(())
                 } else {
-                    Err(format!(
+                    Err(k1_format_user!(
+                        self,
                         "expected enum {} but got variant {} of a different enum",
-                        self.type_id_to_string(expected),
-                        self.ident_str(actual_variant.name)
+                        expected,
+                        actual_variant.name
                     ))
                 }
             }
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.logical_params().len() != f2.logical_params().len() {
-                    return Err(format!(
+                    return Err(k1_format_user!(
+                        self,
                         "Wrong parameter count: expected {} but got {}",
                         f1.logical_params().len(),
                         f2.logical_params().len()
                     ));
                 }
                 if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
-                    Err(format!(
+                    Err(k1_format_user!(
+                        self,
                         "Wrong return type: expected {} but got {}: {}",
-                        self.type_id_to_string(expected),
-                        self.type_id_to_string(actual),
+                        expected,
+                        actual,
                         msg
                     ))
                 } else {
@@ -5089,9 +5103,10 @@ impl TypedProgram {
                         .zip(self.types.mem.getn(f2.logical_params()).iter())
                     {
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
-                            return Err(format!(
+                            return Err(k1_format_user!(
+                                self,
                                 "Incorrect type for parameter '{}': {}",
-                                self.ident_str(p1.name),
+                                p1.name,
                                 msg
                             ));
                         }
@@ -5108,14 +5123,17 @@ impl TypedProgram {
                 {
                     Ok(())
                 } else {
-                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".to_string())
+                    Err("Expected a unique lambda, but got a different one. This probably shouldn't happen".into())
                 }
             }
-            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => Err(format!(
-                "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
-                self.type_id_to_string(expected),
-                self.type_id_to_string(actual),
-            )),
+            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => {
+                Err(k1_format_user!(
+                    self,
+                    "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
+                    expected,
+                    actual,
+                ))
+            }
             (Type::LambdaObject(exp_lambda_object), Type::LambdaObject(act_lambda_object)) => self
                 .check_types(
                     exp_lambda_object.function_type,
@@ -5131,24 +5149,27 @@ impl TypedProgram {
                             if exp_value_id == act_value_id {
                                 Ok(())
                             } else {
-                                Err(format!(
+                                Err(k1_format_user!(
+                                    self,
                                     "Different static values of same type: {} vs {}",
-                                    self.static_value_to_string(exp_value_id),
-                                    self.static_value_to_string(act_value_id)
+                                    exp_value_id,
+                                    act_value_id
                                 ))
                             }
                         }
-                        (Some(_), None) => Err(format!(
+                        (Some(_), None) => Err(k1_format_user!(
+                            self,
                             "Expected a specific static but got an unresolved one: {} vs {}",
-                            self.type_id_to_string(expected),
-                            self.type_id_to_string(actual),
+                            expected,
+                            actual,
                         )),
                     }
                 } else {
-                    Err(format!(
+                    Err(k1_format_user!(
+                        self,
                         "Expected static {} but got static {}",
-                        self.type_id_to_string(expected),
-                        self.type_id_to_string(actual)
+                        expected,
+                        actual
                     ))
                 }
             }
@@ -5158,10 +5179,11 @@ impl TypedProgram {
                 if let Some(actual_function_type) = actual_function_type {
                     self.check_types(expected_function_type, actual_function_type, scope_id)
                 } else {
-                    Err(format!(
+                    Err(k1_format_user!(
+                        self,
                         "Expected some function-like with type: {} but got {}",
-                        self.type_id_to_string(expected_function_type),
-                        self.type_id_to_string(actual),
+                        expected_function_type,
+                        actual,
                     ))
                 }
             }
@@ -5174,19 +5196,15 @@ impl TypedProgram {
                 let size_check =
                     self.check_types(expected_array.size_type, actual_array.size_type, scope_id);
                 if let Err(msg) = elem_check {
-                    Err(format!("Arrays have different element types: {msg}"))
+                    Err(k1_format_user!(self, "Arrays have different element types: {msg}"))
                 } else if let Err(msg) = size_check {
-                    Err(format!("Arrays have different size types: {msg}"))
+                    Err(k1_format_user!(self, "Arrays have different size types: {msg}"))
                 } else {
                     Ok(())
                 }
             }
             (_expected, Type::Never) => Ok(()),
-            (_exp, _act) => Err(format!(
-                "Expected {} but got {}",
-                self.type_id_to_string_ext(expected, false),
-                self.type_id_to_string_ext(actual, false),
-            )),
+            (_exp, _act) => Err(k1_format_user!(self, "Expected {} but got {}", expected, actual,)),
         }
     }
 
@@ -9103,8 +9121,6 @@ impl TypedProgram {
             }
         };
 
-        let is_do_block = for_expr.expr_type == ForExprType::Do;
-
         // We de-sugar the 'for ... do' expr into a typed while loop, synthesizing
         // a few local variables in order to achieve this.
 
@@ -9181,46 +9197,6 @@ impl TypedProgram {
             ctx.with_scope(consequent_block.scope_id).with_expected_type(expected_block_type),
             false,
         )?;
-        let body_block_result_type = self.exprs.get_type(body_block);
-
-        let outer_for_expr_ctx = ctx.with_scope(outer_for_expr_scope).with_no_expected_type();
-        let yielded_coll_variable = if !is_do_block {
-            let size_hint_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.Iterator_sizeHint.with_span(body_span),
-                &[],
-                &[iterator_variable.variable_expr],
-                outer_for_expr_ctx,
-                false,
-            )?;
-            let size_hint_ret_type = self.exprs.get_type(size_hint_call);
-            let size_hint_lower_bound = self.exprs.add(
-                TypedExpr::StructFieldAccess(FieldAccess {
-                    struct_type: size_hint_ret_type,
-                    base: size_hint_call,
-                    field_index: 0,
-                    access_kind: FieldAccessKind::ValueToValue,
-                }),
-                SIZE_TYPE_ID,
-                iterable_span,
-            );
-            let synth_function_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.List_withCapacity.with_span(body_span),
-                &[body_block_result_type],
-                &[size_hint_lower_bound],
-                outer_for_expr_ctx,
-                false,
-            )?;
-            Some(self.synth_variable_defn(
-                self.ast.idents.b.yieldDest,
-                synth_function_call,
-                false,
-                true, //is_mutable
-                true,
-                outer_for_expr_scope,
-            ))
-        } else {
-            None
-        };
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
@@ -9233,17 +9209,6 @@ impl TypedProgram {
 
         consequent_block.statements.push(binding_variable.defn_stmt);
         consequent_block.statements.push(user_block_variable.defn_stmt);
-        // Push element to yielded list
-        if let Some(yielded_coll_variable) = &yielded_coll_variable {
-            let list_push_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.List_push.with_span(body_span),
-                &[body_block_result_type],
-                &[yielded_coll_variable.variable_expr, user_block_variable.variable_expr],
-                outer_for_expr_ctx,
-                false,
-            )?;
-            self.push_expr_id_to_block(&mut consequent_block, list_push_call);
-        }
 
         let next_is_some_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.Opt_isSome.with_span(body_span),
@@ -9299,18 +9264,8 @@ impl TypedProgram {
         let mut for_expr_initial_statements = self.mem.new_list(5);
         for_expr_initial_statements.push(index_variable.defn_stmt);
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
-        if let Some(yielded_coll_variable) = &yielded_coll_variable {
-            for_expr_initial_statements.push(yielded_coll_variable.defn_stmt);
-        }
         let loop_stmt_id = self.add_expr_stmt(loop_expr);
         for_expr_initial_statements.push(loop_stmt_id);
-
-        if let Some(yielded_coll_variable) = yielded_coll_variable {
-            let yield_expr = self.synth_dereference(yielded_coll_variable.variable_expr);
-            let yield_expr_type = self.exprs.get_type(yield_expr);
-            let yield_stmt_id = self.stmts.add(TypedStmt::Expr(yield_expr, yield_expr_type));
-            for_expr_initial_statements.push(yield_stmt_id);
-        }
 
         let final_type =
             self.get_stmt_type(*for_expr_initial_statements.as_slice().last().unwrap());
@@ -15059,7 +15014,6 @@ impl TypedProgram {
         field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
         span_id: SpanId,
     ) {
-        eprintln!("generate_ctors_for_type: {}", self.type_id_to_string(type_id));
         #[inline]
         fn alive(ctor: PatternCtorId) -> PatternCtorTrialEntry {
             PatternCtorTrialEntry { ctor, alive: true }

@@ -26,7 +26,7 @@ fn simpleIncrement(): i32 {
   let x = 10;
   #meta {
     let* code = StringBuilder/new();
-    for core/IntRange/upTo(5) do {
+    for core/IntRange/upTo(5) {
       code.line("x := x + 1;");
     };
     code.build()
@@ -44,7 +44,7 @@ fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, typeId: u64): un
   switch typeSchema(typeId) {
     .Struct(s) -> {
       code.line("w.writeChar('{{');");
-      for f in s.fields do {
+      for f in s.fields {
 
         let fieldLetName = `_{name}{f.name}`;
 

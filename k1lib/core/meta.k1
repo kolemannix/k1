@@ -6,7 +6,7 @@ ns meta {
   ability CodeWriter {
     fn line(self: Self, line: string): unit 
     fn lines[Iter: Iterator[Item = string]](self: Self, lines: Iter): unit {
-      for l in lines do { self.line(l) }
+      for l in lines { self.line(l) }
     }
     fn var[T](self: Self, name: string, value: T): unit 
   }
@@ -45,7 +45,7 @@ ns meta {
 
     let* code = StringBuilder/new();
     code.line("deftype {name} = {{");
-    for f in fields do {
+    for f in fields {
       code.line("  ARR_{f.name}: List[typeFromId({f.typeId})],");
     };
     code.line("}");
@@ -56,7 +56,7 @@ ns meta {
     // begin fn get
     code.line(`  fn get(self: {name}, index: size): {tt} {{`);
     code.line(`    let* ret: *mut {tt} = mem/zeroed();`);
-    for f in fields do {
+    for f in fields {
       code.line(`    ret.{f.name}* <- self.ARR_{f.name}.get(index);`)
     };
     code.line(`    ret.*`);
@@ -64,14 +64,14 @@ ns meta {
 
     // begin fn empty
     code.line(`  fn empty(): {name} {{ {{`);
-    for f in fields do {
+    for f in fields {
       code.line(`    ARR_{f.name}: List/empty(),`);
     };
     code.line(`  } }`); // end fn empty
 
     // begin fn push
     code.line(`  fn push(self: *mut {name}, value: {tt}): unit {{`);
-    for f in fields do {
+    for f in fields {
       code.line(`    self.ARR_{f.name}*.push(value.{f.name});`)
     };
     code.line(`}`); // end fn push

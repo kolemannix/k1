@@ -115,9 +115,9 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn display_type_id(
+    pub fn display_type_id<W: fmt::Write + ?Sized>(
         &self,
-        writ: &mut impl Write,
+        writ: &mut W,
         ty: TypeId,
         expand: bool,
     ) -> std::fmt::Result {
@@ -153,9 +153,9 @@ impl TypedProgram {
         s
     }
 
-    fn display_instance_info(
+    fn display_instance_info<W: fmt::Write + ?Sized>(
         &self,
-        w: &mut impl Write,
+        w: &mut W,
         spec_info: &GenericInstanceInfo,
         expand: bool,
     ) -> std::fmt::Result {
@@ -171,9 +171,9 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn display_type_ext(
+    fn display_type_ext<W: fmt::Write + ?Sized>(
         &self,
-        w: &mut impl Write,
+        w: &mut W,
         type_id: TypeId,
         expand: bool,
     ) -> std::fmt::Result {
@@ -385,9 +385,9 @@ impl TypedProgram {
         }
     }
 
-    fn display_struct_fields(
+    fn display_struct_fields<W: fmt::Write + ?Sized>(
         &self,
-        writ: &mut impl Write,
+        writ: &mut W,
         struc: &StructType,
         expand: bool,
     ) -> std::fmt::Result {
@@ -749,7 +749,11 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_static_value(&self, w: &mut impl Write, id: StaticValueId) -> std::fmt::Result {
+    pub fn display_static_value<W: Write + ?Sized>(
+        &self,
+        w: &mut W,
+        id: StaticValueId,
+    ) -> std::fmt::Result {
         match self.static_values.get(id) {
             StaticValue::Unit => w.write_str("()"),
             StaticValue::Bool(b) => write!(w, "{}", *b),
@@ -821,9 +825,9 @@ impl TypedProgram {
         }
     }
 
-    fn display_static_items(
+    fn display_static_items<W: Write + ?Sized>(
         &self,
-        w: &mut impl Write,
+        w: &mut W,
         elements: &[StaticValueId],
     ) -> std::fmt::Result {
         write!(w, "[")?;
@@ -1143,7 +1147,7 @@ impl TypedProgram {
         s
     }
 
-    pub fn write_ident(&self, w: &mut impl Write, ident: Ident) -> std::fmt::Result {
+    pub fn write_ident<W: Write + ?Sized>(&self, w: &mut W, ident: Ident) -> std::fmt::Result {
         w.write_str(self.ident_str(ident))
     }
 
@@ -1272,5 +1276,99 @@ impl TypedProgram {
             writeln!(w)?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct K1DisplayArgs {
+    /// What exactly this does for each type is up to the implementor
+    pub verbose: bool,
+    pub user_facing: bool,
+}
+impl K1DisplayArgs {
+    pub const fn user_facing() -> Self {
+        Self { verbose: false, user_facing: true }
+    }
+    pub const fn verbose() -> Self {
+        Self { verbose: true, user_facing: false }
+    }
+}
+
+pub trait DepDisplay<Dep, Args> {
+    fn fmt(&self, w: &mut dyn Write, dep: &Dep, args: &Args) -> std::fmt::Result;
+}
+
+impl<D, A, T> DepDisplay<D, A> for &T
+where
+    T: DepDisplay<D, A> + ?Sized,
+{
+    fn fmt(&self, w: &mut dyn Write, dep: &D, args: &A) -> std::fmt::Result {
+        (**self).fmt(w, dep, args)
+    }
+}
+
+use core::fmt;
+
+pub struct DepFmt<'d, 'a, 'v, D, A, T: ?Sized> {
+    value: &'v T,
+    dep: &'d D,
+    args: &'a A,
+}
+
+impl<'d, 'a, 'v, D, A, T: ?Sized> fmt::Display for DepFmt<'d, 'a, 'v, D, A, T>
+where
+    T: DepDisplay<D, A>,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f, self.dep, self.args)
+    }
+}
+
+pub fn depfmt<'d, 'a, 'v, D, A, T: ?Sized>(
+    dep: &'d D,
+    args: &'a A,
+    value: &'v T,
+) -> DepFmt<'d, 'a, 'v, D, A, T> {
+    DepFmt { value, dep, args }
+}
+
+impl<D, A> DepDisplay<D, A> for str {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for MStr<MemTmp> {
+    fn fmt(
+        &self,
+        w: &mut dyn Write,
+        _k1: &TypedProgram,
+        _args: &K1DisplayArgs,
+    ) -> std::fmt::Result {
+        w.write_str(self.as_str())
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for Ident {
+    fn fmt(&self, w: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
+        w.write_str(k1.ident_str(*self))
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
+        k1.display_type_ext(f, *self, args.verbose)
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for StaticValueId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
+        k1.display_static_value(f, *self)
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for u32 {
+    fn fmt(&self, f: &mut dyn Write, _k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
+        write!(f, "{self}")
     }
 }

@@ -70,15 +70,15 @@ fn main(): i32 {
   let mut goodGamesSum: u64 = 0;
 
   // TODO: use `List.filter`
-  for line in input.splitByChar('\n') do {
+  for line in input.splitByChar('\n') {
     let id = it_index + 1;
     let line = line.splitByChar(':').get(1);
     let mut isGoodGame = true;
-    for round in line.splitByChar(';') do {
+    for round in line.splitByChar(';') {
 
       // Parse the puzzle input
       let values = round.splitByChar(',');
-      let values: List[{ amount: int, color: Color }] = for value in values yield {
+      let values: List[{ amount: int, color: Color }] = values.map(\value. {
         let amountColor = value.splitByChar(' ');
         let amount = amountColor.get(0).toInt() ? crash("Bad amount: \{value}");
         let color: Color = switch amountColor.get(1) {
@@ -88,10 +88,10 @@ fn main(): i32 {
           c -> crash("Unexpected color: \{c}")
         };
         { amount: amount, color: color }
-      };
+      });
 
       // Solve the puzzle; detect 'bad games'
-      for value in values do {
+      for value in values {
         let colorSupply = switch value.color {
           .Red -> supply.red,
           .Green -> supply.green,

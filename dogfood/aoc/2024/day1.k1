@@ -6,7 +6,7 @@ fn main(): i32 {
   // let* left = Array/new[int]();
   let* right = Array/new[int]();
 
-  for line in input.splitByChar('\n') do {
+  for line in input.splitByChar('\n') {
     left.push(line.substring(0, 5).toInt().!);
     right.push(line.substring(8, 13).toInt().!);
   };
@@ -15,7 +15,7 @@ fn main(): i32 {
   right.sort();
 
   let sumDiffs = 0;
-  for l in left.* do {
+  for l in left.* {
     let r = right.*.get(itIndex);
     let diff = if l > r l - r else r - l;
     sumDiffs := sumDiffs + diff;

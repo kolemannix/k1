@@ -52,7 +52,7 @@ fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> ?T): ?T {
 }
 
 fn runThings(thunks: List[dyn[\()-> unit]]): unit {
-  for thunk in thunks do { thunk() }
+  for thunk in thunks { thunk() }
 }
 
 fn thunksTest(): unit {

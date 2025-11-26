@@ -901,18 +901,11 @@ pub struct ParsedLoopExpr {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForExprType {
-    Yield,
-    Do,
-}
-
 #[derive(Debug, Clone)]
 pub struct ForExpr {
     pub iterable_expr: ParsedExprId,
     pub binding: Option<Ident>,
     pub body_block: ParsedBlock,
-    pub expr_type: ForExprType,
     pub span: SpanId,
 }
 
@@ -3324,29 +3317,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     return Err(error("Expected identifiers between for and in keywords", second));
                 }
                 let binding_ident = self.intern_ident_token(second);
-                self.advance();
-                self.advance();
+                self.advance_n(2);
                 Some(binding_ident)
             } else {
                 None
             };
             let iterable_expr = self.expect_expression()?;
-            let expr_type_keyword = self.tokens.peek();
-            let for_expr_type = if expr_type_keyword.kind == K::KeywordYield {
-                Ok(ForExprType::Yield)
-            } else if expr_type_keyword.kind == K::KeywordDo {
-                Ok(ForExprType::Do)
-            } else {
-                Err(error("Expected yield or do keyword", expr_type_keyword))
-            }?;
-            self.advance();
             let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
             let span = self.extend_span(first.span, body_expr.span);
             Ok(Some(self.add_expression(ParsedExpr::For(ForExpr {
                 iterable_expr,
                 binding,
                 body_block: body_expr,
-                expr_type: for_expr_type,
                 span,
             }))))
         } else if first.kind.is_prefix_operator() {

@@ -9,7 +9,7 @@ deftype Todo = {
 fn hasId[T](): bool {
   let info = typeInfo[T]();
   require info is .Struct(s) else { crash("Only structs are supported") };
-  for s.fields do {
+  for s.fields {
     if it.name == "id" or it.name == "ID" return true
   };
   false

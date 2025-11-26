@@ -30,11 +30,11 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
           crash("Mismatching format arg count")
         };
 
-        for field in fields do {
+        for field in fields {
           code.line("let f{itIndex} = args.{field.name};")
         };
 
-        for part in parts do {
+        for part in parts {
           code.line("parts.get({itIndex}).printTo(result);");
           code.line("f{itIndex}.printTo(result);");
         };
@@ -85,7 +85,7 @@ fn test(): unit {
 //fn fmt[W: Writer, S: static FmtString, Args](writer: W, fmtString: S, args: Args): unit {
 //  let* sb = StringBuilder/new();
 //  let argsCount = 
-//  for p in s.parts do { 
+//  for p in s.parts { 
 //    switch p {
 //      .String(s) -> { 
 //        // format("?.writeString(?)");

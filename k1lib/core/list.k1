@@ -229,7 +229,7 @@ ns List {
     let* right = List/withCapacity[T](halfIndex);
     let* equal = List/withCapacity[T](4);
   
-    for item in input.* do {
+    for item in input.* {
       switch item.compare(pivot) {
         .Less -> left.push(item),
         .Equal -> equal.push(item),
@@ -241,17 +241,17 @@ ns List {
     right.sort();
   
     let i = 0;
-    for item in left.* do {
+    for item in left.* {
       input.set(i, item);
       i := i + 1;
     };
   
-    for item in equal.* do {
+    for item in equal.* {
       input.set(i, item);
       i := i + 1;
     };
   
-    for item in right.* do {
+    for item in right.* {
       input.set(i, item);
       i := i + 1;
     };
@@ -266,7 +266,7 @@ ns List {
   // TODO(stdlib) remove or tweak this; assumes global allocation
   fn join[T: Show](self: List[T], sep: string): string {
     let* b = StringBuilder/new();
-    for s in self do {
+    for s in self {
       b.writeString(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
@@ -276,21 +276,33 @@ ns List {
     b.build()
   }
 
+  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some \T -> U): List[U]
+  where Iter: Iterator[Item = T], Iterable: Iterable[Item = T, I = Iter]
+  {
+    let* iter = input.iterator();
+    let* us = List/withCapacity[U](iter.sizeHint().atLeast);
+    for iter.* {
+      let u = f(it);
+      us.push(u)
+    };
+    us.*
+  }
+
   fn map[T, U](self: List[T], f: some \T -> U): List[U] {
     let* us = List/withCapacity[U](self.len);
-    for i in self do { us.push[U](f(i)) };
+    for i in self { us.push[U](f(i)) };
     us.*
   }
   
   fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
     let* us = List/empty[U]();
-    for i in self do { us.appendList[U](f(i)) };
+    for i in self { us.appendList[U](f(i)) };
     us.*
   }
   
   fn filter[T](self: List[T], f: some \T -> bool): List[T] {
     let* keep = List/empty[T]();
-    for i in self do { if f(i) keep.push(i) };
+    for i in self { if f(i) keep.push(i) };
     keep
   }
 
@@ -319,7 +331,7 @@ impl Equals for List[int] {
 impl[T: Equals] Equals for List[T] {
   fn equals(self: List[T], other: List[T]): bool {
     if self.len != other.len false else {
-      for a in self do {
+      for a in self {
         let b = other.get(itIndex);
         if a != b return(false);
       };
@@ -331,7 +343,7 @@ impl[T: Equals] Equals for List[T] {
 impl[T: Print] Print for List[T] {
   fn printTo[W: Writer](self: List[T], w: W): unit {
     w.writeChar('[');
-    for self do {
+    for self {
       it.printTo(w);
       let last = itIndex == self.len - 1;
       if not last {

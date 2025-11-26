@@ -27,7 +27,7 @@ fn fnv1a_hash(key: string): u64 {
   let FNV_PRIME: u64 = 1099511628211;
   let FNV_OFFSET: u64 = 14695981039346656037;
   let hash_value = FNV_OFFSET;
-  for c in key do {
+  for c in key {
     hash_value := Bitwise/xor(hash_value, c as u8 as u64);
     hash_value := hash_value * FNV_PRIME;
   };
@@ -52,7 +52,7 @@ ns HashMap {
     let newMap = _make[V](newCap);
     self <- newMap;
 
-    for v in oldEntries do {
+    for v in oldEntries {
       if v is .Some(v) {
         if not v.deleted self.insert(v.key, v.value)
       }
@@ -181,7 +181,7 @@ ns HashMap {
     let capacity = self.entries.len;
     let size = self.size;
     println("Size: {size}, Capacity: {capacity}");
-    for self.entries do {
+    for self.entries {
       print("  SLOT {itIndex}: ");
       switch it {
         .None -> println("empty"),

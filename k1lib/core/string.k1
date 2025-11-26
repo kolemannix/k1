@@ -67,7 +67,7 @@ ns string {
 
 
   fn indexOf(self: string, c: char): i64 {
-    for self.view do {
+    for self.view {
       if it == c return(itIndex)
     };
     -1
@@ -92,7 +92,7 @@ ns string {
     let* ranges = List/empty[{ start: size, len: size }]();
     let* r = { start: 0: size, len: 0: size };
 
-    for c in self do {
+    for c in self {
       if c == delim {
         if r.len != 0 {
           ranges.push(r);
@@ -107,14 +107,14 @@ ns string {
       ranges.push(r);
     };
 
-    for range in ranges yield {
+    ranges.map(\range. {
       let end = range.start + range.len;
       self.substring(range.start, end)
-    }
+    })
   }
 
   fn indexOfString(self: string, target: string): ?size {
-    for self.view do {
+    for self.view {
       let i = itIndex;
       if i + target.len() >= self.len() {
         return(.None)

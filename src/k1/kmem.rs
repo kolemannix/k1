@@ -19,15 +19,22 @@
 /// 48 bits for the offset and 16 for the length
 use smallvec::SmallVec;
 
-use crate::static_assert_size;
+use crate::{static_assert_size, typer::dump::DepDisplay};
 macro_rules! fuckit {
     ($($t:tt)*) => {
         unsafe { $($t)* }
     };
 }
 
-use core::mem::{align_of, size_of};
-use std::{marker::PhantomData, num::NonZeroU32, ops::{Deref, DerefMut}};
+use core::{
+    fmt,
+    mem::{align_of, size_of},
+};
+use std::{
+    marker::PhantomData,
+    num::NonZeroU32,
+    ops::{Deref, DerefMut},
+};
 /// Use 'Tag' to meaningfully identify the arena to help
 /// prevent mixups
 pub struct Mem<Tag = ()> {
@@ -109,7 +116,10 @@ impl<T, Tag> MSlice<T, Tag> {
     }
 }
 
-pub struct MStr<Tag>(pub MSlice<u8, Tag>);
+pub struct MStr<Tag> {
+    bytes: *const [u8],
+    _tag: PhantomData<Tag>,
+}
 impl<Tag> Copy for MStr<Tag> {}
 impl<Tag> Clone for MStr<Tag> {
     fn clone(&self) -> Self {
@@ -118,12 +128,29 @@ impl<Tag> Clone for MStr<Tag> {
 }
 
 impl<Tag> MStr<Tag> {
+    pub fn from_static(s: &'static str) -> Self {
+        Self { bytes: s.as_bytes(), _tag: PhantomData }
+    }
+
     pub fn empty() -> Self {
-        Self(MSlice::empty())
+        Self { bytes: "".as_bytes(), _tag: PhantomData }
+    }
+
+    fn make(bytes: *const [u8]) -> Self {
+        Self { bytes, _tag: PhantomData }
+    }
+
+    fn from_parts(data: *const u8, len: usize) -> Self {
+        let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+        Self { bytes, _tag: PhantomData }
     }
 
     pub fn len(&self) -> u32 {
-        self.0.len()
+        self.bytes.len() as u32
+    }
+
+    pub fn as_str(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(&*self.bytes) }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -131,15 +158,38 @@ impl<Tag> MStr<Tag> {
     }
 }
 
-struct MemWriter<'a, Tag> {
-    mem: &'a mut Mem<Tag>,
+impl<Tag> AsRef<str> for MStr<Tag> {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
-impl<'a, Tag> std::fmt::Write for MemWriter<'a, Tag> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        #[cfg(debug_assertions)]
-        let start = self.mem.cursor;
 
-        let bytes = self.mem.pushn_raw(s.as_bytes());
+impl<Tag> std::fmt::Display for MStr<Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = self.as_str();
+        write!(f, "{}", s)
+    }
+}
+
+impl<AnyTag> From<&'static str> for MStr<AnyTag> {
+    fn from(s: &'static str) -> Self {
+        MStr::<AnyTag>::from_static(s)
+    }
+}
+
+/// We avoid the borrow checker here in MemWriter
+/// since we sometimes need access to the `Mem` and to other data
+/// at the same time; see `Mem::format_all`
+pub struct MemWriter<Tag> {
+    mem: *mut Mem<Tag>,
+}
+impl<Tag> std::fmt::Write for MemWriter<Tag> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let mem = unsafe { &mut *self.mem };
+        #[cfg(debug_assertions)]
+        let start = mem.cursor;
+
+        let bytes = mem.pushn_raw(s.as_bytes());
         #[cfg(debug_assertions)]
         {
             let bytes_start = bytes.as_ptr();
@@ -353,21 +403,14 @@ impl<Tag> Mem<Tag> {
         MList { buf: raw_slice, len: 0, _tag: PhantomData }
     }
 
-    pub fn get_str(&self, s: MStr<Tag>) -> &str {
-        let bytes = self.getn(s.0);
-        unsafe { str::from_utf8_unchecked(bytes) }
-    }
-
     pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr<Tag> {
         let bytes = self.pushn_raw(s.as_ref().as_bytes());
-        let bytes_ptr = bytes.as_ptr();
-        let len = bytes.len() as u32;
-        MStr(MSlice::make(self.ptr_to_offset(bytes_ptr), len))
+        MStr::make(bytes)
     }
 
     // Zero-allocation formatted strings.
-    // Formats a string directly into our backing buffer, to avoid any extra allocations, then
-    // bumps cursor based on final length
+    // Formats a string directly into our backing buffer, then
+    // bump cursor based on final length
     pub fn format_str(&mut self, args: std::fmt::Arguments) -> MStr<Tag> {
         use std::fmt::Write;
 
@@ -378,7 +421,41 @@ impl<Tag> Mem<Tag> {
         if len < 0 {
             panic!("Cursor moved backwards in kmem::Mem::format_str");
         }
-        MStr(MSlice::make(self.ptr_to_offset(base), len as u32))
+        MStr::from_parts(base, len as usize)
+    }
+
+    pub fn format_all<D, A>(
+        &mut self,
+        dep: &D,
+        args: &A,
+        stuff: &[&dyn DepDisplay<D, A>],
+    ) -> MStr<Tag> {
+        let base: *const u8 = self.cursor;
+        let mut writer = MemWriter { mem: self };
+        for s in stuff.iter() {
+            DepDisplay::fmt(*s, &mut writer, dep, args).unwrap();
+        }
+        let len = unsafe { self.cursor.offset_from(base) };
+        if len < 0 {
+            panic!("Cursor moved backwards in kmem::Mem::format_str");
+        }
+        MStr::from_parts(base, len as usize)
+    }
+
+    pub fn format_with<D, A, F>(&mut self, dep: &D, args: &A, f: F) -> MStr<Tag>
+    where
+        F: FnOnce(&mut MemWriter<Tag>, &D, &A) -> fmt::Result,
+    {
+        let base: *const u8 = self.cursor;
+        let mut writer = MemWriter { mem: self };
+
+        f(&mut writer, dep, args).unwrap();
+
+        let len = unsafe { self.cursor.offset_from(base) };
+        if len < 0 {
+            panic!("Cursor moved backwards in Mem::format_with");
+        }
+        MStr::from_parts(base, len as usize)
     }
 
     pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
@@ -482,6 +559,24 @@ macro_rules! mformat {
     ($mem:expr, $($arg:tt)*) => {
         $mem.format_str(format_args!($($arg)*))
     };
+}
+
+#[macro_export]
+macro_rules! k1_format_user {
+    ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        k1_format!($k1, &K1DisplayArgs::user_facing(), $fmt, $($arg),*)
+    }};
+}
+
+#[macro_export]
+macro_rules! k1_format {
+    ($k1:expr, $args:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        #[allow(unused)]
+        $k1.get_tmp_unsafe().format_with($k1, $args, |w, dep, args| {
+            use core::fmt::Write as _;
+            write!(w, $fmt $(, $crate::typer::dump::depfmt(dep, args, &$arg))* )
+        })
+    }};
 }
 
 impl<Tag> Mem<Tag> {
