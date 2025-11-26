@@ -71,6 +71,20 @@ ns types {
 
   // DO NOT REORDER VARIANTS
   deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
+  ns IntKind {
+    fn bitWidth(self: IntKind): size {
+      switch self {
+        .U8  -> 8,
+        .U16 -> 16,
+        .U32 -> 32,
+        .U64 -> 64,
+        .I8  -> 8,
+        .I16 -> 16,
+        .I32 -> 32,
+        .I64 -> 64,
+      }
+    }
+  }
 
   // DO NOT REORDER VARIANTS
   deftype IntValue = either
@@ -116,10 +130,11 @@ ns types {
       returnTypeId: u64,
     }),
     FunctionPointer({ functionTypeId: u64 }),
+    Never,
+    // StaticScalar(),
     // TODO: lambda schema, lambda object schema
     // Lambda({ typeId: u64, functionTypeId: u64 }),
     // LambdaObject({ functionTypeId: u64 }),
-    Never,
     Other(string)
   )
 
@@ -164,6 +179,14 @@ ability Writer {
 
   fn writeChar(self: Self, value: char): unit { self.writeByte(value as u8) }
   fn writeString(self: Self, value: string): unit { self.writeBytes(value.viewBytes()) }
+
+  fn repeat(self: Self, value: string, n: size): unit {
+    let i = 0;
+    while i < n {
+      self.writeString(value);
+      i := i + 1;
+    }
+  }
 }
 
 ability Print {
@@ -529,6 +552,8 @@ impl Equals for ptr {
 
 ns bool {
   intern fn negated(self: bool): bool
+  fn as_u8(self: bool): u8 { if self 1u8 else 0u8 }
+  fn from_u8(value: u8): bool { value != 0u8 }
 }
 
 impl Equals for unit { fn equals(_self: unit, _other: unit): bool { true } }

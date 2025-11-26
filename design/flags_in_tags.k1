@@ -1,0 +1,29 @@
+// Manually encoded
+00 
+^ upper bit = rounded
+ ^ lower bit = even-sided
+deftype Shape = either(u8)
+  Circle({ radius: i32 }) = 0b11,
+  Oval({ radiusx: i32, radiusy: i32}) = 0b10,
+  Square({ len: i32 }) = 0b01,
+  Rect({ lenx: i32, leny: i32 }) = 0b00
+
+// Automatically encoded using 'flags' declarations
+deftype Shape = {
+  // Common
+  id: string, zIndex: int, 
+  // Variants
+  kind: either(
+    tag_type = u32,
+    flags = [rounded, even]
+  ) {
+    Circle({ radius: i32 }, [rounded, even]),
+    Oval({ radiusx: i32, radiusy: i32}, [rounded]),
+    Square({ len: i32 }, ),
+    Rect({ lenx: i32, leny: i32 })
+  }
+}
+// We then assign a bit to each flag, and generate unique tag values that satisfy the flags of each variant
+  x: Shape
+  x.rounded >>
+  x.tag & 0b00000010 == 0b00000010

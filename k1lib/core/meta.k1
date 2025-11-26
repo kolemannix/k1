@@ -9,6 +9,23 @@ ns meta {
       for l in lines { self.line(l) }
     }
     fn var[T](self: Self, name: string, value: T): unit 
+
+    fn indent(self: Self, n: size): unit {
+      self.repeat("  ", n);
+    }
+    fn implPrint(self: Self, typeName: string, body: string, indent: size): unit {
+      self.indent(indent);
+      self.line("impl Print for {typeName} {{");
+
+      self.indent(indent + 1);
+      self.line("fn printTo[W: Writer](self: Self, w: W): unit {{");
+      self.writeString(body);
+      self.indent(indent + 1);
+      self.line("}");
+
+      self.indent(indent);
+      self.line("}");
+    }
   }
   
   impl[W: Writer] CodeWriter for W {

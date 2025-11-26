@@ -194,13 +194,61 @@ ns char {
       .None
     }
   }
+
+  // mask to convert ASCII letters to uppercase
+  let ASCII_CASE_MASK: u8 = 0b0010_0000;
+  // Ported from Rust core library; todo wrapping_sub
+  //fn asDigit(self: char, radix: u32): ?u32 {
+  //  assert(radix >= 2 and radix <= 36);
+  //  let value = if self > '9' and radix > 10 {
+  //    self as u8
+  //  }
+
+  //}
+
+  fn isAscii(self: char): bool {
+    self as u8 <= 0x7F
+  }
+
+  fn isAsciiLetter(self: char): bool {
+    let s = self as u8;
+    (s >= 'a' as u8 and s <= 'z' as u8) or (s >= 'A' as u8 and s <= 'Z' as u8)
+  }
+
+  fn isAsciiDigit(self: char): bool {
+    let s = self as u8;
+    s >= '0' as u8 and s <= '9' as u8
+  }
+
+  fn isAsciiLower(self: char): bool {
+    let s = self as u8;
+    s >= 'a' as u8 and s <= 'z' as u8
+  }
+
+  fn isAsciiUpper(self: char): bool {
+    let s = self as u8;
+    s >= 'A' as u8 and s <= 'Z' as u8
+  }
+
+  fn toAsciiUpper(self: char): char {
+    // Toggle (clear) the 6th bit if we are ascii lower
+    let u8 = (self as u8).xor(ASCII_CASE_MASK * self.isAsciiLower().as_u8());
+    u8 as char
+  }
+
+  fn toAsciiLower(self: char): char {
+    // Set the 6th bit if we are ascii upper
+    let u8 = (self as u8).bitOr(ASCII_CASE_MASK * self.isAsciiUpper().as_u8());
+    u8 as char
+  }
+
 }
 
 impl[T: Print] Show for T {
   fn show(self: Self): string { 
-    let* charList = List/empty[char]();
-    self.printTo(charList);
-    string/wrapList(charList)
+    let* sb = StringBuilder/new();
+    self.printTo(sb);
+    sb.build()
   }
 }
 
@@ -211,8 +259,9 @@ impl Print for bool {
     w.writeString(s)
   }
 }
-// Direct specialized 'show' impl to avoid going through a buffer
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
+
+// Direct specialized 'show' impl to avoid going through a buffer
 impl Print for char { fn printTo[W: Writer](self: char, w: W): unit { w.writeChar(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
 impl Show for char { fn show(self: char): string { self.toString() } }
@@ -373,6 +422,40 @@ ns u8 {
   fn toAsciiDigit(v: u8): char {
     (v + 48) as char
   }
+}
+
+ns i64 {
+  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF;
+  fn nextPow2(self: i64): i64 {
+    // TODO: We could call ctlz instead when available
+    if self < 0 crash("i64/nextPow2: value must be positive") else
+    if self == 0 return(1);
+
+    let next = (self as u64).nextPow2();
+    if next > i64/maxValue as u64 {
+      crash("i64/nextPow2: value too large to fit in i64")
+    };
+    next as i64
+  }
+}
+
+ns u64 {
+  fn nextPow2(self: u64): u64 {
+    let v = self - 1;
+    v := v.bitOr(v.shiftRight(1));
+    v := v.bitOr(v.shiftRight(2));
+    v := v.bitOr(v.shiftRight(4));
+    v := v.bitOr(v.shiftRight(8));
+    v := v.bitOr(v.shiftRight(16));
+    v := v.bitOr(v.shiftRight(32));
+    v + 1
+  }
+
+  fn bitmaskLow(n: size): u64 {
+    assert(n <= 64);
+    1usize.shiftLeft((n) as u32) - 1
+  }
+
 }
 
 ns k1rt {

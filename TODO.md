@@ -20,6 +20,7 @@ Non-major Ideas
 - [ ] userland: CCompatString which is a valid c string with prefixed length
 - [ ] Implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc)
+- [ ] "Flags in Tags"
 - [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
