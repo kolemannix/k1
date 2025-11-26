@@ -3499,15 +3499,15 @@ impl TypedProgram {
                     EvalExprContext::make(scope_id).with_expected_type(Some(U64_TYPE_ID)),
                 )?;
                 let TypedExpr::StaticValue(static_const) = self.exprs.get(id_expr_id) else {
-                    self.ice_with_span(
-                        "Expected an integer expression for TypeFromId",
+                    return failf!(
                         type_from_id.span,
+                        "Expected an integer expression for TypeFromId",
                     );
                 };
                 let StaticValue::Int(TypedIntValue::U64(u64_value)) =
                     self.static_values.get(static_const.value_id)
                 else {
-                    self.ice_with_span("Expected a u64 value for TypeFromId", type_from_id.span)
+                    return failf!(type_from_id.span, "Expected a u64 value for TypeFromId");
                 };
                 let Some(type_id) = TypeId::from_u32(*u64_value as u32) else {
                     return failf!(type_from_id.span, "Type ID {} is out of bounds", u64_value);
@@ -12216,8 +12216,12 @@ impl TypedProgram {
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get_type(rhs);
                 if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
-                    return failf!(assignment.span, "Invalid type for assignment: {}", msg,);
+                    return failf!(assignment.span, "Invalid type for assignment: {}", msg);
                 }
+                // nocommit: Ensure this cannot be a capture expr
+                // nocommit: Only usage of a variable is being captured
+                //           Capture counts as usage
+
                 self.variables
                     .get_mut(typed_variable_id)
                     .flags

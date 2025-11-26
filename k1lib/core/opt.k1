@@ -51,7 +51,7 @@ impl[T: Equals] Equals for Opt[T] {
 }
 
 impl[A] Try[T = A, E = unit] for Opt[A] {
-  fn error(e: unit): Opt[T] { .None }
+  fn error(_e: unit): Opt[T] { .None }
   fn value(t: T): Opt[T] { Opt.Some(t) }
 
   fn isOk(self: Opt[T]): bool { self is .Some(_) }

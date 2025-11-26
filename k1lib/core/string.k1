@@ -18,7 +18,7 @@ ns string {
     self.view().asByteView()
   }
 
-  fn clone(self: string): string {
+  fn cloned(self: string): string {
     fromView(self.view.cloned())
   }
 
@@ -198,6 +198,14 @@ ns string {
     some(
       if neg { total * -1 } else { (total) }
     )
+  }
+
+  fn capitalizeAscii(self: string): string {
+    if self.first() is .Some(c) and c.isAsciiLower() {
+      let cloneChars: Buffer[char] = self.view.buffer.cloned();
+      cloneChars.set(0, c.toAsciiUpper());
+      wrapBuffer(cloneChars)
+    } else self
   }
 
 }
