@@ -131,7 +131,7 @@ impl[T] Iterable[Item = T, I = BufferIterator[T]] for View[T] {
 impl[T: Print] Print for View[T] {
   fn printTo[W: Writer](self: Self, w: W): unit {
     w.writeChar('[');
-    for self do {
+    for self {
       it.printTo(w);
       let last = itIndex == self.len() - 1;
       if not last {

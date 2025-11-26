@@ -2658,7 +2658,7 @@ pub fn display_block(
     let block = bc.mem.get_nth(unit.blocks, block_id as usize);
     write!(w, "b{} ", block_id)?;
     if !block.name.is_empty() {
-        w.write_str(bc.mem.get_str(block.name))?;
+        w.write_str(block.name.as_ref())?;
     }
     writeln!(w)?;
     for inst_id in bc.mem.getn(block.instrs).iter() {
@@ -2673,7 +2673,7 @@ pub fn display_block(
         display_inst(w, k1, bc, *inst_id)?;
         let comment = bc.comments.get(*inst_id);
         if !comment.is_empty() {
-            write!(w, " ; {}", bc.mem.get_str(*comment))?;
+            write!(w, " ; {}", comment)?;
         }
         writeln!(w)?;
     }

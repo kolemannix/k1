@@ -16,7 +16,7 @@ ns type_schema {
     let* sb = core/StringBuilder/new();
     let name = typeName(id);
     sb.writeString("Struct {name} {{\n");
-    for field in fields do {
+    for field in fields {
       sb.writeString("  ");
       sb.writeString(field.name);
       sb.writeString(": ");

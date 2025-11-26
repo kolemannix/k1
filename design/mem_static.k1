@@ -112,11 +112,11 @@ fn main(): i32 {
    println("debug? {debug}");
    {
      let b = myFilledIn[int](size = 5, value = 42);
-     for i in b do {
+     for i in b {
        println("{i}");
      };
      let b2 = myFilledIn[int](size = 5, value = 49);
-     for i in b2 do {
+     for i in b2 {
        println("{i}");
      };
    };

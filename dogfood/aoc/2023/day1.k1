@@ -3,7 +3,7 @@ fn day2(): int {
   let lines = input.splitByChar('\n');
   let lineDigits = for line in lines yield {
     let* digits: List[i64]* = [];
-    for c in line do {
+    for c in line {
       let thisDigit: ?i64 = if c.toAsciiDigit() is .Some(d) {
         .Some(d as i64)
       } else {
@@ -27,7 +27,7 @@ fn day2(): int {
     *digits
   };
   let sum = 0;
-  for lineDigits do {
+  for lineDigits {
     if it.first() is .Some(fst) {
       if it.last() is .Some(lst) {
         let two_digit = fst * 10 + lst;
@@ -47,7 +47,7 @@ fn main(): i32 {
   let* digits: List[List[int]]* = [];
   let line: u64 = 0;
   let first = true;
-  for c in input do {
+  for c in input {
     if c == '\n' {
       line := line + 1;
       first := true;
@@ -62,7 +62,7 @@ fn main(): i32 {
     };
   };
   let sum = 0;
-  for *digits do {
+  for *digits {
     if it.first() is .Some(fst) {
       if it.last() is .Some(lst) {
         let two_digit = fst * 10 + lst;

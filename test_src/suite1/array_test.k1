@@ -21,7 +21,7 @@ fn testFilled(): unit {
   assertEquals(buffer.len, 64);
   assertEquals(array.len(), 64);
   assertEquals(list.len, 64);
-  for buffer do {
+  for buffer {
     assertEquals(buffer.get(itIndex), 3);
     assertEquals(list.get(itIndex), 3);
     assertEquals(array.get(itIndex), 3);
@@ -33,10 +33,10 @@ fn testArray(): unit {
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
   let a: *mut Array[u8, 10] = List/copyToArray(ls, 10);
-  for core/IntRange/upTo(a.len()) do {
+  for core/IntRange/upTo(a.len()) {
     if it % 2 == 0 { a.getRef(it) <- 1 };
   };
-  for core/IntRange/upTo(a.len()) do {
+  for core/IntRange/upTo(a.len()) {
     if it % 2 == 0 {
       assertEquals(a.get(it), 1);
     } else {

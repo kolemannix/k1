@@ -67,7 +67,7 @@ impl Show for Square {
 
 
 fn dump(board: List[SquareState]): unit {
-  for square in board do {
+  for square in board {
     let symbol = square.charSymbol();
     if itIndex % 8 == 7 {
       println("{symbol}");

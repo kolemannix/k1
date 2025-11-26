@@ -1,8 +1,8 @@
 fn unique(arr: Buffer[char]): bool {
   let* seen: List[char]* = [];
   let ret = true;
-  for c in arr do {
-    for s in seen.* do {
+  for c in arr {
+    for s in seen.* {
       if c == s {
           ret := false;
       }
@@ -14,7 +14,7 @@ fn unique(arr: Buffer[char]): bool {
 
 fn solve(): int {
   let input = "bvwbjplbgvbhsrlpgdmjqwftvncz";
-  for input do {
+  for input {
     let i = itIndex;
     let sub = input.substring(i, i + 4);
     if unique(sub.innerBuffer()) {

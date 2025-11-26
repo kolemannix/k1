@@ -483,9 +483,9 @@ impl Scopes {
         name
     }
 
-    pub fn display_scope_name(
+    pub fn display_scope_name<W: std::fmt::Write + ?Sized>(
         &self,
-        name_buf: &mut impl std::fmt::Write,
+        name_buf: &mut W,
         scope: &Scope,
         identifiers: &IdentPool,
     ) -> std::fmt::Result {

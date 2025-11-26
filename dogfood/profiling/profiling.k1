@@ -104,7 +104,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64): unit {
-    for anchor in global_profiler_anchors.asBuffer().refIter() do {
+    for anchor in global_profiler_anchors.asBuffer().refIter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }
@@ -138,7 +138,7 @@ fn cheap_computation(n: int): int {
   defer end_profile_block(block);
     
   let result = 0;
-  for IntRange/upTo(n) do {
+  for IntRange/upTo(n) {
     if itIndex % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
@@ -151,7 +151,7 @@ fn expensive_computation(n: int): int {
   defer end_profile_block(block);
     
   let result = 0;
-  for IntRange/upTo(n) do {
+  for IntRange/upTo(n) {
     if itIndex % 2 == 0 { result := result + 3 }
     else { result := result - 2 }
   };
@@ -169,7 +169,7 @@ fn main(): i32 {
   defer end_profile_block(main_block);
   
   let result = 0;
-  for IntRange/upTo(10) do {
+  for IntRange/upTo(10) {
     result := result + expensive_computation(10_000_000);
   };
 

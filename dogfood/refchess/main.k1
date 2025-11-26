@@ -79,7 +79,7 @@ fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
     // TODO(dogfood): formatUInt(base = 2) (also need padding specifier)
     //formatUInt(context writer)(valueAtRank(b, rank as u64), base = 2);
 
-    for square in IntRange/make(rankStart, rankStart + 8) do {
+    for square in IntRange/make(rankStart, rankStart + 8) {
       let bit = valueAtSquare(b, square as u64);
       writer.writeChar(u8/toAsciiDigit(bit as u8));
     };
@@ -112,7 +112,7 @@ ns GameState {
     let rank = 7;
     while rank >= 0 {
       let rankStart = rank * 8;
-      for i in IntRange/make(rankStart, rankStart + 8) do {
+      for i in IntRange/make(rankStart, rankStart + 8) {
         let i = i as u64;
         if isSet(self.wPawns, i) { writer.writeChar('P') }
         else if isSet(self.wKnights, i) { writer.writeChar('N') }

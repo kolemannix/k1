@@ -3725,8 +3725,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param.set_name("sret_ptr");
                 continue;
             }
-            let typed_param_record =
-                self.k1.mem.get_nth(typed_function.params, i - sret_offset);
+            let typed_param_record = self.k1.mem.get_nth(typed_function.params, i - sret_offset);
             let typed_param = if is_sret_param {
                 &FnParamType {
                     name: self.k1.ast.idents.get("ret").unwrap(),
@@ -3772,7 +3771,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 param_name,
                 typed_param_record.variable_id
             );
-            self.variable_to_value.insert(typed_param_record.variable_id, VariableValue::Direct { value: param });
+            self.variable_to_value
+                .insert(typed_param_record.variable_id, VariableValue::Direct { value: param });
         }
         match typed_function.intrinsic_type {
             Some(intrinsic_type) => {

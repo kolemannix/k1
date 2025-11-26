@@ -132,9 +132,7 @@ fn test(): unit {
 
   // lists
   let listLast = #static {
-    let inced = for [1,2,3,4,5] yield {
-      it + 1
-    };
+    let inced = [1,2,3,4,5].map(\it. it+1);
     inced.last()
   };
   assertEquals[?int](listLast, some(6));

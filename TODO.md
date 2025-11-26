@@ -5,14 +5,13 @@ New tagline? "C with typeclasses and tagged unions"
 IDEAS 11/13
 A let* that goes to the heap, mark/reset on function return. (function arenas)
 Similarly, put lambda environments in the (non-function) arena
-Add enum tags to the LLVM repr (they're opaque currently; this'll allow SROA to at least handle the tag stuff)
 Inline all small functions in typer or bc
 AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
 - let context(impl Alloc) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 
 More optimal final programs
-- [ ] Represent payload-less `either` types as ints not structs
+- [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
 - [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
 
@@ -32,10 +31,10 @@ Non-major Ideas
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
 Syntax/elegance
-- [ ] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
+- [x] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
-- [ ] Fix the builtin `for` ... `yield`. What about for ... push, but with
+- [ ] Replace the builtin for ... yield with a userspace function taking a lambda
 - [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
