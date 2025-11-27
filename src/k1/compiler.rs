@@ -373,8 +373,9 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
     let total_elapsed_ms = start_time.elapsed().as_millis();
-    if !p.non_errors.is_empty() {
-        eprintln!("Completed with {} warnings", p.non_errors.len());
+    let warning_count = p.errors.iter().filter(|e| e.level == ErrorLevel::Warn).count();
+    if warning_count > 0 {
+        eprintln!("Completed with {} warnings", warning_count);
     }
     p.print_timing_info(
         &src_path.to_string_lossy(),

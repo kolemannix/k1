@@ -148,12 +148,6 @@ impl Backend {
                     .iter()
                     .map(|e| error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)),
             );
-            all_errors.extend(
-                module
-                    .non_errors
-                    .iter()
-                    .map(|e| error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)),
-            )
         };
         all_errors
     }

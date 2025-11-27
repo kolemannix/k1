@@ -59,7 +59,7 @@ pub(super) fn handle_ffi_call(
             k1.vm_ffi_functions.insert(function_id, cif);
         }
         Some(mcif) => {
-            eprintln!("reusing cif");
+            debug!("reusing cif");
             cif = *mcif
         }
     };
