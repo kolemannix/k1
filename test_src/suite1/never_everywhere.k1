@@ -1,7 +1,7 @@
 ns never_everywhere;
 
 fn callArgument(): never { println(crash("call arg")) }
-fn letRhs(): unit { let x = crash("letRhs") }
+fn letRhs(): unit { let _x = crash("letRhs") }
 fn assgnRhs(): never { let x = 123; x := crash("assgn rhs") }
 // should fail to compile anyway
 // fn binopLhs(): never { crash("") + 4 }

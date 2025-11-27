@@ -19,6 +19,8 @@ ns Buffer {
 
   fn dataPtr[T](self: Buffer[T]): ptr { self.data as ptr }
 
+  fn len[T](self: Buffer[T]): size { self.len }
+
   ////////////////////////
   // Constructor functions
 
@@ -173,15 +175,14 @@ ns Buffer {
   }
 
   fn slice[T](self: Buffer[T], start: size, end: size): Buffer[T] {
-    if end < start or self.len == 0 {
+    let endClamp = if end > self.len self.len else end;
+    let newLen = endClamp - start;
+    if newLen <= 0 or self.len == 0 {
       return(empty[T]())
     };
-    if start >= self.len or start < 0 {
-      let len = self.len;
-      crash("slice start index out of bounds: {start}. length is: {len}")
+    if start < 0 or start >= self.len {
+      crash("slice start index out of bounds: {start}. length is: {self.len}")
     };
-    let end = if end > self.len self.len else end;
-    let newLen = end - start;
     let newBase = self.getRef(start);
     { len: newLen, data: newBase }
   }

@@ -1,7 +1,12 @@
-fn main(): i32 {
-
+fn testAll(): unit {
   hash_test/test();
   testFixList();
+  testBitfield();
+}
+fn main(): i32 {
+
+  #static testAll();
+  testAll();
 
   0
 }

@@ -1,0 +1,11 @@
+use std/bitfield/b1 use std/bitfield/bn
+#meta std/bitfield/define[u16]("FlagsAuto", [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, bn("foo", 8)])
+
+fn testBitfield(): unit {
+  let y: FlagsAuto = { bits: 0b1111_0000_1000_1101 };
+  let x: FlagsAuto = FlagsAuto/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
+  assertEquals(y.getShielded(), x.getShielded());
+  assertEquals(y.getCloaked(), x.getCloaked());
+  assertEquals(y.getDamaged(), x.getDamaged());
+  assertEquals(y.getSectorId(), x.getSectorId());
+}

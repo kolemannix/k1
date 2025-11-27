@@ -176,6 +176,7 @@ pub struct Vm {
     pub static_stack: Stack,
     pub stack: Stack,
     eval_span: SpanId,
+    compiler_messages: Vec<String>,
 }
 
 impl Vm {
@@ -199,6 +200,7 @@ impl Vm {
         self.stack.reset();
         self.static_stack.reset();
         self.globals.clear();
+        self.compiler_messages.clear();
 
         if let Some(mut arena) = arena_to_preserve {
             // Voila!
@@ -219,6 +221,7 @@ impl Vm {
             static_stack,
             stack,
             eval_span: SpanId::NONE,
+            compiler_messages: Vec::with_capacity(16),
         }
     }
 
@@ -529,7 +532,12 @@ pub fn execute_compiled_unit(
     k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
 
     if exit_code != 0 {
-        failf!(span, "Static execution exited with code: {}", exit_code)
+        failf!(
+            span,
+            "Static execution exited with code: {}.\nOutput:\n{}",
+            exit_code,
+            vm.compiler_messages.join("\n")
+        )
     } else {
         match top_ret_info {
             None => Ok(k1.static_values.unit_id()),
@@ -920,13 +928,17 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                         "Bad filename string passed to EmitCompilerMessage: {msg}"
                                     )
                                 })?;
-                            eprintln!(
+                            let message = format!(
                                 "[{}:{} {}] {}",
                                 filename,
                                 location.line,
                                 level_str,
                                 k1.get_string(message).color(color)
                             );
+
+                            eprintln!("{}", &message);
+                            vm.compiler_messages.push(message);
+
                             builtin_return!(Value(0))
                         }
                     },

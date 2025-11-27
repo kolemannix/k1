@@ -1557,7 +1557,7 @@ impl Display for ErrorLevel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TyperError {
     pub message: String,
     pub span: SpanId,
@@ -2348,7 +2348,6 @@ pub struct TypedProgram {
     pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
     pub errors: Vec<TyperError>,
-    pub non_errors: Vec<TyperError>,
     pub namespaces: Namespaces,
     pub abilities: VPool<TypedAbility, AbilityId>,
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
@@ -2517,7 +2516,6 @@ impl TypedProgram {
             type_names: FxHashMap::new(),
             scopes,
             errors: vec![],
-            non_errors: vec![],
             namespaces,
             abilities: VPool::make_with_hint("abilities", 2048),
             ability_impls: VPool::make_with_hint("ability_impls", 4096),
@@ -6380,6 +6378,8 @@ impl TypedProgram {
         &mut self,
         variable_expr_id: ParsedExprId,
         scope_id: ScopeId,
+        // Currently, only used to determine if this counts as a usage
+        is_assignment_lhs: bool,
     ) -> TyperResult<(VariableId, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
@@ -6413,12 +6413,20 @@ impl TypedProgram {
 
                 let v = self.variables.get(variable_id);
                 if is_capture {
+                    if is_assignment_lhs {
+                        return failf!(
+                            variable_name_span,
+                            "Cannot assign to captured variable '{}'. Declare it as a reference and use `<-` instead",
+                            self.ast.idents.get_name(variable.name.name)
+                        );
+                    }
                     if !variable.name.path.is_empty() {
                         return failf!(
                             variable_name_span,
                             "Should not capture namespaced things, I think?"
                         );
                     }
+
                     let fixup_expr_id = self.exprs.add(
                         TypedExpr::PendingCapture(PendingCaptureExpr {
                             captured_variable_id: variable_id,
@@ -6428,6 +6436,8 @@ impl TypedProgram {
                         variable_name_span,
                     );
                     self.scopes.add_capture(lambda_scope_id.unwrap(), variable_id, fixup_expr_id);
+
+                    self.variables.get_mut(variable_id).usage_count += 1;
                     Ok((variable_id, fixup_expr_id))
                 } else {
                     let expr = self.exprs.add(
@@ -6435,7 +6445,10 @@ impl TypedProgram {
                         v.type_id,
                         variable_name_span,
                     );
-                    self.variables.get_mut(variable_id).usage_count += 1;
+
+                    if !is_assignment_lhs {
+                        self.variables.get_mut(variable_id).usage_count += 1;
+                    }
                     Ok((variable_id, expr))
                 }
             }
@@ -7071,7 +7084,9 @@ impl TypedProgram {
                     self.exprs.add_static(static_value_id, type_to_use, is_typed_as_static, *span);
                 Ok(static_expr)
             }
-            ParsedExpr::Variable(_variable) => Ok(self.eval_variable(expr_id, ctx.scope_id)?.1),
+            ParsedExpr::Variable(_variable) => {
+                Ok(self.eval_variable(expr_id, ctx.scope_id, false)?.1)
+            }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
                 self.eval_field_access(&field_access, ctx, false)
@@ -7510,7 +7525,8 @@ impl TypedProgram {
                 false,
                 None,
             );
-            let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx.scope_id)?;
+            let (variable_id, variable_expr) =
+                self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get_type(variable_expr);
             match self.types.get_no_follow_static(variable_type) {
                 Type::Static(stat) => {
@@ -12043,7 +12059,7 @@ impl TypedProgram {
                 // These uses should always hit since we only do 1 pass inside function bodies, and
                 // at that point all symbols are resolvable
                 let Some(useable_symbol) =
-                    self.find_useable_symbol(ctx.scope_id, &parsed_use.target)?
+                    self.find_useable_symbol(ctx.scope_id, &parsed_use.target, true)?
                 else {
                     return failf!(
                         parsed_use.target.span,
@@ -12211,7 +12227,8 @@ impl TypedProgram {
                         "Value assignment destination must be a plain variable expression"
                     );
                 };
-                let (typed_variable_id, lhs) = self.eval_variable(assignment.lhs, ctx.scope_id)?;
+                let (typed_variable_id, lhs) =
+                    self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
                 let lhs_type = self.exprs.get_type(lhs);
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get_type(rhs);
@@ -14205,7 +14222,8 @@ impl TypedProgram {
         &mut self,
         scope_id: ScopeId,
         parsed_use_id: ParsedUseId,
-    ) -> TyperResult<()> {
+        fail_on_traverse_fail: bool,
+    ) {
         let parsed_use = *self.ast.uses.get_use(parsed_use_id);
         let status_entry = self.use_statuses.get(&parsed_use_id);
         let is_fulfilled = match status_entry {
@@ -14213,39 +14231,55 @@ impl TypedProgram {
             _ => false,
         };
         if is_fulfilled {
-            return Ok(());
+            return;
         }
         debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
-        let resolution =
-            if let Some(symbol) = self.find_useable_symbol(scope_id, &parsed_use.target)? {
-                self.scopes.add_use_binding(
-                    scope_id,
-                    symbol,
-                    parsed_use.alias.unwrap_or(parsed_use.target.name),
-                );
-                debug!("Inserting resolved use of {:?}", symbol);
-                UseStatus::Resolved(symbol)
-            } else {
-                debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
-                UseStatus::Unresolved(scope_id)
+        let find_result =
+            match self.find_useable_symbol(scope_id, &parsed_use.target, fail_on_traverse_fail) {
+                Err(e) => {
+                    self.report(e);
+                    return;
+                }
+                Ok(sym) => sym,
             };
+        let resolution = if let Some(symbol) = find_result {
+            self.scopes.add_use_binding(
+                scope_id,
+                symbol,
+                parsed_use.alias.unwrap_or(parsed_use.target.name),
+            );
+            debug!("Inserting resolved use of {:?}", symbol);
+            UseStatus::Resolved(symbol)
+        } else {
+            debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
+            UseStatus::Unresolved(scope_id)
+        };
 
         self.use_statuses.insert(parsed_use_id, resolution);
-        Ok(())
     }
 
     fn find_useable_symbol(
         &self,
         scope_id: ScopeId,
         name: &QIdent,
+        fail_on_traverse_fail: bool,
     ) -> TyperResult<Option<UseableSymbol>> {
-        let scope_id_to_search = self.scopes.traverse_namespace_chain(
+        let scope_id_to_search = match self.scopes.traverse_namespace_chain(
             scope_id,
             name.path,
             &self.namespaces,
             &self.ast.idents,
             name.span,
-        )?;
+        ) {
+            Err(e) => {
+                if fail_on_traverse_fail {
+                    return Err(e);
+                } else {
+                    return Ok(None);
+                }
+            }
+            Ok(s) => s,
+        };
         let scope_to_search = self.scopes.get_scope(scope_id_to_search);
 
         debug!(
@@ -14386,9 +14420,7 @@ impl TypedProgram {
 
         for &parsed_definition_id in parsed_definitions.iter() {
             if let ParsedId::Use(parsed_use_id) = parsed_definition_id {
-                if let Err(e) = self.eval_use_definition(namespace_scope_id, parsed_use_id) {
-                    self.report(e);
-                }
+                self.eval_use_definition(namespace_scope_id, parsed_use_id, true);
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
                 self.resolve_uses_in_namespace_recursively(namespace_id);
@@ -14608,6 +14640,12 @@ impl TypedProgram {
                 continue;
             }
             match *defn {
+                ParsedId::Use(parsed_use_id) => {
+                    // Attempting uses here will really only resolve things from pre/
+                    // or from other modules; stuff from this module will need to be
+                    // resolved by later passes
+                    self.eval_use_definition(namespace_scope_id, parsed_use_id, false);
+                }
                 ParsedId::Namespace(namespace_id) => {
                     if let Err(e) = self.declare_namespace_recursive(
                         namespace_id,
@@ -14771,6 +14809,7 @@ impl TypedProgram {
             None => &[][..],
             Some(id) => &[id],
         };
+
         self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, skip_defns)?;
 
         Ok(module_id)
@@ -14785,7 +14824,7 @@ impl TypedProgram {
         let mut err_writer = stderr();
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!(
                 "{} failed namespace declaration phase with {} errors",
                 self.program_name(),
@@ -14796,7 +14835,7 @@ impl TypedProgram {
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types");
         self.declare_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!(
                 "{} failed type definition phase with {} errors",
                 self.program_name(),
@@ -14805,7 +14844,7 @@ impl TypedProgram {
         }
 
         self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!("{} failed resolving uses with {} errors", self.program_name(), self.errors.len())
         }
 
@@ -14818,7 +14857,7 @@ impl TypedProgram {
             self.write_error(&mut err_writer, &e)?;
             self.errors.push(e);
         }
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!(
                 "{} failed type evaluation phase with {} errors",
                 self.program_name(),
@@ -14849,7 +14888,7 @@ impl TypedProgram {
         // Everything else declaration phase
         debug!(">> Pass 4 declare rest of definitions (functions, globals, abilities)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             eprintln!(
                 "{} failed declaration phase with {} errors, but I will soldier on.",
                 self.program_name(),
@@ -14864,7 +14903,7 @@ impl TypedProgram {
                 UseStatus::Resolved(_) => None,
             }));
         for (unresolved_use, scope_id) in self.tmp.getn(unresolved_uses) {
-            self.eval_use_definition(*scope_id, *unresolved_use)?;
+            self.eval_use_definition(*scope_id, *unresolved_use, true);
             let resolved = self.use_statuses.get(unresolved_use).unwrap().is_resolved();
             if !resolved {
                 let parsed_use = self.ast.uses.get_use(*unresolved_use);
@@ -14886,7 +14925,7 @@ impl TypedProgram {
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!(
                 "Module {} failed typechecking with {} errors",
                 self.program_name(),
@@ -14896,11 +14935,15 @@ impl TypedProgram {
 
         debug!(">> Pass 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
-        if !self.errors.is_empty() {
+        if self.error_count(&[ErrorLevel::Error]) > 0 {
             bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
         }
 
         Ok(())
+    }
+
+    fn error_count(&self, kinds: &[ErrorLevel]) -> usize {
+        self.errors.iter().filter(|e| kinds.contains(&e.level)).count()
     }
 
     fn assert_builtin_types_correct(&self) {
@@ -15349,7 +15392,7 @@ impl TypedProgram {
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
-            self.eval_use_definition(scope, use_id)?;
+            self.eval_use_definition(scope, use_id, true);
         }
         Ok(())
     }
@@ -15867,19 +15910,14 @@ impl TypedProgram {
 
     // Errors and logging
 
-    pub fn report_warning(&mut self, e: TyperError) {
-        self.write_error(&mut std::io::stderr(), &e).unwrap();
-        self.non_errors.push(e);
-    }
-
     pub fn report(&mut self, e: TyperError) {
-        self.write_error(&mut std::io::stderr(), &e).unwrap();
-        match e.level {
-            ErrorLevel::Error => {
-                self.errors.push(e);
-            }
-            ErrorLevel::Warn | ErrorLevel::Info | ErrorLevel::Hint => self.non_errors.push(e),
+        // Check for exact duplicates; happens a lot with generic code
+        if self.errors.contains(&e) {
+            return;
         }
+
+        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        self.errors.push(e);
     }
 
     pub fn write_error(
