@@ -1723,6 +1723,8 @@ impl TypePool {
         }
     }
 
+    // PHYSICAL TYPE STUFF /////////////////////////////////////////////////////
+
     pub fn get_pt_layout(&self, pt: &PhysicalType) -> Layout {
         match pt {
             PhysicalType::Scalar(s) => s.get_layout(),

@@ -3110,14 +3110,35 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     IntrinsicBitwiseBinopKind::And => self.builder.build_and(lhs, rhs, ""),
                     IntrinsicBitwiseBinopKind::Xor => self.builder.build_xor(lhs, rhs, ""),
                     IntrinsicBitwiseBinopKind::Or => self.builder.build_or(lhs, rhs, ""),
-                    IntrinsicBitwiseBinopKind::ShiftLeft => {
-                        self.builder.build_left_shift(lhs, rhs, "")
-                    }
-                    IntrinsicBitwiseBinopKind::SignedShiftRight => {
-                        self.builder.build_right_shift(lhs, rhs, true, "")
-                    }
-                    IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
-                        self.builder.build_right_shift(lhs, rhs, false, "")
+                    IntrinsicBitwiseBinopKind::ShiftLeft
+                    | IntrinsicBitwiseBinopKind::SignedShiftRight
+                    | IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                        let rhs_casted =
+                            if lhs.get_type().get_bit_width() != rhs.get_type().get_bit_width() {
+                                // rhs is always a u32
+                                self.builder
+                                    .build_int_cast_sign_flag(
+                                        rhs,
+                                        lhs.get_type(),
+                                        false,
+                                        "shift_magnitude_cast",
+                                    )
+                                    .unwrap()
+                            } else {
+                                rhs
+                            };
+                        match op_kind {
+                            IntrinsicBitwiseBinopKind::ShiftLeft => {
+                                self.builder.build_left_shift(lhs, rhs_casted, "")
+                            }
+                            IntrinsicBitwiseBinopKind::SignedShiftRight => {
+                                self.builder.build_right_shift(lhs, rhs_casted, true, "")
+                            }
+                            IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                                self.builder.build_right_shift(lhs, rhs_casted, false, "")
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                 };
                 let result = result.to_err(call.span)?;
@@ -3648,6 +3669,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         for param in self.k1.types.mem.getn(function_type.physical_params).iter() {
             let param_type = self.codegen_type(param.type_id)?;
 
+            // let callconv = match typed_function.linkage {
+            //     TyperLinkage::Standard => BigStructs,
+            //     TyperLinkage::External { lib_name, fn_name } => todo!(),
+            //     TyperLinkage::Intrinsic => todo!(),
+            // }
             param_metadata_types
                 .push(BasicMetadataTypeEnum::from(param_type.canonical_repr_type()));
             param_types.push(param_type);
