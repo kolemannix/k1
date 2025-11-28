@@ -4949,16 +4949,14 @@ impl TypedProgram {
         }
     }
 
-    // nocommit(3): We're now generating errors as a matter of course in successful compilation
-    //              due to how 'coerce' works. We need to make sure generating these error strings
-    //              is performant, currently it is very much not
-    //
-    //              Passing in a buffer for the errors to go is 1 thing
-    //              But often check_types calls 'type_id_to_string', which is an entire
-    //              other can of worms to optimize!
-    //
-    //              Got type_id_to_string pretty well optimized; we also have a format!'ed print to
-    //              arena now
+    // Due to the fact that check_types may get called multiple times for
+    // a given expression, for example in many expression positions we'll
+    // attempt a coerce after typechecking fails. This means we have a scenario
+    // where we're formatting a big string (the typecheck error msg) in the
+    // happy path of successful compilation, so we need it to be held to the same
+    // standards of performance as the rest of compilation. So we build the string
+    // up in our arena, using our own machinery designed for zero-allocation, configurable, rich formatting
+    // That's why we return this `MStr` thing here (its essentially a raw string pointer; since it points into TypedProgram technically)
     pub fn check_types(
         &self,
         expected: TypeId,
@@ -11099,7 +11097,6 @@ impl TypedProgram {
                     self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id);
                 if let Some(matching_context_variable) = matching_context_variable {
                     let found = self.variables.get(matching_context_variable);
-                    // nocommit 6: Add context ability signatures
                     final_args.push(MaybeTypedExpr::Typed(self.exprs.add(
                         TypedExpr::Variable(VariableExpr {
                             variable_id: matching_context_variable,
@@ -12235,9 +12232,6 @@ impl TypedProgram {
                 if let Err(msg) = self.check_types(lhs_type, rhs_type, ctx.scope_id) {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg);
                 }
-                // nocommit: Ensure this cannot be a capture expr
-                // nocommit: Only usage of a variable is being captured
-                //           Capture counts as usage
 
                 self.variables
                     .get_mut(typed_variable_id)
@@ -14794,10 +14788,6 @@ impl TypedProgram {
                 .filter_map(|d| d.as_namespace_id())
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
-                // Phase 1
-                // nocommit 4 finish or remove the sticky message attempt
-                // self.phase = 0;
-                // self.msg(ErrorLevel::Info, format_args!(""));
                 debug!(">> Phase 0.5 compile pre namespace");
                 self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
@@ -15974,17 +15964,19 @@ impl TypedProgram {
         panic!("not yet implemented: {}", msg.as_ref())
     }
 
-    pub fn sticky_update(&self) {
+    pub fn _sticky_update(&self) {
         // Sticky line
         use std::io::Write;
         write!(std::io::stderr(), "\r>> Phase {}", self.phase).ok();
     }
 
-    pub fn info(&self, format_args: std::fmt::Arguments<'_>) {
-        self.msg(ErrorLevel::Info, format_args)
+    pub fn _info(&self, format_args: std::fmt::Arguments<'_>) {
+        self._sticky_msg(ErrorLevel::Info, format_args)
     }
 
-    pub fn msg(&self, level: ErrorLevel, format_args: std::fmt::Arguments<'_>) {
+    // unfinished attempt at a sticky progress bar. We compile too fast for it to matter
+    // but i also wanted to reduce total output lines; might revisit
+    pub fn _sticky_msg(&self, level: ErrorLevel, format_args: std::fmt::Arguments<'_>) {
         use std::io::Write;
         let mut err = std::io::stderr();
 

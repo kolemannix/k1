@@ -4,10 +4,11 @@ New tagline? "C with typeclasses and tagged unions"
 
 IDEAS 11/13
 A let* that goes to the heap, mark/reset on function return. (function arenas)
-Similarly, put lambda environments in the (non-function) arena
+Similarly, put lambda environments in the arena
 Inline all small functions in typer or bc
 AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
 - let context(impl Alloc) temp = mem/AllocMode.Arena;
+- let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 
 More optimal final programs
