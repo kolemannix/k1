@@ -2187,7 +2187,7 @@ pub fn vm_value_to_static_value(
                 let elem_static = vm_value_to_static_value(k1, element_type, elem_result, span)?;
                 elements.push(elem_static);
             }
-            let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
+            let elements_slice = k1.static_values.mem.list_to_handle(&elements);
             k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                 elements: elements_slice,
                 kind: StaticContainerKind::Array,
@@ -2222,7 +2222,7 @@ pub fn vm_value_to_static_value(
                                 vm_value_to_static_value(k1, element_type, elem_vm, span)?;
                             elements.push(elem_static);
                         }
-                        let elements_slice = k1.static_values.mem.vec_to_mslice(&elements);
+                        let elements_slice = k1.static_values.mem.list_to_handle(&elements);
                         k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                             elements: elements_slice,
                             kind: StaticContainerKind::View,
@@ -2246,7 +2246,7 @@ pub fn vm_value_to_static_value(
                 }
                 k1.static_values.add(StaticValue::Struct(StaticStruct {
                     type_id,
-                    fields: k1.static_values.mem.vec_to_mslice(&field_value_ids),
+                    fields: k1.static_values.mem.list_to_handle(&field_value_ids),
                 }))
             }
         }

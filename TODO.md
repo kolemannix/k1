@@ -1,6 +1,4 @@
-> For the joy of programming
-
-New tagline? "C with typeclasses and tagged unions"
+"C with typeclasses and tagged unions"
 
 IDEAS 11/13
 A let* that goes to the heap, mark/reset on function return. (function arenas)

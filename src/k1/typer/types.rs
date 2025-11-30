@@ -307,6 +307,12 @@ pub struct FnParamType {
     pub is_lambda_env: bool,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum CallConv {
+    Default,
+    C,
+}
+
 #[derive(Clone)]
 pub struct FunctionType {
     pub physical_params: MSlice<FnParamType, TypePool>,
@@ -1804,7 +1810,7 @@ impl TypePool {
                     if not_physical {
                         None
                     } else {
-                        let fields_handle = self.mem.vec_to_mslice(&fields);
+                        let fields_handle = self.mem.list_to_handle(&fields);
                         let agg_id = self.phys_types.add(PhysicalTypeRecord {
                             agg_type: AggType::Struct { fields: fields_handle },
                             origin_type_id: type_id,
