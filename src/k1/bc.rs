@@ -685,7 +685,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
         });
         params.push(t);
     }
-    let params_handle = b.k1.bytecode.mem.vec_to_mslice(&params);
+    let params_handle = b.k1.bytecode.mem.list_to_handle(&params);
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
@@ -828,7 +828,7 @@ impl<'k1> Builder<'k1> {
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
-        self.k1.bytecode.mem.vec_to_mslice(&blocks)
+        self.k1.bytecode.mem.list_to_handle(&blocks)
     }
 
     fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
@@ -1596,7 +1596,7 @@ fn compile_expr(
                 },
                 Some(dst) => Some(dst),
             };
-            let args_handle = b.k1.bytecode.mem.vec_to_mslice(&args);
+            let args_handle = b.k1.bytecode.mem.list_to_handle(&args);
             let call_id = b.k1.bytecode.calls.add(BcCall {
                 dst: call_dst,
                 ret_inst_kind: return_inst_kind,
@@ -1686,7 +1686,7 @@ fn compile_expr(
                     Ok(inst.as_value())
                 }
                 Some(came_from) => {
-                    let real_incomings = b.k1.bytecode.mem.vec_to_mslice(&incomings);
+                    let real_incomings = b.k1.bytecode.mem.list_to_handle(&incomings);
                     let Inst::CameFrom { incomings: i, .. } =
                         b.k1.bytecode.instrs.get_mut(came_from)
                     else {

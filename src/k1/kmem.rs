@@ -271,9 +271,9 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0)
     }
 
-    pub fn vec_to_mslice<T>(&self, fix_vec: &MList<T, Tag>) -> MSlice<T, Tag> {
-        let offset = self.ptr_to_offset(fix_vec.buf.cast_const());
-        MSlice::make(offset, fix_vec.len() as u32)
+    pub fn list_to_handle<T>(&self, list: &MList<T, Tag>) -> MSlice<T, Tag> {
+        let offset = self.ptr_to_offset(list.buf.cast_const());
+        MSlice::make(offset, list.len() as u32)
     }
 
     #[track_caller]
@@ -466,14 +466,6 @@ impl<Tag> Mem<Tag> {
         unsafe { &*ptr }
     }
 
-    pub fn get_copy<T: Copy>(&self, handle: MHandle<T, Tag>) -> T {
-        let ptr = self.unpack_handle(handle);
-        if cfg!(feature = "dbg") {
-            self.check_mine(ptr.addr())
-        }
-        unsafe { *ptr }
-    }
-
     pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
         let ptr: *const T = self.offset_to_ptr(handle.offset);
         if cfg!(debug_assertions) {
@@ -482,7 +474,7 @@ impl<Tag> Mem<Tag> {
         (ptr, handle.count as usize)
     }
 
-    fn getn_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
+    pub fn getn_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
             let src: &[T] = std::slice::from_raw_parts(ptr, count);
@@ -521,6 +513,11 @@ impl<Tag> Mem<Tag> {
             let src: &mut [T] = std::slice::from_raw_parts_mut(ptr.cast_mut(), count);
             src
         }
+    }
+
+    /// `lt` stands for lifetime; this one takes any lifetime vs the one that fixes to static
+    pub fn get_nth_lt<T>(&self, handle: MSlice<T, Tag>, n: usize) -> &'_ T {
+        &self.getn_lt(handle)[n]
     }
 
     pub fn get_nth<T>(&self, handle: MSlice<T, Tag>, n: usize) -> &'static T {
