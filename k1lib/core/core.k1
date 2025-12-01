@@ -169,8 +169,6 @@ ns files {
       Buffer/fromPtrAndCount(count = fileSizeBytes, pointer = buf)
     );
 
-    alloc.free(ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
-
     string
   }
 }

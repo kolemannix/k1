@@ -1,0 +1,55 @@
+fn day1(): unit {
+  let sample = `L68
+L30
+R48
+L5
+R60
+L55
+L1
+L99
+R14
+L82`;
+  let context alloc: mem/AllocMode = .SystemHeap;
+  let input = core/files/readToString("day1_input.txt");
+
+  let commands = input.splitByChar('\n');
+
+  //println(input);
+
+  let pos = 50;
+  let zeroCount = 0;
+  for commands {
+    let negative = it.get(0) == 'L';
+    let magnitudeStr = it.drop(1);
+    require parseBase10(magnitudeStr) is .Some(magnitude) else { return() };
+    let change = if negative { magnitude as int * -1 } else magnitude as int;
+
+    pos := pos + change;
+    if pos < 0 { pos := pos + 100 };
+    if pos > 99 { pos := pos - 100 };
+    println("pos {itIndex}: {change} {pos}");
+    if pos == 0 { zeroCount := zeroCount + 1 };
+  };
+
+  println("Day 1: {zeroCount}");
+  crash("");
+}
+
+fn parseBase10(s: string): ?uint {
+  let o: uint = 0;
+  for c in s {
+    if not c.isAsciiDigit() { return(.None) };
+    // nocommit "Incompatible integer types" needs more info
+    let digitValue: uint = (c as u8 - 48) as uint;
+    o := o * 10;
+    o := o + digitValue;
+  };
+  .Some(o)
+}
+
+fn main(): i32 {
+  println("Hello, AoC 2025!");
+  #static day1();
+  day1();
+  0
+}
