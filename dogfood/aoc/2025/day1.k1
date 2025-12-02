@@ -12,26 +12,36 @@ L82`;
   let context alloc: mem/AllocMode = .SystemHeap;
   let input = core/files/readToString("day1_input.txt");
 
-  let commands = input.splitByChar('\n');
+  let commands = sample.splitByChar('\n');
 
   //println(input);
 
   let pos = 50;
   let zeroCount = 0;
+  let wrapCount = 0;
   for commands {
     let negative = it.get(0) == 'L';
     let magnitudeStr = it.drop(1);
     require parseBase10(magnitudeStr) is .Some(magnitude) else { return() };
     let change = if negative { magnitude as int * -1 } else magnitude as int;
 
+    let lastPos = pos;
     pos := pos + change;
-    if pos < 0 { pos := pos + 100 };
-    if pos > 99 { pos := pos - 100 };
-    println("pos {itIndex}: {change} {pos}");
+
+    let signChange = pos.xor(lastPos) < 0;
+
+    let wrap = pos / 100;
+    let clicks = if wrap < 0 wrap * -1 else wrap + (if signChange 1 else 0);
+    wrapCount := wrapCount + clicks;
+
+    pos := pos - (wrap * 100);
+
+    //println("pos {itIndex}: {change} {pos}");
     if pos == 0 { zeroCount := zeroCount + 1 };
   };
 
-  println("Day 1: {zeroCount}");
+  println("Day 1 part 1: {zeroCount}");
+  println("Day 1 part 2: {wrapCount}");
   crash("");
 }
 
