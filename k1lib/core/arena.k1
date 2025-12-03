@@ -23,22 +23,21 @@ ns Arena {
     self.curAddr.diff(self.basePtr)
   }
 
-  fn _virtual(usageHintMb: size): ptr {
+  fn _virtual(usageHintMb: size): Arena {
     let basePtr: ptr = mem/virtualAlloc(gb);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
     posix/madvise(basePtr, (usageHintMb * mb) as c_sizet, advice = posix/MADV_SEQUENTIAL);
-    basePtr
-  }
-
-  fn default(): Arena {
-    let basePtr: ptr = _virtual(usageHintMb = 10);
-    //let header: *mut Arena = basePtr as *mut Arena;
-    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {
       basePtr: basePtr,
       curAddr: basePtr,
       maxAddr: basePtr.addBytes(gb)
     }
+  }
+
+  fn default(): Arena {
+    _virtual(usageHintMb = 10)
+    //let header: *mut Arena = basePtr as *mut Arena;
+    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
   }
 
   fn release(self: *mut Arena): unit {

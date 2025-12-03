@@ -6,11 +6,21 @@ ns StringBuilder {
     { list: SpillList/new() }
   }
 
+  fn reset(self: *mut StringBuilder): unit {
+    self.list*.clear()
+  }
+
   fn buildTmp(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.asView().clonedIn(context .Arena)()),
+      .Inline(f)* -> string/fromBytes(f.asView().clonedIn(context .Current)()),
       .Spilled(l)* -> string/fromBytes(l.asView())
     }
+  }
+
+  // Careful, if the StringBuilder is stack-allocated, and not 
+  // spilled, this points to the stack memory!
+  fn rawView(self: *StringBuilder): View[char] {
+    self.list*.asView().toCharView()
   }
 
   fn build(self: *StringBuilder): string {
