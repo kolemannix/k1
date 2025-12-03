@@ -589,7 +589,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
     macro_rules! resolve_value {
         ($v:expr) => {
-            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)
+            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)?
         };
     }
 
@@ -981,7 +981,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     // params or instrs by index, which is basically always! The other option would
                     // be parameterizing 'resolve_value' by stack frame
                     let vm_value =
-                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg);
+                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
 
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
@@ -1511,26 +1511,29 @@ fn resolve_value(
     frame_index: u32,
     inst_offset: u32,
     value: BcValue,
-) -> Value {
+) -> TyperResult<Value> {
     match value {
         BcValue::Inst(inst_id) => {
             let inst_index = inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_index);
-            v
+            Ok(v)
         }
         BcValue::StaticValue { t: _, id } => {
             let v = static_value_to_vm_value(k1, id, vm.eval_span);
-            v
+            Ok(v)
         }
-        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
+        BcValue::FunctionAddr(function_id) => {
+            let value = function_id_to_ref_value(function_id);
+            Ok(value)
+        }
         BcValue::FnParam { t: _, index } => {
             let value = vm.stack.get_param_value(frame_index, index);
             // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
-            value
+            Ok(value)
         }
         BcValue::Imm32 { t, data } => {
             let u32_data = data;
-            match t {
+            let value = match t {
                 ScalarType::F32 => Value(u32_data as u64),
                 ScalarType::F64 => Value::f64(data as f32 as f64),
                 ScalarType::Pointer => Value(data as u64),
@@ -1540,59 +1543,63 @@ fn resolve_value(
                 ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
                     Value(u32_data as u64)
                 }
-            }
+            };
+            Ok(value)
         }
-        BcValue::PtrZero => Value::NULLPTR,
-        BcValue::Global { t, id } => {
-            // Handle global
-            // Case 1: It's a constant, already evaluated, stored in the global static space
-            // Case 2: It's in this VM because its mutable, and we already evaluated it during this execution
-            // Case 3: First evaluation. If not mutable, put in globals. If mutable, put in this
-            // vm's static space.
-            // ** If referencing, allocate layout and perform a store to produce a valid address
-            match k1.vm_global_constant_lookups.get(&id) {
-                Some(v) => *v,
-                None => {
-                    match vm.globals.get(&id) {
-                        Some(v) => *v,
-                        None => {
-                            let global = k1.globals.get(id);
-                            let is_constant = global.is_constant;
-                            let initial_value_id = match global.initial_value {
-                                None => {
-                                    k1.eval_global_body(global.ast_id).unwrap();
-                                    let value_id = k1.globals.get(id).initial_value.unwrap();
-                                    value_id
-                                }
-                                Some(value_id) => value_id,
-                            };
-                            debug!(
-                                "shared global is: {}. the `t` of the instr is: {}",
-                                k1.static_value_to_string(initial_value_id),
-                                types::pt_to_string(&k1.types, &t)
-                            );
-                            let shared_vm_value =
-                                static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-                            let layout = k1.types.get_pt_layout(&t);
-                            if is_constant {
-                                let dst = k1.vm_static_stack.push_layout_uninit(layout);
-                                store_value(&k1.types, t, dst, shared_vm_value);
-                                let addr = Value::ptr(dst.cast_const());
-                                k1.vm_global_constant_lookups.insert(id, addr);
-                                addr
-                            } else {
-                                // We need a local copy of this
-                                let dst = vm.static_stack.push_layout_uninit(layout);
-                                store_value(&k1.types, t, dst, shared_vm_value);
-                                let addr = Value::ptr(dst.cast_const());
-                                vm.globals.insert(id, addr);
-                                addr
-                            }
-                        }
-                    }
-                }
-            }
+        BcValue::PtrZero => Ok(Value::NULLPTR),
+        BcValue::Global { t, id } => resolve_global(k1, vm, id, t),
+    }
+}
+
+#[inline(always)]
+fn resolve_global(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    global_id: TypedGlobalId,
+    t: PhysicalType,
+) -> TyperResult<Value> {
+    // ** If referencing, allocate layout and perform a store to produce a valid address
+    // Case 1: It's a constant, already evaluated, stored in the global static space
+    if let Some(v) = k1.vm_global_constant_lookups.get(&global_id) {
+        return Ok(*v);
+    }
+    // Case 2: It's instead in this VM because it's mutable and we already evaluated it, return it
+    if let Some(v) = vm.globals.get(&global_id) {
+        return Ok(*v);
+    }
+
+    // Case 3: First evaluation. If not mutable, put in share global constants. If mutable,
+    // generate and store the shared original, but store a copy in our local vm to allow mutation
+    let global = k1.globals.get(global_id);
+    let is_constant = global.is_constant;
+    let initial_value_id = match global.initial_value {
+        None => {
+            k1.eval_global_body(global.ast_id)?;
+            let value_id = k1.globals.get(global_id).initial_value.unwrap();
+            value_id
         }
+        Some(value_id) => value_id,
+    };
+    debug!(
+        "shared global is: {}. the `t` of the instr is: {}",
+        k1.static_value_to_string(initial_value_id),
+        types::pt_to_string(&k1.types, &t)
+    );
+    let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+    let layout = k1.types.get_pt_layout(&t);
+    if is_constant {
+        let dst = k1.vm_static_stack.push_layout_uninit(layout);
+        store_value(&k1.types, t, dst, shared_vm_value);
+        let addr = Value::ptr(dst.cast_const());
+        k1.vm_global_constant_lookups.insert(global_id, addr);
+        Ok(addr)
+    } else {
+        // We need a local copy of this
+        let dst = vm.static_stack.push_layout_uninit(layout);
+        store_value(&k1.types, t, dst, shared_vm_value);
+        let addr = Value::ptr(dst.cast_const());
+        vm.globals.insert(global_id, addr);
+        Ok(addr)
     }
 }
 

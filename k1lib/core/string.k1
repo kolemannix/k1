@@ -207,6 +207,17 @@ ns string {
       wrapBuffer(cloneChars)
     } else self
   }
+ 
+  fn parseBase10(s: string): ?uint {
+    let o: uint = 0;
+    for c in s {
+      if not c.isAsciiDigit() { return(.None) };
+      let digitValue: uint = (c as u8 - 48) as uint;
+      o := o * 10;
+      o := o + digitValue;
+    };
+    .Some(o)
+  }
 
 }
 

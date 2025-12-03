@@ -2865,7 +2865,7 @@ impl TypedProgram {
         }
     }
 
-    fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
+    fn push_stmt_id_to_block(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
         block.statements.push(stmt);
     }
 
@@ -4372,7 +4372,7 @@ impl TypedProgram {
 
                 let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
 
-                let libs = self.static_values.get(value_fields[3]).as_view().unwrap();
+                let libs = self.static_values.get(value_fields[3]).as_container().unwrap();
                 let mut lib_refs = vec![];
                 for lib in self.static_values.get_slice(libs.elements) {
                     // Grab the strings out for now. Eventually we can maybe just
@@ -4883,7 +4883,7 @@ impl TypedProgram {
                         }
                     } else {
                         // We never truncate automatically, or change signedness without extension
-                        CheckExprTypeResult::Err("incompatible integer types".into())
+                        CheckExprTypeResult::Err(msg.to_string())
                     }
                 };
             }
@@ -6765,7 +6765,7 @@ impl TypedProgram {
                         alternate,
                         span,
                     );
-                    self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
+                    self.push_stmt_id_to_block(&mut block, base_expr_var.defn_stmt);
                     self.push_expr_id_to_block(&mut block, if_expr);
                     let ty = self.exprs.get_type(if_expr);
                     Ok(self.exprs.add_block(&mut self.mem, block, ty))
@@ -6889,7 +6889,7 @@ impl TypedProgram {
             span,
         );
 
-        self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
+        self.push_stmt_id_to_block(&mut result_block, try_value_var.defn_stmt);
         self.push_expr_id_to_block(&mut result_block, if_expr);
 
         Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
@@ -7454,7 +7454,7 @@ impl TypedProgram {
             };
             let type_id = self.exprs.get_type(push_call);
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-            self.push_block_stmt_id(&mut list_lit_block, push_stmt);
+            self.push_stmt_id_to_block(&mut list_lit_block, push_stmt);
         }
         let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
@@ -8040,7 +8040,7 @@ impl TypedProgram {
                 true, // is_referencing
                 block.scope_id,
             );
-            self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
+            self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
             for part in interpolated_string.parts.into_iter() {
                 match part {
                     parse::InterpolatedStringPart::String(string_id) => {
@@ -9093,6 +9093,11 @@ impl TypedProgram {
         for_expr: &ForExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
+        // Basically no overlap here in what we need to do.
+        if for_expr.is_static {
+            return self.eval_static_for_expr(for_expr, ctx);
+        };
+
         let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.b.it);
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iterable_type = self.exprs.get_type(iterable_expr);
@@ -9212,7 +9217,7 @@ impl TypedProgram {
             false,
         )?;
 
-        self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
+        self.push_stmt_id_to_block(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
         let user_body_block_id = body_block;
         let user_block_variable = self.synth_variable_defn_simple(
@@ -9293,6 +9298,47 @@ impl TypedProgram {
             final_type,
         );
         Ok(final_expr)
+    }
+
+    fn eval_static_for_expr(
+        &mut self,
+        for_expr: &ForExpr,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let iteree_value_id =
+            self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
+        let iteree_value = self.static_values.get(iteree_value_id);
+        let iteree_span = self.ast.get_expr_span(for_expr.iterable_expr);
+        let Some(iteration_list) = iteree_value.as_container() else {
+            return failf!(
+                iteree_span,
+                "Expected something iterable; got: {}",
+                self.static_value_to_string(iteree_value_id)
+            );
+        };
+        let elements = iteration_list.elements;
+
+        let mut block = self.synth_block(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            for_expr.span,
+            iteration_list.len() as u32 * 2,
+        );
+        let binding_name = match for_expr.binding {
+            None => self.ast.idents.b.it,
+            Some(binding) => binding,
+        };
+        let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
+        for elem in self.static_values.mem.getn(elements) {
+            let elem_expr = self.add_static_constant_expr(*elem, iteree_span);
+            let v = self.synth_variable_defn_visible(binding_name, elem_expr, block.scope_id);
+            let user_expr = self.eval_block(&for_expr.body_block, eval_context, false)?;
+            self.push_stmt_id_to_block(&mut block, v.defn_stmt);
+            self.push_expr_id_to_block(&mut block, user_expr);
+        }
+        let block_id = self.exprs.add_block(&mut self.mem, block, UNIT_TYPE_ID);
+
+        Ok(block_id)
     }
 
     fn expect_ability_implementation(
@@ -9765,7 +9811,7 @@ impl TypedProgram {
         )?;
 
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
-        self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
+        self.push_stmt_id_to_block(&mut coalesce_block, lhs_variable.defn_stmt);
         self.push_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
     }
