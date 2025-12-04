@@ -10,6 +10,16 @@ AbilitySignature as context variable kind in addition to Type (enables context W
 - let context(impl Alloc) temp = mem/AllocMode.Arena;
 - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
+Specialization solution (when types are known by the function)
+- A kind of *pattern* that checks the type and binds a variable of that type! What other thing
+  for a feature that needs to _check_ and _bind_ than a pattern?!
+fn write[T](t: View[T]) {
+    if t is type[View[u8]](binding) {
+      // `binding` is of byte View[u8]
+    } else {
+
+    }
+}
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
