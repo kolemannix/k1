@@ -1,35 +1,40 @@
 `k1` is like C with typeclasses, full compile-time execution, ADTs\*, zero-cost lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
 
 ## Tenets
-### The compiler should be uncompromisingly fast.
+### Compile fast
 Shortening the feedback cycle preserves flow and greatly increases joy, as well as literally temporally enabling more iterations.
 This results in better software that is fun to work on.
-### Optimized, nearly optimal, native output
+### Run fast
 A career spent programming for the JVM has made me loathe inescapable costs. There are many fantastic features
 and idioms that can be free, such as newtypes, lambdas, even something as simple as the almighty `struct`, which
 many languages lack in favor of a boxed class as the primary unit of computation. This is a huge mistake; it forces
 the programmer to choose between something typesafe and idiomatic with overhead, or something fast. You end up [doing
 metaprogramming heroics](https://getkyo.io/#/?id=maybe-allocation-free-optional-values) to implement a zero-cost option in Scala,
 or [managing your own memory in Java](https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java).
-### Metaprogramming like normal programming
+### Accessible metaprogramming
 Compile-time execution and reflection enables powerful metaprogramming that is just regular programming.
-## Typeclasses are just the best way to do abstraction and polymorphism
-Miles better than inheritance. Just so good.
+### Typeclasses are just the best way to do abstraction and polymorphism
+[Just so good](https://dl.acm.org/doi/10.1145/75277.75283)
 ### No forced abstractions or costs
 Pay for what you use, and use what you want. And what you use costs as little as possible. This is
 exactly Rust's philosophy and definition of 'zero-cost' functionality. I think it holds up and is a fantastic
 north star.
 
-Check out the [TODO](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
 
-# About this project
-I simply started writing this because I was curious what LLVM was, and had a lot of ideas about how programming could be better.
-I had no illusions that I could make it better, having never designed a language or made a compiler. So I just started studying and
-practicing using this project. 
+## Status
+Still just learning, but I really like using this language these days. Long todo list still!
+[Check it out](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
 
-Just exploring the PL dev world by designing and implementing a toy language. The goal is to implement all the basics,
-and also explore some interesting ideas. I am trying not to have any aspirations for this project
-except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023 in this language.
+Please reach out to me on X or here if you're interested in the project!
+
+## Reflections
+I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you).
+Mainly I wanted to see if a compiler could be fast and do nice things for you. There are some core decisions (function must declare
+their return types) designed to protect the performance of the compiler. (nd I think they are good decisions for software engineering anyway)
+I had no expectation that I could do better, having never designed a language or made a compiler, but I just wanted to explore. So I just started studying and
+practicing using this project.
+
+More later I'm sure... everything evolves...
 
 Inspiration
 
