@@ -1,22 +1,37 @@
-`k1` is like C with typeclasses, full compile-time execution, ADTs\*, capturing lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
+`k1` is like C with typeclasses, full compile-time execution, ADTs\*, zero-cost lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
 
-Core ideas
-- The compiler should be uncompromisingly fast
-- The generated code should be as optimal as possible (No always-on costs like GC, dynamic dispatch, or any sort of runtime)
-- Compile-time execution and reflection enables powerful metaprogramming that is just regular programming.
+## Tenets
+### The compiler should be uncompromisingly fast.
+Shortening the feedback cycle preserves flow and greatly increases joy, as well as literally temporally enabling more iterations.
+This results in better software that is fun to work on.
+### Optimized, nearly optimal, native output
+A career spent programming for the JVM has made me loathe inescapable costs. There are many fantastic features
+and idioms that can be free, such as newtypes, lambdas, even something as simple as the almighty `struct`, which
+many languages lack in favor of a boxed class as the primary unit of computation. This is a huge mistake; it forces
+the programmer to choose between something typesafe and idiomatic with overhead, or something fast. You end up [doing
+metaprogramming heroics](https://getkyo.io/#/?id=maybe-allocation-free-optional-values) to implement a zero-cost option in Scala,
+or [managing your own memory in Java](https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java).
+### Metaprogramming like normal programming
+Compile-time execution and reflection enables powerful metaprogramming that is just regular programming.
+## Typeclasses are just the best way to do abstraction and polymorphism
+Miles better than inheritance. Just so good.
+### No forced abstractions or costs
+Pay for what you use, and use what you want. And what you use costs as little as possible. This is
+exactly Rust's philosophy and definition of 'zero-cost' functionality. I think it holds up and is a fantastic
+north star.
 
 Check out the [TODO](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
 
-\*structs for product types and first-class tagged unions for sum types via the `either` keyword
-
-# About the project
+# About this project
+I simply started writing this because I was curious what LLVM was, and had a lot of ideas about how programming could be better.
+I had no illusions that I could make it better, having never designed a language or made a compiler. So I just started studying and
+practicing using this project. 
 
 Just exploring the PL dev world by designing and implementing a toy language. The goal is to implement all the basics,
 and also explore some interesting ideas. I am trying not to have any aspirations for this project
 except to explore the problem space of compiler development, and maybe to be able to do some of advent of code 2023 in this language.
 
 Inspiration
-
 
 > The programmer, like the poet, works only slightly removed from pure thought-stuff. He builds his castles in the air, from air, creating by exertion of the imagination. Few media of creation are so flexible, so easy to polish and rework, so readily capable of realizing grand conceptual structures.... Yet the program construct, unlike the poet's words, is real in the sense that it moves and works, producing visible outputs separate from the construct itself.
 - Brooks
@@ -29,7 +44,7 @@ Inspiration
 
 https://justforfunnoreally.dev/
 
-Heroes
+Some Heroes
 - Andreas Kling
 - Jonathan Blow
 - Ken Thompson
@@ -37,20 +52,23 @@ Heroes
 - Bjarne Stroustrup
 - [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
 
-## Example
+## Case Study: implementing bitfields
 
-Let's add a feature to `k1` using metaprogramming to support bitfields. I'd like to be able to define a bitfield by providing a name, a 'base' integer type
+Let's add a feature to `k1` using metaprogramming to support bitfields.
+
+I'd like to be able to define a bitfield by providing a name, a 'base' integer type
 big enough to house all the fields I provide, and a series of fields as a collection of (name, bit width) pairs.
+
 We can encode this in K1 easily enough as a function:
 
 ```k1
 fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size}]): ???
 ```
-We use a type parameter, denoted in square brackets, to track our 'base type', which
-should be an unsigned integer type, which we can enforce later. `k1` provides u{8|16|32|64}.
+We use a type parameter, `Base`, denoted in square brackets, to track our 'base type', which
+should be an unsigned integer type, which we can enforce later. `k1` provides the usual friends: u8, u16, u32, and u64.
 
 We also accept a name to attach to whatever constructs we end up generating for our flags.
-Perhaps functions to get and set them, maybe some constants? Not sure yet.
+Perhaps functions to encode and decode each bit-field, and maybe some constants? Not sure yet.
 
 That leaves the return type, which we've left as `???`. Ultimately we'd like to produce
 some code; most text-based programming languages are very well-represented and maintained in
@@ -69,31 +87,55 @@ fn intWidthForBits(bits: size): size {
   else if bits <= 16 16
   else if bits <= 32 32
   else if bits <= 64 64
+  // We'll just exit on an error here rather than returning a `Result[T, E]`, since we intend to run this code at compile-time.
   else crash("Too many bits: {bits}")
 }
-fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
-  use core/StringBuilder;
-  use meta/CodeWriter;
+// Some simple constructors to make our metaprogram nice to invoke later
+fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
+fn b1(name: string): { name: string, bits: size } { bn(name, 1) }
+fn b8(name: string): { name: string, bits: size } { bn(name, 8) }
+```
+
+Here comes a big wall of advanced metaprogramming code; but it may look strikingly like dumb string-building code to you.
+```rust
+fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
+  use core/StringBuilder; use meta/CodeWriter;
+
   let baseTypeId: u64 = types/typeId[Base]();
-  let base = types/typeSchema(baseTypeId);
-
-  // We can exit the program, which will ultimately become a compilation error
-  require base is .Int(intKind) else { crash("Base should be an int") };
-  let totalBits = intKind.bitWidth();
+  let baseSchema = types/typeSchema(baseTypeId);
   let baseName = types/typeName(baseTypeId);
+  require baseSchema is .Int(intKind) else { crash("Base should be an int; got {baseName}") };
+  let totalBits = intKind.bitWidth();
 
-  let* code = StringBuilder/new();
+  // This is just a regular StringBuilder that gets some extra methods since we've
+  // brought the meta/CodeWriter ability into scope
+  let* code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
 
-  // We could also use the builtin typeFromId(...); but I like the short name and we're restricted it u{n} here
+  // This defines a named struct type with one field, which is a common newtype pattern
   code.line("deftype {typeName} = {{ bits: {baseName} }");
 
+  // We crack open a namespace to put some goodies inside
   code.line("ns {typeName} {{");
 
-  // Let Masks (I can also store inverse mask strings here: 0b111...)
+  // This actually gets captured by the lambda below
   let* bitIndex = 0;
-  bitIndex;
-  let memberInfo: List[
-  { mask: usize, invMask: usize, typeWidth: size, rawValue: usize, offset: size, nameCap: string }] = List/fromMap(members, \member. {
+
+  // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
+  // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
+  let memberInfo: List[{ 
+    // mask: the positioned mask
+    mask: usize,
+    // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
+    typeWidth: size,
+    // invMask: the negation of the mask, but also masked down to typeWidth size (to generate constants that fit)
+    invMask: usize,
+    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
+    rawValue: usize,
+    // offset: the bit pos that the mask starts at; where the value lives; how much to shift
+    offset: size,
+    // nameCap: the name of the field, capitalized
+    nameCap: string
+  }] = List/fromMap(members, \member. {
     let bits = member.bits;
     if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
     let rawValue = u64/bitmaskLow(bits);
@@ -104,26 +146,25 @@ fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size }])
     let sizeMask = u64/bitmaskLow(typeWidth);
     let invMask = mask.bitNot().bitAnd(sizeMask);
 
-    // println("{member.name}: typeWidth: {typeWidth}");
-    // println("{member.name}: raw value: {rawValue}");
-    // println("{member.name}: mask: {mask}");
-    // println("sizeMask: {sizeMask}");
-    // println("invMask: {invMask}, bits: {invMaskBits}");
     bitIndex <- bitIndex.* + bits;
 
-    // mask: the positioned mask; 0b100
-    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
-    // offset: the bit pos that the mask starts at; where the value lives
-    { mask, invMask, typeWidth, rawValue, offset, nameCap }
+    { mask, typeWidth, invMask, rawValue, offset, nameCap }
   });
 
+  // The for loop works on any type that implements Iterable or Iterator
+  // The item being iterated over is named `it` if no binding is supplied
+  // `itIndex` is also given to us
   for members {
     let info = memberInfo.get(itIndex);
+    // Emit globals, or constants, for each field's mask
     code.line("  let {it.name}Mask: {baseName} = {info.mask};");
   };
 
   code.line("  let zero: {typeName} = {{ bits: 0 };");
 
+  // Now let's do a getter and setter for each bitfield. If the width is 1,
+  // we'll use bool since that's what the people likely want. Note that we could configure
+  // any of this behavior because this is just a regular function
   for members {
     let info = memberInfo.get(itIndex);
     let nameCap = info.nameCap;
@@ -170,51 +211,30 @@ fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size }])
   };
   code.implPrint(typeName, printBody.build(), indent = 0);
 
-  let s = code.build();
-  println(s);
-  s
+  code.build()
 }
 ```
+We can test this function by running it and looking at the string. Or we could ask `k1` to run it
+for us and insert the result into our program:
+```
+#meta std/bitfield/define[u16]("StarshipFlags",
+  [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, bn("foo", 8)]
+)
+```
 
+And now we can pack some bits!
+```rust
+fn testBitfield(): unit {
+  let y: FlagsAuto = { bits: 0b1111_0000_1000_1101 };
+  //                           foo......|secto||||
+  //                                           |||- shielded
+  //                                           ||- cloaked
+  //                                           |- damaged
+  let x: FlagsAuto = FlagsAuto/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
+  assertEquals(y.getShielded(), x.getShielded());
+  assertEquals(y.getCloaked(), x.getCloaked());
+  assertEquals(y.getDamaged(), x.getDamaged());
+  assertEquals(y.getSectorId(), x.getSectorId());
+}
 
-### Type System
-- Strong Static Typing with limited, fast, and predictable type inference
-- Algebraic Data Types via `either` for tagged unions and structs for product types
-- Generics with support for type constraints through abilities (traits)
-- Deeply expression-oriented 
-  - `loop` with `break(<expr>)`, 
-  - `if` expressions that support a single pattern
-  - A `never` type that allows simplifying types while handling cases
-- First-class Optional Types with ergonomic `?` and `?.` operators and pattern matching
-- Reference Types with distinct pointer and reference semantics
-- Anonymous structs and enums allow for lightweight, low-boilerplate, zero-cost data modeling
-- Zero-cost Abstraction through opaque type aliases, and zero-overhead structs
-
-### Modern Features
-- Pattern Matching with exhaustiveness checking and useless pattern detection
-- Closures with automatic capture analysis and environment generation
-- Type-safe String Interpolation using `\{...}` syntax
-- Iterator Protocol with `for` expressions supporting `yield` and `do` blocks
-- Method Syntax with namespaced scoping
-- Pipeline Operator (`|`) for functional composition
-- Abilities (traits/interfaces) for type-class like abstraction
-
-### Systems Programming facilities
-- Direct Memory Management with `Pointer` operations and introspectable type layouts
-- Foreign Function Interface through external function declarations
-- Bit Manipulation operations
-- Fixed-Size Integer Types (u8/i8 through u64/i64)
-- Platform Integration through libc bindings
-
-### Limited WIP Standard Library
-- Generic Collections including Array and HashMap implementations
-- String Utilities with builders, interpolation, and efficient operations
-- Option Type with ergonomic methods and pattern matching
-- Numeric Tower supporting integers, floats with standard operations
-- Runtime Error Handling with basic crash reporting
-
-### LLVM Backend
-- Efficient Machine Code through LLVM's optimization pipeline
-- Zero-Cost Abstractions with aggressive inlining and dead code elimination
-- Flat Memory Layout for structs and tagged unions
-- Debug Information generation using DWARF format
+```
