@@ -22,15 +22,35 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
   require baseSchema is .Int(intKind) else { crash("Base should be an int; got {baseName}") };
   let totalBits = intKind.bitWidth();
 
-  let* code = StringBuilder/new();
-  // Could also use typeFromId; but I like the short name and we're restricted it u{n} here
+  // This is just a regular StringBuilder that gets some extra methods since we've
+  // brought the meta/CodeWriter ability into scope
+  let* code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
+
+  // This defines a named struct type with one field, which is a common newtype pattern
   code.line("deftype {typeName} = {{ bits: {baseName} }");
 
+  // We crack open a namespace to put some goodies inside
   code.line("ns {typeName} {{");
 
+  // This actually gets captured by the lambda below
   let* bitIndex = 0;
-  let memberInfo: List[
-  { mask: usize, typeWidth: size, invMask: usize, rawValue: usize, offset: size, nameCap: string }] = List/fromMap(members, \member. {
+
+  // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
+  // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
+  let memberInfo: List[{ 
+    // mask: the positioned mask
+    mask: usize,
+    // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
+    typeWidth: size,
+    // invMask: the negation of the mask, but also masked down to typeWidth size (to generate constants that fit)
+    invMask: usize,
+    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
+    rawValue: usize,
+    // offset: the bit pos that the mask starts at; where the value lives; how much to shift
+    offset: size,
+    // nameCap: the name of the field, capitalized
+    nameCap: string
+  }] = List/fromMap(members, \member. {
     let bits = member.bits;
     if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
     let rawValue = u64/bitmaskLow(bits);
@@ -43,22 +63,23 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
 
     bitIndex <- bitIndex.* + bits;
 
-    // mask: the positioned mask; 0b100
-    // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
-    // invMask: the negation of the mask, but also masked down to typeWidth size (to generate constants that fit)
-    // rawValue: the mask shifted to the start, the 'magnitude' of the used bits
-    // offset: the bit pos that the mask starts at; where the value lives; how much to shift
-    // nameCap: the name of the field, capitalized
     { mask, typeWidth, invMask, rawValue, offset, nameCap }
   });
 
+  // The for loop works on any type that implements Iterable or Iterator
+  // The item being iterated over is named `it` if no binding is supplied
+  // `itIndex` is also given to us
   for members {
     let info = memberInfo.get(itIndex);
+    // Emit globals, or constants, for each field's mask
     code.line("  let {it.name}Mask: {baseName} = {info.mask};");
   };
 
   code.line("  let zero: {typeName} = {{ bits: 0 };");
 
+  // Now let's do a getter and setter for each bitfield. If the width is 1,
+  // we'll use bool since that's what the people likely want. Note that we could configure
+  // any of this behavior because this is just a regular function
   for members {
     let info = memberInfo.get(itIndex);
     let nameCap = info.nameCap;
