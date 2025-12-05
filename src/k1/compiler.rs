@@ -517,7 +517,7 @@ pub fn write_executable(
     }
 
     build_cmd.args(extra_options);
-    eprintln!("Build Command: {:?}", build_cmd);
+    //eprintln!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {

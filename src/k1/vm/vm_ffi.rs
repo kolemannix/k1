@@ -29,7 +29,7 @@ pub(super) fn handle_ffi_call(
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
     for arg_value in k1.bytecode.mem.getn(args).iter() {
-        let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value);
+        let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
         ffi_args_value_storage.push(vm_value.bits());
 

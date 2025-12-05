@@ -342,10 +342,17 @@ ability Try[impl T, impl E] {
 }
 
 ability Iterator[impl Item] {
-  fn next(self: *mut Self): ?Item
+  fn next(self: *mut Self): ?Item {
+    let p = self.peek();
+    if p.isSome() { self.advanceBy(1) };
+    p
+  }
+  fn peek(self: *Self): ?Item
   fn sizeHint(self: *Self): { atLeast: size, atMost: ?size }
   fn advanceBy(self: *mut Self, n: size): unit
   fn nth(self: *mut Self, n: size): ?Item
+
+  fn isDone(self: *Self): bool { self.peek().isNone() }
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
