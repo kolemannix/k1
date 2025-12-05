@@ -42,6 +42,8 @@ ns iter {
 }
 
 fn inc(i: *mut size): unit { i <- i.* + 1 }
+// TODO: Would be cool to have this
+// fn incNew[T: Add and KnowledgeOfOne](i: *mut T): T { i <- i.* + 1 }
 
 fn identity[T](value: T): T { value }
 
@@ -169,8 +171,6 @@ ns files {
       Buffer/fromPtrAndCount(count = fileSizeBytes, pointer = buf)
     );
 
-    alloc.free(ptr = filenameCString.ptr, size = filenameCString.len + 1, align = 1);
-
     string
   }
 }
@@ -242,6 +242,19 @@ ns char {
     u8 as char
   }
 
+}
+
+impl Comparable for char {
+  fn compare(self: char, other: char): Ordering {
+    (self as u8).compare(other as u8)
+  }
+}
+
+impl ScalarCmp for char {
+  fn lt(self: Self, other: Self): bool { (self as u8).lt(other as u8) }
+  fn le(self: Self, other: Self): bool { (self as u8).le(other as u8) }
+  fn gt(self: Self, other: Self): bool { (self as u8).gt(other as u8) }
+  fn ge(self: Self, other: Self): bool { (self as u8).ge(other as u8) }
 }
 
 impl[T: Print] Show for T {
@@ -436,6 +449,11 @@ ns i64 {
       crash("i64/nextPow2: value too large to fit in i64")
     };
     next as i64
+  }
+
+  fn abs(self: i64): i64 {
+    let mask = self.shiftRight(63);
+    self.xor(mask) - mask;
   }
 }
 

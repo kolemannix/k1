@@ -26,12 +26,11 @@ ns IntRangeIterator {
 }
 
 impl Iterator[Item = int] for IntRangeIterator {
-  fn next(self: *mut Self): ?int {
+  fn peek(self: *Self): ?int {
      if self.position() >= self.range.end {
        .None
      } else {
        let current = self.current();
-       self.offset* <- self.offset + 1;
        .Some(current)
      }
   }

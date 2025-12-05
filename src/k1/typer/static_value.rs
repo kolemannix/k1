@@ -116,7 +116,7 @@ impl StaticValue {
         }
     }
 
-    pub fn as_view(&self) -> Option<&StaticContainer> {
+    pub fn as_container(&self) -> Option<&StaticContainer> {
         match self {
             StaticValue::LinearContainer(view) => Some(view),
             _ => None,

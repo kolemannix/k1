@@ -906,6 +906,7 @@ pub struct ForExpr {
     pub iterable_expr: ParsedExprId,
     pub binding: Option<Ident>,
     pub body_block: ParsedBlock,
+    pub is_static: bool,
     pub span: SpanId,
 }
 
@@ -2456,10 +2457,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
         match (first.kind, second.kind) {
-            (K::KeywordBuiltin, _) => {
-                self.advance();
-                Ok(Some(self.add_expression(ParsedExpr::Builtin(first.span))))
-            }
             (K::OpenParen, K::CloseParen) => {
                 trace!("parse_literal unit");
                 self.advance();
@@ -3241,283 +3238,295 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let compiler_debug = self.parse_compiler_debug();
         let (first, second, third) = self.tokens.peek_three();
         trace!("parse_base_expression {} {} {}", first.kind, second.kind, third.kind);
-        let resulting_expression = if first.kind == K::OpenParen {
-            self.advance();
-            if self.peek().kind == K::CloseParen {
-                let end = self.tokens.next();
-                let span = self.extend_token_span(first, end);
-                Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
-            } else {
-                // Note: Here would be where we would support tuples
-                let expr = self.expect_expression()?;
-                self.expect_eat_token(K::CloseParen)?;
-                Ok(Some(expr))
-            }
-        } else if first.kind == K::BackSlash {
-            Ok(Some(self.expect_lambda()?))
-        } else if first.kind == K::KeywordWhile {
-            let while_result = Parser::expect("while loop", first, self.parse_while_loop())?;
-            Ok(Some(self.add_expression(ParsedExpr::While(while_result))))
-        } else if first.kind == K::KeywordLoop {
-            self.advance();
-            let body = self.expect_block(ParsedBlockKind::LoopBody)?;
-            let span = self.extend_span(first.span, body.span);
-            Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { body, span }))))
-        } else if first.kind == K::KeywordSwitch {
-            let when_keyword = self.tokens.next();
-            let target_expression = self.expect_expression()?;
-
-            self.expect_eat_token(K::OpenBrace)?;
-
-            // Allow an opening comma for symmetry
-            if self.peek().kind == K::Comma {
+        let resulting_expression = match first.kind {
+            K::OpenParen => {
                 self.advance();
-            }
-            let mut cases = Vec::new();
-            while self.peek().kind != K::CloseBrace {
-                let mut arm_pattern_ids = smallvec::smallvec![];
-                loop {
-                    let arm_pattern_id = self.expect_parse_pattern()?;
-                    arm_pattern_ids.push(arm_pattern_id);
-                    if self.maybe_consume_next(K::KeywordOr).is_none() {
-                        break;
-                    }
-                }
-
-                let guard_condition_expr = if self.maybe_consume_next(K::KeywordIf).is_some() {
-                    Some(self.expect_expression()?)
+                if self.peek().kind == K::CloseParen {
+                    let end = self.tokens.next();
+                    let span = self.extend_token_span(first, end);
+                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
                 } else {
-                    None
-                };
-
-                self.expect_eat_token(K::RThinArrow)?;
-
-                let arm_expr_id = self.expect_expression()?;
-                cases.push(ParsedMatchCase {
-                    patterns: arm_pattern_ids,
-                    guard_condition_expr,
-                    expression: arm_expr_id,
-                });
-                let next = self.peek();
-                if next.kind == K::Comma {
-                    self.advance();
-                } else if next.kind != K::CloseBrace {
-                    return Err(error_expected("comma or close brace", next));
+                    // Note: Here would be where we would support tuples
+                    let expr = self.expect_expression()?;
+                    self.expect_eat_token(K::CloseParen)?;
+                    Ok(Some(expr))
                 }
             }
-            let close = self.expect_eat_token(K::CloseBrace)?;
-            let span = self.extend_token_span(when_keyword, close);
-            let match_expr =
-                ParsedMatchExpression { match_subject: target_expression, cases, span };
-            Ok(Some(self.add_expression(ParsedExpr::Match(match_expr))))
-        } else if first.kind == K::KeywordFor {
-            self.advance();
-            let binding = if third.kind == K::KeywordIn {
-                if second.kind != K::Ident {
-                    return Err(error("Expected identifiers between for and in keywords", second));
-                }
-                let binding_ident = self.intern_ident_token(second);
-                self.advance_n(2);
-                Some(binding_ident)
-            } else {
-                None
-            };
-            let iterable_expr = self.expect_expression()?;
-            let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
-            let span = self.extend_span(first.span, body_expr.span);
-            Ok(Some(self.add_expression(ParsedExpr::For(ForExpr {
-                iterable_expr,
-                binding,
-                body_block: body_expr,
-                span,
-            }))))
-        } else if first.kind.is_prefix_operator() {
-            let Some(op_kind) = ParsedUnaryOpKind::from_tokenkind(first.kind) else {
-                return Err(error("unexpected prefix operator", first));
-            };
-            self.advance();
-            let expr = self.expect_expression()?;
-            let span = self.extend_span(first.span, self.get_expression_span(expr));
-            Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
-        } else if first.kind == K::Dot && second.kind == K::Ident {
-            // <dot> <ident> for example .Red
-            self.advance();
-            self.advance();
-
-            if self.token_chars(second).chars().next().unwrap().is_lowercase() {
-                return Err(error("Variant names must be uppercase", second));
+            K::BackSlash => Ok(Some(self.expect_lambda()?)),
+            K::KeywordWhile => {
+                let while_result = Parser::expect("while loop", first, self.parse_while_loop())?;
+                Ok(Some(self.add_expression(ParsedExpr::While(while_result))))
             }
-            let variant_name = self.intern_ident_token(second);
-
-            if third.kind == K::OpenParen {
-                // Enum Constructor
+            K::KeywordLoop => {
                 self.advance();
-                let payload = self.expect_expression()?;
-                let close_paren = self.expect_eat_token(K::CloseParen)?;
-                let span = self.extend_token_span(first, close_paren);
-                Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
-                    AnonEnumConstructor { variant_name, payload: Some(payload), span },
-                ))))
-            } else {
-                // Tag Literal
-                let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
-                    AnonEnumConstructor { variant_name, payload: None, span },
-                ))))
+                let body = self.expect_block(ParsedBlockKind::LoopBody)?;
+                let span = self.extend_span(first.span, body.span);
+                Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { body, span }))))
             }
-        } else if let Some(literal_id) = self.parse_literal_atom()? {
-            Ok(Some(literal_id))
-        } else if first.kind == K::Ident {
-            let namespaced_ident = self.expect_namespaced_ident()?;
-            let second = self.tokens.peek();
-            // FnCall
-            if second.kind == K::At || second.kind == K::OpenBracket || second.kind == K::OpenParen
-            {
-                let first_type_args = match second.kind {
-                    K::OpenBracket => self.parse_bracketed_type_args()?.0,
-                    K::At => SliceHandle::empty(),
-                    K::OpenParen => SliceHandle::empty(),
-                    _ => unreachable!(),
-                };
-                let next_after_tparams = self.peek();
-                match next_after_tparams.kind {
-                    K::OpenParen => {
-                        // Call with type params above
-                        let (args, args_span) = self.expect_fn_call_args()?;
-                        let args_handle =
-                            self.ast.p_call_args.add_slice_from_iter(args.into_iter());
-                        let span = self.extend_span(namespaced_ident.span, args_span);
-                        Ok(Some(self.add_expression(ParsedExpr::Call(ParsedCall {
-                            name: namespaced_ident,
-                            type_args: first_type_args,
-                            args: args_handle,
-                            span,
-                            is_method: false,
-                            id: ParsedExprId::PENDING,
-                        }))))
-                    }
-                    K::At => {
-                        // Qualified ability call with first_type_args: Ability[<first_type_args>]@(int)/baz()
-                        self.advance();
-                        self.expect_eat_token(K::OpenParen)?;
-                        let target_type = self.expect_type_expression()?;
-                        self.expect_eat_token(K::CloseParen)?;
-                        self.expect_eat_token(K::Slash)?;
-                        let (call_name_token, call_name) = self.expect_ident()?;
-                        let (call_type_args, _) = self.parse_bracketed_type_args()?;
-                        let (args, _) = self.expect_fn_call_args()?;
-                        let args_handle =
-                            self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+            K::KeywordSwitch => {
+                let when_keyword = self.tokens.next();
+                let target_expression = self.expect_expression()?;
 
-                        let span = self.extend_to_here(first.span);
+                self.expect_eat_token(K::OpenBrace)?;
 
-                        let call_expr_id = self.add_expression(ParsedExpr::Call(ParsedCall {
-                            name: QIdent::naked(call_name, call_name_token.span),
-                            type_args: call_type_args,
-                            args: args_handle,
-                            span,
-                            is_method: false,
-                            id: ParsedExprId::PENDING,
-                        }));
-
-                        let ability_type_arguments = first_type_args;
-                        let ab_expr_span = self.extend_to_here(namespaced_ident.span);
-                        let ability_expr_id = self.ast.p_ability_exprs.add(ParsedAbilityExpr {
-                            name: namespaced_ident,
-                            arguments: ability_type_arguments,
-                            span: ab_expr_span,
-                        });
-                        Ok(Some(self.add_expression(ParsedExpr::QualifiedAbilityCall(
-                            ParsedQAbilityCall {
-                                ability_expr: ability_expr_id,
-                                self_name: target_type,
-                                call_expr: call_expr_id,
-                                span,
-                            },
-                        ))))
-                    }
-                    _ => Err(self.error_here(
-                        "Expected '(' for function call; or '@' for qualified ability impl",
-                    )),
+                // Allow an opening comma for symmetry
+                if self.peek().kind == K::Comma {
+                    self.advance();
                 }
-            } else {
-                // The last thing it can be is a simple variable reference expression
-                Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
-                    name: namespaced_ident,
-                }))))
-            }
-        } else if first.kind == K::OpenBrace {
-            // The syntax {} means empty struct, not empty block
-            // If you want an block, use a unit block { () }
-            trace!("parse_expr {:?} {:?} {:?}", first, second, third);
-            if let Some(struct_value) = self.parse_struct_value()? {
-                Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
-            } else {
-                match self.parse_block(ParsedBlockKind::LexicalBlock)? {
-                    None => Err(error_expected("block", self.peek())),
-                    Some(block) => Ok(Some(self.add_expression(ParsedExpr::Block(block)))),
-                }
-            }
-        } else if first.kind == K::KeywordIf {
-            let if_expr = Parser::expect("If Expression", first, self.parse_if_expr())?;
-            Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
-        } else if first.kind == K::OpenBracket {
-            // List literal
-            // []
-            // [a,b,c]
-            // [a x 10]
-            self.advance();
-            let mut elements = eco_vec![];
-            let (_elements_span, _terminator) = self.eat_delimited_ext(
-                "list elements",
-                &mut elements,
-                TokenKind::Comma,
-                &[TokenKind::CloseBracket],
-                Parser::expect_expression,
-            )?;
-            let span = self.extend_to_here(first.span);
-            Ok(Some(self.add_expression(ParsedExpr::ListLiteral(ParsedList { elements, span }))))
-        } else if first.kind == K::Hash {
-            self.advance();
-
-            let maybe_directive = self.peek();
-            if let Some(static_expr) =
-                self.parse_static_expr(first, maybe_directive, false, None)?
-            {
-                Ok(Some(static_expr))
-            } else {
-                match maybe_directive.kind {
-                    K::Ident if !maybe_directive.is_whitespace_preceeded() => {
-                        let chars = self.token_chars(maybe_directive);
-                        match chars {
-                            "code" => {
-                                self.advance();
-                                let parsed_stmt = self.expect_statement()?;
-                                let stmt_span = self.ast.get_stmt_span(parsed_stmt);
-                                let span = self.extend_span(first.span, stmt_span);
-                                Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
-                                    parsed_stmt,
-                                    span,
-                                }))))
-                            }
-                            _ => Err(self.error_here("Unknown directive following #")),
+                let mut cases = Vec::new();
+                while self.peek().kind != K::CloseBrace {
+                    let mut arm_pattern_ids = smallvec::smallvec![];
+                    loop {
+                        let arm_pattern_id = self.expect_parse_pattern()?;
+                        arm_pattern_ids.push(arm_pattern_id);
+                        if self.maybe_consume_next(K::KeywordOr).is_none() {
+                            break;
                         }
                     }
-                    K::KeywordIf => {
-                        let mut if_expr =
-                            Parser::expect("If Expression", first, self.parse_if_expr())?;
-                        if_expr.is_static = true;
-                        Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+
+                    let guard_condition_expr = if self.maybe_consume_next(K::KeywordIf).is_some() {
+                        Some(self.expect_expression()?)
+                    } else {
+                        None
+                    };
+
+                    self.expect_eat_token(K::RThinArrow)?;
+
+                    let arm_expr_id = self.expect_expression()?;
+                    cases.push(ParsedMatchCase {
+                        patterns: arm_pattern_ids,
+                        guard_condition_expr,
+                        expression: arm_expr_id,
+                    });
+                    let next = self.peek();
+                    if next.kind == K::Comma {
+                        self.advance();
+                    } else if next.kind != K::CloseBrace {
+                        return Err(error_expected("comma or close brace", next));
                     }
-                    _ => Err(self.error_here("Unknown directive following #")),
+                }
+                let close = self.expect_eat_token(K::CloseBrace)?;
+                let span = self.extend_token_span(when_keyword, close);
+                let match_expr =
+                    ParsedMatchExpression { match_subject: target_expression, cases, span };
+                Ok(Some(self.add_expression(ParsedExpr::Match(match_expr))))
+            }
+            K::KeywordFor => {
+                let for_expr = self.expect_for_expr(false)?;
+                Ok(Some(for_expr))
+            }
+            K::KeywordNot => {
+                let Some(op_kind) = ParsedUnaryOpKind::from_tokenkind(first.kind) else {
+                    return Err(error("unexpected prefix operator", first));
+                };
+                self.advance();
+                let expr = self.expect_expression()?;
+                let span = self.extend_span(first.span, self.get_expression_span(expr));
+                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
+            }
+            K::Dot => {
+                self.advance();
+                self.expect_eat_token(K::Ident)?;
+                // <dot> <ident> for example .Red
+
+                if self.token_chars(second).chars().next().unwrap().is_lowercase() {
+                    return Err(error("Variant names must be uppercase", second));
+                }
+                let variant_name = self.intern_ident_token(second);
+
+                if third.kind == K::OpenParen {
+                    // Enum Constructor
+                    self.advance();
+                    let payload = self.expect_expression()?;
+                    let close_paren = self.expect_eat_token(K::CloseParen)?;
+                    let span = self.extend_token_span(first, close_paren);
+                    Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
+                        AnonEnumConstructor { variant_name, payload: Some(payload), span },
+                    ))))
+                } else {
+                    // Tag Literal
+                    let span = self.extend_token_span(first, second);
+                    Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
+                        AnonEnumConstructor { variant_name, payload: None, span },
+                    ))))
                 }
             }
-        } else {
-            // More expression types
-            if compiler_debug {
-                Err(error_expected("expression following #debug", first))
-            } else {
-                Ok(None)
+            K::KeywordBuiltin => {
+                self.advance();
+                Ok(Some(self.add_expression(ParsedExpr::Builtin(first.span))))
+            }
+            K::OpenBrace => {
+                // The syntax {} means empty struct, not empty block
+                // If you want an block, use a unit block { () }
+                trace!("parse_expr {:?} {:?} {:?}", first, second, third);
+                if let Some(struct_value) = self.parse_struct_value()? {
+                    Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
+                } else {
+                    match self.parse_block(ParsedBlockKind::LexicalBlock)? {
+                        None => Err(error_expected("block", self.peek())),
+                        Some(block) => Ok(Some(self.add_expression(ParsedExpr::Block(block)))),
+                    }
+                }
+            }
+            K::KeywordIf => {
+                let if_expr = Parser::expect("If Expression", first, self.parse_if_expr(false))?;
+                Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+            }
+            K::OpenBracket => {
+                // List literal
+                // []
+                // [a,b,c]
+                // [a x 10]
+                self.advance();
+                let mut elements = eco_vec![];
+                let (_elements_span, _terminator) = self.eat_delimited_ext(
+                    "list elements",
+                    &mut elements,
+                    TokenKind::Comma,
+                    &[TokenKind::CloseBracket],
+                    Parser::expect_expression,
+                )?;
+                let span = self.extend_to_here(first.span);
+                Ok(Some(
+                    self.add_expression(ParsedExpr::ListLiteral(ParsedList { elements, span })),
+                ))
+            }
+            K::Hash => {
+                self.advance();
+
+                let maybe_directive = self.peek();
+                if let Some(static_expr) =
+                    self.parse_static_expr(first, maybe_directive, false, None)?
+                {
+                    Ok(Some(static_expr))
+                } else {
+                    match maybe_directive.kind {
+                        K::KeywordFor => {
+                            let for_expr = self.expect_for_expr(true)?;
+                            Ok(Some(for_expr))
+                        }
+                        K::KeywordIf => {
+                            let mut if_expr =
+                                Parser::expect("If Expression", first, self.parse_if_expr(true))?;
+                            if_expr.is_static = true;
+                            Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
+                        }
+                        K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+                            let chars = self.token_chars(maybe_directive);
+                            match chars {
+                                "code" => {
+                                    self.advance();
+                                    let parsed_stmt = self.expect_statement()?;
+                                    let stmt_span = self.ast.get_stmt_span(parsed_stmt);
+                                    let span = self.extend_span(first.span, stmt_span);
+                                    Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode {
+                                        parsed_stmt,
+                                        span,
+                                    }))))
+                                }
+                                _ => Err(self.error_here("Unknown directive following #")),
+                            }
+                        }
+                        _ => Err(self.error_here("Unknown directive following #")),
+                    }
+                }
+            }
+            _ => {
+                // Follows below the bad part of this function
+                // parse_literal_atom handles _some_ Idents, but not all.
+                if let Some(literal_id) = self.parse_literal_atom()? {
+                    Ok(Some(literal_id))
+                } else if first.kind == K::Ident {
+                    let namespaced_ident = self.expect_namespaced_ident()?;
+                    let second = self.tokens.peek();
+                    // FnCall OR a QualifiedAbilityCall
+                    if second.kind == K::At
+                        || second.kind == K::OpenBracket
+                        || second.kind == K::OpenParen
+                    {
+                        let first_type_args = match second.kind {
+                            K::OpenBracket => self.parse_bracketed_type_args()?.0,
+                            K::At => SliceHandle::empty(),
+                            K::OpenParen => SliceHandle::empty(),
+                            _ => unreachable!(),
+                        };
+                        let next_after_tparams = self.peek();
+                        match next_after_tparams.kind {
+                            K::OpenParen => {
+                                // Call with type params above
+                                let (args, args_span) = self.expect_fn_call_args()?;
+                                let args_handle =
+                                    self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+                                let span = self.extend_span(namespaced_ident.span, args_span);
+                                Ok(Some(self.add_expression(ParsedExpr::Call(ParsedCall {
+                                    name: namespaced_ident,
+                                    type_args: first_type_args,
+                                    args: args_handle,
+                                    span,
+                                    is_method: false,
+                                    id: ParsedExprId::PENDING,
+                                }))))
+                            }
+                            K::At => {
+                                // Qualified ability call with first_type_args: Ability[<first_type_args>]@(int)/baz()
+                                self.advance();
+                                self.expect_eat_token(K::OpenParen)?;
+                                let target_type = self.expect_type_expression()?;
+                                self.expect_eat_token(K::CloseParen)?;
+                                self.expect_eat_token(K::Slash)?;
+                                let (call_name_token, call_name) = self.expect_ident()?;
+                                let (call_type_args, _) = self.parse_bracketed_type_args()?;
+                                let (args, _) = self.expect_fn_call_args()?;
+                                let args_handle =
+                                    self.ast.p_call_args.add_slice_from_iter(args.into_iter());
+
+                                let span = self.extend_to_here(first.span);
+
+                                let call_expr_id =
+                                    self.add_expression(ParsedExpr::Call(ParsedCall {
+                                        name: QIdent::naked(call_name, call_name_token.span),
+                                        type_args: call_type_args,
+                                        args: args_handle,
+                                        span,
+                                        is_method: false,
+                                        id: ParsedExprId::PENDING,
+                                    }));
+
+                                let ability_type_arguments = first_type_args;
+                                let ab_expr_span = self.extend_to_here(namespaced_ident.span);
+                                let ability_expr_id =
+                                    self.ast.p_ability_exprs.add(ParsedAbilityExpr {
+                                        name: namespaced_ident,
+                                        arguments: ability_type_arguments,
+                                        span: ab_expr_span,
+                                    });
+                                Ok(Some(self.add_expression(ParsedExpr::QualifiedAbilityCall(
+                                    ParsedQAbilityCall {
+                                        ability_expr: ability_expr_id,
+                                        self_name: target_type,
+                                        call_expr: call_expr_id,
+                                        span,
+                                    },
+                                ))))
+                            }
+                            _ => Err(self.error_here(
+                                "Expected '(' for function call; or '@' for qualified ability impl",
+                            )),
+                        }
+                    } else {
+                        // The last thing it can be is a simple variable reference expression
+                        Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
+                            name: namespaced_ident,
+                        }))))
+                    }
+                } else {
+                    // More expression types
+                    if compiler_debug {
+                        Err(error_expected("expression following #debug", first))
+                    } else {
+                        Ok(None)
+                    }
+                }
             }
         }?;
         if let Some(expression_id) = resulting_expression {
@@ -3529,6 +3538,35 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
         }
         Ok(resulting_expression)
+    }
+
+    fn expect_for_expr(&mut self, is_static: bool) -> ParseResult<ParsedExprId> {
+        // for (<binding> in) <iterable> {
+        // ^   ^              ^
+        // 1   2          ^3  2/4
+        let first = self.expect_eat_token(K::KeywordFor)?;
+        let (second, third) = self.peek_two();
+        let binding = if third.kind == K::KeywordIn {
+            if second.kind != K::Ident {
+                return Err(error("Expected identifiers between for and in keywords", second));
+            }
+            let binding_ident = self.intern_ident_token(second);
+            self.advance_n(2);
+            Some(binding_ident)
+        } else {
+            None
+        };
+        let iterable_expr = self.expect_expression()?;
+        let body_expr = self.expect_block(ParsedBlockKind::LoopBody)?;
+        let span = self.extend_span(first.span, body_expr.span);
+        let expr_id = self.add_expression(ParsedExpr::For(ForExpr {
+            iterable_expr,
+            binding,
+            body_block: body_expr,
+            is_static,
+            span,
+        }));
+        Ok(expr_id)
     }
 
     fn expect_lambda_arg_defn(&mut self) -> ParseResult<LambdaArgDefn> {
@@ -3850,7 +3888,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
-    fn parse_if_expr(&mut self) -> ParseResult<Option<ParsedIfExpr>> {
+    fn parse_if_expr(&mut self, is_static: bool) -> ParseResult<Option<ParsedIfExpr>> {
         let Some(if_keyword) = self.maybe_consume_next(TokenKind::KeywordIf) else {
             return Ok(None);
         };
@@ -3871,13 +3909,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             .map(|a| self.get_expression_span(*a))
             .unwrap_or(self.get_expression_span(consequent_expr));
         let span = self.extend_span(if_keyword.span, end_span);
-        let if_expr = ParsedIfExpr {
-            cond: condition_expr,
-            cons: consequent_expr,
-            alt,
-            span,
-            is_static: false,
-        };
+        let if_expr =
+            ParsedIfExpr { cond: condition_expr, cons: consequent_expr, alt, span, is_static };
         Ok(Some(if_expr))
     }
 

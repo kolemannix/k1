@@ -631,7 +631,7 @@ fn i8_array_from_str<'ctx>(ctx: &'ctx Context, value: &str) -> ArrayValue<'ctx> 
 
 impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn init_debug(
-        _ctx: &'ctx Context,
+        ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
         module: &TypedProgram,
         optimize: bool,
@@ -657,42 +657,42 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
             "MacOSX.sdk",
         );
-        //let md0 = ctx.metadata_node(&[
-        //    ctx.i32_type().const_int(2, false).into(),
-        //    ctx.metadata_string("SDK Version").into(),
-        //    ctx.i32_type()
-        //        .const_array(&[
-        //            ctx.i32_type().const_int(14, false),
-        //            ctx.i32_type().const_int(0, false),
-        //        ])
-        //        .into(),
-        //]);
-        //let md1 = ctx.metadata_node(&[
-        //    ctx.i32_type().const_int(2, false).into(),
-        //    ctx.metadata_string("Dwarf Version").into(),
-        //    ctx.i32_type().const_int(4, false).into(),
-        //]);
-        //let md2 = ctx.metadata_node(&[
-        //    ctx.i32_type().const_int(2, false).into(),
-        //    ctx.metadata_string("Debug Info Version").into(),
-        //    ctx.i32_type().const_int(3, false).into(),
-        //]);
-        // let md3 = ctx.metadata_node(&[
-        //     ctx.i32_type().const_int(1, false).into(),
-        //     ctx.metadata_string("PIC Level").into(),
-        //     ctx.i32_type().const_int(2, false).into(),
-        // ]);
-        //let md4 = ctx.metadata_node(&[
-        //    ctx.i32_type().const_int(1, false).into(),
-        //    ctx.metadata_string("PIE Level").into(),
-        //    ctx.i32_type().const_int(2, false).into(),
-        //]);
+        let md0 = ctx.metadata_node(&[
+            ctx.i32_type().const_int(2, false).into(),
+            ctx.metadata_string("SDK Version").into(),
+            ctx.i32_type()
+                .const_array(&[
+                    ctx.i32_type().const_int(14, false),
+                    ctx.i32_type().const_int(0, false),
+                ])
+                .into(),
+        ]);
+        let md1 = ctx.metadata_node(&[
+            ctx.i32_type().const_int(2, false).into(),
+            ctx.metadata_string("Dwarf Version").into(),
+            ctx.i32_type().const_int(4, false).into(),
+        ]);
+        let md2 = ctx.metadata_node(&[
+            ctx.i32_type().const_int(2, false).into(),
+            ctx.metadata_string("Debug Info Version").into(),
+            ctx.i32_type().const_int(3, false).into(),
+        ]);
+         let md3 = ctx.metadata_node(&[
+             ctx.i32_type().const_int(1, false).into(),
+             ctx.metadata_string("PIC Level").into(),
+             ctx.i32_type().const_int(2, false).into(),
+         ]);
+        let md4 = ctx.metadata_node(&[
+            ctx.i32_type().const_int(1, false).into(),
+            ctx.metadata_string("PIE Level").into(),
+            ctx.i32_type().const_int(2, false).into(),
+        ]);
         // revisit this metadata (I did it when scrambling to get debug info to show up)
-        //llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
-        //llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
-        //llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
-        //// llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
-        //llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
+        llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
+        llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
+        llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
+        // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
+        llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
         let di_files: FxHashMap<FileId, DIFile> = module
             .ast

@@ -1,0 +1,87 @@
+let sample: string = `L68
+L30
+R48
+L5
+R60
+L55
+L1
+L99
+R14
+L82`;
+
+fn day1(input: string): unit {
+
+  let commands = input.splitByChar('\n');
+
+  //println(input);
+
+  let pos = 50;
+  // Part 2 count
+  let mzs = 0;
+  // Part 1 count
+  let szs = 0;
+  for commands {
+    let negative = it.get(0) == 'L';
+    let magnitudeStr = it.drop(1);
+    let isZero = pos == 0;
+    let _lastPos = pos;
+    require string/parseBase10(magnitudeStr) is .Some(magnitude) else { return() };
+
+    let change = if negative { magnitude as int * -1 } else magnitude as int;
+
+    pos := pos + change;
+    
+    if (pos < 0 and not isZero) { mzs := mzs + 1 };
+    mzs := mzs + (pos.abs() / 100);
+    if (pos == 0) { mzs := mzs + 1 };
+
+    pos := ((pos % 100) + 100) % 100;
+
+    if (pos == 0) { szs := szs + 1 };
+  };
+
+
+  println("Day 1 part Z: {szs}");
+  println("Day 1 part CLICK: {mzs}");
+}
+
+fn brute(input: string): unit {
+  let commands = input.splitByChar('\n');
+
+  let pos = 50;
+  let zeroes = 0;
+  for commands {
+    let negative = it.get(0) == 'L';
+    let magnitudeStr = it.drop(1);
+    require string/parseBase10(magnitudeStr) is .Some(magnitude) else { return() };
+    let m = magnitude as int;
+    while m > 0 {
+      if negative { pos := pos - 1 } else { pos := pos + 1 };
+      if pos < 0 { pos := pos + 100 };
+      if pos > 99 { pos := pos - 100 };
+      if pos == 0 {
+        zeroes := zeroes + 1
+      };
+
+      m := m - 1;
+    };
+
+    
+  };
+  println("Zeroes: {zeroes}");
+}
+
+let input: string = core/files/readToString(context .Arena)("day1_input.txt");
+fn main(): i32 {
+  println("Hello, AoC 2025!");
+  //#static brute(input);
+  //#static day1(input);
+  //brute(input);
+  //day1(input);
+
+  // day2/day2(part = 2, input = day2/input);
+
+  //day3/part1(day3/input);
+  day3/part2(day3/input);
+  0
+}

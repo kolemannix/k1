@@ -105,7 +105,8 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Ability objects; dyn[<ability expr>]
 
 ## Project: Static Improvements
-- [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+- [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
+- [-] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
