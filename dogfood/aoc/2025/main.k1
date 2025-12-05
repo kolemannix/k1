@@ -79,6 +79,6 @@ fn main(): i32 {
   //brute(input);
   //day1(input);
 
-  day2/day2(day2/part1Input);
+  day2/day2(part = 2, input = day2/input);
   0
 }

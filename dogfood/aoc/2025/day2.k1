@@ -1,9 +1,9 @@
 ns day2;
-let part1Input: string = "5959566378-5959623425,946263-1041590,7777713106-7777870316,35289387-35394603,400-605,9398763-9592164,74280544-74442206,85684682-85865536,90493-179243,202820-342465,872920-935940,76905692-76973065,822774704-822842541,642605-677786,3759067960-3759239836,1284-3164,755464-833196,52-128,3-14,30481-55388,844722790-844967944,83826709-83860070,9595933151-9595993435,4216-9667,529939-579900,1077949-1151438,394508-486310,794-1154,10159-17642,5471119-5683923,16-36,17797-29079,187-382";
+let input: string = "5959566378-5959623425,946263-1041590,7777713106-7777870316,35289387-35394603,400-605,9398763-9592164,74280544-74442206,85684682-85865536,90493-179243,202820-342465,872920-935940,76905692-76973065,822774704-822842541,642605-677786,3759067960-3759239836,1284-3164,755464-833196,52-128,3-14,30481-55388,844722790-844967944,83826709-83860070,9595933151-9595993435,4216-9667,529939-579900,1077949-1151438,394508-486310,794-1154,10159-17642,5471119-5683923,16-36,17797-29079,187-382";
 let sampleInput: string = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-1698528,446443-446449,38593856-38593862,565653-565659,824824821-824824827,2121212118-2121212124";
 use core/iter/forall
 
-fn day2(input: string): unit {
+fn day2(part: int, input: string): unit {
   mem/pushMode(.SystemHeap);
   let ranges = input.splitByChar(',');
   mem/popMode();
@@ -12,34 +12,34 @@ fn day2(input: string): unit {
   println("{mem/arena().usedBytes()/(1024*1024)}mb");
   let invalidSum = 0;
   let valuesProcessed = 0;
+  let totalMem = 0;
   for ranges {
     let parts = it.splitByChar('-');
     let start: i64 = string/parseBase10(parts.first().!).! as i64;
     let end: i64 = string/parseBase10(parts.last().!).! as i64;
-    println("range: {start} - {end}");
-    println("diff: {end - start}");
 
     let value = start;
     while value <= end {
       //println("checking {value}");
-      let isInvalid = checkInvalid(value);
+      let isInvalid = if part == 1 checkInvalidPart1(value) else checkInvalidPart2(value);
       if isInvalid {
-        //println("{value} is invalid! ({invalidSum})");
+        println("{value} is invalid! ({invalidSum})");
         invalidSum := invalidSum + value
       };
       value := value + 1;
     };
     valuesProcessed := valuesProcessed + (end - start);
+    totalMem := totalMem + mem/arena().usedBytes();
     mem/arena().reset(false);
   };
 
-  println("Day 1 part 1: {invalidSum} (processed {valuesProcessed} values)");
-  println("{mem/arena().usedBytes()/(1024*1024)}mb");
+  println("Day 1 part {part}: {invalidSum} (processed {valuesProcessed} values)");
+  println("Total mem reclaimed: {totalMem / (1024*1024)}mb");
   crash("");
 }
 
 let* buffer: *mut core/StringBuilder = core/StringBuilder/new();
-fn checkInvalid(value: i64): bool {
+fn checkInvalidPart1(value: i64): bool {
   buffer.reset();
   value.printTo(buffer);
   let valueStr = string/fromView(buffer.rawView());
@@ -47,28 +47,34 @@ fn checkInvalid(value: i64): bool {
     //println("skipping odd len {valueStr}");
     return(false)
   };
-  let groups = grouped(valueStr, valueStr.len() / 2);
+  let groups = chunks(valueStr, valueStr.len() / 2);
   if groups.len() > 1 {
     let h = groups.first().!;
     let allEqual = forall(groups.drop(1), \g. g == h);
     //println("allEqual? {groups}: {allEqual}");
     allEqual
   } else false;
-  //for IntRange/make(1, valueStr.len() + 1) {
-  //  //println("Testing {value} for {it}");
-  //  let groups = grouped(valueStr, it);
-  //  if groups.len() > 1 {
-  //    let h = groups.first().!;
-  //    let allEqual = forall(groups.drop(1), \g. g == h);
-  //    //println("allEqual? {groups}: {allEqual}");
-  //    if allEqual return(true);
-  //  }
-  //};
-  //false
+}
+fn checkInvalidPart2(value: i64): bool {
+  buffer.reset();
+  value.printTo(buffer);
+  let valueStr = string/fromView(buffer.rawView());
+  //println("checkInvalidPart2 {valueStr}");
+  for IntRange/make(1, (valueStr.len() / 2) + 1) {
+    //println("Testing {value} for {it}");
+    let groups = chunks(valueStr, it);
+    if groups.len() > 1 {
+      let h = groups.first().!;
+      let allEqual = forall(groups.drop(1), \g. g == h);
+      //println("allEqual? {groups}: {allEqual}");
+      if allEqual return(true);
+    }
+  };
+  false
 }
 
-// nocommit add grouped to everything iterable in core or std
-fn grouped(s: string, n: size): View[string] {
+// nocommit add chunks to everything iterable in core or std
+fn chunks(s: string, n: size): View[string] {
   let i = 0;
   let* results = List/empty[string]();
   while i < s.len() {
@@ -79,4 +85,4 @@ fn grouped(s: string, n: size): View[string] {
   results.asView()
 }
 
-//#static day2(part1Input)
+//#static day2(part = 2, input = part1Input)
