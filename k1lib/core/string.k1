@@ -128,6 +128,9 @@ ns string {
   fn substring(self: string, start: size, end: size): string {
     { view: self.view.slice(start, end) }
   }
+  fn slice(self: string, start: size, end: size): string {
+    { view: self.view.slice(start, end) }
+  }
 
   fn take(self: string, count: size): string { self.substring(0,     count) }
   fn drop(self: string, count: size): string { self.substring(count, self.len()) }

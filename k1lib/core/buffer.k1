@@ -283,11 +283,10 @@ ns BufferIterator {
 }
 
 impl[T] Iterator[Item = T] for BufferIterator[T] {
-  fn next(self: *mut BufferIterator[T]): ?Item { 
+  fn peek(self: *BufferIterator[T]): ?Item {
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
-      self.pos* <- self.pos + 1;
-      some(item)
+      .Some(item)
     } else .None
   }
   fn sizeHint(self: *Self): { atLeast: size, atMost: ?size } { 
@@ -334,11 +333,10 @@ ns BufferRefIterator {
 }
 
 impl[T] Iterator[Item = *mut T] for BufferRefIterator[T] {
-  fn next(self: *mut BufferRefIterator[T]): ?Item { 
+  fn peek(self: *BufferRefIterator[T]): ?Item {
     if self.pos < self.buf.len {
       let item = self.buf.getRef(self.pos);
-      self.pos* <- self.pos + 1;
-      some(item)
+      .Some(item)
     } else .None
   }
   fn sizeHint(self: *Self): { atLeast: size, atMost: ?size } { 

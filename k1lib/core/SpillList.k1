@@ -32,7 +32,7 @@ ns SpillList {
 
     let srcBuffer = fixlist.asBuffer();
     list.appendBuffer(srcBuffer);
-    eprintln("Spilled to a list of cap {list.cap()}");
+    // eprintln("Spilled to a list of cap {list.cap()}");
 
     list.*
   }
