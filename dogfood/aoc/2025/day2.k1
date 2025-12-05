@@ -35,7 +35,7 @@ fn day2(part: int, input: string): unit {
 
   println("Day 1 part {part}: {invalidSum} (processed {valuesProcessed} values)");
   println("Total mem reclaimed: {totalMem / (1024*1024)}mb");
-  crash("");
+  crash("{invalidSum}");
 }
 
 let* buffer: *mut core/StringBuilder = core/StringBuilder/new();
