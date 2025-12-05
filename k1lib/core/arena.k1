@@ -24,13 +24,14 @@ ns Arena {
   }
 
   fn _virtual(usageHintMb: size): Arena {
-    let basePtr: ptr = mem/virtualAlloc(gb);
+    let sizeBytes = 1 * gb;
+    let basePtr: ptr = mem/virtualAlloc(sizeBytes);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
     posix/madvise(basePtr, (usageHintMb * mb) as c_sizet, advice = posix/MADV_SEQUENTIAL);
     {
       basePtr: basePtr,
       curAddr: basePtr,
-      maxAddr: basePtr.addBytes(gb)
+      maxAddr: basePtr.addBytes(sizeBytes)
     }
   }
 
@@ -59,6 +60,7 @@ ns Arena {
     let dataStart = self.curAddr.aligned(align);
     let newEnd = dataStart.addBytes(size);
     if newEnd as usize > self.maxAddr as usize {
+      mem/pushMode(.SystemHeap);
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
 
