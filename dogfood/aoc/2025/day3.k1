@@ -45,7 +45,6 @@ fn part2(input: string): unit {
     while rangeSize > 0 {
       let end = bank.len() - rangeSize + 1;
       let candidateRange = bank.slice(start, end);
-      987654321111111;
       println("picking ({start},{end}) {rangeSize} from {candidateRange}");
       let best = { index: start, value: bank.get(start) };
       for cand in candidateRange {
