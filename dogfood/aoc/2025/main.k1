@@ -72,6 +72,7 @@ fn brute(input: string): unit {
 }
 
 let input: string = core/files/readToString(context .Arena)("day1_input.txt");
+
 fn main(): i32 {
   println("Hello, AoC 2025!");
   //#static brute(input);
@@ -79,9 +80,9 @@ fn main(): i32 {
   //brute(input);
   //day1(input);
 
-  // day2/day2(part = 2, input = day2/input);
+  day2/day2(part = 2, input = day2/input);
 
   //day3/part1(day3/input);
-  day3/part2(day3/input);
+  //day3/part2(day3/input);
   0
 }
