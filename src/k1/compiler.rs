@@ -466,7 +466,7 @@ pub fn write_executable(
         TargetOs::MacOs => {
             build_cmd.arg(macos_version_flag.as_ref().unwrap());
             build_cmd.arg("--sysroot");
-            build_cmd.arg("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk");
+            build_cmd.arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
             build_cmd.arg("-lunwind");
         }
         TargetOs::Linux => {
