@@ -223,7 +223,7 @@ ns List {
     if input.len <= 1 return(());
   
     let halfIndex = input.len / 2;
-    let pivot = input.*.get(halfIndex);
+    let pivot = input.get(halfIndex);
   
     let* left = List/withCapacity[T](halfIndex);
     let* right = List/withCapacity[T](halfIndex);

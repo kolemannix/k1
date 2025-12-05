@@ -593,6 +593,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         };
     }
 
+    let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
@@ -600,18 +601,18 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // if debugger {
-        //     eprintln!(
-        //         "{}[{}] i{} {}",
-        //         "  ".repeat(vm.stack.current_frame_index() as usize),
-        //         vm.stack.current_frame_index(),
-        //         inst_id.as_u32(),
-        //         bc::inst_to_string(k1, inst_id)
-        //     );
-        //     std::io::stdin().read_line(&mut line).unwrap();
-        //     if &line == "v\n" {
-        //         vm.dump_current_frame(k1);
-        //     }
-        //     line.clear()
+             //eprintln!(
+             //    "{}[{}] i{} {}",
+             //    "  ".repeat(vm.stack.current_frame_index() as usize),
+             //    vm.stack.current_frame_index(),
+             //    inst_id.as_u32(),
+             //    bc::inst_to_string(k1, inst_id)
+             //);
+             //std::io::stdin().read_line(&mut line).unwrap();
+             //if &line == "v\n" {
+             //    vm.dump_current_frame(k1);
+             //}
+             //line.clear();
         // }
 
         // ~Decode~ Execute

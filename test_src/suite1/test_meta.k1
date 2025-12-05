@@ -106,7 +106,7 @@ fn test(): unit {
   simpleIncrement();
   testToJson();
 
-  let x: MyMetaPoint = { x: 0, y: 42 };
+  let _x: MyMetaPoint = { x: 0, y: 42 };
   pre/pi;
   
   ()

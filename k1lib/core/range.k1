@@ -14,11 +14,9 @@ ns IntRangeIterator {
   fn position(self: IntRangeIterator): int { self.range.start + self.offset }
   fn size(self: IntRangeIterator): int { self.range.end - self.range.start }
   fn stepBy(self: *mut IntRangeIterator, n: size): bool { 
-    let nextPos = self.position() + n;
-    if nextPos >= self.range.end false else {
-      self.offset* <- self.offset + n;
-      true
-    }
+    self.offset* <- self.offset + n;
+    let isNowOob = self.position() >= self.range.end;
+    isNowOob
   }
   fn current(self: IntRangeIterator): int {
     self.range.start + self.offset
