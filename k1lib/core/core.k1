@@ -244,6 +244,19 @@ ns char {
 
 }
 
+impl Comparable for char {
+  fn compare(self: char, other: char): Ordering {
+    (self as u8).compare(other as u8)
+  }
+}
+
+impl ScalarCmp for char {
+  fn lt(self: Self, other: Self): bool { (self as u8).lt(other as u8) }
+  fn le(self: Self, other: Self): bool { (self as u8).le(other as u8) }
+  fn gt(self: Self, other: Self): bool { (self as u8).gt(other as u8) }
+  fn ge(self: Self, other: Self): bool { (self as u8).ge(other as u8) }
+}
+
 impl[T: Print] Show for T {
   fn show(self: Self): string { 
     let* sb = StringBuilder/new();

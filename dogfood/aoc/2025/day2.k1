@@ -84,5 +84,3 @@ fn chunks(s: string, n: size): View[string] {
   };
   results.asView()
 }
-
-//#static day2(part = 2, input = part1Input)
