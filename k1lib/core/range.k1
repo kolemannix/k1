@@ -15,8 +15,8 @@ ns IntRangeIterator {
   fn size(self: IntRangeIterator): int { self.range.end - self.range.start }
   fn stepBy(self: *mut IntRangeIterator, n: size): bool { 
     self.offset* <- self.offset + n;
-    let isNowOob = self.position() >= self.range.end;
-    isNowOob
+    let isInBounds = self.position() < self.range.end;
+    isInBounds
   }
   fn current(self: IntRangeIterator): int {
     self.range.start + self.offset
