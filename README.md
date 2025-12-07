@@ -1,4 +1,4 @@
-`k1` is like C with typeclasses, full compile-time execution, ADTs\*, zero-cost lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
+`k1` is like C with typeclasses, full compile-time execution, ADTs, zero-cost lambdas, pattern matching, next-generation metaprogramming, and a modern generic typesystem
 
 ## Tenets
 ### Compile fast
@@ -66,7 +66,7 @@ big enough to house all the fields I provide, and a series of fields as a collec
 
 We can encode this in K1 easily enough as a function:
 
-```k1
+```rust
 fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size}]): ???
 ```
 We use a type parameter, `Base`, denoted in square brackets, to track our 'base type', which
@@ -80,7 +80,7 @@ some code; most text-based programming languages are very well-represented and m
 a particularly powerful format: source code text. So we'll return a `string`,
 (not a `org.sys.meta.macros.whitebox.TTreeSyn.Quoted`) containing the K1 code we'd otherwise have hand-written for our bitfield.
 
-```k1
+```rust
 fn bitfield[Base](typeName: string, members: View[{ name: string, bits: size}]): string
 ```
 
@@ -219,23 +219,30 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
   code.build()
 }
 ```
-We can test this function by running it and looking at the string. Or we could ask `k1` to run it
-for us and insert the result into our program:
-```
+For an example input, let's encode some data about a starship into 16 bits. 
+- bit 1: shielded
+- bit 2: cloaked
+- bit 3: damaged
+- bits 4-8: a sector id
+- bits 9-16: a byte named `foo` because what example is complete without a `foo`
+
+We could test this function by just running it and inspecting the string, since
+it is a normal function, or we could ask `k1` to run it for us and insert the result into our program:
+```rust
 #meta std/bitfield/define[u16]("StarshipFlags",
   [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, bn("foo", 8)]
 )
 ```
 
-And now we can pack some bits!
+And now we can use the type and namespace `StarshipFlags` to pack some bits!
 ```rust
 fn testBitfield(): unit {
-  let y: FlagsAuto = { bits: 0b1111_0000_1000_1101 };
+  let y: StarshipFlags = { bits: 0b1111_0000_1000_1101 };
   //                           foo......|secto||||
   //                                           |||- shielded
   //                                           ||- cloaked
   //                                           |- damaged
-  let x: FlagsAuto = FlagsAuto/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
+  let x: StarshipFlags = StarshipFlags/zero.setShielded(true).setDamaged(true).setSectorId(17).setFoo(0b1111_0000);
   assertEquals(y.getShielded(), x.getShielded());
   assertEquals(y.getCloaked(), x.getCloaked());
   assertEquals(y.getDamaged(), x.getDamaged());
