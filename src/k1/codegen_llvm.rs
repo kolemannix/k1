@@ -37,7 +37,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::compiler::MAC_SDK_VERSION;
+use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
@@ -640,6 +640,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
+        let sysroot = match module.ast.config.target.target_os() {
+            compiler::TargetOs::Linux => "",
+            compiler::TargetOs::MacOs => compiler::MAC_SDK_SYSROOT,
+            compiler::TargetOs::Wasm => "",
+        };
+        let sdk = match module.ast.config.target.target_os() {
+            compiler::TargetOs::Linux => "",
+            compiler::TargetOs::MacOs => "MacOSX.sdk",
+            compiler::TargetOs::Wasm => "",
+        };
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
@@ -654,15 +664,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             0,
             false,
             false,
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-            "MacOSX.sdk",
+            sysroot,
+            sdk,
         );
         let md0 = ctx.metadata_node(&[
             ctx.i32_type().const_int(2, false).into(),
             ctx.metadata_string("SDK Version").into(),
             ctx.i32_type()
                 .const_array(&[
-                    ctx.i32_type().const_int(14, false),
+                    ctx.i32_type().const_int(15, false),
                     ctx.i32_type().const_int(0, false),
                 ])
                 .into(),
@@ -677,22 +687,22 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ctx.metadata_string("Debug Info Version").into(),
             ctx.i32_type().const_int(3, false).into(),
         ]);
-         let md3 = ctx.metadata_node(&[
-             ctx.i32_type().const_int(1, false).into(),
-             ctx.metadata_string("PIC Level").into(),
-             ctx.i32_type().const_int(2, false).into(),
-         ]);
-        let md4 = ctx.metadata_node(&[
-            ctx.i32_type().const_int(1, false).into(),
-            ctx.metadata_string("PIE Level").into(),
-            ctx.i32_type().const_int(2, false).into(),
-        ]);
+        // let md3 = ctx.metadata_node(&[
+        //     ctx.i32_type().const_int(1, false).into(),
+        //     ctx.metadata_string("PIC Level").into(),
+        //     ctx.i32_type().const_int(2, false).into(),
+        // ]);
+        //let md4 = ctx.metadata_node(&[
+        //    ctx.i32_type().const_int(1, false).into(),
+        //    ctx.metadata_string("PIE Level").into(),
+        //    ctx.i32_type().const_int(2, false).into(),
+        //]);
         // revisit this metadata (I did it when scrambling to get debug info to show up)
         llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
         // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
-        llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
+        // llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
         let di_files: FxHashMap<FileId, DIFile> = module
             .ast
@@ -1818,7 +1828,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
-                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                let string_global = self
+                    .codegen_string_id_to_global(
+                        *string_id,
+                        Some(&format!("static_{}\0", static_value_id.as_u32())),
+                    )
+                    .unwrap();
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
@@ -1928,8 +1943,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
-                            &format!("static_elems_{}", static_value_id.as_u32()),
+                            &format!("static_elems_{}\0", static_value_id.as_u32()),
                             true,
+                            LlvmLinkage::Private,
                         );
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
@@ -1994,8 +2010,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let global = self.make_global_from_value(
             struct_value,
             layout.align,
-            &format!("static_{}", static_value_id.as_u32()),
+            &format!("static_{}\0", static_value_id.as_u32()),
             true,
+            LlvmLinkage::Private,
         );
         self.static_values_globals.insert(static_value_id, global);
         Ok(global)
@@ -2007,12 +2024,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         align: u32,
         name: &str,
         constant: bool,
+        linkage: LlvmLinkage,
     ) -> GlobalValue<'ctx> {
         let global = self.llvm_module.add_global(value.get_type(), None, name);
         global.set_alignment(align);
         global.set_unnamed_addr(true);
         global.set_initializer(&value);
         global.set_constant(constant);
+        global.set_linkage(linkage);
         global
     }
 
@@ -2032,7 +2051,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Int(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::String(string_id) => {
-                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                let string_global = self
+                    .codegen_string_id_to_global(
+                        *string_id,
+                        Some(&format!("static_{}\0", static_value_id.as_u32())),
+                    )
+                    .unwrap();
                 string_global.as_basic_value_enum()
             }
             StaticValue::Zero(type_id) => {
@@ -2069,12 +2093,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         rust_str: &str,
         name: Option<&str>,
     ) -> CodegenResult<GlobalValue<'ctx>> {
+        let string_name = match name {
+            None => "string_data",
+            Some(n) => &format!("string_data_{n}\0"),
+        };
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(rust_str.len() as u32),
             None,
-            "str_data",
+            string_name,
         );
         let str_data_array = i8_array_from_str(self.ctx, rust_str);
+        global_str_data.set_linkage(LlvmLinkage::Private);
         global_str_data.set_initializer(&str_data_array);
         global_str_data.set_unnamed_addr(true);
         global_str_data.set_constant(true);
@@ -2124,12 +2153,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_string_id_to_global(
         &mut self,
         string_id: StringId,
+        name: Option<&str>,
     ) -> CodegenResult<GlobalValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
             let string_value = self.k1.get_string(string_id);
-            let ptr = self.make_string_llvm_global(string_value, None)?;
+            let ptr = self.make_string_llvm_global(string_value, name)?;
 
             self.strings.insert(string_id, ptr);
             Ok(ptr)
@@ -2210,16 +2240,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         self.k1.type_id_to_string(expr_type),
                         &llvm_type
                     );
-                    Ok(self.load_variable_value(&llvm_type, *variable_value).into())
+                    let value = self.load_variable_value(&llvm_type, *variable_value);
+                    Ok(value.into())
                 } else {
-                    Err(CodegenError {
-                        message: format!(
-                            "No pointer or global found for variable {} id={}",
-                            self.k1.expr_to_string(expr_id),
-                            ir_var.variable_id
-                        ),
-                        span: expr_span,
-                    })
+                    let v = self.k1.variables.get(ir_var.variable_id);
+                    match v.global_id() {
+                        None => Err(CodegenError {
+                            message: format!(
+                                "No llvm entry found for variable {} id={}",
+                                self.k1.expr_to_string(expr_id),
+                                ir_var.variable_id
+                            ),
+                            span: expr_span,
+                        }),
+                        Some(global_id) => {
+                            self.codegen_global(global_id)?;
+
+                            // Recurse to avoid code duplication or factoring
+                            self.codegen_expr(expr_id)
+                        }
+                    }
                 }
             }
             TypedExpr::Struct(struc) => {
@@ -3329,7 +3369,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
-                // TODO: sort the schemas so codegen more predictably
                 if is_type_name {
                     for (type_id, static_string_id) in self
                         .k1
@@ -3355,7 +3394,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             else {
                                 panic!("typename should be a string")
                             };
-                            let global_value = self.codegen_string_id_to_global(*string_id)?;
+                            let global_value = self.codegen_string_id_to_global(
+                                *string_id,
+                                Some(&format!("typename_{}\0", type_id.as_u32())),
+                            )?;
                             global_value.as_pointer_value().as_basic_value_enum()
                         };
                         self.store_k1_value(&return_llvm_type, sret_ptr, value);
@@ -3864,18 +3906,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let global = self.k1.globals.get(global_id);
         let initial_static_value_id = global.initial_value.unwrap();
         let variable = self.k1.variables.get(global.variable_id);
-        let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
+
+        // For now let's just use the name, eventually we'll ask the user for a link name
+        let name = if global.is_exported {
+            self.k1.ident_str(variable.name)
+        } else {
+            &self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
+        };
         let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
         let is_reference_type = maybe_reference_type.is_some();
 
         let layout = self.k1.types.get_layout(global.ty);
         let initializer_basic_value =
             self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+        let llvm_linkage = match global.is_exported {
+            false => LlvmLinkage::Private,
+            true => LlvmLinkage::External,
+        };
         let llvm_global = self.make_global_from_value(
             initializer_basic_value,
             layout.align,
-            &name,
+            name,
             global.is_constant,
+            llvm_linkage,
         );
         if self.k1.program_settings.multithreaded {
             if global.is_tls {
@@ -3905,9 +3958,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn codegen_program(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
+
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
+
+        // Guarantee code generation of exported globals
         for global_id in &global_ids {
-            self.codegen_global(*global_id)?;
+            let g = self.k1.globals.get(*global_id);
+            if g.is_exported {
+                self.codegen_global(*global_id)?;
+            }
         }
 
         // TODO: Codegen the exported functions as well as the called ones

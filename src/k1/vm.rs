@@ -20,9 +20,10 @@ use crate::typer::types::{
     ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, Layout, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
-    StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-    TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
+    FunctionId, Layout, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum,
+    StaticStruct, StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue,
+    TypedGlobalId, TypedIntValue, TypedProgram, TyperError, TyperResult, UNIT_BYTE_VALUE,
+    VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -171,12 +172,20 @@ pub enum StackSelection {
     CallStackCurrent,
 }
 
+#[derive(Clone)]
+pub struct CompilerMessage {
+    level: MessageLevel,
+    message: StringId,
+    filename: String,
+    line: u32,
+}
+
 pub struct Vm {
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
     eval_span: SpanId,
-    compiler_messages: Vec<String>,
+    compiler_messages: Vec<CompilerMessage>,
 }
 
 impl Vm {
@@ -531,13 +540,10 @@ pub fn execute_compiled_unit(
     let end = k1.timing.clock.raw();
     k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
 
+    report_execution_messages(k1, vm, span, exit_code);
+
     if exit_code != 0 {
-        failf!(
-            span,
-            "Static execution exited with code: {}.\nOutput:\n{}",
-            exit_code,
-            vm.compiler_messages.join("\n")
-        )
+        failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
         match top_ret_info {
             None => Ok(k1.static_values.unit_id()),
@@ -593,7 +599,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         };
     }
 
-    let mut line = String::new();
+    //let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
@@ -601,18 +607,18 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // if debugger {
-             //eprintln!(
-             //    "{}[{}] i{} {}",
-             //    "  ".repeat(vm.stack.current_frame_index() as usize),
-             //    vm.stack.current_frame_index(),
-             //    inst_id.as_u32(),
-             //    bc::inst_to_string(k1, inst_id)
-             //);
-             //std::io::stdin().read_line(&mut line).unwrap();
-             //if &line == "v\n" {
-             //    vm.dump_current_frame(k1);
-             //}
-             //line.clear();
+        //eprintln!(
+        //    "{}[{}] i{} {}",
+        //    "  ".repeat(vm.stack.current_frame_index() as usize),
+        //    vm.stack.current_frame_index(),
+        //    inst_id.as_u32(),
+        //    bc::inst_to_string(k1, inst_id)
+        //);
+        //std::io::stdin().read_line(&mut line).unwrap();
+        //if &line == "v\n" {
+        //    vm.dump_current_frame(k1);
+        //}
+        //line.clear();
         // }
 
         // ~Decode~ Execute
@@ -906,15 +912,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             let level = unsafe {
                                 (level_arg.as_ptr() as *const k1_types::CompilerMessageLevel).read()
                             };
-                            let color = match level {
-                                k1_types::CompilerMessageLevel::Info => colored::Color::White,
-                                k1_types::CompilerMessageLevel::Warn => colored::Color::Yellow,
-                                k1_types::CompilerMessageLevel::Error => colored::Color::Red,
-                            };
-                            let level_str = match level {
-                                k1_types::CompilerMessageLevel::Info => "info",
-                                k1_types::CompilerMessageLevel::Warn => "warn",
-                                k1_types::CompilerMessageLevel::Error => "error",
+                            let level = match level {
+                                k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
+                                k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
+                                k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
                             };
                             let message = value_to_string_id(k1, message_arg).map_err(|msg| {
                                 errf!(
@@ -929,18 +930,23 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                         "Bad filename string passed to EmitCompilerMessage: {msg}"
                                     )
                                 })?;
-                            let message = format!(
+
+                            eprintln!(
                                 "[{}:{} {}] {}",
                                 filename,
                                 location.line,
-                                level_str,
-                                k1.get_string(message).color(color)
+                                level.name_str().color(level.color()),
+                                k1.get_string(message)
                             );
 
-                            eprintln!("{}", &message);
-                            vm.compiler_messages.push(message);
+                            vm.compiler_messages.push(CompilerMessage {
+                                level,
+                                message,
+                                filename: filename.to_string(),
+                                line: location.line as u32,
+                            });
 
-                            builtin_return!(Value(0))
+                            builtin_return!(Value::UNIT)
                         }
                     },
                     BcCallee::Direct(function_id) => function_id,
@@ -2460,6 +2466,42 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
         writeln!(&mut s).unwrap();
     }
     s
+}
+fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit_code: i32) {
+    if vm.compiler_messages.is_empty() {
+        return;
+    }
+
+    let mut formatted_messages = String::new();
+    let mut max_level = MessageLevel::Hint;
+    for message in &vm.compiler_messages {
+        use std::fmt::Write;
+        let msg_str = k1.get_string(message.message);
+        let color = match message.level {
+            MessageLevel::Info => colored::Color::BrightWhite,
+            MessageLevel::Warn => colored::Color::Yellow,
+            MessageLevel::Error => colored::Color::Red,
+            MessageLevel::Hint => colored::Color::BrightBlue,
+        };
+        if message.level > max_level {
+            max_level = message.level
+        };
+        if msg_str == "\n" {
+            writeln!(&mut formatted_messages).unwrap()
+        } else {
+            writeln!(
+                &mut formatted_messages,
+                "[{}:{} {}] {}",
+                message.filename,
+                message.line,
+                message.level.name_str().color(color),
+                msg_str
+            )
+            .unwrap()
+        };
+    }
+    let level = MessageLevel::Info;
+    k1.report_ext(TyperError { message: formatted_messages, span, level }, true);
 }
 
 #[track_caller]

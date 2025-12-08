@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Write};
 
 use crate::compiler::CompilerConfig;
 use crate::pool::{SliceHandle, VPool};
-use crate::typer::{ErrorLevel, Linkage};
+use crate::typer::{Linkage, MessageLevel};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
@@ -1244,6 +1244,7 @@ pub struct ParsedGlobal {
     pub id: ParsedGlobalId,
     pub is_referencing: bool,
     pub thread_local: bool,
+    pub export: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1619,9 +1620,7 @@ impl ParsedProgram {
     pub fn add_global(&mut self, mut global: ParsedGlobal) -> ParsedGlobalId {
         let id = self.globals.next_id();
         global.id = id;
-        let id2 = self.globals.add(global);
-        debug_assert!(id == id2);
-        id
+        self.globals.add_expected_id(global, id)
     }
 
     pub fn get_ability(&self, id: ParsedAbilityId) -> &ParsedAbility {
@@ -1777,7 +1776,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 &module.spans,
                 &module.sources,
                 lex_error.span,
-                ErrorLevel::Error,
+                MessageLevel::Error,
                 6,
                 Some(&lex_error.message),
             )
@@ -1802,7 +1801,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 &module.spans,
                 &module.sources,
                 span,
-                ErrorLevel::Error,
+                MessageLevel::Error,
                 6,
                 Some(&format!("{message} at '{}'\n", got_str)),
             )
@@ -1817,7 +1816,7 @@ pub fn write_source_location(
     spans: &Spans,
     sources: &Sources,
     span_id: SpanId,
-    level: ErrorLevel,
+    level: MessageLevel,
     context_lines: usize,
     message: Option<&str>,
 ) -> std::io::Result<()> {
@@ -1830,16 +1829,16 @@ pub fn write_source_location(
     use colored::*;
 
     let color = match level {
-        ErrorLevel::Error => Color::Red,
-        ErrorLevel::Warn => Color::Yellow,
-        ErrorLevel::Info => Color::Yellow,
-        ErrorLevel::Hint => Color::Yellow,
+        MessageLevel::Error => Color::Red,
+        MessageLevel::Warn => Color::Yellow,
+        MessageLevel::Info => Color::Yellow,
+        MessageLevel::Hint => Color::Yellow,
     };
     let level_name = match level {
-        ErrorLevel::Error => "Error",
-        ErrorLevel::Warn => "Warning",
-        ErrorLevel::Info => "Info",
-        ErrorLevel::Hint => "Hint",
+        MessageLevel::Error => "Error",
+        MessageLevel::Warn => "Warning",
+        MessageLevel::Info => "Info",
+        MessageLevel::Hint => "Hint",
     }
     .color(color);
 
@@ -3714,14 +3713,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let ident = self.expect_eat_token(K::Ident)?;
-        let (name_token, thread_local) = if self.token_chars(ident) == "tls" {
-            let name_token = self.expect_eat_token(K::Ident)?;
-            (name_token, true)
-        } else {
-            (ident, false)
+        let mut thread_local = false;
+        let mut export = false;
+        let name_token = loop {
+            let ident = self.expect_eat_token(K::Ident)?;
+            let tok_chars = self.token_chars(ident);
+            match tok_chars {
+                "tls" => thread_local = true,
+                "export" => export = true,
+                _ => break ident,
+            }
         };
-        let _colon = self.expect_eat_token(K::Colon);
+        let _colon = self.expect_eat_token(K::Colon)?;
         let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
         self.expect_eat_token(K::Equals)?;
         let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
@@ -3735,6 +3738,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedGlobalId::PENDING,
             is_referencing,
             thread_local,
+            export,
         });
         Ok(Some(global_id))
     }

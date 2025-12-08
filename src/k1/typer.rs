@@ -99,8 +99,10 @@ pub struct TypedAbilityFunctionRef {
 }
 impl_copy_if_small!(16, TypedAbilityFunctionRef);
 
-pub const GLOBAL_ID_IS_STATIC: TypedGlobalId =
+pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
+pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
+    TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
 
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
 pub const WRITER_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
@@ -1538,22 +1540,36 @@ impl TypedStmt {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorLevel {
-    Error,
-    Warn,
-    Info,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MessageLevel {
     Hint,
+    Info,
+    Warn,
+    Error,
 }
 
-impl Display for ErrorLevel {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl MessageLevel {
+    pub fn color(&self) -> colored::Color {
         match self {
-            ErrorLevel::Error => f.write_str("error"),
-            ErrorLevel::Warn => f.write_str("warn"),
-            ErrorLevel::Info => f.write_str("info"),
-            ErrorLevel::Hint => f.write_str("hint"),
+            MessageLevel::Hint => colored::Color::BrightBlue,
+            MessageLevel::Info => colored::Color::Cyan,
+            MessageLevel::Warn => colored::Color::Yellow,
+            MessageLevel::Error => colored::Color::Red,
         }
+    }
+    pub fn name_str(&self) -> &'static str {
+        match self {
+            MessageLevel::Hint => "hint",
+            MessageLevel::Info => "info",
+            MessageLevel::Warn => "warn",
+            MessageLevel::Error => "error",
+        }
+    }
+}
+
+impl Display for MessageLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name_str())
     }
 }
 
@@ -1561,11 +1577,11 @@ impl Display for ErrorLevel {
 pub struct TyperError {
     pub message: String,
     pub span: SpanId,
-    pub level: ErrorLevel,
+    pub level: MessageLevel,
 }
 
 impl TyperError {
-    fn make(message: impl AsRef<str>, span: SpanId, level: ErrorLevel) -> TyperError {
+    fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> TyperError {
         TyperError { message: message.as_ref().to_owned(), span, level }
     }
 }
@@ -1646,6 +1662,7 @@ pub struct TypedGlobal {
     pub is_constant: bool,
     pub is_referencing: bool,
     pub is_tls: bool,
+    pub is_exported: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
 }
@@ -1879,11 +1896,11 @@ impl IntrinsicOperation {
 }
 
 pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
-    TyperError::make(message.as_ref(), span, ErrorLevel::Error)
+    TyperError::make(message.as_ref(), span, MessageLevel::Error)
 }
 
 pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
-    TyperError::make(message.as_ref(), span, ErrorLevel::Warn)
+    TyperError::make(message.as_ref(), span, MessageLevel::Warn)
 }
 
 pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> {
@@ -1980,7 +1997,7 @@ pub fn write_error(
     spans: &Spans,
     sources: &Sources,
     message: impl AsRef<str>,
-    level: ErrorLevel,
+    level: MessageLevel,
     span: SpanId,
 ) -> std::io::Result<()> {
     parse::write_source_location(w, spans, sources, span, level, 6, Some(message.as_ref()))?;
@@ -2494,7 +2511,7 @@ impl TypedProgram {
         let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
         let mut vm_global_constant_lookups = FxHashMap::new();
-        vm_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vm::Value::ptr(addr));
+        vm_global_constant_lookups.insert(GLOBAL_ID_K1_IS_STATIC, vm::Value::ptr(addr));
         let process_dlopen_handle =
             unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
         if process_dlopen_handle.is_null() {
@@ -4935,7 +4952,7 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get_span(expr);
-                Err(TyperError { message: msg, span, level: ErrorLevel::Error })
+                Err(TyperError { message: msg, span, level: MessageLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
                 debug!(
@@ -5413,6 +5430,7 @@ impl TypedProgram {
         let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
 
         let is_referencing = parsed_global.is_referencing;
+        let is_exported = parsed_global.export;
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
@@ -5443,6 +5461,7 @@ impl TypedProgram {
             is_referencing,
             is_constant: !is_mutable,
             is_tls: parsed_global.thread_local,
+            is_exported,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -6059,7 +6078,7 @@ impl TypedProgram {
                         "Blanket impl almost matched but a constraint was unsatisfied; {}",
                         e.message
                     );
-                    e.level = ErrorLevel::Info;
+                    e.level = MessageLevel::Info;
                     self.write_error(&mut std::io::stderr(), &e).unwrap();
                     return None;
                 }
@@ -14472,7 +14491,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
-    ) -> TyperResult<()> {
+    ) {
         let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(*namespace_id);
         let namespace_scope_id = namespace.scope_id;
@@ -14489,12 +14508,9 @@ impl TypedProgram {
                 };
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                if let Err(e) = self.eval_namespace_type_eval_phase(*namespace_id, skip_defns) {
-                    self.report(e);
-                }
+                self.eval_namespace_type_eval_phase(*namespace_id, skip_defns)
             }
         }
-        Ok(())
     }
 
     fn declare_namespace_definitions(
@@ -14857,49 +14873,35 @@ impl TypedProgram {
         module_id: ModuleId,
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
+        macro_rules! check_for_errors {
+            ($msg:expr) => {
+                match self.error_count(&[MessageLevel::Error]) {
+                    n if n > 0 => {
+                        bail!("Module {} failed {} with {} errors", self.program_name(), $msg, n)
+                    }
+                    _ => {}
+                }
+            };
+        }
+
         let mut err_writer = stderr();
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed namespace declaration phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("namespace declaration");
 
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types");
         self.declare_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed type definition phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("type declaration");
 
         self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!("{} failed resolving uses with {} errors", self.program_name(), self.errors.len())
-        }
+        check_for_errors!("resolving uses");
 
         //self.phase = 3;
         // self.info(format_args!(""));
         debug!(">> Pass 3 evaluate types");
-        let type_eval_result =
-            self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
-        if let Err(e) = type_eval_result {
-            self.write_error(&mut err_writer, &e)?;
-            self.errors.push(e);
-        }
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed type evaluation phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
+        check_for_errors!("type bodies");
 
         debug_assert_eq!(self.types.types.len(), self.types.type_phys_type_lookup.len());
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
@@ -14922,15 +14924,9 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        debug!(">> Pass 4 declare rest of definitions (functions, globals, abilities)");
+        debug!(">> Pass 4 declare rest of definitions (functions, globals)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            eprintln!(
-                "{} failed declaration phase with {} errors, but I will soldier on.",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("general declaration");
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =
@@ -14961,24 +14957,16 @@ impl TypedProgram {
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "Module {} failed typechecking with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("typechecking");
 
         debug!(">> Pass 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
-        }
+        check_for_errors!("body specialization");
 
         Ok(())
     }
 
-    fn error_count(&self, kinds: &[ErrorLevel]) -> usize {
+    pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {
         self.errors.iter().filter(|e| kinds.contains(&e.level)).count()
     }
 
@@ -15947,12 +15935,27 @@ impl TypedProgram {
     // Errors and logging
 
     pub fn report(&mut self, e: TyperError) {
+        self.report_ext(e, false)
+    }
+    pub fn report_ext(&mut self, e: TyperError, no_print: bool) {
         // Check for exact duplicates; happens a lot with generic code
         if self.errors.contains(&e) {
             return;
         }
 
-        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        let skip_print = no_print || {
+            if e.level != MessageLevel::Error {
+                // Don't print warnings when errors are present
+                let has_errors = self.error_count(&[MessageLevel::Error]) > 0;
+                has_errors
+            } else {
+                false
+            }
+        };
+
+        if !skip_print {
+            self.write_error(&mut std::io::stderr(), &e).unwrap();
+        }
         self.errors.push(e);
     }
 
@@ -15970,7 +15973,7 @@ impl TypedProgram {
             &self.ast.spans,
             &self.ast.sources,
             span,
-            ErrorLevel::Info,
+            MessageLevel::Info,
             6,
             None,
         )
@@ -15983,7 +15986,7 @@ impl TypedProgram {
             &self.ast.spans,
             &self.ast.sources,
             span,
-            ErrorLevel::Error,
+            MessageLevel::Error,
             6,
             None,
         )
@@ -16017,12 +16020,12 @@ impl TypedProgram {
     }
 
     pub fn _info(&self, format_args: std::fmt::Arguments<'_>) {
-        self._sticky_msg(ErrorLevel::Info, format_args)
+        self._sticky_msg(MessageLevel::Info, format_args)
     }
 
     // unfinished attempt at a sticky progress bar. We compile too fast for it to matter
     // but i also wanted to reduce total output lines; might revisit
-    pub fn _sticky_msg(&self, level: ErrorLevel, format_args: std::fmt::Arguments<'_>) {
+    pub fn _sticky_msg(&self, level: MessageLevel, format_args: std::fmt::Arguments<'_>) {
         use std::io::Write;
         let mut err = std::io::stderr();
 

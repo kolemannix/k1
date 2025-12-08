@@ -26,36 +26,29 @@ let inputFile: string = core/files/readToString(context .Arena)("day5_input.txt"
 // Ingredient ID 32 is spoiled.
 // So, in this example, 3 of the available ingredient IDs are fresh.
 
+use core/assertdbg
 deftype Range = { start: uint, end: uint }
 ns Range {
   fn parse(s: string): Result[Range, string] {
      let r = s.splitByChar('-');
-     core/assertdbg(r.len() == 2);
+     assertdbg(r.len() == 2);
      let start = r.get(0).parseBase10().!;
      let end   = r.get(1).parseBase10().!;
      .Ok({ start, end });
   }
 }
 
-use core/assertdbg
 #debug fn partOne(input: string): unit {
   let lines = input.splitByChar('\n');
   let parseMode: (either Ranges, Ingredients) = .Ranges;
   let* ranges = List/empty[Range]();
   let* ing = List/empty[uint]();
   for lines {
-    if it.isEmpty() {
-      parseMode := .Ingredients;
-    } else {
+    if it.isEmpty() { parseMode := .Ingredients; } else {
       switch parseMode {
-        .Ranges -> {
-          //println("Range: {it}");
-          ranges.push(Range/parse(it).!);
-        },
-        .Ingredients -> { 
-          ing.push(it.parseBase10().!)
-        }
-      };
+        .Ranges -> { ranges.push(Range/parse(it).!) },
+        .Ingredients -> { ing.push(it.parseBase10().!) }
+      }
     }
   };
 
@@ -68,10 +61,7 @@ use core/assertdbg
   });
 
   println("Fresh Count: {fresh.len()}");
-
-  crash("")
 }
 
-#static partOne(sample)
 #static partOne(inputFile)
-
+//#static partOne(sample)

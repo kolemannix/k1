@@ -32,7 +32,7 @@ deftype char    = builtin
 deftype bool    = builtin
 
 /// An uninhabited type representing that code with this type never returns
-/// Used to signal termination and enables control flow analysis
+/// Used to signal termination and enables basic control flow analysis
 deftype never   = builtin
 
 deftype ptr = builtin
@@ -51,6 +51,8 @@ deftype Opt[T] = either None, Some(T)
 
 ns compiler {
   deftype SourceLocation = { filename: string, line: u64 }
+  // nocommit export globals pls
+  let* CAPTURE_PRINTS: *mut bool = true;
 }
 
 deftype Ordering = either Less, Equal, Greater

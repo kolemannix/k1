@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::parse::write_source_location;
 use crate::parse::{self};
-use crate::typer::{ErrorLevel, LibRefLinkType, TypedProgram};
+use crate::typer::{MessageLevel, LibRefLinkType, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::info;
@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 pub const MAC_SDK_VERSION: &str = "15.0.0";
+pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetOs {
@@ -373,7 +374,7 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
     let total_elapsed_ms = start_time.elapsed().as_millis();
-    let warning_count = p.errors.iter().filter(|e| e.level == ErrorLevel::Warn).count();
+    let warning_count = p.errors.iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
@@ -466,7 +467,7 @@ pub fn write_executable(
         TargetOs::MacOs => {
             build_cmd.arg(macos_version_flag.as_ref().unwrap());
             build_cmd.arg("--sysroot");
-            build_cmd.arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+            build_cmd.arg(MAC_SDK_SYSROOT);
             build_cmd.arg("-lunwind");
         }
         TargetOs::Linux => {
@@ -546,7 +547,7 @@ pub fn codegen_module<'ctx, 'module>(
             &codegen.k1.ast.spans,
             &codegen.k1.ast.sources,
             e.span,
-            ErrorLevel::Error,
+            MessageLevel::Error,
             6,
             Some(&e.message),
         )
