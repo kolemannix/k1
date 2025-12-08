@@ -53,10 +53,8 @@ fn printIt[T: Print](value: T): unit {
 
 fn print(s: string): unit {
   // TODO: Instead of this hack, make write(Sink, View[byte]) the intrinsic.
-  if k1/IS_STATIC {
-    if s != "\n" {
-      k1/emitCompilerMessage(compiler/location(), .Info, s)
-    }
+  if compiler/CAPTURE_PRINTS.* {
+    k1/emitCompilerMessage(compiler/location(), .Info, s)
   } else {
     io/STDOUT.writeString(s)
   };
@@ -70,8 +68,8 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  if k1/IS_STATIC {
-    k1/emitCompilerMessage(compiler/location(), .Info, s)
+  if compiler/CAPTURE_PRINTS.* {
+    k1/emitCompilerMessage(compiler/location(), .Warn, s)
   } else {
     io/STDERR.writeString(s)
   };
@@ -86,6 +84,7 @@ fn eprintln(s: string): unit {
 
 #if k1/OS_POSIX
 ns io {
+  // TODO: Add buffering
   deftype OutStream = { fileNo: i32 }
   let STDOUT: OutStream = { fileNo: posix/STDOUT };
   let STDERR: OutStream = { fileNo: posix/STDERR };

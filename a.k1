@@ -8,6 +8,8 @@
 //   code.line(`let _iter = {iterable};`);
 // }
 
+let export foo: int = 23;
+
 fn main(): i32  {
   // myfor(x in [1,2,3,4,5] {
   //    

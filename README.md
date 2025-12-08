@@ -25,6 +25,9 @@ north star.
 Still just learning, but I really like using this language these days. Long todo list still!
 [Check it out](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
 
+**Disclaimer**: `k1` is not ready for use; it needs to evolve much more and will require a lot of elbow grease if things ever
+get to that point. I'd like to push the language further, as well as correct a number of design mistakes, before allowing it to begin to crystallize
+
 Please reach out to me on X or here if you're interested in the project!
 
 ## Reflections
@@ -49,13 +52,7 @@ Inspiration
 
 https://justforfunnoreally.dev/
 
-Some Heroes
-- Andreas Kling
-- Jonathan Blow
-- Ken Thompson
-- Chris Lattner
-- Bjarne Stroustrup
-- [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
+Some Heroes: Casey Muratori, Andreas Kling, Jonathan Blow, Ken Thompson, Chris Lattner, Bjarne Stroustrup, [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
 
 ## Case Study: implementing bitfields
 

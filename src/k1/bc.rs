@@ -2562,7 +2562,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
                 compiled_unit_to_string(k1, unit_id, true),
                 error_string
             ),
-            level: ErrorLevel::Error,
+            level: MessageLevel::Error,
         })
     } else {
         Ok(())

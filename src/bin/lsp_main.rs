@@ -26,7 +26,7 @@ use tracing::info;
 fn error_to_diagnostic(
     ast: &ParsedProgram,
     message: String,
-    level: ErrorLevel,
+    level: MessageLevel,
     span_id: SpanId,
 ) -> (Url, Diagnostic) {
     let span = ast.spans.get(span_id);
@@ -34,10 +34,10 @@ fn error_to_diagnostic(
     let source = ast.sources.get_source(span.file_id);
     let url = source_to_uri(&source.directory, &source.filename);
     let severity = match level {
-        ErrorLevel::Error => DiagnosticSeverity::ERROR,
-        ErrorLevel::Warn => DiagnosticSeverity::WARNING,
-        ErrorLevel::Info => DiagnosticSeverity::INFORMATION,
-        ErrorLevel::Hint => DiagnosticSeverity::HINT,
+        MessageLevel::Error => DiagnosticSeverity::ERROR,
+        MessageLevel::Warn => DiagnosticSeverity::WARNING,
+        MessageLevel::Info => DiagnosticSeverity::INFORMATION,
+        MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
     let diagnostic = Diagnostic {
         range: Range {
@@ -128,7 +128,7 @@ impl Backend {
                         error_to_diagnostic(
                             parsed_module,
                             e.message().to_string(),
-                            ErrorLevel::Error,
+                            MessageLevel::Error,
                             e.span(),
                         )
                     })
