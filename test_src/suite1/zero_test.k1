@@ -2,7 +2,21 @@ ns zero_test;
 
 use core/mem/zeroed
 
-fn test(): unit {
+fn testBitcast(): unit {
+  let x: i32 = -1;
+  let y: u32 = mem/bitcast(x);
+  assertEquals(y, 0xffff_ffff);
+
+  let s: string = "foo";
+  let sWrap = { inner: s };
+  let sAgain: string = mem/bitcast(sWrap);
+  assert(testCompile(
+    mem/bitcast[u8, u16](4)
+  ).isSome());
+  assertEquals(s, sAgain);
+}
+
+fn testZero(): unit {
   let v8: u8 = zeroed();
   let v16: u16 = zeroed();
   let v32: u32 = zeroed();

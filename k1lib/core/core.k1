@@ -53,7 +53,7 @@ fn printIt[T: Print](value: T): unit {
 
 fn print(s: string): unit {
   // TODO: Instead of this hack, make write(Sink, View[byte]) the intrinsic.
-  if compiler/CAPTURE_PRINTS.* {
+  if k1/IS_STATIC and compiler/CAPTURE_PRINTS.* {
     k1/emitCompilerMessage(compiler/location(), .Info, s)
   } else {
     io/STDOUT.writeString(s)
@@ -68,7 +68,7 @@ fn println(s: string): unit {
 }
 
 fn eprint(s: string): unit {
-  if compiler/CAPTURE_PRINTS.* {
+  if k1/IS_STATIC and compiler/CAPTURE_PRINTS.* {
     k1/emitCompilerMessage(compiler/location(), .Warn, s)
   } else {
     io/STDERR.writeString(s)

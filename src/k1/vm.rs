@@ -1068,6 +1068,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 vm.stack.set_cur_inst_value(inst_index, Value(result));
                 ip += 1
             }
+            Inst::BitCast { v, to: _ } => {
+                let input = resolve_value!(v);
+
+                vm.stack.set_cur_inst_value(inst_index, input);
+                ip += 1
+            }
             Inst::IntTrunc { v, to: _ } => {
                 let input = resolve_value!(v);
 

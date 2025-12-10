@@ -2617,6 +2617,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(value.as_basic_value_enum().into())
             }
+            CastType::BoolToInt => {
+                let value = self.codegen_expr_basic_value(cast.base_expr)?;
+                let int_value = value.into_int_value();
+                let to_type = self.codegen_type(target_type_id)?;
+                let to_int_type = to_type.rich_repr_type().into_int_type();
+                let extended = self.builder.build_int_z_extend(int_value, to_int_type, "bool_to_int").unwrap();
+                Ok(extended.as_basic_value_enum().into())
+
+            }
             CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
@@ -3016,6 +3025,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let input_value_int = input_value.into_int_value();
                 let not_value = self.builder.build_not(input_value_int, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
+            }
+            IntrinsicOperation::BitCast => {
+                // intern fn bitcast[T, U](t: T): U
+                let input_value = return_void!(self.codegen_expr(call.args[0])?);
+                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
+                let k1_type = self.codegen_type(type_param.type_id)?;
+                let to_type = k1_type.rich_repr_type();
+                if k1_type.is_aggregate() {
+                    debug_assert!(input_value.get_type().is_pointer_type());
+                    // Just point at the same place!
+                    Ok(input_value.into())
+                } else {
+                    let cast_op = self.builder.build_bit_cast(input_value, to_type, "").unwrap();
+                    Ok(cast_op.into())
+                }
             }
             IntrinsicOperation::ArithBinop(op_kind) => {
                 let lhs = return_void!(self.codegen_expr(call.args[0])?);

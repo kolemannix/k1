@@ -330,13 +330,7 @@ impl Equals for List[int] {
 
 impl[T: Equals] Equals for List[T] {
   fn equals(self: List[T], other: List[T]): bool {
-    if self.len != other.len false else {
-      for a in self {
-        let b = other.get(itIndex);
-        if a != b return(false);
-      };
-      true
-    }
+    self.asBuffer() == other.asBuffer()
   }
 }
 

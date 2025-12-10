@@ -149,6 +149,10 @@ ns Buffer {
     self.dataPtr().refAtIndex[T](index)
   }
 
+  fn getUnchecked[T](self: Buffer[T], index: size): T {
+    self.getRefUnchecked(index).*
+  }
+
   fn getRef[T](self: Buffer[T], index: size): *mut T {
     if index < 0 or index >= self.len {
       crash("index out of bounds: {index} >= {self.len}")
@@ -189,6 +193,23 @@ ns Buffer {
 
   fn take[T](self: Buffer[T], count: size): Buffer[T] { self.slice(0,     count) }
   fn drop[T](self: Buffer[T], count: size): Buffer[T] { self.slice(count, self.len) }
+
+  fn chunks[T](self: Buffer[T], size: size): View[Buffer[T]] {
+    if size == 0 return(View/empty());
+    let rem = self.len() % size != 0;
+    let div = self.len() / size;
+    let* results = List/withCapacity[Buffer[T]](div + (rem as size));
+
+    let i = 0;
+    let j = 0;
+    while i < self.len() {
+      let chunk = self.slice(i, i + size);
+      results.push(chunk);
+      i := i + size;
+      j := j + 1;
+    };
+    results.asView()
+  }
 
   fn isEmpty[T](self: Buffer[T]): bool {
     self.len == 0
@@ -349,5 +370,17 @@ impl[T] Iterator[Item = *mut T] for BufferRefIterator[T] {
   fn nth(self: *mut Self, n: size): ?Item {
     self.advanceBy(n);
     self.next()
+  }
+}
+
+impl[T: Equals] Equals for Buffer[T] {
+  fn equals(self: Buffer[T], other: Buffer[T]): bool {
+    if self.len != other.len false else {
+      for a in self {
+        let b = other.get(itIndex);
+        if a != b return(false);
+      };
+      true
+    }
   }
 }
