@@ -29,7 +29,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue,
+    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
@@ -2946,8 +2946,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
         };
         match callsite_value.try_as_basic_value() {
-            either::Either::Left(value) => Ok(LlvmValue::BasicValue(value)),
-            either::Either::Right(_instr) => {
+            ValueKind::Basic(value) => Ok(LlvmValue::BasicValue(value)),
+            ValueKind::Instruction(_instr) => {
                 if llvm_function_type.is_sret {
                     let sret_pointer = sret_alloca.unwrap();
                     // We should technically 'load' this, but the load would be a no-op since
@@ -3268,7 +3268,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("malloc").unwrap();
                 let call = self.builder.build_call(f, &[size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().basic().unwrap();
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::AllocateZeroed => {
@@ -3280,7 +3280,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let f = self.llvm_module.get_function("calloc").unwrap();
                 // libc/calloc(count = 1, size = size);
                 let call = self.builder.build_call(f, &[count_one.into(), size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("calloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::Reallocate => {
@@ -3290,7 +3290,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("realloc").unwrap();
                 let call = self.builder.build_call(f, &[old_ptr_arg, new_size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("realloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::Free => {
@@ -3298,7 +3298,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("free").unwrap();
                 let call = self.builder.build_call(f, &[old_ptr_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("free return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::MemCopy => {
@@ -3350,7 +3350,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("memcmp").unwrap();
                 let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left().into_int_value();
+                let result = call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
                 let is_zero = self
                     .builder
                     .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
@@ -3364,7 +3364,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("exit").unwrap();
                 let call = self.builder.build_call(f, &[code_arg], "").unwrap();
-                let _result = call.try_as_basic_value().unwrap_right();
+                let _result = call.try_as_basic_value();
                 self.builder.build_unreachable().unwrap()
             }
 
@@ -4041,9 +4041,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let res = self
             .builder
             .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_left();
+            .unwrap().try_as_basic_value().basic().unwrap();
         self.builder.build_return(Some(&res)).unwrap();
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
