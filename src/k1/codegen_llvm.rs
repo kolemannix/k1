@@ -141,7 +141,7 @@ struct StructDebugMember<'ctx, 'name> {
 
 #[derive(Copy, Clone, Debug)]
 enum AbiParamMapping {
-    AsIs,
+    ScalarInRegister,
     /// How everyone does 1-8 byte structs
     StructInInteger {
         width: u32,
@@ -157,6 +157,7 @@ enum AbiParamMapping {
     BigStructByPtrToCopy {
         byval_attr: bool,
     },
+    StructByPtrNoCopy,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -683,11 +684,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ctx.metadata_string("Debug Info Version").into(),
             ctx.i32_type().const_int(3, false).into(),
         ]);
-         let md3 = ctx.metadata_node(&[
-             ctx.i32_type().const_int(1, false).into(),
-             ctx.metadata_string("PIC Level").into(),
-             ctx.i32_type().const_int(2, false).into(),
-         ]);
+        let md3 = ctx.metadata_node(&[
+            ctx.i32_type().const_int(1, false).into(),
+            ctx.metadata_string("PIC Level").into(),
+            ctx.i32_type().const_int(2, false).into(),
+        ]);
         let md4 = ctx.metadata_node(&[
             ctx.i32_type().const_int(1, false).into(),
             ctx.metadata_string("PIE Level").into(),
@@ -1502,11 +1503,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             Some(self.mapped_abi_type(&return_k1_type, return_type_abi_mapping))
         };
         let is_sret = match return_type_abi_mapping {
-            AbiParamMapping::AsIs => false,
+            AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
+            AbiParamMapping::StructByPtrNoCopy { .. } => true,
         };
 
         // The logical parameters closest to K1 model
@@ -1567,7 +1569,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         abi_mapping: AbiParamMapping,
     ) -> BasicTypeEnum<'ctx> {
         match abi_mapping {
-            AbiParamMapping::AsIs => self.canonical_repr_type(k1_ty),
+            AbiParamMapping::ScalarInRegister => self.canonical_repr_type(k1_ty),
             AbiParamMapping::StructInInteger { width } => {
                 self.ctx.custom_width_int_type(width).as_basic_type_enum()
             }
@@ -1607,6 +1609,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 self.builtin_types.ptr.as_basic_type_enum()
             }
+            AbiParamMapping::StructByPtrNoCopy { .. } => {
+                self.builtin_types.ptr.as_basic_type_enum()
+            }
         }
     }
 
@@ -1625,7 +1630,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             mapping
         );
         match mapping {
-            AbiParamMapping::AsIs => abi_value,
+            AbiParamMapping::ScalarInRegister => abi_value,
             AbiParamMapping::StructInInteger { width } => {
                 let truncated = self
                     .builder
@@ -1665,6 +1670,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // And this abi route represents them as a ptr, so nothing to do
                 abi_value
             }
+            AbiParamMapping::StructByPtrNoCopy => abi_value,
         }
     }
 
@@ -1683,7 +1689,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             mapping
         );
         match mapping {
-            AbiParamMapping::AsIs => k1_value,
+            AbiParamMapping::ScalarInRegister => k1_value,
             AbiParamMapping::StructInInteger { width } => {
                 let abi_type = self.mapped_abi_type(k1_ty, mapping);
                 let integer_ptr = self.build_alloca(abi_type, "abi_struct_int");
@@ -1755,6 +1761,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 loaded_aggregate
             }
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
+                // Our canonical representation of all aggregates is an llvm ptr
+                // And this abi route represents them as a ptr, so nothing to do
+                //
+                // nocommit: If this is truly the 'value' getting passed to the C code, then
+                // this would allow mutation incorrectly, and we do have to make a copy
+                // So, if this is not a return, but a param marshal, we'd make a copy
+                k1_value
+            }
+            AbiParamMapping::StructByPtrNoCopy => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
                 k1_value
@@ -2888,9 +2903,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let int_value = value.into_int_value();
                 let to_type = self.codegen_type(target_type_id)?;
                 let to_int_type = self.rich_repr_type(&to_type).into_int_type();
-                let extended = self.builder.build_int_z_extend(int_value, to_int_type, "bool_to_int").unwrap();
+                let extended =
+                    self.builder.build_int_z_extend(int_value, to_int_type, "bool_to_int").unwrap();
                 Ok(extended.as_basic_value_enum().into())
-
             }
             CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
@@ -3623,7 +3638,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("memcmp").unwrap();
                 let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
+                let result =
+                    call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
                 let is_zero = self
                     .builder
                     .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
@@ -4044,7 +4060,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         is_return: bool,
     ) -> AbiParamMapping {
         enum CallConv {
-            NoOp,
+            InternalK1,
             AMD64,
             ARM64,
         }
@@ -4053,11 +4069,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
             crate::compiler::Target::Wasm64 => CallConv::ARM64,
         };
-        let callconv = CallConv::NoOp;
+        let callconv = CallConv::InternalK1;
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
         match param_type {
-            K1LlvmType::Scalar(_) => AbiParamMapping::AsIs,
+            K1LlvmType::Scalar(_) => AbiParamMapping::ScalarInRegister,
             K1LlvmType::EnumType(_) => {
                 // struct {
                 //   <4> tag;
@@ -4071,9 +4087,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let size = param_type.rich_repr_layout().size;
                 if size < 8 {
                     match callconv {
-                        CallConv::NoOp => {
-                            AbiParamMapping::AsIs
-                        }
+                        CallConv::InternalK1 => AbiParamMapping::ScalarInRegister,
                         CallConv::AMD64 => {
                             // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
                             let width_bits = size * 8;
@@ -4087,7 +4101,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                 } else if size <= 16 {
                     match callconv {
-                        CallConv::NoOp => AbiParamMapping::AsIs,
+                        CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
                         CallConv::AMD64 => {
                             // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
                             // Pass by classified eightbytes
@@ -4110,16 +4124,20 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         false
                     } else {
                         match callconv {
-                            CallConv::NoOp => true,
+                            CallConv::InternalK1 => true,
                             CallConv::AMD64 => true,
                             CallConv::ARM64 => false,
                         }
                     };
-                    AbiParamMapping::BigStructByPtrToCopy { byval_attr }
+                    match callconv {
+                        CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
+                        CallConv::AMD64 => AbiParamMapping::BigStructByPtrToCopy { byval_attr },
+                        CallConv::ARM64 => AbiParamMapping::BigStructByPtrToCopy { byval_attr },
+                    }
                 }
             }
-            K1LlvmType::Reference(_) => AbiParamMapping::AsIs,
-            K1LlvmType::Void(_) => AbiParamMapping::AsIs,
+            K1LlvmType::Reference(_) => AbiParamMapping::ScalarInRegister,
+            K1LlvmType::Void(_) => AbiParamMapping::ScalarInRegister,
         }
     }
 
@@ -4483,7 +4501,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let res = self
             .builder
             .build_call(function_value, &params, "")
-            .unwrap().try_as_basic_value().basic().unwrap();
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
         self.builder.build_return(Some(&res)).unwrap();
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
