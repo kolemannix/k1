@@ -297,6 +297,10 @@ pub enum Inst {
     BitNot {
         v: Value,
     },
+    BitCast {
+        v: Value,
+        to: PhysicalType,
+    },
     IntTrunc {
         v: Value,
         to: ScalarType,
@@ -547,6 +551,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Ret(_) => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::BOOL,
         Inst::BitNot { v } => get_value_kind(bc, types, v),
+        Inst::BitCast { to, .. } => InstKind::Value(*to),
         Inst::IntTrunc { to, .. } => InstKind::scalar(*to),
         Inst::IntExtU { to, .. } => InstKind::scalar(*to),
         Inst::IntExtS { to, .. } => InstKind::scalar(*to),
@@ -1444,6 +1449,22 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
+                        IntrinsicOperation::BitCast => {
+                            return {
+                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let pt = b.get_physical_type(type_id);
+                                let base = compile_expr(b, None, call.args[0])?;
+                                let bitcast = b.push_inst_anon(Inst::BitCast { v: base, to: pt });
+                                let stored = store_rich_if_dst(
+                                    b,
+                                    dst,
+                                    pt,
+                                    bitcast.as_value(),
+                                    "fulfill bitcast destination",
+                                );
+                                Ok(stored)
+                            };
+                        }
                         IntrinsicOperation::ArithBinop(op) => {
                             return compile_arith_binop(b, op, &call, dst);
                         }
@@ -2014,22 +2035,19 @@ fn compile_cast(
         | CastType::ReferenceToMut
         | CastType::ReferenceUnMut
         | CastType::IntegerCast(IntegerCastDirection::NoOp)
+        | CastType::IntegerCast(IntegerCastDirection::SignChange)
         | CastType::Integer8ToChar
         | CastType::StaticErase
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
-            let base_noop = compile_expr(b, dst, c.base_expr)?;
-            Ok(base_noop)
+            let base_noop = compile_expr(b, None, c.base_expr)?;
+            let to_pt = b.get_physical_type(target_type_id);
+            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
+            let stored = store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
+            Ok(stored)
         }
         CastType::Transmute => {
             todo!()
-        }
-        CastType::IntegerCast(IntegerCastDirection::SignChange) => {
-            // Treating this as a noop for now but it does mean that
-            // we have a slightly incorrectly typed instr here,
-            // but it should not lead to any incorrect instructions
-            let base_noop = compile_expr(b, dst, c.base_expr)?;
-            Ok(base_noop)
         }
         CastType::IntegerCast(IntegerCastDirection::Extend)
         | CastType::IntegerCast(IntegerCastDirection::Truncate)
@@ -2058,6 +2076,18 @@ fn compile_cast(
             };
             let inst = b.push_inst_anon(inst);
             let stored = store_simple_if_dst(b, dst, inst.as_value());
+            Ok(stored)
+        }
+        CastType::BoolToInt => {
+            let base = compile_expr(b, None, c.base_expr)?;
+            let to_pt = b.get_physical_type(target_type_id);
+            let to = to_pt.expect_scalar();
+            let bitcast = b.push_inst_anon(Inst::BitCast {
+                v: base,
+                to: PhysicalType::Scalar(ScalarType::U8),
+            });
+            let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
+            let stored = store_simple_if_dst(b, dst, extend.as_value());
             Ok(stored)
         }
         CastType::PointerToWord | CastType::WordToPointer => {
@@ -2461,6 +2491,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
                         errors.push(format!("i{inst_id}: bit_not src is not an int"))
                     }
                 }
+                Inst::BitCast { .. } => (),
                 Inst::IntTrunc { to, .. } => {
                     if !to.is_int() {
                         errors.push("i{inst_id}: int trunc to non-int type".to_string())
@@ -2793,6 +2824,11 @@ pub fn display_inst(
         }
         Inst::BitNot { v } => {
             write!(w, "bitnot {}", v)?;
+        }
+        Inst::BitCast { v, to } => {
+            write!(w, "bitcast ")?;
+            display_pt(w, &k1.types, to)?;
+            write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
             write!(w, "trunc ")?;

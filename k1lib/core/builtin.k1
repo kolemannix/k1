@@ -51,7 +51,7 @@ deftype Opt[T] = either None, Some(T)
 
 ns compiler {
   deftype SourceLocation = { filename: string, line: u64 }
-  // nocommit export globals pls
+  // Need some way to mark this and IS_STATIC as comptime only
   let* CAPTURE_PRINTS: *mut bool = true;
 }
 
@@ -148,6 +148,15 @@ ns types {
 
   fn makeAny[T](t: *T): Any {
     { typeId: typeId[T](), value: t as ptr }
+  }
+
+  fn assertWrapperType[A, B](): unit {
+    let schemaA = types/getTypeSchema[A]();
+    let bTypeId = types/typeId[B]();
+    require schemaA is .Struct({ fields }) else { crash("isWrapperType: A must be a struct") };
+    require fields.first() is .Some(field) and fields.len() == 1 else crash("A must have one field, got {fields.len()}");
+    let equal = field.typeId == bTypeId;
+    if not equal { crash("Expected {types/getTypeName[B]()} but got {types/typeName(field.typeId)}") };
   }
 
 }
@@ -461,6 +470,8 @@ ns mem {
 
   intern fn zeroed[T](): T
 
+  intern fn bitcast[T, U](t: T): U
+
 }
 
 /////////////////////////////////
@@ -561,7 +572,7 @@ impl Equals for ptr {
 
 ns bool {
   intern fn negated(self: bool): bool
-  fn as_u8(self: bool): u8 { if self 1u8 else 0u8 }
+  fn as_u8(self: bool): u8 { self as u8 }
   fn from_u8(value: u8): bool { value != 0u8 }
 }
 

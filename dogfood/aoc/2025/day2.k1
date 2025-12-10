@@ -47,7 +47,7 @@ fn checkInvalidPart1(value: i64): bool {
     //println("skipping odd len {valueStr}");
     return(false)
   };
-  let groups = chunks(valueStr, valueStr.len() / 2);
+  let groups = valueStr.chunks(valueStr.len() / 2);
   if groups.len() > 1 {
     let h = groups.first().!;
     let allEqual = forall(groups.drop(1), \g. g == h);
@@ -62,7 +62,7 @@ fn checkInvalidPart2(value: i64): bool {
   //println("checkInvalidPart2 {valueStr}");
   for IntRange/make(1, (valueStr.len() / 2) + 1) {
     //println("Testing {value} for {it}");
-    let groups = chunks(valueStr, it);
+    let groups = valueStr.chunks(it);
     if groups.len() > 1 {
       let h = groups.first().!;
       let allEqual = forall(groups.drop(1), \g. g == h);
@@ -73,14 +73,3 @@ fn checkInvalidPart2(value: i64): bool {
   false
 }
 
-// nocommit add chunks to everything iterable in core or std
-fn chunks(s: string, n: size): View[string] {
-  let i = 0;
-  let* results = List/empty[string]();
-  while i < s.len() {
-    let chunk = s.substring(i, i + n);
-    results.push(chunk);
-    i := i + n
-  };
-  results.asView()
-}

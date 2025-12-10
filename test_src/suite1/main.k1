@@ -61,7 +61,8 @@ fn moderate(): unit {
   lambdas/test();
   condcomp/test();
   struct_composition/test();
-  zero_test/test();
+  zero_test/testZero();
+  zero_test/testBitcast();
   type_schema/test();
   array_type_test/test();
   ability_complex/test();

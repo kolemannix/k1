@@ -134,6 +134,11 @@ ns string {
   fn take(self: string, count: size): string { self.substring(0,     count) }
   fn drop(self: string, count: size): string { self.substring(count, self.len()) }
 
+  fn chunks(self: string, size: size): View[string] {
+    let charViews: View[View[char]] = self.view.chunks(size);
+    mem/bitcast[View[View[char]], View[string]](charViews)
+  }
+
   fn startsWith(self: string, other: string): bool {
     self.substring(0, other.len()) == other
   }

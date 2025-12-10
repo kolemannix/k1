@@ -12,7 +12,7 @@ pub(crate) mod types;
 pub(crate) mod visit;
 
 use crate::typer::dump::K1DisplayArgs;
-use crate::{bc, k1_format, k1_format_user, vm};
+use crate::{bc, k1_format, k1_format_user, kbail, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -564,6 +564,7 @@ pub struct TypedAbility {
     pub name: Ident,
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
+    // nocommit(3): swap these ecovecs out for arena memory
     pub parameters: EcoVec<TypedAbilityParam>,
     pub functions: EcoVec<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
@@ -1252,6 +1253,7 @@ pub enum CastType {
     IntegerCast(IntegerCastDirection),
     Integer8ToChar,
     IntegerExtendFromChar,
+    BoolToInt,
     EnumToVariant,
     VariantToEnum,
     ReferenceToMut,
@@ -1279,6 +1281,7 @@ impl Display for CastType {
             CastType::IntegerCast(_dir) => write!(f, "intcast"),
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
+            CastType::BoolToInt => write!(f, "bool2int"),
             CastType::EnumToVariant => write!(f, "enum2variant"),
             CastType::VariantToEnum => write!(f, "variant2enum"),
             CastType::ReferenceToMut => write!(f, "reference2mut"),
@@ -1800,13 +1803,15 @@ pub enum IntrinsicOperation {
     AlignOf,
     Zeroed,
     TypeId,
-    TypeName,
     CompilerSourceLocation,
     // Actual function
     TypeSchema,
+    TypeName,
 
     BoolNegate,
     BitNot,
+    /// Bit-for-bit no-op reinterpretation from A to B
+    BitCast,
     ArithBinop(IntrinsicArithOpKind),
     BitwiseBinop(IntrinsicBitwiseBinopKind),
     PointerIndex,
@@ -1841,6 +1846,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
             IntrinsicOperation::BitNot => false,
+            IntrinsicOperation::BitCast => false,
             IntrinsicOperation::ArithBinop(_) => false,
             IntrinsicOperation::BitwiseBinop(_) => false,
             IntrinsicOperation::PointerIndex => false,
@@ -1859,6 +1865,13 @@ impl IntrinsicOperation {
         }
     }
 
+    pub fn is_typer_phase_check_only(&self) -> bool {
+        match self {
+            IntrinsicOperation::BitCast => true,
+            _ => false,
+        }
+    }
+
     /// Determines whether a physical function should be generated for this
     /// operation; currently used by the LLVM backend
     pub fn is_inlined(self) -> bool {
@@ -1870,6 +1883,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::BoolNegate => true,
             IntrinsicOperation::BitNot => true,
+            IntrinsicOperation::BitCast => true,
             IntrinsicOperation::ArithBinop(_) => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
             IntrinsicOperation::PointerIndex => true,
@@ -9058,6 +9072,20 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
+            Type::Bool => match self.types.get(target_type) {
+                Type::Integer(_to_integer_type) => {
+                    // Since the bit pattern of a boolean only
+                    // concerns the first bit, it can validly
+                    // and safely be represented as all of our
+                    // integer types
+                    Ok(CastType::BoolToInt)
+                }
+                _ => failf!(
+                    cast.span,
+                    "Cannot cast bool to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok(CastType::ReferenceToPointer),
                 Type::Reference(_) => Ok(CastType::ReferenceToReference),
@@ -11550,13 +11578,18 @@ impl TypedProgram {
         };
 
         // Intrinsics that are handled by the typechecking phase are implemented here.
-        if let Some(intrinsic_type) = call
-            .callee
-            .maybe_function_id()
-            .and_then(|id| self.get_function(id).intrinsic_type)
-            .filter(|op| op.is_typer_phase())
-        {
-            self.handle_intrinsic(call, intrinsic_type, ctx)
+        let intrinsic =
+            call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type);
+        if let Some(intrinsic) = intrinsic {
+            if intrinsic.is_typer_phase() {
+                self.handle_intrinsic(call, intrinsic, ctx)
+            } else {
+                if intrinsic.is_typer_phase_check_only() {
+                    self.check_intrinsic(&call, intrinsic, ctx)?;
+                }
+                let call_id = self.calls.add(call);
+                Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
+            }
         } else {
             let call_id = self.calls.add(call);
             Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
@@ -11693,6 +11726,35 @@ impl TypedProgram {
                 Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
             }
             _ => self.ice(format!("Unexpected intrinsic in type phase: {:?}", intrinsic), None),
+        }
+    }
+
+    fn check_intrinsic(
+        &mut self,
+        call: &Call,
+        intrinsic: IntrinsicOperation,
+        _ctx: EvalExprContext,
+    ) -> TyperResult<()> {
+        match intrinsic {
+            IntrinsicOperation::BitCast => {
+                let type_from = self.named_types.get_nth(call.type_args, 0).type_id;
+                let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
+                let layout_from = self.types.get_layout(type_from);
+                let layout_to = self.types.get_layout(type_to);
+                if layout_from.size != layout_to.size || layout_from.align != layout_to.align {
+                    kbail!(
+                        self,
+                        call.span,
+                        "Cannot bitcast between types of different sizes: {} (size {}) -> {} (size {})",
+                        type_from,
+                        layout_from.size,
+                        type_to,
+                        layout_to.size
+                    )
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -12664,10 +12726,11 @@ impl TypedProgram {
                     "allocZeroed" => Some(IntrinsicOperation::AllocateZeroed),
                     "realloc" => Some(IntrinsicOperation::Reallocate),
                     "free" => Some(IntrinsicOperation::Free),
-                    "zeroed" => Some(IntrinsicOperation::Zeroed),
                     "copy" => Some(IntrinsicOperation::MemCopy),
                     "set" => Some(IntrinsicOperation::MemSet),
                     "equals" => Some(IntrinsicOperation::MemEquals),
+                    "zeroed" => Some(IntrinsicOperation::Zeroed),
+                    "bitcast" => Some(IntrinsicOperation::BitCast),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {

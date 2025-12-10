@@ -16,8 +16,11 @@ fn main(): i32  {
   // })
 
 
+  #static testBitcast();
+  testBitcast();
+
   #debug #for x in [1,2,3,4,5].asView() {
-    println("{x}"); println("{x}")
+    println("{x}")
   };
 
   0

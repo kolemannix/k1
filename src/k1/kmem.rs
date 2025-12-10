@@ -569,6 +569,18 @@ macro_rules! k1_format_user {
 }
 
 #[macro_export]
+macro_rules! kbail {
+    ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        let msg: String = k1_format_user!($k1, $fmt, $($arg),*).to_string();
+        return Err(TyperError {
+            span: $span,
+            message: msg,
+            level: MessageLevel::Error
+        })
+    }}
+}
+
+#[macro_export]
 macro_rules! k1_format {
     ($k1:expr, $args:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         #[allow(unused)]
