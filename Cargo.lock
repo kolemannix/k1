@@ -893,10 +893,9 @@ dependencies = [
 
 [[package]]
 name = "inkwell"
-version = "0.6.0"
-source = "git+https://github.com/TheDan64/inkwell#d7e646b17dd55d417fef09a80e761bd8404c210b"
+version = "0.7.1"
+source = "git+https://github.com/TheDan64/inkwell#b9c53276e30935ccec841d12c9687a17e9199958"
 dependencies = [
- "either",
  "inkwell_internals",
  "libc",
  "llvm-sys",
@@ -906,8 +905,8 @@ dependencies = [
 
 [[package]]
 name = "inkwell_internals"
-version = "0.11.0"
-source = "git+https://github.com/TheDan64/inkwell#d7e646b17dd55d417fef09a80e761bd8404c210b"
+version = "0.12.0"
+source = "git+https://github.com/TheDan64/inkwell#b9c53276e30935ccec841d12c9687a17e9199958"
 dependencies = [
  "proc-macro2",
  "quote",

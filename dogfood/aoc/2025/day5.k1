@@ -1,0 +1,67 @@
+ns day5;
+
+let sample: string =
+`3-5
+10-14
+16-20
+12-18
+
+1
+5
+8
+11
+17
+32`;
+let inputFile: string = core/files/readToString(context .Arena)("day5_input.txt");
+
+// The fresh ID ranges are inclusive: the range 3-5 means that ingredient IDs 3, 4, and 5 are all fresh. The ranges can also overlap; an ingredient ID is fresh if it is in any range.
+// 
+// The Elves are trying to determine which of the available ingredient IDs are fresh. In this example, this is done as follows:
+// 
+// Ingredient ID 1 is spoiled because it does not fall into any range.
+// Ingredient ID 5 is fresh because it falls into range 3-5.
+// Ingredient ID 8 is spoiled.
+// Ingredient ID 11 is fresh because it falls into range 10-14.
+// Ingredient ID 17 is fresh because it falls into range 16-20 as well as range 12-18.
+// Ingredient ID 32 is spoiled.
+// So, in this example, 3 of the available ingredient IDs are fresh.
+
+use core/assertdbg
+deftype Range = { start: uint, end: uint }
+ns Range {
+  fn parse(s: string): Result[Range, string] {
+     let r = s.splitByChar('-');
+     assertdbg(r.len() == 2);
+     let start = r.get(0).parseBase10().!;
+     let end   = r.get(1).parseBase10().!;
+     .Ok({ start, end });
+  }
+}
+
+#debug fn partOne(input: string): unit {
+  let lines = input.splitByChar('\n');
+  let parseMode: (either Ranges, Ingredients) = .Ranges;
+  let* ranges = List/empty[Range]();
+  let* ing = List/empty[uint]();
+  for lines {
+    if it.isEmpty() { parseMode := .Ingredients; } else {
+      switch parseMode {
+        .Ranges -> { ranges.push(Range/parse(it).!) },
+        .Ingredients -> { ing.push(it.parseBase10().!) }
+      }
+    }
+  };
+
+  let fresh = ing.filter(\i. {
+    for range in ranges {
+      let fresh = range.start <= i and range.end >= i;
+      if fresh return(true)
+    };
+    return(false)
+  });
+
+  println("Fresh Count: {fresh.len()}");
+}
+
+#static partOne(inputFile)
+//#static partOne(sample)

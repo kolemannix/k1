@@ -93,11 +93,10 @@ ns string {
     let* r = { start: 0: size, len: 0: size };
 
     for c in self {
+      //println("{itIndex} {c} ({r.start},{r.len})");
       if c == delim {
-        if r.len != 0 {
-          ranges.push(r);
-          r <- { start: itIndex + 1, len: 0 };
-        }
+        ranges.push(r);
+        r <- { start: itIndex + 1, len: 0 };
       } else {
         r.len* <- r.len + 1
       };
@@ -128,9 +127,17 @@ ns string {
   fn substring(self: string, start: size, end: size): string {
     { view: self.view.slice(start, end) }
   }
+  fn slice(self: string, start: size, end: size): string {
+    { view: self.view.slice(start, end) }
+  }
 
   fn take(self: string, count: size): string { self.substring(0,     count) }
   fn drop(self: string, count: size): string { self.substring(count, self.len()) }
+
+  fn chunks(self: string, size: size): View[string] {
+    let charViews: View[View[char]] = self.view.chunks(size);
+    mem/bitcast[View[View[char]], View[string]](charViews)
+  }
 
   fn startsWith(self: string, other: string): bool {
     self.substring(0, other.len()) == other
@@ -206,6 +213,17 @@ ns string {
       cloneChars.set(0, c.toAsciiUpper());
       wrapBuffer(cloneChars)
     } else self
+  }
+ 
+  fn parseBase10(s: string): ?uint {
+    let o: uint = 0;
+    for c in s {
+      if not c.isAsciiDigit() { return(.None) };
+      let digitValue: uint = (c as u8 - 48) as uint;
+      o := o * 10;
+      o := o + digitValue;
+    };
+    .Some(o)
   }
 
 }

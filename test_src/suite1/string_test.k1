@@ -32,8 +32,8 @@ fn test(): unit {
   assertEquals("a.".splitByChar('.'), ["a"]);
   assert("bbb.".splitByChar('.') == ["bbb"]);
   assertEquals("a.b.cc.d".splitByChar('.'), ["a", "b", "cc", "d"]);
-  assert("a...".splitByChar('.') == ["a"]);
-  assert("..".splitByChar('.') == []);
+  assert("a...".splitByChar('.') == ["a", "", ""]);
+  assert("..".splitByChar('.') == ["", ""]);
 
   assert("hello".indexOfString("hel").! == 0);
   assert("hello".indexOfString("").! == 0);

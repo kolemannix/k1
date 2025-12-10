@@ -23,22 +23,22 @@ ns Arena {
     self.curAddr.diff(self.basePtr)
   }
 
-  fn _virtual(usageHintMb: size): ptr {
-    let basePtr: ptr = mem/virtualAlloc(gb);
+  fn _virtual(usageHintMb: size): Arena {
+    let sizeBytes = 1 * gb;
+    let basePtr: ptr = mem/virtualAlloc(sizeBytes);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
     posix/madvise(basePtr, (usageHintMb * mb) as c_sizet, advice = posix/MADV_SEQUENTIAL);
-    basePtr
-  }
-
-  fn default(): Arena {
-    let basePtr: ptr = _virtual(usageHintMb = 10);
-    //let header: *mut Arena = basePtr as *mut Arena;
-    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
     {
       basePtr: basePtr,
       curAddr: basePtr,
-      maxAddr: basePtr.addBytes(gb)
+      maxAddr: basePtr.addBytes(sizeBytes)
     }
+  }
+
+  fn default(): Arena {
+    _virtual(usageHintMb = 10)
+    //let header: *mut Arena = basePtr as *mut Arena;
+    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
   }
 
   fn release(self: *mut Arena): unit {
@@ -60,6 +60,7 @@ ns Arena {
     let dataStart = self.curAddr.aligned(align);
     let newEnd = dataStart.addBytes(size);
     if newEnd as usize > self.maxAddr as usize {
+      mem/pushMode(.SystemHeap);
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
 

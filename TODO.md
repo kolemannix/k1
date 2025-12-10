@@ -8,6 +8,16 @@ AbilitySignature as context variable kind in addition to Type (enables context W
 - let context(impl Alloc) temp = mem/AllocMode.Arena;
 - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
+Specialization solution (when types are known by the function)
+- A kind of *pattern* that checks the type and binds a variable of that type! What other thing
+  for a feature that needs to _check_ and _bind_ than a pattern?!
+fn write[T](t: View[T]) {
+    if t is type[View[u8]](binding) {
+      // `binding` is of byte View[u8]
+    } else {
+
+    }
+}
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -93,7 +103,8 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Ability objects; dyn[<ability expr>]
 
 ## Project: Static Improvements
-- [ ] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
+- [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
+- [-] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)

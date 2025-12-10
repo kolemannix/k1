@@ -32,7 +32,7 @@ deftype char    = builtin
 deftype bool    = builtin
 
 /// An uninhabited type representing that code with this type never returns
-/// Used to signal termination and enables control flow analysis
+/// Used to signal termination and enables basic control flow analysis
 deftype never   = builtin
 
 deftype ptr = builtin
@@ -51,6 +51,8 @@ deftype Opt[T] = either None, Some(T)
 
 ns compiler {
   deftype SourceLocation = { filename: string, line: u64 }
+  // Need some way to mark this and IS_STATIC as comptime only
+  let* CAPTURE_PRINTS: *mut bool = true;
 }
 
 deftype Ordering = either Less, Equal, Greater
@@ -146,6 +148,15 @@ ns types {
 
   fn makeAny[T](t: *T): Any {
     { typeId: typeId[T](), value: t as ptr }
+  }
+
+  fn assertWrapperType[A, B](): unit {
+    let schemaA = types/getTypeSchema[A]();
+    let bTypeId = types/typeId[B]();
+    require schemaA is .Struct({ fields }) else { crash("isWrapperType: A must be a struct") };
+    require fields.first() is .Some(field) and fields.len() == 1 else crash("A must have one field, got {fields.len()}");
+    let equal = field.typeId == bTypeId;
+    if not equal { crash("Expected {types/getTypeName[B]()} but got {types/typeName(field.typeId)}") };
   }
 
 }
@@ -342,10 +353,17 @@ ability Try[impl T, impl E] {
 }
 
 ability Iterator[impl Item] {
-  fn next(self: *mut Self): ?Item
+  fn next(self: *mut Self): ?Item {
+    let p = self.peek();
+    if p.isSome() { self.advanceBy(1) };
+    p
+  }
+  fn peek(self: *Self): ?Item
   fn sizeHint(self: *Self): { atLeast: size, atMost: ?size }
   fn advanceBy(self: *mut Self, n: size): unit
   fn nth(self: *mut Self, n: size): ?Item
+
+  fn isDone(self: *Self): bool { self.peek().isNone() }
 }
 
 ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
@@ -452,6 +470,8 @@ ns mem {
 
   intern fn zeroed[T](): T
 
+  intern fn bitcast[T, U](t: T): U
+
 }
 
 /////////////////////////////////
@@ -552,7 +572,7 @@ impl Equals for ptr {
 
 ns bool {
   intern fn negated(self: bool): bool
-  fn as_u8(self: bool): u8 { if self 1u8 else 0u8 }
+  fn as_u8(self: bool): u8 { self as u8 }
   fn from_u8(value: u8): bool { value != 0u8 }
 }
 

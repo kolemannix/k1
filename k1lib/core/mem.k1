@@ -159,7 +159,6 @@ ns mem {
     s
   };
 
-  // Eventually, we want 'push'/'pop' for allocMode
   fn pushMode(mode: AllocMode): unit {
     allocStack.push(mode)
   }

@@ -20,9 +20,10 @@ use crate::typer::types::{
     ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, Layout, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
-    StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-    TypedIntValue, TypedProgram, TyperResult, UNIT_BYTE_VALUE, VariableId,
+    FunctionId, Layout, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum,
+    StaticStruct, StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue,
+    TypedGlobalId, TypedIntValue, TypedProgram, TyperError, TyperResult, UNIT_BYTE_VALUE,
+    VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -171,12 +172,20 @@ pub enum StackSelection {
     CallStackCurrent,
 }
 
+#[derive(Clone)]
+pub struct CompilerMessage {
+    level: MessageLevel,
+    message: StringId,
+    filename: String,
+    line: u32,
+}
+
 pub struct Vm {
     globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
     eval_span: SpanId,
-    compiler_messages: Vec<String>,
+    compiler_messages: Vec<CompilerMessage>,
 }
 
 impl Vm {
@@ -531,13 +540,10 @@ pub fn execute_compiled_unit(
     let end = k1.timing.clock.raw();
     k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
 
+    report_execution_messages(k1, vm, span, exit_code);
+
     if exit_code != 0 {
-        failf!(
-            span,
-            "Static execution exited with code: {}.\nOutput:\n{}",
-            exit_code,
-            vm.compiler_messages.join("\n")
-        )
+        failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
         match top_ret_info {
             None => Ok(k1.static_values.unit_id()),
@@ -589,10 +595,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
     macro_rules! resolve_value {
         ($v:expr) => {
-            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)
+            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)?
         };
     }
 
+    //let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
@@ -600,18 +607,18 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // if debugger {
-        //     eprintln!(
-        //         "{}[{}] i{} {}",
-        //         "  ".repeat(vm.stack.current_frame_index() as usize),
-        //         vm.stack.current_frame_index(),
-        //         inst_id.as_u32(),
-        //         bc::inst_to_string(k1, inst_id)
-        //     );
-        //     std::io::stdin().read_line(&mut line).unwrap();
-        //     if &line == "v\n" {
-        //         vm.dump_current_frame(k1);
-        //     }
-        //     line.clear()
+        //eprintln!(
+        //    "{}[{}] i{} {}",
+        //    "  ".repeat(vm.stack.current_frame_index() as usize),
+        //    vm.stack.current_frame_index(),
+        //    inst_id.as_u32(),
+        //    bc::inst_to_string(k1, inst_id)
+        //);
+        //std::io::stdin().read_line(&mut line).unwrap();
+        //if &line == "v\n" {
+        //    vm.dump_current_frame(k1);
+        //}
+        //line.clear();
         // }
 
         // ~Decode~ Execute
@@ -905,15 +912,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             let level = unsafe {
                                 (level_arg.as_ptr() as *const k1_types::CompilerMessageLevel).read()
                             };
-                            let color = match level {
-                                k1_types::CompilerMessageLevel::Info => colored::Color::White,
-                                k1_types::CompilerMessageLevel::Warn => colored::Color::Yellow,
-                                k1_types::CompilerMessageLevel::Error => colored::Color::Red,
-                            };
-                            let level_str = match level {
-                                k1_types::CompilerMessageLevel::Info => "info",
-                                k1_types::CompilerMessageLevel::Warn => "warn",
-                                k1_types::CompilerMessageLevel::Error => "error",
+                            let level = match level {
+                                k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
+                                k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
+                                k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
                             };
                             let message = value_to_string_id(k1, message_arg).map_err(|msg| {
                                 errf!(
@@ -928,18 +930,23 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                         "Bad filename string passed to EmitCompilerMessage: {msg}"
                                     )
                                 })?;
-                            let message = format!(
+
+                            eprintln!(
                                 "[{}:{} {}] {}",
                                 filename,
                                 location.line,
-                                level_str,
-                                k1.get_string(message).color(color)
+                                level.name_str().color(level.color()),
+                                k1.get_string(message)
                             );
 
-                            eprintln!("{}", &message);
-                            vm.compiler_messages.push(message);
+                            vm.compiler_messages.push(CompilerMessage {
+                                level,
+                                message,
+                                filename: filename.to_string(),
+                                line: location.line as u32,
+                            });
 
-                            builtin_return!(Value(0))
+                            builtin_return!(Value::UNIT)
                         }
                     },
                     BcCallee::Direct(function_id) => function_id,
@@ -981,7 +988,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     // params or instrs by index, which is basically always! The other option would
                     // be parameterizing 'resolve_value' by stack frame
                     let vm_value =
-                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg);
+                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
 
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
@@ -1059,6 +1066,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let result = !input.bits();
 
                 vm.stack.set_cur_inst_value(inst_index, Value(result));
+                ip += 1
+            }
+            Inst::BitCast { v, to: _ } => {
+                let input = resolve_value!(v);
+
+                vm.stack.set_cur_inst_value(inst_index, input);
                 ip += 1
             }
             Inst::IntTrunc { v, to: _ } => {
@@ -1511,26 +1524,29 @@ fn resolve_value(
     frame_index: u32,
     inst_offset: u32,
     value: BcValue,
-) -> Value {
+) -> TyperResult<Value> {
     match value {
         BcValue::Inst(inst_id) => {
             let inst_index = inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_index);
-            v
+            Ok(v)
         }
         BcValue::StaticValue { t: _, id } => {
             let v = static_value_to_vm_value(k1, id, vm.eval_span);
-            v
+            Ok(v)
         }
-        BcValue::FunctionAddr(function_id) => function_id_to_ref_value(function_id),
+        BcValue::FunctionAddr(function_id) => {
+            let value = function_id_to_ref_value(function_id);
+            Ok(value)
+        }
         BcValue::FnParam { t: _, index } => {
             let value = vm.stack.get_param_value(frame_index, index);
             // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
-            value
+            Ok(value)
         }
         BcValue::Imm32 { t, data } => {
             let u32_data = data;
-            match t {
+            let value = match t {
                 ScalarType::F32 => Value(u32_data as u64),
                 ScalarType::F64 => Value::f64(data as f32 as f64),
                 ScalarType::Pointer => Value(data as u64),
@@ -1540,59 +1556,63 @@ fn resolve_value(
                 ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
                     Value(u32_data as u64)
                 }
-            }
+            };
+            Ok(value)
         }
-        BcValue::PtrZero => Value::NULLPTR,
-        BcValue::Global { t, id } => {
-            // Handle global
-            // Case 1: It's a constant, already evaluated, stored in the global static space
-            // Case 2: It's in this VM because its mutable, and we already evaluated it during this execution
-            // Case 3: First evaluation. If not mutable, put in globals. If mutable, put in this
-            // vm's static space.
-            // ** If referencing, allocate layout and perform a store to produce a valid address
-            match k1.vm_global_constant_lookups.get(&id) {
-                Some(v) => *v,
-                None => {
-                    match vm.globals.get(&id) {
-                        Some(v) => *v,
-                        None => {
-                            let global = k1.globals.get(id);
-                            let is_constant = global.is_constant;
-                            let initial_value_id = match global.initial_value {
-                                None => {
-                                    k1.eval_global_body(global.ast_id).unwrap();
-                                    let value_id = k1.globals.get(id).initial_value.unwrap();
-                                    value_id
-                                }
-                                Some(value_id) => value_id,
-                            };
-                            debug!(
-                                "shared global is: {}. the `t` of the instr is: {}",
-                                k1.static_value_to_string(initial_value_id),
-                                types::pt_to_string(&k1.types, &t)
-                            );
-                            let shared_vm_value =
-                                static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-                            let layout = k1.types.get_pt_layout(&t);
-                            if is_constant {
-                                let dst = k1.vm_static_stack.push_layout_uninit(layout);
-                                store_value(&k1.types, t, dst, shared_vm_value);
-                                let addr = Value::ptr(dst.cast_const());
-                                k1.vm_global_constant_lookups.insert(id, addr);
-                                addr
-                            } else {
-                                // We need a local copy of this
-                                let dst = vm.static_stack.push_layout_uninit(layout);
-                                store_value(&k1.types, t, dst, shared_vm_value);
-                                let addr = Value::ptr(dst.cast_const());
-                                vm.globals.insert(id, addr);
-                                addr
-                            }
-                        }
-                    }
-                }
-            }
+        BcValue::PtrZero => Ok(Value::NULLPTR),
+        BcValue::Global { t, id } => resolve_global(k1, vm, id, t),
+    }
+}
+
+#[inline(always)]
+fn resolve_global(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    global_id: TypedGlobalId,
+    t: PhysicalType,
+) -> TyperResult<Value> {
+    // ** If referencing, allocate layout and perform a store to produce a valid address
+    // Case 1: It's a constant, already evaluated, stored in the global static space
+    if let Some(v) = k1.vm_global_constant_lookups.get(&global_id) {
+        return Ok(*v);
+    }
+    // Case 2: It's instead in this VM because it's mutable and we already evaluated it, return it
+    if let Some(v) = vm.globals.get(&global_id) {
+        return Ok(*v);
+    }
+
+    // Case 3: First evaluation. If not mutable, put in share global constants. If mutable,
+    // generate and store the shared original, but store a copy in our local vm to allow mutation
+    let global = k1.globals.get(global_id);
+    let is_constant = global.is_constant;
+    let initial_value_id = match global.initial_value {
+        None => {
+            k1.eval_global_body(global.ast_id)?;
+            let value_id = k1.globals.get(global_id).initial_value.unwrap();
+            value_id
         }
+        Some(value_id) => value_id,
+    };
+    debug!(
+        "shared global is: {}. the `t` of the instr is: {}",
+        k1.static_value_to_string(initial_value_id),
+        types::pt_to_string(&k1.types, &t)
+    );
+    let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
+    let layout = k1.types.get_pt_layout(&t);
+    if is_constant {
+        let dst = k1.vm_static_stack.push_layout_uninit(layout);
+        store_value(&k1.types, t, dst, shared_vm_value);
+        let addr = Value::ptr(dst.cast_const());
+        k1.vm_global_constant_lookups.insert(global_id, addr);
+        Ok(addr)
+    } else {
+        // We need a local copy of this
+        let dst = vm.static_stack.push_layout_uninit(layout);
+        store_value(&k1.types, t, dst, shared_vm_value);
+        let addr = Value::ptr(dst.cast_const());
+        vm.globals.insert(global_id, addr);
+        Ok(addr)
     }
 }
 
@@ -2452,6 +2472,42 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
         writeln!(&mut s).unwrap();
     }
     s
+}
+fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit_code: i32) {
+    if vm.compiler_messages.is_empty() {
+        return;
+    }
+
+    let mut formatted_messages = String::new();
+    let mut max_level = MessageLevel::Hint;
+    for message in &vm.compiler_messages {
+        use std::fmt::Write;
+        let msg_str = k1.get_string(message.message);
+        let color = match message.level {
+            MessageLevel::Info => colored::Color::BrightWhite,
+            MessageLevel::Warn => colored::Color::Yellow,
+            MessageLevel::Error => colored::Color::Red,
+            MessageLevel::Hint => colored::Color::BrightBlue,
+        };
+        if message.level > max_level {
+            max_level = message.level
+        };
+        if msg_str == "\n" {
+            writeln!(&mut formatted_messages).unwrap()
+        } else {
+            writeln!(
+                &mut formatted_messages,
+                "[{}:{} {}] {}",
+                message.filename,
+                message.line,
+                message.level.name_str().color(color),
+                msg_str
+            )
+            .unwrap()
+        };
+    }
+    let level = MessageLevel::Info;
+    k1.report_ext(TyperError { message: formatted_messages, span, level }, true);
 }
 
 #[track_caller]

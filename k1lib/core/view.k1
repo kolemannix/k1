@@ -64,6 +64,11 @@ ns View {
   fn take[T](self: View[T], count: size): View[T] { self.slice(0,     count) }
   fn drop[T](self: View[T], count: size): View[T] { self.slice(count, self.len()) }
 
+  fn chunks[T](self: View[T], size: size): View[View[T]] {
+    let bufferChunks = self.buffer.chunks(size);
+    mem/bitcast(bufferChunks)
+  }
+
   fn isEmpty[T](self: View[T]): bool {
     self.len() == 0
   }
@@ -139,6 +144,12 @@ impl[T: Print] Print for View[T] {
       };
     };
     w.writeChar(']');
+  }
+}
+
+impl[T: Equals] Equals for View[T] {
+  fn equals(self: View[T], other: View[T]): bool {
+    self.buffer == other.buffer
   }
 }
 

@@ -1,0 +1,27 @@
+// macro myfor(raw: tokens) {
+//   let binding: ?string = if raw.peekKind(.Ident) is .Some(i) {
+//     raw.advance();
+//     raw.expectKind(.In);
+//     .Some(i.text)
+//   } else .None;
+//   let iterable = raw.expectExpr();
+//   code.line(`let _iter = {iterable};`);
+// }
+
+let export foo: int = 23;
+
+fn main(): i32  {
+  // myfor(x in [1,2,3,4,5] {
+  //    
+  // })
+
+
+  #static testBitcast();
+  testBitcast();
+
+  #debug #for x in [1,2,3,4,5].asView() {
+    println("{x}")
+  };
+
+  0
+}

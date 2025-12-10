@@ -27,7 +27,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue,
+    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
@@ -35,7 +35,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::compiler::MAC_SDK_VERSION;
+use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
@@ -277,15 +277,6 @@ struct LlvmArrayType<'ctx> {
     element_type: MHandle<K1LlvmType<'ctx>, CodegenPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
-}
-
-// nocommit Can this just be 'struct'? :()
-#[derive(Debug, Copy, Clone)]
-struct LlvmLambdaObjectType<'ctx> {
-    type_id: TypeId,
-    struct_type: StructType<'ctx>,
-    di_type: DIType<'ctx>,
-    size: Layout,
 }
 
 #[derive(Copy, Clone)]
@@ -645,6 +636,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
+        let sysroot = match module.ast.config.target.target_os() {
+            compiler::TargetOs::Linux => "",
+            compiler::TargetOs::MacOs => compiler::MAC_SDK_SYSROOT,
+            compiler::TargetOs::Wasm => "",
+        };
+        let sdk = match module.ast.config.target.target_os() {
+            compiler::TargetOs::Linux => "",
+            compiler::TargetOs::MacOs => "MacOSX.sdk",
+            compiler::TargetOs::Wasm => "",
+        };
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
             false,
             DWARFSourceLanguage::C,
@@ -659,15 +660,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             0,
             false,
             false,
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-            "MacOSX.sdk",
+            sysroot,
+            sdk,
         );
         let md0 = ctx.metadata_node(&[
             ctx.i32_type().const_int(2, false).into(),
             ctx.metadata_string("SDK Version").into(),
             ctx.i32_type()
                 .const_array(&[
-                    ctx.i32_type().const_int(14, false),
+                    ctx.i32_type().const_int(15, false),
                     ctx.i32_type().const_int(0, false),
                 ])
                 .into(),
@@ -697,7 +698,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         llvm_module.add_global_metadata("llvm.module.flags", &md0).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md1).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md2).unwrap();
-        // llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
+        llvm_module.add_global_metadata("llvm.module.flags", &md3).unwrap();
         llvm_module.add_global_metadata("llvm.module.flags", &md4).unwrap();
 
         let di_files: FxHashMap<FileId, DIFile> = module
@@ -2076,7 +2077,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Int(int_value) => self.codegen_integer_value(*int_value).unwrap(),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
-                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                let string_global = self
+                    .codegen_string_id_to_global(
+                        *string_id,
+                        Some(&format!("static_{}\0", static_value_id.as_u32())),
+                    )
+                    .unwrap();
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
@@ -2186,8 +2192,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
-                            &format!("static_elems_{}", static_value_id.as_u32()),
+                            &format!("static_elems_{}\0", static_value_id.as_u32()),
                             true,
+                            LlvmLinkage::Private,
                         );
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
@@ -2252,8 +2259,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let global = self.make_global_from_value(
             struct_value,
             layout.align,
-            &format!("static_{}", static_value_id.as_u32()),
+            &format!("static_{}\0", static_value_id.as_u32()),
             true,
+            LlvmLinkage::Private,
         );
         self.static_values_globals.insert(static_value_id, global);
         Ok(global)
@@ -2265,12 +2273,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         align: u32,
         name: &str,
         constant: bool,
+        linkage: LlvmLinkage,
     ) -> GlobalValue<'ctx> {
         let global = self.llvm_module.add_global(value.get_type(), None, name);
         global.set_alignment(align);
         global.set_unnamed_addr(true);
         global.set_initializer(&value);
         global.set_constant(constant);
+        global.set_linkage(linkage);
         global
     }
 
@@ -2290,7 +2300,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             StaticValue::Int(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::String(string_id) => {
-                let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
+                let string_global = self
+                    .codegen_string_id_to_global(
+                        *string_id,
+                        Some(&format!("static_{}\0", static_value_id.as_u32())),
+                    )
+                    .unwrap();
                 string_global.as_basic_value_enum()
             }
             StaticValue::Zero(type_id) => {
@@ -2327,12 +2342,17 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         rust_str: &str,
         name: Option<&str>,
     ) -> CodegenResult<GlobalValue<'ctx>> {
+        let string_name = match name {
+            None => "string_data",
+            Some(n) => &format!("string_data_{n}\0"),
+        };
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(rust_str.len() as u32),
             None,
-            "str_data",
+            string_name,
         );
         let str_data_array = i8_array_from_str(self.ctx, rust_str);
+        global_str_data.set_linkage(LlvmLinkage::Private);
         global_str_data.set_initializer(&str_data_array);
         global_str_data.set_unnamed_addr(true);
         global_str_data.set_constant(true);
@@ -2382,12 +2402,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_string_id_to_global(
         &mut self,
         string_id: StringId,
+        name: Option<&str>,
     ) -> CodegenResult<GlobalValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
             let string_value = self.k1.get_string(string_id);
-            let ptr = self.make_string_llvm_global(string_value, None)?;
+            let ptr = self.make_string_llvm_global(string_value, name)?;
 
             self.strings.insert(string_id, ptr);
             Ok(ptr)
@@ -2469,16 +2490,26 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         self.k1.type_id_to_string(expr_type),
                         self.rich_repr_type(&llvm_type)
                     );
-                    Ok(self.load_variable_value(&llvm_type, variable_value).into())
+                    let value = self.load_variable_value(&llvm_type, variable_value);
+                    Ok(value.into())
                 } else {
-                    Err(CodegenError {
-                        message: format!(
-                            "No pointer or global found for variable {} id={}",
-                            self.k1.expr_to_string(expr_id),
-                            ir_var.variable_id
-                        ),
-                        span: expr_span,
-                    })
+                    let v = self.k1.variables.get(ir_var.variable_id);
+                    match v.global_id() {
+                        None => Err(CodegenError {
+                            message: format!(
+                                "No llvm entry found for variable {} id={}",
+                                self.k1.expr_to_string(expr_id),
+                                ir_var.variable_id
+                            ),
+                            span: expr_span,
+                        }),
+                        Some(global_id) => {
+                            self.codegen_global(global_id)?;
+
+                            // Recurse to avoid code duplication or factoring
+                            self.codegen_expr(expr_id)
+                        }
+                    }
                 }
             }
             TypedExpr::Struct(struc) => {
@@ -2852,6 +2883,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 };
                 Ok(value.as_basic_value_enum().into())
             }
+            CastType::BoolToInt => {
+                let value = self.codegen_expr_basic_value(cast.base_expr)?;
+                let int_value = value.into_int_value();
+                let to_type = self.codegen_type(target_type_id)?;
+                let to_int_type = self.rich_repr_type(&to_type).into_int_type();
+                let extended = self.builder.build_int_z_extend(int_value, to_int_type, "bool_to_int").unwrap();
+                Ok(extended.as_basic_value_enum().into())
+
+            }
             CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                 let value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let int_value = value.into_int_value();
@@ -3173,7 +3213,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
         };
         match callsite_value.try_as_basic_value() {
-            Either::Left(returned_value) => {
+            ValueKind::Basic(returned_value) => {
                 let canonical_value = self.canonicalize_abi_param_value(
                     llvm_function_type.return_abi_mapping,
                     &llvm_function_type.return_k1_type,
@@ -3181,7 +3221,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 );
                 Ok(LlvmValue::BasicValue(canonical_value))
             }
-            Either::Right(_instr) => {
+            ValueKind::Instruction(_instr) => {
                 if llvm_function_type.is_sret {
                     let sret_pointer = sret_alloca.unwrap();
                     Ok(sret_pointer.as_basic_value_enum().into())
@@ -3257,6 +3297,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let input_value_int = input_value.into_int_value();
                 let not_value = self.builder.build_not(input_value_int, "not").unwrap();
                 Ok(not_value.as_basic_value_enum().into())
+            }
+            IntrinsicOperation::BitCast => {
+                // intern fn bitcast[T, U](t: T): U
+                let input_value = return_void!(self.codegen_expr(call.args[0])?);
+                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
+                let k1_type = self.codegen_type(type_param.type_id)?;
+                let to_type = self.rich_repr_type(&k1_type);
+                if k1_type.is_aggregate() {
+                    debug_assert!(input_value.get_type().is_pointer_type());
+                    // Just point at the same place!
+                    Ok(input_value.into())
+                } else {
+                    let cast_op = self.builder.build_bit_cast(input_value, to_type, "").unwrap();
+                    Ok(cast_op.into())
+                }
             }
             IntrinsicOperation::ArithBinop(op_kind) => {
                 let lhs = return_void!(self.codegen_expr(call.args[0])?);
@@ -3486,7 +3541,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("malloc").unwrap();
                 let call = self.builder.build_call(f, &[size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().basic().unwrap();
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::AllocateZeroed => {
@@ -3498,7 +3553,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let f = self.llvm_module.get_function("calloc").unwrap();
                 // libc/calloc(count = 1, size = size);
                 let call = self.builder.build_call(f, &[count_one.into(), size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("calloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::Reallocate => {
@@ -3508,7 +3563,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("realloc").unwrap();
                 let call = self.builder.build_call(f, &[old_ptr_arg, new_size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("realloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::Free => {
@@ -3516,7 +3571,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("free").unwrap();
                 let call = self.builder.build_call(f, &[old_ptr_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left();
+                let result = call.try_as_basic_value().expect_basic("free return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
             IntrinsicOperation::MemCopy => {
@@ -3568,7 +3623,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("memcmp").unwrap();
                 let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
-                let result = call.try_as_basic_value().unwrap_left().into_int_value();
+                let result = call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
                 let is_zero = self
                     .builder
                     .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
@@ -3582,7 +3637,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let f = self.llvm_module.get_function("exit").unwrap();
                 let call = self.builder.build_call(f, &[code_arg], "").unwrap();
-                let _result = call.try_as_basic_value().unwrap_right();
+                let _result = call.try_as_basic_value();
                 self.builder.build_unreachable().unwrap()
             }
 
@@ -3611,7 +3666,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
-                // TODO: sort the schemas so codegen more predictably
                 if is_type_name {
                     for (type_id, static_string_id) in self
                         .k1
@@ -3637,7 +3691,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             else {
                                 panic!("typename should be a string")
                             };
-                            let global_value = self.codegen_string_id_to_global(*string_id)?;
+                            let global_value = self.codegen_string_id_to_global(
+                                *string_id,
+                                Some(&format!("typename_{}\0", type_id.as_u32())),
+                            )?;
                             global_value.as_pointer_value().as_basic_value_enum()
                         };
                         self.store_k1_value(&return_llvm_type, sret_ptr, value);
@@ -3987,6 +4044,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         is_return: bool,
     ) -> AbiParamMapping {
         enum CallConv {
+            NoOp,
             AMD64,
             ARM64,
         }
@@ -3995,6 +4053,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
             crate::compiler::Target::Wasm64 => CallConv::ARM64,
         };
+        let callconv = CallConv::NoOp;
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
         match param_type {
@@ -4012,6 +4071,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let size = param_type.rich_repr_layout().size;
                 if size < 8 {
                     match callconv {
+                        CallConv::NoOp => {
+                            AbiParamMapping::AsIs
+                        }
                         CallConv::AMD64 => {
                             // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
                             let width_bits = size * 8;
@@ -4025,6 +4087,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                 } else if size <= 16 {
                     match callconv {
+                        CallConv::NoOp => AbiParamMapping::AsIs,
                         CallConv::AMD64 => {
                             // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
                             // Pass by classified eightbytes
@@ -4047,6 +4110,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         false
                     } else {
                         match callconv {
+                            CallConv::NoOp => true,
                             CallConv::AMD64 => true,
                             CallConv::ARM64 => false,
                         }
@@ -4308,18 +4372,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let global = self.k1.globals.get(global_id);
         let initial_static_value_id = global.initial_value.unwrap();
         let variable = self.k1.variables.get(global.variable_id);
-        let name = self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false);
+
+        // For now let's just use the name, eventually we'll ask the user for a link name
+        let name = if global.is_exported {
+            self.k1.ident_str(variable.name)
+        } else {
+            &self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
+        };
         let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
         let is_reference_type = maybe_reference_type.is_some();
 
         let layout = self.k1.types.get_layout(global.ty);
         let initializer_basic_value =
             self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+        let llvm_linkage = match global.is_exported {
+            false => LlvmLinkage::Private,
+            true => LlvmLinkage::External,
+        };
         let llvm_global = self.make_global_from_value(
             initializer_basic_value,
             layout.align,
-            &name,
+            name,
             global.is_constant,
+            llvm_linkage,
         );
         if self.k1.program_settings.multithreaded {
             if global.is_tls {
@@ -4349,9 +4424,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn codegen_program(&mut self) -> CodegenResult<()> {
         let start = std::time::Instant::now();
+
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
+
+        // Guarantee code generation of exported globals
         for global_id in &global_ids {
-            self.codegen_global(*global_id)?;
+            let g = self.k1.globals.get(*global_id);
+            if g.is_exported {
+                self.codegen_global(*global_id)?;
+            }
         }
 
         // TODO: Codegen the exported functions as well as the called ones
@@ -4402,9 +4483,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let res = self
             .builder
             .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_left();
+            .unwrap().try_as_basic_value().basic().unwrap();
         self.builder.build_return(Some(&res)).unwrap();
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());

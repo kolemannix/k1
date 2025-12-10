@@ -91,6 +91,22 @@ fn bufferConcat(): unit {
   assertEquals(combined.get(3), 2);
 }
 
+fn bufferChunks(): unit {
+  let b = [1,2,3,4]: Buffer[int];
+  assertEquals(b.chunks(1).get(0), [1]);
+  assertEquals(b.chunks(1).get(1), [2]);
+  assertEquals(b.chunks(1).get(2), [3]);
+  assertEquals(b.chunks(1).get(3), [4]);
+  assertEquals(b.chunks(1).len(), 4);
+
+  assertEquals(b.chunks(4).get(0), [1,2,3,4]);
+  assertEquals(b.chunks(7).get(0), [1,2,3,4]);
+
+  assertEquals(b.chunks(3).get(0), [1,2,3]);
+  assertEquals(b.chunks(3).get(1), [4]);
+  ()
+}
+
 fn bufferSwap(): unit {
   let* buf = Buffer/filled(3, 0);
   buf.set(0, 10);
@@ -129,4 +145,5 @@ fn test(): unit {
   bufferConcat();
   bufferSwap();
   bufferClone();
+  bufferChunks();
 }

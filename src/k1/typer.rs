@@ -12,7 +12,7 @@ pub(crate) mod types;
 pub(crate) mod visit;
 
 use crate::typer::dump::K1DisplayArgs;
-use crate::{bc, k1_format, k1_format_user, vm};
+use crate::{bc, k1_format, k1_format_user, kbail, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -99,8 +99,10 @@ pub struct TypedAbilityFunctionRef {
 }
 impl_copy_if_small!(16, TypedAbilityFunctionRef);
 
-pub const GLOBAL_ID_IS_STATIC: TypedGlobalId =
+pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
+pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
+    TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
 
 pub const EQUALS_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
 pub const WRITER_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
@@ -562,6 +564,7 @@ pub struct TypedAbility {
     pub name: Ident,
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
+    // nocommit(3): swap these ecovecs out for arena memory
     pub parameters: EcoVec<TypedAbilityParam>,
     pub functions: EcoVec<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
@@ -1250,6 +1253,7 @@ pub enum CastType {
     IntegerCast(IntegerCastDirection),
     Integer8ToChar,
     IntegerExtendFromChar,
+    BoolToInt,
     EnumToVariant,
     VariantToEnum,
     ReferenceToMut,
@@ -1277,6 +1281,7 @@ impl Display for CastType {
             CastType::IntegerCast(_dir) => write!(f, "intcast"),
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
+            CastType::BoolToInt => write!(f, "bool2int"),
             CastType::EnumToVariant => write!(f, "enum2variant"),
             CastType::VariantToEnum => write!(f, "variant2enum"),
             CastType::ReferenceToMut => write!(f, "reference2mut"),
@@ -1538,22 +1543,36 @@ impl TypedStmt {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorLevel {
-    Error,
-    Warn,
-    Info,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MessageLevel {
     Hint,
+    Info,
+    Warn,
+    Error,
 }
 
-impl Display for ErrorLevel {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl MessageLevel {
+    pub fn color(&self) -> colored::Color {
         match self {
-            ErrorLevel::Error => f.write_str("error"),
-            ErrorLevel::Warn => f.write_str("warn"),
-            ErrorLevel::Info => f.write_str("info"),
-            ErrorLevel::Hint => f.write_str("hint"),
+            MessageLevel::Hint => colored::Color::BrightBlue,
+            MessageLevel::Info => colored::Color::Cyan,
+            MessageLevel::Warn => colored::Color::Yellow,
+            MessageLevel::Error => colored::Color::Red,
         }
+    }
+    pub fn name_str(&self) -> &'static str {
+        match self {
+            MessageLevel::Hint => "hint",
+            MessageLevel::Info => "info",
+            MessageLevel::Warn => "warn",
+            MessageLevel::Error => "error",
+        }
+    }
+}
+
+impl Display for MessageLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name_str())
     }
 }
 
@@ -1561,11 +1580,11 @@ impl Display for ErrorLevel {
 pub struct TyperError {
     pub message: String,
     pub span: SpanId,
-    pub level: ErrorLevel,
+    pub level: MessageLevel,
 }
 
 impl TyperError {
-    fn make(message: impl AsRef<str>, span: SpanId, level: ErrorLevel) -> TyperError {
+    fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> TyperError {
         TyperError { message: message.as_ref().to_owned(), span, level }
     }
 }
@@ -1646,6 +1665,7 @@ pub struct TypedGlobal {
     pub is_constant: bool,
     pub is_referencing: bool,
     pub is_tls: bool,
+    pub is_exported: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
 }
@@ -1783,13 +1803,15 @@ pub enum IntrinsicOperation {
     AlignOf,
     Zeroed,
     TypeId,
-    TypeName,
     CompilerSourceLocation,
     // Actual function
     TypeSchema,
+    TypeName,
 
     BoolNegate,
     BitNot,
+    /// Bit-for-bit no-op reinterpretation from A to B
+    BitCast,
     ArithBinop(IntrinsicArithOpKind),
     BitwiseBinop(IntrinsicBitwiseBinopKind),
     PointerIndex,
@@ -1824,6 +1846,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::Zeroed => false,
             IntrinsicOperation::BoolNegate => false,
             IntrinsicOperation::BitNot => false,
+            IntrinsicOperation::BitCast => false,
             IntrinsicOperation::ArithBinop(_) => false,
             IntrinsicOperation::BitwiseBinop(_) => false,
             IntrinsicOperation::PointerIndex => false,
@@ -1842,6 +1865,13 @@ impl IntrinsicOperation {
         }
     }
 
+    pub fn is_typer_phase_check_only(&self) -> bool {
+        match self {
+            IntrinsicOperation::BitCast => true,
+            _ => false,
+        }
+    }
+
     /// Determines whether a physical function should be generated for this
     /// operation; currently used by the LLVM backend
     pub fn is_inlined(self) -> bool {
@@ -1853,6 +1883,7 @@ impl IntrinsicOperation {
             IntrinsicOperation::TypeId => true,
             IntrinsicOperation::BoolNegate => true,
             IntrinsicOperation::BitNot => true,
+            IntrinsicOperation::BitCast => true,
             IntrinsicOperation::ArithBinop(_) => true,
             IntrinsicOperation::BitwiseBinop(_) => true,
             IntrinsicOperation::PointerIndex => true,
@@ -1879,11 +1910,11 @@ impl IntrinsicOperation {
 }
 
 pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
-    TyperError::make(message.as_ref(), span, ErrorLevel::Error)
+    TyperError::make(message.as_ref(), span, MessageLevel::Error)
 }
 
 pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> TyperError {
-    TyperError::make(message.as_ref(), span, ErrorLevel::Warn)
+    TyperError::make(message.as_ref(), span, MessageLevel::Warn)
 }
 
 pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> {
@@ -1980,7 +2011,7 @@ pub fn write_error(
     spans: &Spans,
     sources: &Sources,
     message: impl AsRef<str>,
-    level: ErrorLevel,
+    level: MessageLevel,
     span: SpanId,
 ) -> std::io::Result<()> {
     parse::write_source_location(w, spans, sources, span, level, 6, Some(message.as_ref()))?;
@@ -2494,7 +2525,7 @@ impl TypedProgram {
         let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
         let mut vm_global_constant_lookups = FxHashMap::new();
-        vm_global_constant_lookups.insert(GLOBAL_ID_IS_STATIC, vm::Value::ptr(addr));
+        vm_global_constant_lookups.insert(GLOBAL_ID_K1_IS_STATIC, vm::Value::ptr(addr));
         let process_dlopen_handle =
             unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
         if process_dlopen_handle.is_null() {
@@ -2865,7 +2896,7 @@ impl TypedProgram {
         }
     }
 
-    fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
+    fn push_stmt_id_to_block(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
         block.statements.push(stmt);
     }
 
@@ -4372,7 +4403,7 @@ impl TypedProgram {
 
                 let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
 
-                let libs = self.static_values.get(value_fields[3]).as_view().unwrap();
+                let libs = self.static_values.get(value_fields[3]).as_container().unwrap();
                 let mut lib_refs = vec![];
                 for lib in self.static_values.get_slice(libs.elements) {
                     // Grab the strings out for now. Eventually we can maybe just
@@ -4883,7 +4914,7 @@ impl TypedProgram {
                         }
                     } else {
                         // We never truncate automatically, or change signedness without extension
-                        CheckExprTypeResult::Err("incompatible integer types".into())
+                        CheckExprTypeResult::Err(msg.to_string())
                     }
                 };
             }
@@ -4935,7 +4966,7 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get_span(expr);
-                Err(TyperError { message: msg, span, level: ErrorLevel::Error })
+                Err(TyperError { message: msg, span, level: MessageLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
                 debug!(
@@ -5413,6 +5444,7 @@ impl TypedProgram {
         let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
 
         let is_referencing = parsed_global.is_referencing;
+        let is_exported = parsed_global.export;
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
@@ -5443,6 +5475,7 @@ impl TypedProgram {
             is_referencing,
             is_constant: !is_mutable,
             is_tls: parsed_global.thread_local,
+            is_exported,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -6059,7 +6092,7 @@ impl TypedProgram {
                         "Blanket impl almost matched but a constraint was unsatisfied; {}",
                         e.message
                     );
-                    e.level = ErrorLevel::Info;
+                    e.level = MessageLevel::Info;
                     self.write_error(&mut std::io::stderr(), &e).unwrap();
                     return None;
                 }
@@ -6765,7 +6798,7 @@ impl TypedProgram {
                         alternate,
                         span,
                     );
-                    self.push_block_stmt_id(&mut block, base_expr_var.defn_stmt);
+                    self.push_stmt_id_to_block(&mut block, base_expr_var.defn_stmt);
                     self.push_expr_id_to_block(&mut block, if_expr);
                     let ty = self.exprs.get_type(if_expr);
                     Ok(self.exprs.add_block(&mut self.mem, block, ty))
@@ -6889,7 +6922,7 @@ impl TypedProgram {
             span,
         );
 
-        self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
+        self.push_stmt_id_to_block(&mut result_block, try_value_var.defn_stmt);
         self.push_expr_id_to_block(&mut result_block, if_expr);
 
         Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
@@ -7454,7 +7487,7 @@ impl TypedProgram {
             };
             let type_id = self.exprs.get_type(push_call);
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-            self.push_block_stmt_id(&mut list_lit_block, push_stmt);
+            self.push_stmt_id_to_block(&mut list_lit_block, push_stmt);
         }
         let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
@@ -8040,7 +8073,7 @@ impl TypedProgram {
                 true, // is_referencing
                 block.scope_id,
             );
-            self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
+            self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
             for part in interpolated_string.parts.into_iter() {
                 match part {
                     parse::InterpolatedStringPart::String(string_id) => {
@@ -9039,6 +9072,20 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
+            Type::Bool => match self.types.get(target_type) {
+                Type::Integer(_to_integer_type) => {
+                    // Since the bit pattern of a boolean only
+                    // concerns the first bit, it can validly
+                    // and safely be represented as all of our
+                    // integer types
+                    Ok(CastType::BoolToInt)
+                }
+                _ => failf!(
+                    cast.span,
+                    "Cannot cast bool to '{}'",
+                    self.type_id_to_string(target_type).blue()
+                ),
+            },
             Type::Reference(_refer) => match self.types.get(target_type) {
                 Type::Pointer => Ok(CastType::ReferenceToPointer),
                 Type::Reference(_) => Ok(CastType::ReferenceToReference),
@@ -9093,6 +9140,11 @@ impl TypedProgram {
         for_expr: &ForExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
+        // Basically no overlap here in what we need to do.
+        if for_expr.is_static {
+            return self.eval_static_for_expr(for_expr, ctx);
+        };
+
         let binding_ident = for_expr.binding.unwrap_or(self.ast.idents.b.it);
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iterable_type = self.exprs.get_type(iterable_expr);
@@ -9212,7 +9264,7 @@ impl TypedProgram {
             false,
         )?;
 
-        self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
+        self.push_stmt_id_to_block(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
         let user_body_block_id = body_block;
         let user_block_variable = self.synth_variable_defn_simple(
@@ -9293,6 +9345,47 @@ impl TypedProgram {
             final_type,
         );
         Ok(final_expr)
+    }
+
+    fn eval_static_for_expr(
+        &mut self,
+        for_expr: &ForExpr,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let iteree_value_id =
+            self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
+        let iteree_value = self.static_values.get(iteree_value_id);
+        let iteree_span = self.ast.get_expr_span(for_expr.iterable_expr);
+        let Some(iteration_list) = iteree_value.as_container() else {
+            return failf!(
+                iteree_span,
+                "Expected something iterable; got: {}",
+                self.static_value_to_string(iteree_value_id)
+            );
+        };
+        let elements = iteration_list.elements;
+
+        let mut block = self.synth_block(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            for_expr.span,
+            iteration_list.len() as u32 * 2,
+        );
+        let binding_name = match for_expr.binding {
+            None => self.ast.idents.b.it,
+            Some(binding) => binding,
+        };
+        let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
+        for elem in self.static_values.mem.getn(elements) {
+            let elem_expr = self.add_static_constant_expr(*elem, iteree_span);
+            let v = self.synth_variable_defn_visible(binding_name, elem_expr, block.scope_id);
+            let user_expr = self.eval_block(&for_expr.body_block, eval_context, false)?;
+            self.push_stmt_id_to_block(&mut block, v.defn_stmt);
+            self.push_expr_id_to_block(&mut block, user_expr);
+        }
+        let block_id = self.exprs.add_block(&mut self.mem, block, UNIT_TYPE_ID);
+
+        Ok(block_id)
     }
 
     fn expect_ability_implementation(
@@ -9765,7 +9858,7 @@ impl TypedProgram {
         )?;
 
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
-        self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
+        self.push_stmt_id_to_block(&mut coalesce_block, lhs_variable.defn_stmt);
         self.push_expr_id_to_block(&mut coalesce_block, if_else);
         Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
     }
@@ -11485,13 +11578,18 @@ impl TypedProgram {
         };
 
         // Intrinsics that are handled by the typechecking phase are implemented here.
-        if let Some(intrinsic_type) = call
-            .callee
-            .maybe_function_id()
-            .and_then(|id| self.get_function(id).intrinsic_type)
-            .filter(|op| op.is_typer_phase())
-        {
-            self.handle_intrinsic(call, intrinsic_type, ctx)
+        let intrinsic =
+            call.callee.maybe_function_id().and_then(|id| self.get_function(id).intrinsic_type);
+        if let Some(intrinsic) = intrinsic {
+            if intrinsic.is_typer_phase() {
+                self.handle_intrinsic(call, intrinsic, ctx)
+            } else {
+                if intrinsic.is_typer_phase_check_only() {
+                    self.check_intrinsic(&call, intrinsic, ctx)?;
+                }
+                let call_id = self.calls.add(call);
+                Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
+            }
         } else {
             let call_id = self.calls.add(call);
             Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
@@ -11628,6 +11726,35 @@ impl TypedProgram {
                 Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
             }
             _ => self.ice(format!("Unexpected intrinsic in type phase: {:?}", intrinsic), None),
+        }
+    }
+
+    fn check_intrinsic(
+        &mut self,
+        call: &Call,
+        intrinsic: IntrinsicOperation,
+        _ctx: EvalExprContext,
+    ) -> TyperResult<()> {
+        match intrinsic {
+            IntrinsicOperation::BitCast => {
+                let type_from = self.named_types.get_nth(call.type_args, 0).type_id;
+                let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
+                let layout_from = self.types.get_layout(type_from);
+                let layout_to = self.types.get_layout(type_to);
+                if layout_from.size != layout_to.size || layout_from.align != layout_to.align {
+                    kbail!(
+                        self,
+                        call.span,
+                        "Cannot bitcast between types of different sizes: {} (size {}) -> {} (size {})",
+                        type_from,
+                        layout_from.size,
+                        type_to,
+                        layout_to.size
+                    )
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -12599,10 +12726,11 @@ impl TypedProgram {
                     "allocZeroed" => Some(IntrinsicOperation::AllocateZeroed),
                     "realloc" => Some(IntrinsicOperation::Reallocate),
                     "free" => Some(IntrinsicOperation::Free),
-                    "zeroed" => Some(IntrinsicOperation::Zeroed),
                     "copy" => Some(IntrinsicOperation::MemCopy),
                     "set" => Some(IntrinsicOperation::MemSet),
                     "equals" => Some(IntrinsicOperation::MemEquals),
+                    "zeroed" => Some(IntrinsicOperation::Zeroed),
+                    "bitcast" => Some(IntrinsicOperation::BitCast),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
@@ -14426,7 +14554,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
-    ) -> TyperResult<()> {
+    ) {
         let namespace_id = self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
         let namespace = self.namespaces.get(*namespace_id);
         let namespace_scope_id = namespace.scope_id;
@@ -14443,12 +14571,9 @@ impl TypedProgram {
                 };
             }
             if let ParsedId::Namespace(namespace_id) = parsed_definition_id {
-                if let Err(e) = self.eval_namespace_type_eval_phase(*namespace_id, skip_defns) {
-                    self.report(e);
-                }
+                self.eval_namespace_type_eval_phase(*namespace_id, skip_defns)
             }
         }
-        Ok(())
     }
 
     fn declare_namespace_definitions(
@@ -14811,49 +14936,35 @@ impl TypedProgram {
         module_id: ModuleId,
         skip_defns: &[ParsedId],
     ) -> anyhow::Result<()> {
+        macro_rules! check_for_errors {
+            ($msg:expr) => {
+                match self.error_count(&[MessageLevel::Error]) {
+                    n if n > 0 => {
+                        bail!("Module {} failed {} with {} errors", self.program_name(), $msg, n)
+                    }
+                    _ => {}
+                }
+            };
+        }
+
         let mut err_writer = stderr();
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed namespace declaration phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("namespace declaration");
 
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types");
         self.declare_types_in_parsed_namespace(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed type definition phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("type declaration");
 
         self.resolve_uses_in_namespace_recursively(module_root_parsed_namespace);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!("{} failed resolving uses with {} errors", self.program_name(), self.errors.len())
-        }
+        check_for_errors!("resolving uses");
 
         //self.phase = 3;
         // self.info(format_args!(""));
         debug!(">> Pass 3 evaluate types");
-        let type_eval_result =
-            self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
-        if let Err(e) = type_eval_result {
-            self.write_error(&mut err_writer, &e)?;
-            self.errors.push(e);
-        }
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "{} failed type evaluation phase with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
+        check_for_errors!("type bodies");
 
         debug_assert_eq!(self.types.types.len(), self.types.type_phys_type_lookup.len());
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
@@ -14876,15 +14987,9 @@ impl TypedProgram {
         }
 
         // Everything else declaration phase
-        debug!(">> Pass 4 declare rest of definitions (functions, globals, abilities)");
+        debug!(">> Pass 4 declare rest of definitions (functions, globals)");
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            eprintln!(
-                "{} failed declaration phase with {} errors, but I will soldier on.",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("general declaration");
 
         // Now that functions are declared, another pass for unresolved uses
         let unresolved_uses =
@@ -14915,24 +15020,16 @@ impl TypedProgram {
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
 
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!(
-                "Module {} failed typechecking with {} errors",
-                self.program_name(),
-                self.errors.len()
-            )
-        }
+        check_for_errors!("typechecking");
 
         debug!(">> Pass 6 specialize function bodies");
         self.specialize_pending_function_bodies(&mut err_writer)?;
-        if self.error_count(&[ErrorLevel::Error]) > 0 {
-            bail!("{} failed specialize with {} errors", self.program_name(), self.errors.len())
-        }
+        check_for_errors!("body specialization");
 
         Ok(())
     }
 
-    fn error_count(&self, kinds: &[ErrorLevel]) -> usize {
+    pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {
         self.errors.iter().filter(|e| kinds.contains(&e.level)).count()
     }
 
@@ -15901,12 +15998,27 @@ impl TypedProgram {
     // Errors and logging
 
     pub fn report(&mut self, e: TyperError) {
+        self.report_ext(e, false)
+    }
+    pub fn report_ext(&mut self, e: TyperError, no_print: bool) {
         // Check for exact duplicates; happens a lot with generic code
         if self.errors.contains(&e) {
             return;
         }
 
-        self.write_error(&mut std::io::stderr(), &e).unwrap();
+        let skip_print = no_print || {
+            if e.level != MessageLevel::Error {
+                // Don't print warnings when errors are present
+                let has_errors = self.error_count(&[MessageLevel::Error]) > 0;
+                has_errors
+            } else {
+                false
+            }
+        };
+
+        if !skip_print {
+            self.write_error(&mut std::io::stderr(), &e).unwrap();
+        }
         self.errors.push(e);
     }
 
@@ -15924,7 +16036,7 @@ impl TypedProgram {
             &self.ast.spans,
             &self.ast.sources,
             span,
-            ErrorLevel::Info,
+            MessageLevel::Info,
             6,
             None,
         )
@@ -15937,7 +16049,7 @@ impl TypedProgram {
             &self.ast.spans,
             &self.ast.sources,
             span,
-            ErrorLevel::Error,
+            MessageLevel::Error,
             6,
             None,
         )
@@ -15971,12 +16083,12 @@ impl TypedProgram {
     }
 
     pub fn _info(&self, format_args: std::fmt::Arguments<'_>) {
-        self._sticky_msg(ErrorLevel::Info, format_args)
+        self._sticky_msg(MessageLevel::Info, format_args)
     }
 
     // unfinished attempt at a sticky progress bar. We compile too fast for it to matter
     // but i also wanted to reduce total output lines; might revisit
-    pub fn _sticky_msg(&self, level: ErrorLevel, format_args: std::fmt::Arguments<'_>) {
+    pub fn _sticky_msg(&self, level: MessageLevel, format_args: std::fmt::Arguments<'_>) {
         use std::io::Write;
         let mut err = std::io::stderr();
 

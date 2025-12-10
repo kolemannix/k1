@@ -1,0 +1,63 @@
+ns day3;
+
+let sample: string = "987654321111111\n811111111111119\n234234234234278\n818181911112111";
+let input: string = core/files/readToString(context .Arena)("day3_input.txt");
+
+fn part1(input: string): unit {
+  let hi: char = '0';
+  let lo: char = '0';
+  let sum: int = 0;
+  for bank in input.splitByChar('\n') {
+    hi := bank.get(0);
+    lo := bank.get(1);
+    let rest = bank.drop(1);
+    let* iter = rest.iterator();
+    while iter.next() is .Some(c) {
+      let last = iter.isDone();
+      if not last {
+        // Consider new hi
+        if c > hi {
+          hi := c;
+          lo := iter.peek().!;
+        } else {
+          // Consider new lo
+          if c > lo { lo := c }
+        }
+      } else {
+        // Consider new lo only
+        if c > lo { lo := c }
+      };
+    };
+    let joltage = (hi.toDigitValue().! * 10 + lo.toDigitValue().!);
+    sum := sum + joltage;
+    println("Result {itIndex} for bank `{bank}`: {joltage} {sum}")
+  };
+  println("Sum: {sum}")
+}
+
+fn part2(input: string): unit {
+  let sum: uint = 0;
+  let* sels: *mut List[char] = List/withCapacity(12);
+  for bank in input.splitByChar('\n') {
+    sels.clear();
+    let rangeSize = 12;
+    let start = 0;
+    while rangeSize > 0 {
+      let end = bank.len() - rangeSize + 1;
+      let candidateRange = bank.slice(start, end);
+      println("picking ({start},{end}) {rangeSize} from {candidateRange}");
+      let best = { index: start, value: bank.get(start) };
+      for cand in candidateRange {
+        if cand > best.value { best := { index: itIndex + start, value: cand } }
+      };
+      sels.push(best.value);
+      start := best.index + 1;
+      rangeSize := rangeSize - 1;
+    };
+
+    let joltage = string/fromView(sels.asView()).parseBase10();
+    sum := sum + joltage.!;
+    println("Result {itIndex} for bank `{bank}`: {sels.*} {sum}")
+  };
+  println("Sum: {sum}")
+}
