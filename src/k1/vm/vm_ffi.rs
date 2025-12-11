@@ -31,6 +31,14 @@ pub(super) fn handle_ffi_call(
     for arg_value in k1.bytecode.mem.getn(args).iter() {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
+        // All structs are meant to be passed as pointers 
+        // But we're doing... a pointer to a pointer? since our canonical repr is
+        // a pointer
+        // So, match on the type.
+        // If scalar, _get_ a pointer to it
+        // A. Can we just get a pointer to our 'register file'? A special resolve_value?
+        // If aggregate, you already have the pointer that libffi wants
+
         ffi_args_value_storage.push(vm_value.bits());
 
         // Now we have an address to push into the actual args array
@@ -240,8 +248,8 @@ fn make_struct_ffi_type(
     }
     element_ptrs.push(core::ptr::null_mut());
 
-    debug!("ffi struct elements: {:?}", ffi_type_storage);
-    debug!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
+    eprintln!("ffi struct elements: {:?}", ffi_type_storage);
+    eprintln!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
     // size and alignment get filled in my ffi_prep_cif
     let my_struct: ffi_type = ffi_type {
         size: 0,

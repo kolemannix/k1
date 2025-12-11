@@ -3513,6 +3513,7 @@ impl TypedProgram {
                     physical_params: params_handle,
                     is_lambda: false,
                     return_type,
+                    abi_mode: AbiMode::Internal,
                 }));
                 Ok(function_type_id)
             }
@@ -4201,6 +4202,7 @@ impl TypedProgram {
                 let is_lambda = fun_type.is_lambda;
                 let old_return_type = fun_type.return_type;
                 let old_params = fun_type.physical_params;
+                let old_call_conv = fun_type.abi_mode;
                 let new_return_type = self.substitute_in_type(old_return_type, substitution_pairs);
                 if new_return_type != old_return_type {
                     any_new = true
@@ -4225,6 +4227,7 @@ impl TypedProgram {
                         physical_params: new_params_handle,
                         return_type: new_return_type,
                         is_lambda,
+                        abi_mode: old_call_conv,
                     };
                     let new_function_type_id = self.types.add_anon(Type::Function(new_fun_type));
                     new_function_type_id
@@ -8276,6 +8279,7 @@ impl TypedProgram {
                 physical_params: self.types.mem.list_to_handle(&typed_params),
                 return_type,
                 is_lambda: false,
+                abi_mode: AbiMode::Internal,
             }));
 
             self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
@@ -8410,6 +8414,7 @@ impl TypedProgram {
             physical_params: self.types.mem.list_to_handle(&typed_params),
             return_type,
             is_lambda: true,
+            abi_mode: AbiMode::Internal,
         }));
 
         let actual_body_function_id = self.add_function(TypedFunction {
@@ -10687,6 +10692,7 @@ impl TypedProgram {
 
     fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {
         let function_type = self.types.get(function_type_id).as_function().unwrap();
+        let call_conv = function_type.abi_mode;
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
         let empty_env_struct_type = self.types.add_empty_struct();
@@ -10705,6 +10711,7 @@ impl TypedProgram {
             physical_params: self.types.mem.list_to_handle(&new_params),
             return_type,
             is_lambda: true,
+            abi_mode: call_conv,
         };
 
         let defn_info = self.types.get_defn_info(function_type_id);
@@ -13572,10 +13579,16 @@ impl TypedProgram {
         };
 
         let param_types_handle = self_.types.mem.list_to_handle(&param_types);
+        let call_conv = match parsed_function_linkage {
+            Linkage::Standard => AbiMode::Internal,
+            Linkage::External { .. } => AbiMode::Native,
+            Linkage::Intrinsic => AbiMode::Internal,
+        };
         let function_type_id = self_.types.add_anon(Type::Function(FunctionType {
             physical_params: param_types_handle,
             return_type,
             is_lambda: false,
+            abi_mode: call_conv,
         }));
 
         let type_params_handle = self_.named_types.add_slice_copy(&type_params);

@@ -1,7 +1,7 @@
 set -e
 set -x
 cd libs
-clang -c mul.c -o mul.o
-ar rcs libmul.a mul.o
+clang -c foo.c -o foo.o
+ar rcs libfoo.a foo.o
 
-clang -fPIC -shared mul.c -o libmul.dylib
+clang -fPIC -shared foo.c -o libfoo.dylib

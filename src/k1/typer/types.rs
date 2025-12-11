@@ -308,9 +308,9 @@ pub struct FnParamType {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub enum CallConv {
-    Default,
-    C,
+pub enum AbiMode {
+    Internal,
+    Native,
 }
 
 #[derive(Clone)]
@@ -318,6 +318,7 @@ pub struct FunctionType {
     pub physical_params: MSlice<FnParamType, TypePool>,
     pub return_type: TypeId,
     pub is_lambda: bool,
+    pub abi_mode: AbiMode
 }
 
 impl FunctionType {

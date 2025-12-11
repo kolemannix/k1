@@ -2,35 +2,64 @@ let MODULE_INFO: core/k1/ModuleManifest = {
   kind: .Executable,
   deps: [],
   multithreading: false,
-  libs: ["mul"]
+  libs: ["foo"]
 };
 
-extern("mul", "myMul") fn myMul(x: int, y: int): int
-extern("mul", "make") fn make(x: u8, y: u8): { x: u8, y: u8 }
-extern("mul", "origin") fn origin(): { x: u8, y: u8 }
+//fn deriveStructPrint[S](): string {
+//  let schema = types/getTypeSchema[S]();
+//  require schema is .Struct({ fields }) else { crash("") };
+//  let* code = StringBuilder/new();
+//  code.putString("{{ ");
+//  for fields {
+//    code.putString()
+//  }
+//}
 
-let staticMul: 1024 = myMul(32,32);
+ns foo {
 
-let staticOrigin: { x: u8, y: u8 } = origin();
+  deftype VerySmall = { x: u8 }
+  impl Print for VerySmall { fn printTo[W: Writer](self: VerySmall, w: W): unit { w.writeString("{ {self.x} }") } }
+  impl Equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
+  extern("foo", "very_small") fn very_small(x: VerySmall, y: VerySmall): VerySmall
+
+  deftype Small = { r: u8, g: u8, b: u8, a: u8 }
+  extern("foo", "small")      fn small(x: Small, y: Small): Small
+
+  deftype Medium = { a: u64, b: u64 }
+  extern("foo", "medium")     fn medium(a: Medium, b: Medium): Medium
+
+  deftype MixedClassMedium = { f1: f32, f2: f32, i3: Array[i16, 4] }
+
+  deftype Large = { med1: Medium, med2: Medium }
+  extern("foo", "large")      fn large(a: Large, b: Large): Large
+
+
+}
+
+// nocommit
+//let staticSmall: 64 = foo/very_small({ x: 32 },{ x: 32 }).x;
+
+fn testAll(): unit {
+  assertEquals(
+    foo/very_small({ x: 10 }, { x: 20 }),
+    { x: 30 }
+  );
+  let mediumResult = foo/medium({ a: 10, b: 100 }, { a: 1, b: 20 });
+  assertEquals(mediumResult.a, 11);
+  assertEquals(mediumResult.b, 120);
+
+  let largeResult = foo/large(
+    { med1: { a: 1, b: 2 }, med2: { a: 3, b: 4 } },
+    { med1: { a: 10, b: 20 }, med2: { a: 30, b: 40 } }
+  );
+  assertEquals(largeResult.med1.a, 11);
+  assertEquals(largeResult.med1.b, 22);
+  assertEquals(largeResult.med2.a, 33);
+  assertEquals(largeResult.med2.b, 44);
+}
 
 fn main(): i32 {
-  let i = myMul(4, 3);
-  assertEquals(myMul(4,3), 4*3);
-  assertEquals(staticMul.fromStatic(), 32*32);
-
-  assertEquals(staticOrigin.x, 0);
-  assertEquals(staticOrigin.y, 0);
-  let makeStatic = #static make(1, 255);
-  assertEquals(makeStatic.x, 1);
-  assertEquals(makeStatic.y, 255);
-
-
-  let origin = origin();
-  println("rt origin is ({origin.x},{origin.y})");
-
-  let makeRt = make(1, 255);
-  // Fix when runtime struct ABI is fixed
-  // assertEquals(makeRt.x, 1);
-  // assertEquals(makeRt.y, 255);
+  testAll();
+  //#static testAll();
   0
 }

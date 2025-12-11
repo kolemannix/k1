@@ -1185,7 +1185,7 @@ pub struct ParsedTypeConstraint {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedFunction {
     pub name: Ident,
     pub type_params: EcoVec<ParsedTypeParam>,

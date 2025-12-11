@@ -41,7 +41,7 @@ use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
+    self, BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
     IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo, TypeId,
     U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
 };
@@ -1494,8 +1494,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function_type_id: TypeId,
     ) -> CodegenResult<K1LlvmFunctionType<'ctx>> {
         let function_type = self.k1.types.get(function_type_id).as_function().unwrap();
+        let abi_mode = function_type.abi_mode;
         let return_k1_type = self.codegen_type(function_type.return_type)?;
-        let return_type_abi_mapping = self.get_abi_param_type(&return_k1_type, true);
+        let return_type_abi_mapping =
+            self.get_abi_param_type(function_type.abi_mode, &return_k1_type, true);
         eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
         let return_mapped_type = if return_k1_type.is_void() {
             None
@@ -1529,7 +1531,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         for p in self.k1.types.mem.getn(function_type.physical_params).iter() {
             let param_type = self.codegen_type(p.type_id)?;
-            let abi_mapping = self.get_abi_param_type(&param_type, false);
+            let abi_mapping = self.get_abi_param_type(abi_mode, &param_type, false);
             eprintln!("abi mapping for {} is {:?}", self.rich_repr_type(&param_type), abi_mapping);
             param_abi_mappings.push(abi_mapping);
             param_types.push(param_type);
@@ -4056,6 +4058,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn get_abi_param_type(
         &self,
+        abi_mode: types::AbiMode,
         param_type: &K1LlvmType<'ctx>,
         is_return: bool,
     ) -> AbiParamMapping {
@@ -4064,12 +4067,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AMD64,
             ARM64,
         }
-        let callconv = match self.k1.ast.config.target {
-            crate::compiler::Target::LinuxIntel64 => CallConv::AMD64,
-            crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
-            crate::compiler::Target::Wasm64 => CallConv::ARM64,
+        let callconv = match abi_mode {
+            types::AbiMode::Internal => CallConv::InternalK1,
+            types::AbiMode::Native => match self.k1.ast.config.target {
+                crate::compiler::Target::LinuxIntel64 => CallConv::AMD64,
+                crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
+                crate::compiler::Target::Wasm64 => CallConv::ARM64,
+            },
         };
-        let callconv = CallConv::InternalK1;
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
         match param_type {
@@ -4079,7 +4084,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   <4> tag;
                 //   [i8 x 12] payload;
                 // }
-                // nocommit enum abi mapping
+                // nocommit enum abi mapping eventually; for
+                // now we just say they are always passed by pointer
                 AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
             }
             K1LlvmType::StructType(_) | K1LlvmType::ArrayType(_) => {
