@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::parse::write_source_location;
 use crate::parse::{self};
-use crate::typer::{MessageLevel, LibRefLinkType, TypedProgram};
+use crate::typer::{LibRefLinkType, MessageLevel, TypedProgram};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::info;
@@ -428,9 +428,8 @@ pub fn write_executable(
     let k1_lib_dir = &k1.ast.config.k1_lib_dir;
     let clang_time = std::time::Instant::now();
 
-    //opt/homebrew/opt/llvm@18/lib/libunwind.dylib
     let llvm_base = PathBuf::from(
-        std::env::var("LLVM_SYS_180_PREFIX").expect("could not find llvm at $LLVM_SYS_180_PREFIX"),
+        std::env::var("LLVM_SYS_211_PREFIX").expect("could not find llvm at $LLVM_SYS_211_PREFIX"),
     );
     let clang_path = llvm_base.join("bin").join("clang");
     let mut build_cmd = std::process::Command::new(clang_path);
@@ -468,17 +467,8 @@ pub fn write_executable(
             build_cmd.arg(macos_version_flag.as_ref().unwrap());
             build_cmd.arg("--sysroot");
             build_cmd.arg(MAC_SDK_SYSROOT);
-            build_cmd.arg("-lunwind");
         }
-        TargetOs::Linux => {
-            build_cmd.arg("-lunwind");
-            if debug {
-                // Requires: sudo apt-get install libdw-dev (or equivalent)
-                // Alternative: Use -static flag to statically link for distribution
-                build_cmd.arg("-ldw");
-                build_cmd.arg("-DHAVE_LIBDW");
-            }
-        }
+        TargetOs::Linux => {}
         TargetOs::Wasm => {}
     }
 
@@ -518,7 +508,7 @@ pub fn write_executable(
     }
 
     build_cmd.args(extra_options);
-    //eprintln!("Build Command: {:?}", build_cmd);
+    eprintln!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {

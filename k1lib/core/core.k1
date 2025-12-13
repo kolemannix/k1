@@ -109,8 +109,10 @@ ns io {
 ns sys {
 
   fn printBacktrace(): unit {
-    if not k1/IS_STATIC {
-      k1rt/_k1_show_backtrace();
+    #if k1/OS_POSIX {
+      k1rt/_k1_print_backtrace(frame_count = 128);
+    } else {
+      println("non-posix backtrace TODO")
     }
   }
 
@@ -480,7 +482,9 @@ ns k1rt {
   // extern("k1rt.c", "_k1_show_backtrace") fn _k1_show_backtrace(): unit
   // Allowing you to mix and match .c and .k1 files
 
-  extern("k1rt", "_k1_show_backtrace") fn _k1_show_backtrace(): unit
+  // TODO: Doesn't even need to be written in C
+  extern("k1rt", "_k1_print_backtrace") fn _k1_print_backtrace(frame_count: c_int): unit
+
   extern("k1rt", "_k1_snprintf_f32") fn snprintf_f32(buf: ptr, size: c_sizet, float: f32, places: u32): i32
   extern("k1rt", "_k1_snprintf_f64") fn snprintf_f64(buf: ptr, size: c_sizet, float: f64, places: u32): i32
 }

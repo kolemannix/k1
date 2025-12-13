@@ -682,6 +682,8 @@ ns Array {
   let MADV_SEQUENTIAL: i32 = 2;
   extern("posix_madvise") fn madvise(addr: ptr, len: c_sizet, advice: c_int): c_int
 
+  extern("backtrace") fn backtrace(buffer: ptr, size: c_int): unit
+
 }
 
 // Eventually: #if k1/C_RUNTIME

@@ -52,6 +52,7 @@ Syntax/elegance
   - [x] Also: do safe integer coercions automatically
 
 Simple but missing
+- [ ] Get an addr2line implementation linked in for better backtraces, likely (https://github.com/gimli-rs/addr2line)
 - [x] Support ability constraints on generics
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
 - [ ] implement iterator for Array

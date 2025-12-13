@@ -12,7 +12,7 @@ pub(crate) mod types;
 pub(crate) mod visit;
 
 use crate::typer::dump::K1DisplayArgs;
-use crate::{bc, k1_format, k1_format_user, kbail, vm};
+use crate::{bc, compiler, k1_format, k1_format_user, kbail, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -25,6 +25,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::error::Error;
+use std::ffi::c_void;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
 use std::io::stderr;
@@ -2438,6 +2439,10 @@ pub struct TypedProgram {
     pub vm_global_constant_lookups: FxHashMap<TypedGlobalId, vm::Value>,
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
     pub vm_process_dlopen_handle: *mut std::ffi::c_void,
+
+    // nocommit shutdown tasks (important for lsp use-case)
+    // - close these dlopens
+    // - scan for other things to close in TypedProgram
     pub vm_library_dlopens: FxHashMap<Ident, *mut std::ffi::c_void>,
     pub vm_ffi_functions: FxHashMap<FunctionId, libffi::raw::ffi_cif>,
 
@@ -2692,9 +2697,6 @@ impl TypedProgram {
                 kind: ModuleKind::Library,
                 deps: vec![],
                 multithreading: false,
-                // TODO: Programmer just specifies the path; I didn't like the 'libs/' thing anyway
-                //       as it feels inflexible. If extension included, it'll be static. If no
-                //       slashes, libs/, if slashes
                 libs: vec![LibRef {
                     name: self.ast.strings.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
@@ -15916,14 +15918,14 @@ impl TypedProgram {
 
     pub fn get_dlopen_handle(
         &mut self,
-        lib_name: Ident,
+        lib_name_ident: Ident,
         span: SpanId,
     ) -> TyperResult<*mut std::ffi::c_void> {
-        if let Some(handle) = self.vm_library_dlopens.get(&lib_name) {
+        if let Some(handle) = self.vm_library_dlopens.get(&lib_name_ident) {
             return Ok(*handle);
         }
 
-        let lib_name_str = self.ast.idents.get_name(lib_name);
+        let lib_name_str = self.ast.idents.get_name(lib_name_ident);
         let lib_filename: PathBuf = match self.ast.config.target.target_os() {
             crate::compiler::TargetOs::Linux => {
                 Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
@@ -15937,26 +15939,44 @@ impl TypedProgram {
         };
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.config.src_path.display());
-        let lib_path = if lib_name_str == "k1rt" {
-            self.ast.config.k1_lib_dir.join(lib_filename)
-        } else {
-            let mut lib_path = self.ast.config.src_path.clone();
-            lib_path.push("libs");
-            lib_path.push(lib_filename);
-            lib_path
-        };
-        let c_lib_name = std::ffi::CString::new(lib_path.to_string_lossy().as_bytes()).unwrap();
-        let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
-        if handle.is_null() {
-            eprintln!(
-                "Failed to dlopen library '{}': {}",
-                lib_path.display(),
-                unsafe { std::ffi::CStr::from_ptr(libc::dlerror()) }.to_string_lossy()
-            );
-            return failf!(span, "Failed to dlopen library '{}'", lib_name_str);
+
+        let module_ip_id = self.module_in_progress.unwrap();
+        let search_path = self.modules.get(module_ip_id).home_dir.join(compiler::LIBS_DIR_NAME).join(lib_filename);
+        if let Some(handle) = self.attempt_dlopen(search_path.to_str().unwrap()) {
+            self.vm_library_dlopens.insert(lib_name_ident, handle);
+            return Ok(handle);
         }
-        self.vm_library_dlopens.insert(lib_name, handle);
-        Ok(handle)
+
+        // System lookup
+        let logical_lib_path = lib_name_str;
+        if let Some(handle) = self.attempt_dlopen(logical_lib_path) {
+            self.vm_library_dlopens.insert(lib_name_ident, handle);
+            return Ok(handle);
+        }
+        // For the system lookup, we call dlerror() to see everywhere it tried.
+        let dlopen_error_message =
+            unsafe { std::ffi::CStr::from_ptr(libc::dlerror()) }.to_string_lossy();
+        // let lib_dirs_tried = self
+        //     .modules
+        //     .get(module_ip_id)
+        //     .manifest
+        //     .lib_dirs
+        //     .iter()
+        //     .map(|p| p.display().to_string())
+        //     .collect::<Vec<String>>()
+        //     .join(", ");
+        failf!(
+            span,
+            "Failed to dlopen library: '{}'. I tried the project's `libs/`, then tried a system lookup: {}",
+            lib_name_str,
+            dlopen_error_message
+        )
+    }
+
+    pub fn attempt_dlopen(&self, name: &str) -> Option<*mut c_void> {
+        let c_lib_name = std::ffi::CString::new(name).unwrap();
+        let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
+        if handle.is_null() { None } else { Some(handle) }
     }
 
     pub fn all_manifest_libs(&self) -> Vec<LibRef> {

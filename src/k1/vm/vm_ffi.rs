@@ -28,22 +28,24 @@ pub(super) fn handle_ffi_call(
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
-    for arg_value in k1.bytecode.mem.getn(args).iter() {
+    let function_params = k1.bytecode.functions.get(function_id).unwrap().fn_params;
+
+    for (arg_value, arg_pt) in
+        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
+    {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
-        // All structs are meant to be passed as pointers 
-        // But we're doing... a pointer to a pointer? since our canonical repr is
-        // a pointer
-        // So, match on the type.
-        // If scalar, _get_ a pointer to it
-        // A. Can we just get a pointer to our 'register file'? A special resolve_value?
         // If aggregate, you already have the pointer that libffi wants
+        if arg_pt.is_agg() {
+            ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut u8 as *mut c_void);
+        } else {
+            // If scalar, _get_ a pointer to it
+            ffi_args_value_storage.push(vm_value.bits());
 
-        ffi_args_value_storage.push(vm_value.bits());
-
-        // Now we have an address to push into the actual args array
-        let ffi_arg_addr = ffi_args_value_storage.last_mut().unwrap();
-        ffi_args_value_ptrs.push(ffi_arg_addr as *mut _ as *mut c_void)
+            // Now we have an address to push into the actual args array
+            let ffi_arg_addr = ffi_args_value_storage.last_mut().unwrap();
+            ffi_args_value_ptrs.push(ffi_arg_addr as *mut _ as *mut c_void)
+        }
     }
     let handle_for_search = match lib_name {
         None => k1.vm_process_dlopen_handle,
@@ -125,7 +127,7 @@ fn prep_ffi_cif(
     let mut ffi_args_types_storage = k1.mem.new_list(nargs as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(nargs as u32);
     for arg_pt in k1.bytecode.mem.getn(fn_params) {
-        let ffi_type = inst_kind_to_ffi_type(k1, InstKind::Value(*arg_pt))
+        let ffi_type: ffi_type = inst_kind_to_ffi_type(k1, InstKind::Value(*arg_pt))
             .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
 
         // We need a stable-ish address to each Value here; so we push them to
@@ -244,12 +246,19 @@ fn make_struct_ffi_type(
     // Explicit range loop to be really sure the pointers are stable and not tied to some iterator bullshit
     #[allow(clippy::needless_range_loop)]
     for i in 0..ffi_type_storage.len() {
+        #[cfg(debug_assertions)]
+        {
+            let t = ffi_type_storage[i];
+            eprintln!(
+                "ffi struct elements {i}: size: {}, align: {}, type: {}",
+                t.size, t.alignment, t.type_
+            );
+            eprintln!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
+        }
         element_ptrs.push(&mut ffi_type_storage[i])
     }
     element_ptrs.push(core::ptr::null_mut());
 
-    eprintln!("ffi struct elements: {:?}", ffi_type_storage);
-    eprintln!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
     // size and alignment get filled in my ffi_prep_cif
     let my_struct: ffi_type = ffi_type {
         size: 0,

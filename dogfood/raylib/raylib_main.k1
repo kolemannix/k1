@@ -2,7 +2,7 @@ let MODULE_INFO: core/k1/ModuleManifest = {
   kind: .Executable,
   deps: [],
   multithreading: false,
-  libs: []
+  libs: ["raylib"]
 };
 ns raylib {
   deftype Color = {
@@ -24,6 +24,7 @@ ns raylib {
   deftype Rectangle = {
     x: f32, y: f32, width: f32, height: f32
   }
+
   extern("raylib","InitWindow") fn init(width: i32, height: i32, name: ptr): unit
   extern("raylib","CloseWindow") fn CloseWindow(): unit
   extern("raylib","WindowShouldClose") fn WindowShouldClose(): bool
@@ -45,28 +46,41 @@ let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
 let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 };
 let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
 
-fn main(): i32 {
-    let context allocMode: mem/AllocMode = .Arena;
-    let name = "raylib [core] example - basic window";
-    let name2 = name.toCString();
-    raylib/init(800, 450, name2.ptr);
-    raylib/SetTargetFPS(60);
+#debug fn run(title: string): i32 {
+  let context allocMode: mem/AllocMode = .Arena;
+  let titleC = title.toCString();
+  raylib/init(800, 450, titleC.ptr);
+  raylib/SetTargetFPS(60);
 
-    use raylib/ClearBackground;
-    use raylib/DrawText;
+  use raylib/ClearBackground;
+  use raylib/DrawText;
 
-    let i = 0;
-    while not raylib/WindowShouldClose() {
-      raylib/BeginDrawing();
-      let color = if i < 1000 PURPLE else PINK;
-      ClearBackground(color);
-      DrawText("Congrats!".toCString().ptr, 200, 200, GRAY);
-      raylib/EndDrawing();
-      i := i + 1;
-      if i == 2000 { i := 0 };
-    };
+  let i = 0;
+  while not raylib/WindowShouldClose() {
+    raylib/BeginDrawing();
+    let color = if i < 100 PURPLE else PINK;
+    ClearBackground(color);
+    DrawText("Congrats!".toCString().ptr, 200, 200, GRAY);
+    raylib/EndDrawing();
+    i := i + 1;
+    if i == 2000 { i := 0 };
+  };
 
-    raylib/CloseWindow();
-
-    0
+  raylib/CloseWindow();
+  if k1/IS_STATIC 11 else 1
 }
+
+fn main(): i32 {
+  #static { 
+    let ctResult = run("comptime!");
+    println("Hey, the comptime result (printed at comptime btw) was {ctResult}");
+    ctResult
+  };
+  let rtResult = run("runtime!");
+  println("Hey, the runtime result was {rtResult}");
+  0
+}
+
+//#static {
+//  run("comptime!")
+//}

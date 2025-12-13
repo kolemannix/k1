@@ -14,3 +14,8 @@ k1_lsp.log*
 k1lib/*.o
 k1lib/*.a
 k1lib/*.dylib
+
+llvm/build-llvm
+llvm/install-llvm
+llvm/llvm-project
+

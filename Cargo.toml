@@ -38,10 +38,11 @@ quanta = "0.12.6"
 libc = "0.2.177"
 
 # LLVM / compiler toolchain stuff
-llvm-sys = { version = "181.2.0" }
-inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.7.1", features = ["llvm18-1"] }
+llvm-sys = { version = "211.0.0" }
+inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.7.1", features = ["llvm21-1"] }
 zstd-sys = "2.0.8"
-libffi = "4.0.0"
+libffi = "5.0.0"
+# libffi-sys = "4.0.0"
 
 # lsp-only deps
 tower-lsp = { version = "0.20.0", optional = true }

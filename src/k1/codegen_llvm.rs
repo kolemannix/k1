@@ -31,7 +31,7 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
-use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueAtEnd;
+use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
@@ -550,9 +550,9 @@ impl<'ctx> DebugContext<'ctx> {
         expr: Option<DIExpression<'ctx>>,
         debug_loc: DILocation<'ctx>,
         block: BasicBlock<'ctx>,
-    ) -> InstructionValue<'ctx> {
-        let value_ref = unsafe {
-            LLVMDIBuilderInsertDbgValueAtEnd(
+    ) {
+        unsafe {
+            LLVMDIBuilderInsertDbgValueRecordAtEnd(
                 self.debug_builder.as_mut_ptr(),
                 value.as_value_ref(),
                 var_info.as_mut_ptr(),
@@ -561,8 +561,6 @@ impl<'ctx> DebugContext<'ctx> {
                 block.as_mut_ptr(),
             )
         };
-
-        unsafe { InstructionValue::new(value_ref) }
     }
 
     fn create_pointer_type(&self, name: &str, pointee: DIType<'ctx>) -> DIType<'ctx> {
@@ -1836,13 +1834,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let variable_ptr = self.build_k1_alloca(&variable_type, &name);
 
             // Consider a flag not to declare debug vars for synthesized variables
-            self.debug.debug_builder.insert_declare_at_end(
-                variable_ptr,
-                local_variable,
-                None,
-                self.builder.get_current_debug_location().unwrap(),
-                self.builder.get_insert_block().unwrap(),
-            );
+            unsafe {
+                llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd(
+                    self.debug.debug_builder.as_mut_ptr(),
+                    variable_ptr.as_value_ref(),
+                    local_variable.map(|v| v.as_mut_ptr()).unwrap_or(std::ptr::null_mut()),
+                    self.debug.debug_builder.create_expression(vec![]).as_mut_ptr(),
+                    self.builder.get_current_debug_location().unwrap().as_mut_ptr(),
+                    self.builder.get_insert_block().unwrap().as_mut_ptr(),
+                );
+            }
 
             if let_stmt.is_referencing {
                 // If this is a let*, then we put the rhs behind another alloca so that we end up
