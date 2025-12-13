@@ -60,6 +60,6 @@ fn testAll(): unit {
 
 fn main(): i32 {
   testAll();
-  //#static testAll();
+  #static testAll();
   0
 }

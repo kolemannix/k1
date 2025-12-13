@@ -1,12 +1,12 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use k1::compiler::CompilerConfig;
 use k1::lex::TokenKind;
 use k1::parse::{ParsedProgram, Source};
+use k1::typer::ModuleId;
 use log::info;
 use mimalloc::MiMalloc;
 
@@ -24,8 +24,6 @@ fn main() -> anyhow::Result<ExitCode> {
     log::set_max_level(log::LevelFilter::Info);
     info!("k1 repl v0.1.0");
 
-    let lib_dir_pathbuf =
-        std::env::var("K1_LIB_DIR").map(PathBuf::from).unwrap_or(PathBuf::from("k1lib"));
     let cwd = std::env::current_dir().unwrap();
     let name = "repl.k1";
     let mut ast = ParsedProgram::make(
@@ -38,7 +36,6 @@ fn main() -> anyhow::Result<ExitCode> {
                 .unwrap_or(k1::compiler::Target::LinuxIntel64),
             debug: true,
             out_dir: ".k1-out/repl".into(),
-            k1_lib_dir: lib_dir_pathbuf,
         },
     );
     let file_id = 0;
@@ -69,10 +66,17 @@ fn main() -> anyhow::Result<ExitCode> {
                 return Ok(ExitCode::SUCCESS);
             }
         };
+        let module_id = ModuleId::from_u32(1).unwrap();
         let module_name = ast.idents.intern("REPL");
         let parsed_ns_id = k1::parse::init_module(module_name, &mut ast);
-        let mut parser =
-            k1::parse::Parser::make_for_file(module_name, parsed_ns_id, &mut ast, &tokens, file_id);
+        let mut parser = k1::parse::Parser::make_for_file(
+            module_id,
+            module_name,
+            parsed_ns_id,
+            &mut ast,
+            &tokens,
+            file_id,
+        );
         match parser.parse_statement() {
             Ok(None) => match parser.parse_definition(TokenKind::Eof) {
                 Ok(Some(_defn)) => eprintln!("thanks for your definition"),

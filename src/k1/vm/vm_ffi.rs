@@ -47,48 +47,58 @@ pub(super) fn handle_ffi_call(
             ffi_args_value_ptrs.push(ffi_arg_addr as *mut _ as *mut c_void)
         }
     }
-    let handle_for_search = match lib_name {
-        None => k1.vm_process_dlopen_handle,
-        Some(lib_name) => k1.get_dlopen_handle(lib_name, vm.eval_span)?,
-    };
-    // TODO: I could cache the cstr in the hashmap along with the cif as well
-    let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
-    let fn_ptr: *mut c_void = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
-    if fn_ptr.is_null() {
-        return failf!(
-            vm.eval_span,
-            "Could not find extern function symbol: {}",
-            k1.ident_str(fn_name)
-        );
-    }
 
-    let mut cif: ffi_cif;
-    match k1.vm_ffi_functions.get_mut(&function_id) {
+    let mut ffi_handle = match k1.vm_ffi_functions.get(&function_id).copied() {
         None => {
-            cif = prep_ffi_cif(k1, function_id, ret_inst_kind, vm.eval_span)?;
-            k1.vm_ffi_functions.insert(function_id, cif);
+            let handle_for_search = match lib_name {
+                None => k1.vm_process_dlopen_handle,
+                Some(lib_name) => k1.get_dylib_handle(function_id, lib_name, vm.eval_span)?,
+            };
+
+            let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
+            let fn_ptr: *mut c_void = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
+            if fn_ptr.is_null() {
+                return failf!(
+                    vm.eval_span,
+                    "Could not find extern function symbol: {}",
+                    k1.ident_str(fn_name)
+                );
+            }
+            let cif = prep_ffi_cif(k1, function_id, ret_inst_kind, vm.eval_span)?;
+            let handle = vm::VmFfiHandle {
+                library_handle: handle_for_search,
+                function_pointer: fn_ptr,
+                cif,
+            };
+            k1.vm_ffi_functions.insert(function_id, handle);
+            handle
         }
-        Some(mcif) => {
+        Some(ffi_handle) => {
             debug!("reusing cif");
-            cif = *mcif
+            ffi_handle
         }
     };
 
     debug!("ffi args were: {:?}", ffi_args_value_storage.as_slice());
     debug!("ffi args types were: {:?}", unsafe {
-        core::slice::from_raw_parts(cif.arg_types, nargs)
+        core::slice::from_raw_parts(ffi_handle.cif.arg_types, nargs)
     });
 
     let result_storage = unsafe {
-        let ret_size = (*cif.rtype).size;
-        let ret_align = (*cif.rtype).alignment;
+        let ret_size = (*(ffi_handle.cif.rtype)).size;
+        let ret_align = (*(ffi_handle.cif.rtype)).alignment;
         let result_space: *mut u8 =
             vm.stack.push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
         debug!("result space is {} {}", ret_size, ret_align);
 
         let args = ffi_args_value_ptrs.as_slice_mut().as_mut_ptr();
-        let code_ptr = CodePtr(fn_ptr);
-        raw::ffi_call(&mut cif, Some(*code_ptr.as_safe_fun()), result_space as *mut c_void, args);
+        let code_ptr = CodePtr(ffi_handle.function_pointer);
+        raw::ffi_call(
+            &mut ffi_handle.cif,
+            Some(*code_ptr.as_safe_fun()),
+            result_space as *mut c_void,
+            args,
+        );
         result_space
     };
     let result = match ret_inst_kind {

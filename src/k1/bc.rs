@@ -1532,7 +1532,7 @@ fn compile_expr(
                         }
                     }
                 }
-                (_, Some(Linkage::External { lib_name, fn_name })) => {
+                (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
                     let fn_name = match fn_name {
                         None => b.k1.get_function(function_id).name,

@@ -17,7 +17,6 @@ fn make_test_module() -> ParsedProgram {
             target: detect_host_target().unwrap(),
             debug: true,
             out_dir: ".k1-out-parse-test".into(),
-            k1_lib_dir: std::path::PathBuf::from("k1lib"),
         },
     )
 }
@@ -26,13 +25,14 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let source =
         Source::make(0, "unit_test".to_string(), "unit_test.k1".to_string(), input.to_string());
     let file_id = source.file_id;
+    let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
     let mut token_vec = vec![];
     lex_text(ast, source, &mut token_vec).unwrap();
     let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
     let ns_id = parse::init_module(module_name, ast);
-    let parser = Parser::make_for_file(module_name, ns_id, ast, token_vec, file_id);
+    let parser = Parser::make_for_file(module_id, module_name, ns_id, ast, token_vec, file_id);
     parser
 }
 

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::ffi::c_void;
 use std::num::NonZeroU32;
 
 use ahash::HashMapExt;
@@ -164,6 +165,14 @@ pub mod k1_types {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VmFfiHandle {
+    #[allow(unused)]
+    library_handle: *mut c_void,
+    function_pointer: *mut c_void,
+    cif: libffi::raw::ffi_cif
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

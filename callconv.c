@@ -14,6 +14,8 @@ void call_small() {
   takes_small(s);
 }
 void eb_pair_mixed(ClassesEz c) {
+  c.i = 3;
+  c.j = 4;
   return;
 }
 void call_eb_pair_mixed() {
@@ -25,4 +27,9 @@ void call_eb_pair_mixed() {
 ClassesEz return_ebpair_mixed() {
   ClassesEz c = {0};
   return c;
+}
+
+void take_big1(Big1 big1) {
+  big1.i[3] = 77;
+  return;
 }

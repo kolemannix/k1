@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Write};
 
 use crate::compiler::CompilerConfig;
 use crate::pool::{SliceHandle, VPool};
-use crate::typer::{Linkage, MessageLevel};
+use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
@@ -2001,17 +2001,19 @@ pub fn init_module(module_name: Ident, ast: &mut ParsedProgram) -> ParsedNamespa
 
 pub fn parse_file(
     ast: &mut ParsedProgram,
+    module_id: ModuleId,
     module_name: Ident,
     module_namespace_id: ParsedNamespaceId,
     file_id: FileId,
     tokens: &[Token],
 ) -> ParseResult<()> {
-    let mut parser = Parser::make_for_file(module_name, module_namespace_id, ast, tokens, file_id);
+    let mut parser = Parser::make_for_file(module_id, module_name, module_namespace_id, ast, tokens, file_id);
     parser.parse_file();
     Ok(())
 }
 
 pub struct Parser<'toks, 'module> {
+    pub module_id: ModuleId,
     pub module_name: Ident,
     pub module_namespace_id: ParsedNamespaceId,
     pub ast: &'module mut ParsedProgram,
@@ -2022,6 +2024,7 @@ pub struct Parser<'toks, 'module> {
 
 impl<'toks, 'ast> Parser<'toks, 'ast> {
     pub fn make_for_file(
+        module_id: ModuleId,
         module_name: Ident,
         module_namespace_id: ParsedNamespaceId,
         ast: &'ast mut ParsedProgram,
@@ -2029,6 +2032,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         file_id: FileId,
     ) -> Parser<'toks, 'ast> {
         Parser {
+            module_id,
             module_name,
             module_namespace_id,
             ast,
@@ -4053,7 +4057,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 (None, None)
             };
-            Linkage::External { lib_name, fn_name }
+            Linkage::External { module_id: self.module_id, lib_name, fn_name }
         } else {
             Linkage::Standard
         };
@@ -4852,18 +4856,18 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
             target: crate::compiler::detect_host_target().unwrap(),
             debug: true,
             out_dir: ".k1-out-unit-test".into(),
-            k1_lib_dir: std::path::PathBuf::from("k1lib"),
         },
     );
 
     let file_id = source.file_id;
     let mut token_vec = vec![];
     lex_text(&mut ast, source, &mut token_vec)?;
+    let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("test_module");
     let module_ns_id = init_module(module_name, &mut ast);
 
     let mut parser =
-        Parser::make_for_file(module_name, module_ns_id, &mut ast, &token_vec, file_id);
+        Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &token_vec, file_id);
     parser.parse_file();
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);

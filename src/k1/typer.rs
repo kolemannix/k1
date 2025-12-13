@@ -81,7 +81,7 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External { lib_name: Option<Ident>, fn_name: Option<Ident> },
+    External { module_id: ModuleId, lib_name: Option<Ident>, fn_name: Option<Ident> },
     Intrinsic,
 }
 
@@ -2257,6 +2257,12 @@ pub struct ModuleManifest {
     pub libs: Vec<LibRef>,
 }
 
+impl Default for ModuleManifest {
+    fn default() -> Self {
+        Self { kind: ModuleKind::Executable, deps: vec![], multithreading: false, libs: vec![] }
+    }
+}
+
 pub struct Module {
     pub id: ModuleId,
     pub name: Ident,
@@ -2264,6 +2270,20 @@ pub struct Module {
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
+}
+
+impl Module {
+    // Used to 'reserve' a spot for module so that parser can know its module id
+    pub fn pending(id: ModuleId, name: Ident) -> Self {
+        Module {
+            id,
+            name,
+            home_dir: PathBuf::new(),
+            manifest: ModuleManifest::default(),
+            namespace_id: NamespaceId::PENDING,
+            namespace_scope_id: ScopeId::PENDING,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2443,8 +2463,8 @@ pub struct TypedProgram {
     // nocommit shutdown tasks (important for lsp use-case)
     // - close these dlopens
     // - scan for other things to close in TypedProgram
-    pub vm_library_dlopens: FxHashMap<Ident, *mut std::ffi::c_void>,
-    pub vm_ffi_functions: FxHashMap<FunctionId, libffi::raw::ffi_cif>,
+    pub vm_dylib_handles: FxHashMap<(ModuleId, Ident), *mut std::ffi::c_void>,
+    pub vm_ffi_functions: FxHashMap<FunctionId, vm::VmFfiHandle>,
 
     /// Perm arena space
     pub mem: kmem::Mem<TypedProgram>,
@@ -2595,7 +2615,7 @@ impl TypedProgram {
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
             vm_process_dlopen_handle: process_dlopen_handle,
-            vm_library_dlopens: FxHashMap::with_capacity(32),
+            vm_dylib_handles: FxHashMap::with_capacity(32),
             vm_ffi_functions: FxHashMap::with_capacity(64),
 
             mem: kmem::Mem::make(),
@@ -2629,10 +2649,12 @@ impl TypedProgram {
             eprintln!("Module already included: {}", self.ident_str(m.name),);
             return Ok(m.id);
         }
-        let is_core = self.modules.is_empty();
-        if is_core {
-            debug_assert_eq!(self.modules.next_id(), MODULE_ID_CORE);
-        }
+
+        let module_id = self.modules.next_id();
+        let module_id =
+            self.modules.add_expected_id(Module::pending(module_id, module_name), module_id);
+
+        let is_core = module_id == MODULE_ID_CORE;
 
         let (module_dir, mut files_to_compile) = crate::compiler::discover_source_files(&src_path);
         if is_core {
@@ -2668,6 +2690,7 @@ impl TypedProgram {
                 Ok(_) => {}
             };
             let mut parser = parse::Parser::make_for_file(
+                module_id,
                 module_name,
                 parsed_namespace_id,
                 &mut self.ast,
@@ -2720,7 +2743,10 @@ impl TypedProgram {
         };
 
         if module_manifest.kind == ModuleKind::Executable {
-            if let Some(m) = self.modules.iter().find(|m| m.manifest.kind == ModuleKind::Executable)
+            if let Some(m) = self
+                .modules
+                .iter()
+                .find(|m| m.id != module_id && m.manifest.kind == ModuleKind::Executable)
             {
                 bail!(
                     "Cannot compile a program with 2 executable modules. {} and {}",
@@ -2747,8 +2773,13 @@ impl TypedProgram {
         }
 
         let type_start = self.timing.clock.raw();
-        let module_id =
-            self.run_on_module(module_name, parsed_namespace_id, module_manifest, module_dir)?;
+        let module_id = self.run_on_module(
+            module_id,
+            module_name,
+            parsed_namespace_id,
+            module_manifest,
+            module_dir,
+        )?;
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
@@ -7747,6 +7778,7 @@ impl TypedProgram {
         tokens.retain(|token| token.kind != TokenKind::LineComment);
 
         let mut p = crate::parse::Parser::make_for_file(
+            module.id,
             module.name,
             parsed_namespace_id,
             &mut self.ast,
@@ -14880,13 +14912,14 @@ impl TypedProgram {
 
     pub fn run_on_module(
         &mut self,
+        module_id: ModuleId,
         module_name: Ident,
         module_root_parsed_namespace: ParsedNamespaceId,
         manifest: ModuleManifest,
         home_dir: PathBuf,
     ) -> anyhow::Result<ModuleId> {
-        let module_id = self.modules.next_id();
         self.module_in_progress = Some(module_id);
+        let is_core = module_id == MODULE_ID_CORE;
 
         // Namespace phase
         debug!(">> Phase 0 declare root namespace");
@@ -14903,17 +14936,15 @@ impl TypedProgram {
         }
         let typed_namespace_id = root_namespace_declare_result.unwrap();
         let root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
-        let real_module_id = self.modules.add(Module {
+        *self.modules.get_mut(module_id) = Module {
             id: module_id,
             name: module_name,
             home_dir,
             manifest,
             namespace_id: typed_namespace_id,
             namespace_scope_id: root_namespace_scope_id,
-        });
-        debug_assert_eq!(module_id, real_module_id);
+        };
 
-        let is_core = module_id == MODULE_ID_CORE;
         if !is_core {
             self.add_core_uses_to_scope(root_namespace_scope_id, SpanId::NONE)?;
         }
@@ -15916,12 +15947,16 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_dlopen_handle(
+    pub fn get_dylib_handle(
         &mut self,
+        function_id: FunctionId,
         lib_name_ident: Ident,
         span: SpanId,
     ) -> TyperResult<*mut std::ffi::c_void> {
-        if let Some(handle) = self.vm_library_dlopens.get(&lib_name_ident) {
+        let Linkage::External { module_id, .. } = self.functions.get(function_id).linkage else {
+            ice_span!(self, span, "get_dylib_handle called for non-external function");
+        };
+        if let Some(handle) = self.vm_dylib_handles.get(&(module_id, lib_name_ident)) {
             return Ok(*handle);
         }
 
@@ -15940,35 +15975,27 @@ impl TypedProgram {
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.config.src_path.display());
 
-        let module_ip_id = self.module_in_progress.unwrap();
-        let search_path = self.modules.get(module_ip_id).home_dir.join(compiler::LIBS_DIR_NAME).join(lib_filename);
+        let module_home_dir = &self.modules.get(module_id).home_dir;
+        let search_path = module_home_dir.join(compiler::LIBS_DIR_NAME).join(lib_filename);
         if let Some(handle) = self.attempt_dlopen(search_path.to_str().unwrap()) {
-            self.vm_library_dlopens.insert(lib_name_ident, handle);
+            self.vm_dylib_handles.insert((module_id, lib_name_ident), handle);
             return Ok(handle);
         }
 
         // System lookup
         let logical_lib_path = lib_name_str;
         if let Some(handle) = self.attempt_dlopen(logical_lib_path) {
-            self.vm_library_dlopens.insert(lib_name_ident, handle);
+            self.vm_dylib_handles.insert((module_id, lib_name_ident), handle);
             return Ok(handle);
         }
         // For the system lookup, we call dlerror() to see everywhere it tried.
         let dlopen_error_message =
             unsafe { std::ffi::CStr::from_ptr(libc::dlerror()) }.to_string_lossy();
-        // let lib_dirs_tried = self
-        //     .modules
-        //     .get(module_ip_id)
-        //     .manifest
-        //     .lib_dirs
-        //     .iter()
-        //     .map(|p| p.display().to_string())
-        //     .collect::<Vec<String>>()
-        //     .join(", ");
         failf!(
             span,
-            "Failed to dlopen library: '{}'. I tried the project's `libs/`, then tried a system lookup: {}",
+            "Failed to dlopen library: '{}'. I tried the project's libs: `{}`, then tried a system lookup: {}",
             lib_name_str,
+            search_path.display(),
             dlopen_error_message
         )
     }
@@ -15977,14 +16004,6 @@ impl TypedProgram {
         let c_lib_name = std::ffi::CString::new(name).unwrap();
         let handle = unsafe { libc::dlopen(c_lib_name.as_ptr(), libc::RTLD_LAZY) };
         if handle.is_null() { None } else { Some(handle) }
-    }
-
-    pub fn all_manifest_libs(&self) -> Vec<LibRef> {
-        let mut names = vec![];
-        for module in self.modules.iter() {
-            names.extend(&module.manifest.libs);
-        }
-        names
     }
 
     pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, &parse::Line) {

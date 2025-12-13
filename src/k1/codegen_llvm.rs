@@ -128,7 +128,7 @@ pub struct K1LlvmFunctionType<'ctx> {
     // Does not include sret, or abi mappings
     param_k1_types: MSlice<K1LlvmType<'ctx>, CodegenPerm>,
     param_abi_mappings: MSlice<AbiParamMapping, CodegenPerm>,
-    // nocommit wrap in mhandle
+    // Should probably wrap this in a handle due to size
     return_k1_type: K1LlvmType<'ctx>,
     return_abi_mapping: AbiParamMapping,
     is_sret: bool,
@@ -1508,7 +1508,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::StructByEightbytePair { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
-            AbiParamMapping::StructByPtrNoCopy { .. } => true,
+            AbiParamMapping::StructByPtrNoCopy => true,
         };
 
         // The logical parameters closest to K1 model
@@ -1609,7 +1609,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 self.builtin_types.ptr.as_basic_type_enum()
             }
-            AbiParamMapping::StructByPtrNoCopy { .. } => {
+            AbiParamMapping::StructByPtrNoCopy => {
                 self.builtin_types.ptr.as_basic_type_enum()
             }
         }
@@ -1681,6 +1681,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         mapping: AbiParamMapping,
         k1_ty: &K1LlvmType<'ctx>,
         k1_value: BasicValueEnum<'ctx>,
+        is_return: bool,
     ) -> BasicValueEnum<'ctx> {
         eprintln!(
             "marshalling k1 {}: {} with {:?}",
@@ -1762,16 +1763,29 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 // Our canonical representation of all aggregates is an llvm ptr
-                // And this abi route represents them as a ptr, so nothing to do
+                // And this abi route represents them as a ptr, already.
                 //
-                // nocommit: If this is truly the 'value' getting passed to the C code, then
+                // But, this is truly the 'value' getting passed to the C code, then
                 // this would allow mutation incorrectly, and we do have to make a copy
                 // So, if this is not a return, but a param marshal, we'd make a copy
-                k1_value
+                if is_return {
+                    // For returns its moot, the ptr is already a caller-owned slot
+                    k1_value
+                } else {
+                    let callers_copy = self.alloca_copy_entire_value(
+                        k1_value.into_pointer_value(),
+                        k1_ty,
+                        "abi_callers_copy",
+                    );
+                    callers_copy.as_basic_value_enum()
+                }
             }
             AbiParamMapping::StructByPtrNoCopy => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
+                //
+                // This is possible (avoiding the copy) because k1 does not allow mutation of a struct
+                // value, it has to be a language-level pointer
                 k1_value
             }
         }
@@ -2742,6 +2756,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             return_abi_mapping,
                             &return_k1_type,
                             return_value,
+                            true,
                         );
                         eprintln!(
                             "marshalled return: {} w/ {:?} -> {}",
@@ -3131,7 +3146,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let arg_value = self.codegen_expr_basic_value(*arg_expr)?;
             eprintln!("expression with bad type is: {}", self.k1.expr_to_string(*arg_expr));
             let value_marshalled =
-                self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value);
+                self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
             trace!("codegen function call arg type: {}", value_marshalled);
             args.push(value_marshalled.into())
         }

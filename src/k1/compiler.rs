@@ -234,7 +234,6 @@ pub struct CompilerConfig {
     pub target: Target,
     pub debug: bool,
     pub out_dir: PathBuf,
-    pub k1_lib_dir: PathBuf,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -349,7 +348,6 @@ pub fn compile_program(
         target,
         debug: args.debug,
         out_dir,
-        k1_lib_dir: lib_dir_pathbuf,
     };
 
     let mut p = TypedProgram::new(module_name.clone(), config);
@@ -425,7 +423,6 @@ pub fn write_executable(
     let target = k1.ast.config.target;
     let debug = k1.ast.config.debug;
     let out_dir = &k1.ast.config.out_dir;
-    let k1_lib_dir = &k1.ast.config.k1_lib_dir;
     let clang_time = std::time::Instant::now();
 
     let llvm_base = PathBuf::from(
@@ -478,30 +475,25 @@ pub fn write_executable(
     build_cmd.arg("-o");
     build_cmd.arg(out_name);
 
-    // Linking with libraries
-    // First, put k1lib on the search path
-    build_cmd.arg(format!("-L{}", k1_lib_dir.display()));
-    let home_dir = if k1.ast.config.src_path.is_dir() {
-        &k1.ast.config.src_path
-    } else {
-        k1.ast.config.src_path.parent().unwrap()
-    };
-    let module_libs_dir = home_dir.join(LIBS_DIR_NAME);
-    build_cmd.arg(format!("-L{}", module_libs_dir.display()));
-    let libs_to_link = k1.all_manifest_libs();
-    for ext_lib in &libs_to_link {
-        let logical_name_str = k1.get_string(ext_lib.name);
-        if logical_name_str == "k1rt" {
-            build_cmd.arg(k1_lib_dir.join("libk1rt.a"));
-        } else {
+    // Linking with libraries.
+    // For each module, for each of its libraries, link with it as specified by the link_type
+    for module in k1.modules.iter() {
+        let module_libs_dir = module.home_dir.join(LIBS_DIR_NAME);
+        if !module.manifest.libs.is_empty() {
+            build_cmd.arg(format!("-L{}", module_libs_dir.display()));
+        }
+        for lib in &module.manifest.libs {
+            let logical_name_str = k1.get_string(lib.name);
             let filename = logical_name_to_dylib_filename(
                 &module_libs_dir,
                 target.target_os(),
-                ext_lib.link_type,
+                lib.link_type,
                 logical_name_str,
             );
-            match ext_lib.link_type {
+            match lib.link_type {
+                // Link via linker arg, since the name has no extension
                 LibRefLinkType::Default => build_cmd.arg(format!("-l{}", filename.display())),
+                // 'Link' via direct clang arg, since its an exact filepath
                 _ => build_cmd.arg(filename),
             };
         }
