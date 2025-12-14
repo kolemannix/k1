@@ -566,7 +566,6 @@ pub struct TypedAbility {
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
     pub parameters: MSlice<TypedAbilityParam, TypedProgram>,
-    // nocommit(3): swap these ecovecs out for arena memory
     pub functions: EcoVec<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
     pub ast_id: ParsedAbilityId,
@@ -2327,7 +2326,7 @@ impl TypedExprPool {
         self.add(
             TypedExpr::Block(TypedBlock {
                 scope_id: builder.scope_id,
-                statements: mem.list_to_handle(&builder.statements),
+                statements: mem.list_to_handle(builder.statements),
             }),
             type_id,
             builder.span,
@@ -3221,7 +3220,7 @@ impl TypedProgram {
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
                 let struct_defn =
-                    Type::Struct(StructType { fields: self.types.mem.list_to_handle(&fields) });
+                    Type::Struct(StructType { fields: self.types.mem.list_to_handle(fields) });
                 let type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
                     struct_defn,
@@ -3541,7 +3540,7 @@ impl TypedProgram {
                     });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
-                let params_handle = self.types.mem.list_to_handle(&params);
+                let params_handle = self.types.mem.list_to_handle(params);
                 let function_type_id = self.types.add_anon(Type::Function(FunctionType {
                     physical_params: params_handle,
                     is_lambda: false,
@@ -3771,7 +3770,7 @@ impl TypedProgram {
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
                 let new_struct = Type::Struct(StructType {
-                    fields: self.types.mem.list_to_handle(&combined_fields),
+                    fields: self.types.mem.list_to_handle(combined_fields),
                 });
                 let type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
@@ -4681,7 +4680,7 @@ impl TypedProgram {
                 }
                 let struct_pattern = TypedStructPattern {
                     struct_type_id: target_type_id,
-                    fields: self.patterns.mem.list_to_handle(&fields),
+                    fields: self.patterns.mem.list_to_handle(fields),
                     span: struct_pattern.span,
                 };
                 Ok(self.patterns.add(TypedPattern::Struct(struct_pattern)))
@@ -5725,7 +5724,7 @@ impl TypedProgram {
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
-            functions: self.mem.list_to_handle(&impl_functions),
+            functions: self.mem.list_to_handle(impl_functions),
             scope_id,
             span,
             compile_errors: vec![],
@@ -6262,7 +6261,7 @@ impl TypedProgram {
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
             impl_arguments: substituted_impl_arguments_handle,
-            functions: self.mem.list_to_handle(&specialized_functions),
+            functions: self.mem.list_to_handle(specialized_functions),
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: vec![],
@@ -7838,9 +7837,9 @@ impl TypedProgram {
             field_values.push(StructLiteralField { name: ast_field.name, expr });
         }
 
-        let struct_type = StructType { fields: self.types.mem.list_to_handle(&field_defns) };
+        let struct_type = StructType { fields: self.types.mem.list_to_handle(field_defns) };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
-        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(&field_values) };
+        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, ast_struct.span))
     }
 
@@ -7985,14 +7984,14 @@ impl TypedProgram {
                 }
             }
         };
-        let output_struct = StructType { fields: self.types.mem.list_to_handle(&field_types) };
+        let output_struct = StructType { fields: self.types.mem.list_to_handle(field_types) };
         let output_struct_type_id = self.types.add(
             Type::Struct(output_struct),
             expected_struct_defn_info,
             output_instance_info,
         );
 
-        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(&field_values) };
+        let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), output_struct_type_id, ast_struct.span))
     }
 
@@ -8312,7 +8311,7 @@ impl TypedProgram {
         // NO CAPTURES! Optimize this lambda down into a regular function
         if lambda_info.captured_variables.is_empty() {
             let function_type = self.types.add_anon(Type::Function(FunctionType {
-                physical_params: self.types.mem.list_to_handle(&typed_params),
+                physical_params: self.types.mem.list_to_handle(typed_params),
                 return_type,
                 is_lambda: false,
                 abi_mode: AbiMode::Internal,
@@ -8326,7 +8325,7 @@ impl TypedProgram {
             self.add_function(TypedFunction {
                 name,
                 scope: lambda_scope_id,
-                params: self.mem.list_to_handle(&param_variables),
+                params: self.mem.list_to_handle(param_variables),
                 type_params: SliceHandle::empty(),
                 function_type_params: SliceHandle::empty(),
                 body_block: Some(body_expr_id),
@@ -8364,12 +8363,12 @@ impl TypedProgram {
             );
             env_exprs.push(StructLiteralField { name: v.name, expr: var_expr });
         }
-        let env_fields_handle = self.types.mem.list_to_handle(&env_field_types);
+        let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
         let environment_struct_type =
             self.types.add_anon(Type::Struct(StructType { fields: env_fields_handle }));
 
         let environment_struct = self.exprs.add(
-            TypedExpr::Struct(StructLiteral { fields: self.mem.list_to_handle(&env_exprs) }),
+            TypedExpr::Struct(StructLiteral { fields: self.mem.list_to_handle(env_exprs) }),
             environment_struct_type,
             body_span,
         );
@@ -8423,7 +8422,7 @@ impl TypedProgram {
             new_stmts.push(environment_casted_variable.defn_stmt);
             new_stmts.extend(self.mem.getn(body.statements));
 
-            body.statements = self.mem.list_to_handle(&new_stmts);
+            body.statements = self.mem.list_to_handle(new_stmts);
         } else {
             panic!()
         }
@@ -8447,7 +8446,7 @@ impl TypedProgram {
         }
 
         let function_type = self.types.add_anon(Type::Function(FunctionType {
-            physical_params: self.types.mem.list_to_handle(&typed_params),
+            physical_params: self.types.mem.list_to_handle(typed_params),
             return_type,
             is_lambda: true,
             abi_mode: AbiMode::Internal,
@@ -8456,7 +8455,7 @@ impl TypedProgram {
         let actual_body_function_id = self.add_function(TypedFunction {
             name,
             scope: lambda_scope_id,
-            params: self.mem.list_to_handle(&param_variables),
+            params: self.mem.list_to_handle(param_variables),
             type_params: SliceHandle::empty(),
             function_type_params: SliceHandle::empty(),
             body_block: Some(body_expr_id),
@@ -8658,7 +8657,7 @@ impl TypedProgram {
                     }
 
                     let match_arm = TypedMatchArm {
-                        condition: MatchingCondition { instrs: self.mem.list_to_handle(&instrs) },
+                        condition: MatchingCondition { instrs: self.mem.list_to_handle(instrs) },
                         consequent_expr,
                     };
                     typed_arms.push(match_arm);
@@ -8746,7 +8745,7 @@ impl TypedProgram {
         Ok(self.exprs.add(
             TypedExpr::Match(TypedMatchExpr {
                 initial_let_statements: self.mem.pushn(&[match_subject_variable.defn_stmt]),
-                arms: self.mem.list_to_handle(&typed_arms),
+                arms: self.mem.list_to_handle(typed_arms),
             }),
             match_result_type,
             match_expr_span,
@@ -10697,7 +10696,7 @@ impl TypedProgram {
                 span: function_defn_span,
             });
             new_variables.extend(self.mem.getn(new_function.params));
-            new_function.params = self.mem.list_to_handle(&new_variables);
+            new_function.params = self.mem.list_to_handle(new_variables);
 
             let new_function_type = self.add_lambda_env_to_function_type(new_function.type_id);
             new_function.type_id = new_function_type;
@@ -10744,7 +10743,7 @@ impl TypedProgram {
         new_params.extend(self.types.mem.getn(physical_params));
 
         let new_function_type = FunctionType {
-            physical_params: self.types.mem.list_to_handle(&new_params),
+            physical_params: self.types.mem.list_to_handle(new_params),
             return_type,
             is_lambda: true,
             abi_mode: call_conv,
@@ -12053,7 +12052,7 @@ impl TypedProgram {
         let specialized_function = TypedFunction {
             name: specialized_name_ident,
             scope: spec_fn_scope,
-            params: self.mem.list_to_handle(&param_variables),
+            params: self.mem.list_to_handle(param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
@@ -13611,7 +13610,7 @@ impl TypedProgram {
             },
         };
 
-        let param_types_handle = self_.types.mem.list_to_handle(&param_types);
+        let param_types_handle = self_.types.mem.list_to_handle(param_types);
         let call_conv = match parsed_function_linkage {
             Linkage::Standard => AbiMode::Internal,
             Linkage::External { .. } => AbiMode::Native,
@@ -13631,7 +13630,7 @@ impl TypedProgram {
         for v in params.iter() {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
-        let param_variables_handle = self_.mem.list_to_handle(&params);
+        let param_variables_handle = self_.mem.list_to_handle(params);
         let function_id = self_.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -13898,7 +13897,7 @@ impl TypedProgram {
             name: parsed_ability.name,
             base_ability_id: ability_id,
             self_type_id,
-            parameters: self.mem.list_to_handle(&ability_params),
+            parameters: self.mem.list_to_handle(ability_params),
             functions: eco_vec![],
             scope_id: ability_scope_id,
             ast_id: parsed_ability.id,
@@ -14268,7 +14267,7 @@ impl TypedProgram {
             ability_id,
             base_ability_id,
             impl_arguments: impl_arguments_handle,
-            functions: self.mem.list_to_handle(&typed_functions),
+            functions: self.mem.list_to_handle(typed_functions),
             scope_id: impl_scope_id,
             span,
             compile_errors: vec![],
@@ -15620,7 +15619,7 @@ impl TypedProgram {
                         ),
                     );
                 }
-                let values_slice = self.static_values.mem.list_to_handle(&field_values);
+                let values_slice = self.static_values.mem.list_to_handle(field_values);
                 let view =
                     self.static_values.add_view(struct_schema_fields_view_type_id, values_slice);
                 let payload = self
@@ -15747,7 +15746,7 @@ impl TypedProgram {
                         ],
                     ))
                 }
-                let variant_values_slice = self.static_values.mem.list_to_handle(&variant_values);
+                let variant_values_slice = self.static_values.mem.list_to_handle(variant_values);
                 let variants_view_value_id =
                     self.static_values.add_view(variants_view_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
@@ -15825,7 +15824,7 @@ impl TypedProgram {
                 }
 
                 let params_value_ids_slice =
-                    self.static_values.mem.list_to_handle(&params_value_ids);
+                    self.static_values.mem.list_to_handle(params_value_ids);
                 let params_view_value_id = self
                     .static_values
                     .add_view(function_params_view_type_id, params_value_ids_slice);

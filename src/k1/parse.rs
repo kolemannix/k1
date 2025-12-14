@@ -1525,6 +1525,7 @@ pub struct ParsedProgram {
     pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
     // p_ prefix means 'pool'; used to delineate secondary pools from primary language concepts
+    // TODO: Replace these with a kmem
     pub p_type_args: VPool<NamedTypeArg, NamedTypeArgId>,
     pub p_call_args: VPool<ParsedCallArg, CallArgId>,
     pub p_ability_exprs: VPool<ParsedAbilityExpr, ParsedAbilityExprId>,

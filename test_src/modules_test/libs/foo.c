@@ -51,6 +51,15 @@ Large large(Large a, Large b) {
   return r;
 }
 
+typedef struct { float f1; float f2; } HFASmall;
+void hfa_small(HFASmall hfa1) {
+  return;
+}
+typedef struct { double f1; double f2; double f3; double f4; } HFABig;
+void hfa_big(HFABig hfa1) {
+  return;
+}
+
 
 
 

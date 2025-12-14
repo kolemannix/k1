@@ -1,19 +1,17 @@
 /target
 .idea
 .k1-out
-zig-cache
-zig-out
 .bsp
 .metals
 .scala-build
 k1_lsp.log*
-.aider*
 .DS_Store
 *module_dump.txt
 
-k1lib/*.o
-k1lib/*.a
-k1lib/*.dylib
+*.o
+*.a
+*.dylib
+*.so
 
 llvm/build-llvm
 llvm/install-llvm

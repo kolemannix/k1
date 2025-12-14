@@ -36,9 +36,6 @@ ns foo {
 
 }
 
-// nocommit
-//let staticSmall: 64 = foo/very_small({ x: 32 },{ x: 32 }).x;
-
 fn testAll(): unit {
   assertEquals(
     foo/very_small({ x: 10 }, { x: 20 }),

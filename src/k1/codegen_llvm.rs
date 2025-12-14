@@ -1097,7 +1097,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 Ok(LlvmStructType {
                     type_id,
                     struct_type: llvm_struct_type,
-                    fields: self.mem.list_to_handle(&field_types),
+                    fields: self.mem.list_to_handle(field_types),
                     di_type,
                     layout,
                 }
@@ -1365,7 +1365,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     tag_type: tag_int_type,
                     envelope_type_just_bytes: physical_type_just_bytes,
                     envelope_type_with_aligner: physical_type_correct_align,
-                    variants: self.mem.list_to_handle(&variant_structs),
+                    variants: self.mem.list_to_handle(variant_structs),
                     di_type: debug_union_type,
                     layout: enum_layout,
                 }
@@ -1557,8 +1557,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(K1LlvmFunctionType {
             type_id: function_type_id,
             llvm_function_type: fn_type,
-            param_k1_types: self.mem.list_to_handle(&param_types),
-            param_abi_mappings: self.mem.list_to_handle(&param_abi_mappings),
+            param_k1_types: self.mem.list_to_handle(param_types),
+            param_abi_mappings: self.mem.list_to_handle(param_abi_mappings),
             return_k1_type,
             return_abi_mapping: return_type_abi_mapping,
             is_sret,

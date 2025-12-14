@@ -1811,7 +1811,7 @@ impl TypePool {
                     if not_physical {
                         None
                     } else {
-                        let fields_handle = self.mem.list_to_handle(&fields);
+                        let fields_handle = self.mem.list_to_handle(fields);
                         let agg_id = self.phys_types.add(PhysicalTypeRecord {
                             agg_type: AggType::Struct { fields: fields_handle },
                             origin_type_id: type_id,
