@@ -1,5 +1,4 @@
 fn low(): unit {
-  println("testing 'low'");
   test_string_literal/test();
   arith/test();
   bool_test/test();
@@ -35,7 +34,6 @@ fn low(): unit {
 }
 
 fn moderate(): unit {
-  println("testing 'moderate'");
   defer_test/test();
   never_everywhere/test();
   ns_extend/test();
@@ -70,7 +68,6 @@ fn moderate(): unit {
 }
 
 fn coreLib(): unit {
-  println("testing 'core'");
   // core lib coverage
   for_yield_test/test();
   allocator_test/test();
@@ -104,7 +101,7 @@ fn main(): i32 {
   coreLib();
   #static coreLib();
 
-  println("All tests passed!");
+  println("[suite1] All tests passed!");
 
   0
 }

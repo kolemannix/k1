@@ -560,13 +560,13 @@ impl ArgsAndParams {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedAbility {
     pub name: Ident,
     pub base_ability_id: AbilityId,
     pub self_type_id: TypeId,
+    pub parameters: MSlice<TypedAbilityParam, TypedProgram>,
     // nocommit(3): swap these ecovecs out for arena memory
-    pub parameters: EcoVec<TypedAbilityParam>,
     pub functions: EcoVec<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
     pub ast_id: ParsedAbilityId,
@@ -5660,8 +5660,8 @@ impl TypedProgram {
         let base_ability_id = ability.base_ability_id;
         let ability_self_type = ability.self_type_id;
         let all_params = match ability.parent_ability_id() {
-            None => ability.parameters.clone(),
-            Some(parent) => self.abilities.get(parent).parameters.clone(),
+            None => ability.parameters,
+            Some(parent) => self.abilities.get(parent).parameters,
         };
         let ability_args = self.named_types.get_slice(ability.kind.arguments());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
@@ -5670,13 +5670,15 @@ impl TypedProgram {
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.Self_, type_variable_id);
         // Add ability params
         for (parent_ability_param, ability_arg) in
-            all_params.iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
+            self.mem.getn(all_params).iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
         {
             subst_pairs.push(spair! {parent_ability_param.type_variable_id => ability_arg.type_id});
             let _ = self.scopes.add_type(scope_id, ability_arg.name, ability_arg.type_id);
         }
         // Add impl params
-        for (parent_impl_param, impl_arg) in all_params
+        for (parent_impl_param, impl_arg) in self
+            .mem
+            .getn(all_params)
             .iter()
             .filter(|p| p.is_impl_param)
             .zip(self.named_types.get_slice(impl_signature.impl_arguments).iter())
@@ -10768,7 +10770,7 @@ impl TypedProgram {
         let base_ability_id = ability_function_ref.ability_id;
         let ability_fn_type = self.types.get(function_type_id).as_function().unwrap().clone();
         let ability_fn_return_type = ability_fn_type.return_type;
-        let ability_params = self.abilities.get(base_ability_id).parameters.clone();
+        let ability_params = self.abilities.get(base_ability_id).parameters;
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
         let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
@@ -10781,36 +10783,31 @@ impl TypedProgram {
         }
 
         // First, we need to solve for 'Self' using the arguments and expected return type
-        //
         // TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
+        let mut all_type_params = self.tmp.new_list(ability_params.len() + 1);
+        all_type_params
+            .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
+        all_type_params.extend_iter(
+            self.mem
+                .getn(ability_params)
+                .iter()
+                .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
+        );
+        //let all_type_params_handle = self.named_types.add_slice_copy(&all_type_params);
 
-        let all_type_params: SmallVec<[NameAndType; 8]> = {
-            let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
-            type_params
-                .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
-            type_params.extend(
-                ability_params
-                    .iter()
-                    .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
-            );
-            type_params
-        };
-        let all_type_params_handle = self.named_types.add_slice_copy(&all_type_params);
-        let must_solve_type_params: SmallVec<[NameAndType; 8]> = {
-            let mut type_params = SmallVec::with_capacity(ability_params.len() + 1);
-            type_params
-                .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
-            type_params.extend(
-                ability_params
-                    .iter()
-                    .filter(|p| !p.is_impl_param)
-                    .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
-            );
-            type_params
-        };
-        let must_solve_type_params_handle =
-            self.named_types.add_slice_copy(&must_solve_type_params);
+        // must_solve includes Self, and just the ability-side params (it excludes the ability impl params)
+        // let mut must_solve_type_params_new = self.tmp.new_list(ability_params.len() + 1);
+        // must_solve_type_params_new
+        //     .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
+        // must_solve_type_params_new.extend_iter(
+        //     self.mem.getn(ability_params)
+        //         .iter()
+        //         .filter(|p| !p.is_impl_param)
+        //         .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
+        // );
+        // let must_solve_type_params_handle =
+        //     self.named_types.add_slice_copy(&must_solve_type_params_new);
 
         let self_only_type_params_handle = self.named_types.add_slice_copy(&[NameAndType {
             name: self.ast.idents.b.Self_,
@@ -10853,23 +10850,24 @@ impl TypedProgram {
 
         debug!(
             "all ability params: {}",
-            self.pretty_print_named_type_slice(all_type_params_handle, ", ")
+            self.pretty_print_named_types(&all_type_params, ", ")
         );
         debug!(
             "to solve: {}",
-            self.pretty_print_named_type_slice(must_solve_type_params_handle, ", ")
+            self.pretty_print_named_type_slice(self_only_type_params_handle, ", ")
         );
 
-        let (self_only, other_solved) = self.infer_types(
+        let (self_solution, other_solved) = self.infer_types(
             &all_type_params,
             self_only_type_params_handle,
             &args_and_params,
             fn_call.span,
             ctx.scope_id,
         )?;
+
         let mut parameter_constraints: MList<Option<TypeId>, MemTmp> =
-            self.tmp.new_list(ability_params.len() as u32);
-        for ab_param in &ability_params {
+            self.tmp.new_list(ability_params.len());
+        for ab_param in self.mem.getn(ability_params) {
             if ab_param.is_impl_param {
                 continue;
             }
@@ -10877,7 +10875,7 @@ impl TypedProgram {
                 self.named_types.get_slice(other_solved).iter().find(|nt| nt.name == ab_param.name);
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
-        let solved_self = self.named_types.get_nth(self_only, 0).type_id;
+        let solved_self = self.named_types.get_nth(self_solution, 0).type_id;
 
         // Follow 'statics' since we're never going to be implementing abilities for the
         // specific static values but instead for the inner types
@@ -11809,7 +11807,7 @@ impl TypedProgram {
         let specialized_ability = self.abilities.get(signature.specialized_ability_id);
         let base_ability_id = specialized_ability.base_ability_id;
         let base_ability = self.abilities.get(base_ability_id);
-        let all_base_params = base_ability.parameters.clone();
+        let all_base_params = base_ability.parameters;
         if all_base_params.is_empty() {
             // Special case if the ability has no params at all, e.g., Comparable
             return signature;
@@ -11827,7 +11825,7 @@ impl TypedProgram {
         let mut ability_args_new: SV8<NameAndType> = smallvec![];
         let mut impl_args_new: SV4<NameAndType> = smallvec![];
         for (index, ability_param) in
-            all_base_params.iter().filter(|p| !p.is_impl_param).enumerate()
+            self.mem.getn(all_base_params).iter().filter(|p| !p.is_impl_param).enumerate()
         {
             let previous_value = self.named_types.get_nth(old_impl_ability_arguments, index);
             let substituted = self.substitute_in_type(previous_value.type_id, set);
@@ -11838,7 +11836,7 @@ impl TypedProgram {
                 self.type_id_to_string_ext(substituted, true)
             );
         }
-        for (index, impl_param) in all_base_params.iter().filter(|p| p.is_impl_param).enumerate() {
+        for (index, impl_param) in self.mem.getn(all_base_params).iter().filter(|p| p.is_impl_param).enumerate() {
             let previous_value = self.named_types.get_nth(old_impl_arguments, index);
             let substituted = self.substitute_in_type(previous_value.type_id, set);
             impl_args_new.push(NameAndType { name: impl_param.name, type_id: substituted });
@@ -13026,21 +13024,22 @@ impl TypedProgram {
         skip_impl_check: bool,
     ) -> TyperResult<(NamedTypeSlice, NamedTypeSlice)> {
         let ability = self.abilities.get(ability_id);
-        let ability_parameters = ability.parameters.clone();
+        let ability_parameters = ability.parameters;
 
         // Catch unrecognized arguments first
         for arg in self.named_types.get_slice(arguments) {
-            let has_matching_param = ability_parameters.iter().any(|param| param.name == arg.name);
+            let has_matching_param = self.mem.getn(ability_parameters).iter().any(|param| param.name == arg.name);
             if !has_matching_param {
                 return failf!(span, "No parameter named {}", self.ident_str(arg.name));
             }
         }
 
+        // TODO: Most of these temporary SV8s can be replaced with tmp arena usage
         let mut ability_arguments: SV8<NameAndType> = smallvec![];
         let mut impl_arguments: SV8<NameAndType> = SmallVec::with_capacity(arguments.len());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         for param in
-            ability_parameters.iter().filter(|p| !skip_impl_check || p.is_ability_side_param())
+            self.mem.getn(ability_parameters).iter().filter(|p| !skip_impl_check || p.is_ability_side_param())
         {
             let Some(matching_arg) = self
                 .named_types
@@ -13063,7 +13062,7 @@ impl TypedProgram {
             subst_pairs.push(spair! { param.type_variable_id => matching_arg.type_id });
         }
 
-        for (param, pair) in ability_parameters
+        for (param, pair) in self.mem.getn(ability_parameters)
             .iter()
             .filter(|p| !skip_impl_check || p.is_ability_side_param())
             .zip(subst_pairs.iter())
@@ -13106,10 +13105,10 @@ impl TypedProgram {
         let generic_ability_id = ability_id;
         let ability_ast_id = ability.ast_id;
         let ability_name = ability.name;
-        let ability_parameters = ability.parameters.clone();
+        let ability_parameters = ability.parameters;
         let ability_namespace_id = ability.namespace_id;
         let specializations = self.abilities.get(generic_ability_id).kind.specializations();
-        if arguments.len() > ability_parameters.len() {
+        if arguments.len() > ability_parameters.len() as usize {
             panic!("Passed too many arguments to specialize_ability; probably passed impl args");
         }
         if let Some(cached_specialization) = specializations
@@ -13131,7 +13130,7 @@ impl TypedProgram {
         );
 
         for (arg_type, param) in
-            self.named_types.copy_slice_sv::<4>(arguments).iter().zip(ability_parameters.iter())
+            self.named_types.copy_slice_sv::<4>(arguments).iter().zip(self.mem.getn(ability_parameters).iter())
         {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, arg_type.type_id);
         }
@@ -13139,8 +13138,7 @@ impl TypedProgram {
         // The implementor is responsible for providing the impl_params, so those are the
         // only parameters that the specialized ability should now take
         // ... It also takes 'Self', of course, but we don't treat that as a 'parameter'
-        // since we take that for granted in the definition of 'ability'
-        let mut impl_params = ability_parameters;
+        let mut impl_params = self.mem.getn_sv8(ability_parameters);
         impl_params.retain(|p| p.is_impl_param);
         for impl_param in &impl_params {
             let _ = self.scopes.add_type(
@@ -13171,11 +13169,12 @@ impl TypedProgram {
             .get_scope_mut(specialized_ability_scope)
             .add_type(self_ident, new_self_type_id);
 
+        let impl_params_handle = self.mem.pushn(&impl_params);
         let specialized_ability_id = self.abilities.add(TypedAbility {
             name: ability_name,
             base_ability_id: generic_ability_id,
             self_type_id: new_self_type_id,
-            parameters: impl_params,
+            parameters: impl_params_handle,
             functions: eco_vec![],
             scope_id: specialized_ability_scope,
             ast_id: ability_ast_id,
@@ -13803,8 +13802,8 @@ impl TypedProgram {
         );
 
         let self_ident_id = self.ast.idents.b.Self_;
-        let mut ability_params: EcoVec<TypedAbilityParam> =
-            EcoVec::with_capacity(parsed_ability.params.len() + 1);
+        let mut ability_params: MList<TypedAbilityParam, _> =
+            self.mem.new_list(parsed_ability.params.len() as u32 + 1);
         let self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident_id,
@@ -13899,7 +13898,7 @@ impl TypedProgram {
             name: parsed_ability.name,
             base_ability_id: ability_id,
             self_type_id,
-            parameters: ability_params,
+            parameters: self.mem.list_to_handle(&ability_params),
             functions: eco_vec![],
             scope_id: ability_scope_id,
             ast_id: parsed_ability.id,
@@ -14113,8 +14112,8 @@ impl TypedProgram {
         }
 
         let mut impl_arguments: SV8<NameAndType> =
-            SmallVec::with_capacity(ability.parameters.len());
-        for impl_param in ability.parameters.iter().filter(|p| p.is_impl_param) {
+            SmallVec::with_capacity(ability.parameters.len() as usize);
+        for impl_param in self.mem.getn(ability.parameters).iter().filter(|p| p.is_impl_param) {
             let Some(&matching_arg) = self
                 .ast
                 .p_type_args

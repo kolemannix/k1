@@ -1,11 +1,11 @@
 ns static_literals;
 fn test(): unit {
   assertEquals(testCompile(1: 5), .Some("Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type: 5i64 vs 1i64"));
-  let c: 'c' = 'c';
-  let pi: 3.14 = 3.14;
-  let hello: "hello" = "hello";
+  let _c: 'c' = 'c';
+  let _pi: 3.14 = 3.14;
+  let _hello: "hello" = "hello";
 
-  let hello: "hello!" = #static {
+  let _hello2: "hello!" = #static {
     let* bytes = [104u8];
     bytes.push(101);
     bytes.push(108);

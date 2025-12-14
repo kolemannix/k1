@@ -271,6 +271,7 @@ impl<Tag> Mem<Tag> {
         self.offset_to_ptr::<T>(handle.0)
     }
 
+    // nocommit: Should probably take ownership of the list
     pub fn list_to_handle<T>(&self, list: &MList<T, Tag>) -> MSlice<T, Tag> {
         let offset = self.ptr_to_offset(list.buf.cast_const());
         MSlice::make(offset, list.len() as u32)
@@ -692,6 +693,15 @@ impl<T, Tag> MList<T, Tag> {
         self.len += vals.len();
     }
 
+    pub fn extend_iter<I>(&mut self, vals: I)
+    where
+        T: Copy,
+        I: Iterator<Item = T>
+    {
+        for item in vals {
+            self.push(item);
+        }
+    }
     pub fn as_slice(&self) -> &[T] {
         unsafe { &(&(*self.buf))[..self.len] }
     }

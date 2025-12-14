@@ -61,32 +61,25 @@ Simple but missing
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
 
-# From dogfood round
-- [x] Introduce an "uninitialized" specifier, similar to `zeroed()`
-- [x] Add 'zeroed()' static value special case for efficiency?
-- [x] provide a way to specify if globals are comptime available or just runtime globals?
-      I accidentally wrapped a global defn in #static...
-
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] We should require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
-## Project: Actual modules, library vs binary compile, allow linker options
-- [ ] Separate modules
-  - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
-  - [x] Add entire modules from TypedProgram
-  - [x] Module manifests somewhere
-  - [x] Library vs Binary
-  - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-  - [x] Dependencies: local module
-  - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
-  - [ ] serialize typedprogram at each module completion (for incremental compilation)
-  - [ ] Support ".c" sources; compiles your c and adds it to the main compilation unit
-- [x] clang passthrough options, when do we 'link', in IR or as object files, ...
-  - [x] we 'link' with k1 in the typer's modules system
-  - [x] we link with other deps w/ the linker
+## Project: Make llvm codegen run off our bytecode
+It currently runs directly off the typed tree
+
+## VM Profiler: Instrument the vm itself
+
+## K1 Profiler: core code to allow block profiling of k1 programs
+
+## Project: Redesign the physical representation of enums
+- [ ] Implement `union` as a thing
+- [ ] Represent enums as `{ tag, union }`,
+      not `union { tag, payload }, { tag, payload }`, ...
+- [ ] Classify like structs for ABI handling; test with mirrored C types
+- [ ] Think about optimizing no-payload enums into non-aggregates
 
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
@@ -105,19 +98,22 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Static Improvements
 - [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
-- [-] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
-- [ ] functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
+- [x] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
+- [ ] 'Type predicate': functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] 'Type predicate' functions as type bounds
 
-## Project: aarch64 struct passing ABI
-## Project: x86-64 struct passing ABI
+## Project: struct passing ABI for aarch64 and x86_64
+- [x] Add abi mapping step to function type generation
+- [x] Classify eightbytes for x86
+- [x] Add marshal/re-canonicalize steps in caller/callee code
+- [x] Commit a test in test suite
 
 ## Introduce Warnings
 - [x] Unused var
 - [ ] Unused type bound
-- [ ] Disallow naked variable patterns in 'is' OR Disallow capital variables, require capital enum variants...
+- [ ] Footgun, warn on naked variable patterns in 'is'
     - `if self.slots.get(probe_index) is None {`
 
 ## Project: Zero-Sized Types
@@ -129,9 +125,31 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: More LSP features
 - [x] Hover first pass
-- [ ] Hover much better
+- [x] Hover much better
+- [ ] Hover no more markdown
 - [ ] Go-to
 - [ ] Completion
+
+## Project: Actual modules, library vs binary compile, allow linker options
+- [ ] Separate modules
+  - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
+  - [x] Add entire modules from TypedProgram
+  - [x] Module manifests somewhere
+  - [x] Library vs Binary
+  - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
+  - [x] Dependencies: local module
+  - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
+  - [ ] serialize typedprogram at each module completion (for incremental compilation)
+  - [ ] Support ".c" sources; compiles your c and adds it to the main compilation unit
+- [x] clang passthrough options, when do we 'link', in IR or as object files, ...
+  - [x] we 'link' with k1 in the typer's modules system
+  - [x] we link with other deps w/ the linker
+
+# Profiler dogfood round
+- [x] Introduce an "uninitialized" specifier, similar to `zeroed()`
+- [x] Add 'zeroed()' static value special case for efficiency?
+- [x] provide a way to specify if globals are comptime available or just runtime globals?
+      I accidentally wrapped a global defn in #static...
 
 ## Project: VM for `static` execution
 - [x] vm: static execution

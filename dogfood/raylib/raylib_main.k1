@@ -32,6 +32,8 @@ ns raylib {
   extern("raylib","BeginDrawing") fn BeginDrawing(): unit
   extern("raylib","EndDrawing") fn EndDrawing(): unit
   extern("raylib","ClearBackground") fn ClearBackground(color: Color): unit
+
+  // define void @DrawText(ptr noundef %0, i32 noundef %1, i32 noundef %2, i64 %3) #0 {
   extern("raylib","DrawText") fn DrawText(text: ptr, posX: i32, posY: i32, color: Color): unit
 
   extern("raylib","SetTargetFPS") fn SetTargetFPS(fps: i32): unit
@@ -57,10 +59,11 @@ let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
 
   let i = 0;
   while not raylib/WindowShouldClose() {
-    raylib/BeginDrawing();
+    let fps = raylib/GetFPS();
     let color = if i < 100 PURPLE else PINK;
     ClearBackground(color);
-    DrawText("Congrats!".toCString().ptr, 200, 200, GRAY);
+    raylib/BeginDrawing();
+    DrawText("Congrats! (fps: {fps})".toCString().ptr, 200, 200, GRAY);
     raylib/EndDrawing();
     i := i + 1;
     if i == 2000 { i := 0 };
@@ -71,11 +74,12 @@ let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
 }
 
 fn main(): i32 {
-  #static { 
-    let ctResult = run("comptime!");
-    println("Hey, the comptime result (printed at comptime btw) was {ctResult}");
-    ctResult
-  };
+  //#static { 
+  //  let ctResult = run("comptime!");
+  //  println("Hey, the comptime result (printed at comptime btw) was {ctResult}");
+  //  ctResult
+  //};
+
   let rtResult = run("runtime!");
   println("Hey, the runtime result was {rtResult}");
   0

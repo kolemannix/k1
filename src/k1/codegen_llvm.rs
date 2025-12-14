@@ -127,6 +127,8 @@ pub struct K1LlvmFunctionType<'ctx> {
     llvm_function_type: LlvmFunctionType<'ctx>,
     // Does not include sret, or abi mappings
     param_k1_types: MSlice<K1LlvmType<'ctx>, CodegenPerm>,
+
+    // Does not include sret
     param_abi_mappings: MSlice<AbiParamMapping, CodegenPerm>,
     // Should probably wrap this in a handle due to size
     return_k1_type: K1LlvmType<'ctx>,
@@ -1496,7 +1498,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_k1_type = self.codegen_type(function_type.return_type)?;
         let return_type_abi_mapping =
             self.get_abi_param_type(function_type.abi_mode, &return_k1_type, true);
-        eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
+        // eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
         let return_mapped_type = if return_k1_type.is_void() {
             None
         } else {
@@ -1530,16 +1532,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         for p in self.k1.types.mem.getn(function_type.physical_params).iter() {
             let param_type = self.codegen_type(p.type_id)?;
             let abi_mapping = self.get_abi_param_type(abi_mode, &param_type, false);
-            eprintln!("abi mapping for {} is {:?}", self.rich_repr_type(&param_type), abi_mapping);
+            // eprintln!("abi mapping for {} is {:?}", self.rich_repr_type(&param_type), abi_mapping);
             param_abi_mappings.push(abi_mapping);
             param_types.push(param_type);
             let mapped_type = self.mapped_abi_type(&param_type, abi_mapping);
-            eprintln!(
-                "abi mapping for {} is {:?}. Mapped type: {}",
-                self.rich_repr_type(&param_type),
-                abi_mapping,
-                mapped_type
-            );
+            // eprintln!(
+            //     "abi mapping for {} is {:?}. Mapped type: {}",
+            //     self.rich_repr_type(&param_type),
+            //     abi_mapping,
+            //     mapped_type
+            // );
             function_final_params.push(mapped_type.into());
         }
 
@@ -1609,9 +1611,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::BigStructByPtrToCopy { .. } => {
                 self.builtin_types.ptr.as_basic_type_enum()
             }
-            AbiParamMapping::StructByPtrNoCopy => {
-                self.builtin_types.ptr.as_basic_type_enum()
-            }
+            AbiParamMapping::StructByPtrNoCopy => self.builtin_types.ptr.as_basic_type_enum(),
         }
     }
 
@@ -1623,7 +1623,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         k1_ty: &K1LlvmType<'ctx>,
         abi_value: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        eprintln!(
+        debug!(
             "canonicalizing {} to {} via {:?}",
             abi_value,
             self.rich_repr_type(k1_ty),
@@ -1683,7 +1683,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         k1_value: BasicValueEnum<'ctx>,
         is_return: bool,
     ) -> BasicValueEnum<'ctx> {
-        eprintln!(
+        debug!(
             "marshalling k1 {}: {} with {:?}",
             k1_value,
             self.k1.type_id_to_string(k1_ty.type_id()),
@@ -2080,7 +2080,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // Call-site sret
                 let sret_attribute =
                     self.make_sret_attribute(self.rich_repr_type(k1_llvm_type).as_any_type_enum());
-                eprintln!("I generated a call to static maker function: {}", callsite_value);
+                debug!("I generated a call to static maker function: {}", callsite_value);
                 callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
                 ptr.as_basic_value_enum()
             }
@@ -2758,7 +2758,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                             return_value,
                             true,
                         );
-                        eprintln!(
+                        debug!(
                             "marshalled return: {} w/ {:?} -> {}",
                             return_value, return_abi_mapping, marshalled_value
                         );
@@ -3144,7 +3144,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let param_k1_ty = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, index);
             let abi_mapping = *self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, index);
             let arg_value = self.codegen_expr_basic_value(*arg_expr)?;
-            eprintln!("expression with bad type is: {}", self.k1.expr_to_string(*arg_expr));
             let value_marshalled =
                 self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
             trace!("codegen function call arg type: {}", value_marshalled);
@@ -3995,6 +3994,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
 
         let typed_function = self.k1.get_function(function_id);
+        let typed_function_params = typed_function.params;
         let function_type_id = typed_function.type_id;
 
         let llvm_linkage = match typed_function.linkage {
@@ -4040,7 +4040,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             llvm_linkage,
         );
         let sret_pointer = if is_sret {
-            eprintln!("sret is {}", function_value.get_first_param().unwrap());
             Some(function_value.get_first_param().unwrap().into_pointer_value())
         } else {
             None
@@ -4050,8 +4049,32 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
         }
 
-        // nocommit: Set param names on the function here
-        // nocommit: Set byval attrs
+        // We have to make another pass, now that we've actually made an llvm function value,
+        // to set some parameter attributes: names and byval, currently
+        for (i, param) in function_value.get_param_iter().enumerate() {
+            if is_sret && i == 0 {
+                param.set_name("sret")
+            } else {
+                let offset = if is_sret { 1 } else { 0 };
+                let typed_param = self.k1.mem.get_nth(typed_function_params, i - offset);
+                let v = self.k1.variables.get(typed_param.variable_id);
+                param.set_name(self.k1.ident_str(v.name));
+                let abi_mapping =
+                    self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
+                if let AbiParamMapping::BigStructByPtrToCopy { byval_attr } = abi_mapping {
+                    // FIXME: We likely need to be setting param alignments explicitly sometimes
+                    //function_value.set_param_alignment(param_index, alignment);
+                    if *byval_attr {
+                        let k1_type =
+                            self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                        let byval_attribute = self
+                            .make_byval_attribute(self.rich_repr_type(k1_type).as_any_type_enum());
+                        function_value
+                            .add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
+                    }
+                }
+            }
+        }
 
         let compile_body = !typed_function.linkage.is_external();
         if compile_body {
@@ -4100,31 +4123,47 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   <4> tag;
                 //   [i8 x 12] payload;
                 // }
-                // nocommit enum abi mapping eventually; for
+                // enum abi mapping eventually; for
                 // now we just say they are always passed by pointer
-                AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
+                match callconv {
+                    CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
+                    CallConv::AMD64 | CallConv::ARM64 => {
+                        AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
+                    }
+                }
             }
             K1LlvmType::StructType(_) | K1LlvmType::ArrayType(_) => {
-                // nocommit: Check for HFA on ARM64
                 let size = param_type.rich_repr_layout().size;
-                if size < 8 {
-                    match callconv {
-                        CallConv::InternalK1 => AbiParamMapping::ScalarInRegister,
-                        CallConv::AMD64 => {
-                            // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
-                            let width_bits = size * 8;
-                            AbiParamMapping::StructInInteger { width: width_bits }
+                match callconv {
+                    CallConv::InternalK1 => {
+                        if size <= 8 {
+                            AbiParamMapping::ScalarInRegister
+                        } else if size <= 16 {
+                            AbiParamMapping::StructByPtrNoCopy
+                        } else {
+                            AbiParamMapping::StructByPtrNoCopy
                         }
-                        CallConv::ARM64 => {
+                    }
+                    CallConv::ARM64 => {
+                        // nocommit: Check for HFA on ARM64
+                        if size <= 8 {
                             // Returns use the exact width; otherwise just i64
                             let width_bits = if is_return { size * 8 } else { 64 };
                             AbiParamMapping::StructInInteger { width: width_bits }
+                        } else if size <= 16 {
+                            // If the size of the structure is between 9 and 16 bytes, pass the structure as
+                            // [an array of] two integers of 8 bytes each
+                            AbiParamMapping::StructByIntPairArray
+                        } else {
+                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
                         }
                     }
-                } else if size <= 16 {
-                    match callconv {
-                        CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
-                        CallConv::AMD64 => {
+                    CallConv::AMD64 => {
+                        if size <= 8 {
+                            // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
+                            let width_bits = size * 8;
+                            AbiParamMapping::StructInInteger { width: width_bits }
+                        } else if size <= 16 {
                             // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
                             // Pass by classified eightbytes
                             let (eb1, eb2, eb2_bits) =
@@ -4134,27 +4173,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                                 class2: eb2,
                                 active_bits2: eb2_bits,
                             }
+                        } else {
+                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
                         }
-                        CallConv::ARM64 => {
-                            // If the size of the structure is between 9 and 16 bytes, pass the structure as
-                            // [an array of] two integers of 8 bytes each
-                            AbiParamMapping::StructByIntPairArray
-                        }
-                    }
-                } else {
-                    let byval_attr = if is_return {
-                        false
-                    } else {
-                        match callconv {
-                            CallConv::InternalK1 => true,
-                            CallConv::AMD64 => true,
-                            CallConv::ARM64 => false,
-                        }
-                    };
-                    match callconv {
-                        CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
-                        CallConv::AMD64 => AbiParamMapping::BigStructByPtrToCopy { byval_attr },
-                        CallConv::ARM64 => AbiParamMapping::BigStructByPtrToCopy { byval_attr },
                     }
                 }
             }
@@ -4258,7 +4279,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
 
     fn codegen_function_body(&mut self, function_id: FunctionId) -> CodegenResult<()> {
-        eprintln!("codegen function body\n{}", self.k1.function_id_to_string(function_id, true));
+        debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, false));
         let typed_function = self.k1.get_function(function_id);
 
         let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
@@ -4309,7 +4330,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.set_debug_location_from_span(typed_param_record.span);
 
             let name = param.get_name().to_str().unwrap();
-            eprintln!("canonicalizing fn param {i} {name}");
+            debug!("canonicalizing fn param {i} {name}");
             let mapped_value =
                 self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
 
@@ -4651,5 +4672,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     }
     fn make_align_attribute(&self, align: u64) -> Attribute {
         self.ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), align)
+    }
+    fn make_byval_attribute(&self, typ: AnyTypeEnum<'ctx>) -> Attribute {
+        self.ctx.create_type_attribute(Attribute::get_named_enum_kind_id("byval"), typ)
     }
 }
