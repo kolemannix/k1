@@ -17,7 +17,7 @@ use crate::bc::{
     self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
 };
 use crate::typer::types::{
-    self, ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
+    ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
     ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
@@ -172,7 +172,7 @@ pub struct VmFfiHandle {
     #[allow(unused)]
     library_handle: *mut c_void,
     function_pointer: *mut c_void,
-    cif: libffi::raw::ffi_cif
+    cif: libffi::raw::ffi_cif,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,14 +522,14 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_ret_info = match unit.expr_ret_kind {
+    let top_ret_info = match unit.return_type {
         None => None,
         Some(ret_pt) => {
-            let pt_layout = k1.types.get_pt_layout(&ret_pt);
+            let pt_layout = k1.types.get_pt_layout(ret_pt);
             let ret_addr = vm.stack.push_layout_uninit(pt_layout);
             debug!(
                 "Pushing ret place for type {} at addr: {:p}",
-                types::pt_to_string(&k1.types, &ret_pt),
+                k1.types.pt_to_string(ret_pt),
                 ret_addr
             );
             Some(RetInfo { place: RetPlace::Addr { addr: ret_addr }, t: ret_pt, ip: 0, block: 0 })
@@ -690,7 +690,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let base_ptr = base_value.as_ptr();
                 let index_value = resolve_value!(element_index);
                 let index = index_value.bits();
-                let elem_layout = k1.types.get_pt_layout(&element_t);
+                let elem_layout = k1.types.get_pt_layout(element_t);
 
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.offset_at_index(index as usize)) };
@@ -1605,7 +1605,7 @@ fn resolve_global(
     debug!(
         "shared global is: {}. the `t` of the instr is: {}",
         k1.static_value_to_string(initial_value_id),
-        types::pt_to_string(&k1.types, &t)
+        k1.types.pt_to_string(t)
     );
     let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
     let layout = k1.types.get_pt_layout(&t);
@@ -2382,7 +2382,7 @@ fn render_debug_value(
             write!(w, "agg ")?;
             render_debug_address(w, vm, value)?;
             w.write_str(" ")?;
-            types::display_pt(w, &k1.types, &pt)?;
+            k1.types.display_pt(w, pt)?;
             let layout = k1.types.get_pt_layout(&pt);
             if value.as_usize() == 0 {
                 write!(w, "<null>")?;

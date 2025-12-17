@@ -104,7 +104,8 @@ pub struct CompiledBlock {
 pub struct CompiledUnit {
     pub unit_id: CompilableUnitId,
     /// If a compiled expression, the returned type.
-    pub expr_ret_kind: Option<PhysicalType>,
+    /// None means void or divergent
+    pub return_type: Option<PhysicalType>,
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
@@ -764,14 +765,14 @@ fn finalize_unit(
     b: &mut Builder,
     unit_id: CompilableUnitId,
     fn_params: MSlice<PhysicalType, ProgramBytecode>,
-    expr_ret_kind: Option<PhysicalType>,
+    return_type: Option<PhysicalType>,
     is_debug: bool,
 ) -> CompiledUnit {
     let compiled_blocks = b.bake_blocks();
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
     let unit = CompiledUnit {
         unit_id,
-        expr_ret_kind,
+        return_type,
         inst_offset: b.inst_offset,
         inst_count,
         blocks: compiled_blocks,
@@ -860,7 +861,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_alloca(&mut self, pt: PhysicalType, comment: &str) -> InstId {
-        let layout = self.k1.types.get_pt_layout(&pt);
+        let layout = self.k1.types.get_pt_layout(pt);
         let index = match self.last_alloca_index {
             None => 0,
             Some(i) => i as usize + 1,
@@ -929,7 +930,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType, comment: &str) -> InstId {
-        let layout = self.k1.types.get_pt_layout(&pt);
+        let layout = self.k1.types.get_pt_layout(pt);
         self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment)
     }
 
@@ -1473,7 +1474,7 @@ fn compile_expr(
                                 let lhs = compile_expr(b, None, call.args[0])?;
                                 let rhs = compile_expr(b, None, call.args[1])?;
                                 let lhs_pt = b.get_value_kind(&lhs).expect_value().unwrap();
-                                let width = b.k1.types.get_pt_layout(&lhs_pt).size_bits() as u8;
+                                let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
                                 let inst = match op {
                                     IntrinsicBitwiseBinopKind::And => {
                                         Inst::BitAnd { lhs, rhs, width }
@@ -2731,7 +2732,7 @@ pub fn display_inst(
         }
         Inst::Alloca { t, vm_layout } => {
             write!(w, "alloca ")?;
-            display_pt(w, &k1.types, t)?;
+            k1.types.display_pt(w, *t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value, t } => {
@@ -2749,12 +2750,12 @@ pub fn display_inst(
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            display_pt(w, &k1.types, &PhysicalType::Agg(*struct_t))?;
+            k1.types.display_pt(w, PhysicalType::Agg(*struct_t))?;
             write!(w, ".{}, {} ({})", *field_index, *base, *vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            display_pt(w, &k1.types, element_t)?;
+            k1.types.display_pt(w, *element_t)?;
             write!(w, " {}[{}]", *base, *element_index)?;
         }
         Inst::Call { id } => {
@@ -2806,7 +2807,7 @@ pub fn display_inst(
         }
         Inst::CameFrom { t, incomings } => {
             write!(w, "comefrom ")?;
-            display_pt(w, &k1.types, t)?;
+            k1.types.display_pt(w, *t)?;
             write!(w, " [")?;
             for (i, incoming) in bc.mem.getn(*incomings).iter().enumerate() {
                 if i > 0 {
@@ -2827,7 +2828,7 @@ pub fn display_inst(
         }
         Inst::BitCast { v, to } => {
             write!(w, "bitcast ")?;
-            display_pt(w, &k1.types, to)?;
+            k1.types.display_pt(w, *to)?;
             write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
@@ -2966,7 +2967,7 @@ pub fn display_inst_kind(
     kind: &InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => display_pt(w, types, t),
+        InstKind::Value(t) => types.display_pt(w, *t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }

@@ -318,7 +318,7 @@ pub struct FunctionType {
     pub physical_params: MSlice<FnParamType, TypePool>,
     pub return_type: TypeId,
     pub is_lambda: bool,
-    pub abi_mode: AbiMode
+    pub abi_mode: AbiMode,
 }
 
 impl FunctionType {
@@ -992,11 +992,9 @@ pub struct EnumVariantLayout {
 
 #[derive(Clone, Copy)]
 pub enum AggType {
-    // Important specialization since wrappers are common
-    Struct1(PhysicalType),
     EnumVariant(EnumVariantLayout),
     Struct { fields: MSlice<StructField, TypePool> },
-    Array { element_t: PhysicalType, len: u32 },
+    Array { element_pt: PhysicalType, len: u32 },
     Opaque { layout: Layout },
 }
 
@@ -1004,7 +1002,7 @@ impl AggType {
     #[track_caller]
     pub fn expect_array(&self) -> (PhysicalType, u32) {
         match self {
-            AggType::Array { element_t, len } => (*element_t, *len),
+            AggType::Array { element_pt: element_t, len } => (*element_t, *len),
             _ => panic!("Expected array agg type"),
         }
     }
@@ -1732,10 +1730,10 @@ impl TypePool {
 
     // PHYSICAL TYPE STUFF /////////////////////////////////////////////////////
 
-    pub fn get_pt_layout(&self, pt: &PhysicalType) -> Layout {
+    pub fn get_pt_layout(&self, pt: PhysicalType) -> Layout {
         match pt {
             PhysicalType::Scalar(s) => s.get_layout(),
-            PhysicalType::Agg(agg_id) => self.phys_types.get(*agg_id).layout,
+            PhysicalType::Agg(agg_id) => self.phys_types.get(agg_id).layout,
         }
     }
 
@@ -1763,7 +1761,7 @@ impl TypePool {
                     Some(len) => {
                         let elem_layout = self.get_pt_layout(&element_t);
                         let record = PhysicalTypeRecord {
-                            agg_type: AggType::Array { element_t, len: len as u32 },
+                            agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
                             origin_type_id: type_id,
                             layout: elem_layout.array_me(len as usize),
                         };
@@ -1773,52 +1771,35 @@ impl TypePool {
                 },
             },
             Type::Struct(s) => {
-                if s.fields.len() == 1 {
-                    // 1-field struct special case, bit less pointer chasing
-                    let f = self.mem.get_nth(s.fields, 0);
-                    match self.get_physical_type(f.type_id) {
-                        None => None,
-                        Some(pt) => {
-                            let layout = self.get_pt_layout(&pt);
-                            let agg_id = self.phys_types.add(PhysicalTypeRecord {
-                                agg_type: AggType::Struct1(pt),
-                                origin_type_id: type_id,
-                                layout,
-                            });
-                            Some(PhysicalType::Agg(agg_id))
-                        }
-                    }
-                } else {
-                    let s_fields = s.fields;
-                    let mut fields = self.mem.new_list(s.fields.len());
-                    let mut layout = Layout::ZERO;
-                    let mut not_physical = false;
-                    for field in self.mem.getn(s_fields) {
-                        if not_physical {
-                            continue;
-                        }
-                        match self.get_physical_type(field.type_id) {
-                            None => {
-                                not_physical = true;
-                            }
-                            Some(field_pt) => {
-                                let field_layout = self.get_pt_layout(&field_pt);
-                                let offset = layout.append_to_aggregate(field_layout);
-                                fields.push(StructField { field_t: field_pt, offset });
-                            }
-                        }
-                    }
+                let s_fields = s.fields;
+                let mut fields = self.mem.new_list(s.fields.len());
+                let mut layout = Layout::ZERO;
+                let mut not_physical = false;
+                for field in self.mem.getn(s_fields) {
                     if not_physical {
-                        None
-                    } else {
-                        let fields_handle = self.mem.list_to_handle(fields);
-                        let agg_id = self.phys_types.add(PhysicalTypeRecord {
-                            agg_type: AggType::Struct { fields: fields_handle },
-                            origin_type_id: type_id,
-                            layout,
-                        });
-                        Some(PhysicalType::Agg(agg_id))
+                        continue;
                     }
+                    match self.get_physical_type(field.type_id) {
+                        None => {
+                            not_physical = true;
+                        }
+                        Some(field_pt) => {
+                            let field_layout = self.get_pt_layout(&field_pt);
+                            let offset = layout.append_to_aggregate(field_layout);
+                            fields.push(StructField { field_t: field_pt, offset });
+                        }
+                    }
+                }
+                if not_physical {
+                    None
+                } else {
+                    let fields_handle = self.mem.list_to_handle(fields);
+                    let agg_id = self.phys_types.add(PhysicalTypeRecord {
+                        agg_type: AggType::Struct { fields: fields_handle },
+                        origin_type_id: type_id,
+                        layout,
+                    });
+                    Some(PhysicalType::Agg(agg_id))
                 }
             }
             Type::Enum(_typed_enum) => {
@@ -1872,13 +1853,6 @@ impl TypePool {
     // Works for enum variants too
     pub fn get_struct_field_offset(&self, agg_id: PhysicalTypeId, field_index: u32) -> Option<u32> {
         match self.phys_types.get(agg_id).agg_type {
-            AggType::Struct1(_) => {
-                if field_index == 0 {
-                    Some(0)
-                } else {
-                    None
-                }
-            }
             AggType::Struct { fields } => {
                 if field_index < fields.len() {
                     let field_type = self.mem.get_nth(fields, field_index as usize);
@@ -1915,7 +1889,6 @@ impl TypePool {
 
     pub fn get_agg_struct_layout(&self, struct_agg_id: PhysicalTypeId) -> SV4<StructField> {
         match self.phys_types.get(struct_agg_id).agg_type {
-            AggType::Struct1(t) => smallvec![StructField { offset: 0, field_t: t }],
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::EnumVariant(evl) => {
                 let tag_field = StructField { offset: 0, field_t: PhysicalType::Scalar(evl.tag) };
@@ -2077,6 +2050,50 @@ impl TypePool {
             }
         }
     }
+
+    pub fn pt_to_string(&self, t: PhysicalType) -> String {
+        let mut s = String::new();
+        self.display_pt(&mut s, t).unwrap();
+        s
+    }
+
+    pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {
+        match t {
+            PhysicalType::Scalar(st) => write!(w, "{}", st),
+            PhysicalType::Agg(agg) => match self.phys_types.get(agg).agg_type {
+                AggType::EnumVariant(evl) => {
+                    write!(w, "{{ tag({})", evl.tag)?;
+                    if let Some(payload) = &evl.payload {
+                        write!(w, ", ")?;
+                        self.display_pt(w, *payload)?;
+                    };
+                    w.write_str(" }")?;
+                    Ok(())
+                }
+                AggType::Struct { fields } => {
+                    w.write_str("{ ")?;
+                    for (index, field) in self.mem.getn(fields).iter().enumerate() {
+                        self.display_pt(w, field.field_t)?;
+                        let last = index == fields.len() as usize - 1;
+                        if !last {
+                            w.write_str(", ")?;
+                        }
+                    }
+                    w.write_str(" }")?;
+                    Ok(())
+                }
+                AggType::Array { len, element_pt: t } => {
+                    w.write_str("[")?;
+                    self.display_pt(w, t)?;
+                    write!(w, " x {}]", len)?;
+                    Ok(())
+                }
+                AggType::Opaque { layout } => {
+                    write!(w, "opaque {}, align {}", layout.size, layout.align)
+                }
+            },
+        }
+    }
 }
 
 // Talks about the 4 kinds of contiguous 'collection' / 'container' types that
@@ -2086,59 +2103,4 @@ pub enum ContainerKind {
     Buffer,
     View,
     List,
-}
-
-pub fn display_pt(
-    w: &mut impl std::fmt::Write,
-    types: &TypePool,
-    t: &PhysicalType,
-) -> std::fmt::Result {
-    match t {
-        PhysicalType::Scalar(st) => write!(w, "{}", st),
-        PhysicalType::Agg(agg) => match &types.phys_types.get(*agg).agg_type {
-            // Important specialization since wrappers are common
-            AggType::Struct1(t1) => {
-                w.write_str("{ ")?;
-                display_pt(w, types, t1)?;
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::EnumVariant(evl) => {
-                write!(w, "{{ tag({})", evl.tag)?;
-                if let Some(payload) = &evl.payload {
-                    write!(w, ", ")?;
-                    display_pt(w, types, payload)?;
-                };
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::Struct { fields } => {
-                w.write_str("{ ")?;
-                for (index, field) in types.mem.getn(*fields).iter().enumerate() {
-                    display_pt(w, types, &field.field_t)?;
-                    let last = index == fields.len() as usize - 1;
-                    if !last {
-                        w.write_str(", ")?;
-                    }
-                }
-                w.write_str(" }")?;
-                Ok(())
-            }
-            AggType::Array { len, element_t: t } => {
-                w.write_str("[")?;
-                display_pt(w, types, t)?;
-                write!(w, " x {}]", *len)?;
-                Ok(())
-            }
-            AggType::Opaque { layout } => {
-                write!(w, "opaque {}, align {}", layout.size, layout.align)
-            }
-        },
-    }
-}
-
-pub fn pt_to_string(types: &TypePool, t: &PhysicalType) -> String {
-    let mut s = String::new();
-    display_pt(&mut s, types, t).unwrap();
-    s
 }

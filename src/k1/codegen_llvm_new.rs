@@ -35,13 +35,17 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
+use crate::bc::InstId;
 use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    self, FloatType, IntegerType, Type, TypeDefnInfo, TypeId, BOOL_TYPE_ID, CHAR_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID, UNIT_TYPE_ID
+    self, AbiMode, AggType, BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, I8_TYPE_ID, I16_TYPE_ID,
+    I32_TYPE_ID, I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, PhysicalType,
+    PhysicalTypeId, PhysicalTypeRecord, STRING_TYPE_ID, ScalarType, Type, TypeDefnInfo, TypeId,
+    U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
 };
 use crate::typer::{
     AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
@@ -49,15 +53,9 @@ use crate::typer::{
     IntrinsicOperation, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition,
     MatchingConditionInstr, StaticContainerKind, StaticValue, StaticValueId, TypedBlock, TypedCast,
     TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue,
-    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, VariableId, WhileLoop,
+    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult, VariableId, WhileLoop,
 };
-use crate::{SV8, kmem};
-
-#[derive(Debug)]
-pub struct CodegenError {
-    pub message: String,
-    pub span: SpanId,
-}
+use crate::{SV8, bc, errf, failf, kmem};
 
 macro_rules! return_void {
     ($e:expr) => {
@@ -68,40 +66,6 @@ macro_rules! return_void {
     };
 }
 
-macro_rules! failf {
-    ($span:expr, $($format_args:expr),*) => {
-        {
-            let s: String = format!($($format_args),*);
-            Err(CodegenError {
-                message: s,
-                span: $span,
-            })
-        }
-    };
-}
-
-macro_rules! errf {
-    ($span:expr, $($format_args:expr),*) => {
-        {
-            let s: String = format!($($format_args),*);
-            CodegenError {
-                message: s,
-                span: $span,
-            }
-        }
-    };
-}
-
-type CodegenResult<T> = Result<T, CodegenError>;
-
-impl Display for CodegenError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("error in span {:?}: {}", self.span, self.message))
-    }
-}
-
-impl Error for CodegenError {}
-
 #[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
@@ -109,33 +73,32 @@ fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
 
 trait BuilderResultExt {
     type V;
-    fn to_err(self, span: SpanId) -> CodegenResult<Self::V>;
+    fn to_err(self, span: SpanId) -> TyperResult<Self::V>;
 }
 
 impl<T> BuilderResultExt for Result<T, BuilderError> {
     type V = T;
-    fn to_err(self, span: SpanId) -> CodegenResult<Self::V> {
+    fn to_err(self, span: SpanId) -> TyperResult<Self::V> {
         self.map_err(|e| errf!(span, "LLVM Error: {}", e))
     }
 }
 
-pub struct K1LlvmFunctionType<'ctx> {
-    #[allow(unused)]
-    type_id: TypeId,
+pub struct CgFunctionType<'ctx> {
     llvm_function_type: LlvmFunctionType<'ctx>,
     // Does not include sret, or abi mappings
-    param_k1_types: MSlice<K1LlvmType<'ctx>, CodegenPerm>,
+    param_k1_types: MSlice<CgType<'ctx>, CgPerm>,
 
     // Does not include sret
-    param_abi_mappings: MSlice<AbiParamMapping, CodegenPerm>,
+    param_abi_mappings: MSlice<AbiParamMapping, CgPerm>,
     // Should probably wrap this in a handle due to size
-    return_k1_type: K1LlvmType<'ctx>,
+    return_cg_type: CgType<'ctx>,
     return_abi_mapping: AbiParamMapping,
     is_sret: bool,
 }
 
 struct StructDebugMember<'ctx, 'name> {
     name: &'name str,
+    offset: u32,
     di_type: DIType<'ctx>,
 }
 
@@ -215,9 +178,10 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
 #[derive(Copy, Clone)]
 struct LlvmReferenceType<'ctx> {
     type_id: TypeId,
-    pointer_type: MHandle<K1LlvmType<'ctx>, CodegenPerm>,
+    ptr_basic_type: PointerType<'ctx>,
+    pointer_type: MHandle<CgType<'ctx>, CgPerm>,
     #[allow(unused)]
-    pointee_type: MHandle<K1LlvmType<'ctx>, CodegenPerm>,
+    pointee_type: MHandle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -231,7 +195,7 @@ struct LlvmVoidType<'ctx> {
 #[derive(Copy, Clone)]
 struct LlvmScalarType<'ctx> {
     #[allow(unused)]
-    type_id: TypeId,
+    pt: PhysicalType,
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
     layout: Layout,
@@ -241,7 +205,7 @@ struct LlvmScalarType<'ctx> {
 struct EnumVariantType<'ctx> {
     name: Ident,
     variant_struct_type: StructType<'ctx>,
-    payload_type: Option<MHandle<K1LlvmType<'ctx>, CodegenPerm>>,
+    payload_type: Option<MHandle<CgType<'ctx>, CgPerm>>,
     tag_value: IntValue<'ctx>,
     di_type: DIType<'ctx>,
     layout: Layout,
@@ -255,103 +219,113 @@ struct LlvmEnumType<'ctx> {
     #[allow(unused)]
     envelope_type_just_bytes: ArrayType<'ctx>,
     envelope_type_with_aligner: StructType<'ctx>,
-    variants: MSlice<EnumVariantType<'ctx>, CodegenPerm>,
+    variants: MSlice<EnumVariantType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
 
 #[derive(Clone, Copy)]
-struct LlvmStructType<'ctx> {
-    type_id: TypeId,
+struct CgStructType<'ctx> {
+    pt: PhysicalType,
     struct_type: StructType<'ctx>,
-    fields: MSlice<K1LlvmType<'ctx>, CodegenPerm>,
+    fields: MSlice<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
 
 #[derive(Copy, Clone)]
-struct LlvmArrayType<'ctx> {
-    type_id: TypeId,
-    #[allow(unused)]
-    count: u64,
+struct CgArrayType<'ctx> {
+    pt: PhysicalType,
+    count: u32,
     array_type: ArrayType<'ctx>,
-    element_type: MHandle<K1LlvmType<'ctx>, CodegenPerm>,
+    element_type: MHandle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
 
 #[derive(Copy, Clone)]
-enum K1LlvmType<'ctx> {
+struct CgOpaqueType<'ctx> {
+    pt: PhysicalType,
+    aligned_struct_repr: StructType<'ctx>,
+    layout: Layout,
+    di_type: DIType<'ctx>,
+}
+
+#[derive(Copy, Clone)]
+enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     EnumType(LlvmEnumType<'ctx>),
-    StructType(LlvmStructType<'ctx>),
-    ArrayType(LlvmArrayType<'ctx>),
+    StructType(CgStructType<'ctx>),
+    ArrayType(CgArrayType<'ctx>),
     Reference(LlvmReferenceType<'ctx>),
     Void(LlvmVoidType<'ctx>),
+    Opaque(CgOpaqueType<'ctx>),
 }
 
-impl<'ctx> From<LlvmVoidType<'ctx>> for K1LlvmType<'ctx> {
+impl<'ctx> From<LlvmVoidType<'ctx>> for CgType<'ctx> {
     fn from(void: LlvmVoidType<'ctx>) -> Self {
-        K1LlvmType::Void(void)
+        CgType::Void(void)
     }
 }
 
-impl<'ctx> From<LlvmScalarType<'ctx>> for K1LlvmType<'ctx> {
+impl<'ctx> From<LlvmScalarType<'ctx>> for CgType<'ctx> {
     fn from(value: LlvmScalarType<'ctx>) -> Self {
-        K1LlvmType::Scalar(value)
+        CgType::Scalar(value)
     }
 }
 
-impl<'ctx> From<LlvmEnumType<'ctx>> for K1LlvmType<'ctx> {
+impl<'ctx> From<LlvmEnumType<'ctx>> for CgType<'ctx> {
     fn from(value: LlvmEnumType<'ctx>) -> Self {
-        K1LlvmType::EnumType(value)
+        CgType::EnumType(value)
     }
 }
 
-impl<'ctx> From<LlvmStructType<'ctx>> for K1LlvmType<'ctx> {
-    fn from(value: LlvmStructType<'ctx>) -> Self {
-        K1LlvmType::StructType(value)
+impl<'ctx> From<CgStructType<'ctx>> for CgType<'ctx> {
+    fn from(value: CgStructType<'ctx>) -> Self {
+        CgType::StructType(value)
     }
 }
 
-impl<'ctx> From<LlvmReferenceType<'ctx>> for K1LlvmType<'ctx> {
+impl<'ctx> From<LlvmReferenceType<'ctx>> for CgType<'ctx> {
     fn from(value: LlvmReferenceType<'ctx>) -> Self {
-        K1LlvmType::Reference(value)
+        CgType::Reference(value)
     }
 }
 
-impl<'ctx> K1LlvmType<'ctx> {
-    // pub fn size_info(&self) -> Layout {
-    //     match self {
-    //         K1LlvmType::Value(v) => v.layout,
-    //         K1LlvmType::Reference(r) => r.layout,
-    //         K1LlvmType::EnumType(e) => e.layout,
-    //         K1LlvmType::StructType(s) => s.layout,
-    //         K1LlvmType::ArrayType(a) => a.layout,
-    //         K1LlvmType::Void(_) => Layout::ZERO,
-    //         K1LlvmType::LambdaObject(c) => c.size,
-    //     }
-    // }
+impl<'ctx> CgType<'ctx> {
+    pub fn pt(&self) -> PhysicalType {
+        match self {
+            CgType::Scalar(s) => s.pt,
+            CgType::EnumType(e) => todo!(),
+            CgType::StructType(s) => s.pt,
+            CgType::ArrayType(a) => a.pt,
+            CgType::Reference(r) => todo!(),
+            CgType::Void(v) => panic!("no pt on void"),
+            CgType::Opaque(o) => o.pt,
+        }
+    }
 
     pub fn kind_name(&self) -> &'static str {
         match self {
-            K1LlvmType::Scalar(_) => "Scalar",
-            K1LlvmType::Reference(_) => "Reference",
-            K1LlvmType::Void(_) => "Void",
-            K1LlvmType::EnumType(_) => "EnumType",
-            K1LlvmType::StructType(_) => "StructType",
-            K1LlvmType::ArrayType(_) => "ArrayType",
+            CgType::Scalar(_) => "Scalar",
+            CgType::Reference(_) => "Reference",
+            CgType::Void(_) => "Void",
+            CgType::EnumType(_) => "EnumType",
+            CgType::StructType(_) => "StructType",
+            CgType::ArrayType(_) => "ArrayType",
+            CgType::Opaque(_) => "Opaque",
         }
     }
 
     pub fn is_aggregate(&self) -> bool {
         match self {
-            K1LlvmType::Scalar(_) => false,
-            K1LlvmType::Reference(_) => false,
-            K1LlvmType::Void(_) => false,
-            K1LlvmType::EnumType(_) => true,
-            K1LlvmType::StructType(_) => true,
-            K1LlvmType::ArrayType(_) => true,
+            CgType::Scalar(_) => false,
+            CgType::Reference(_) => false,
+            CgType::Void(_) => false,
+            CgType::EnumType(_) => true,
+            CgType::StructType(_) => true,
+            CgType::ArrayType(_) => true,
+            CgType::Opaque(_) => true,
         }
     }
 
@@ -371,17 +345,17 @@ impl<'ctx> K1LlvmType<'ctx> {
     // #[allow(unused)]
     // pub fn requires_custom_alignment(&self) -> bool {
     //     match self {
-    //         K1LlvmType::Scalar(_) => false,
-    //         K1LlvmType::Reference(_) => false,
-    //         K1LlvmType::Void(_) => false,
-    //         K1LlvmType::EnumType(_) => true,
-    //         K1LlvmType::StructType(_) => false,
-    //         K1LlvmType::ArrayType(a) => {
+    //         CgType::Scalar(_) => false,
+    //         CgType::Reference(_) => false,
+    //         CgType::Void(_) => false,
+    //         CgType::EnumType(_) => true,
+    //         CgType::StructType(_) => false,
+    //         CgType::ArrayType(a) => {
     //             // If the array's elements don't have the 'right' alignment in LLVM,
     //             // then neither will the array!
     //             a.element_type.requires_custom_alignment()
     //         }
-    //         K1LlvmType::LambdaObject(_) => false,
+    //         CgType::LambdaObject(_) => false,
     //     }
     // }
 
@@ -389,7 +363,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     #[allow(unused)]
     pub fn expect_reference(&self) -> &LlvmReferenceType<'ctx> {
         match self {
-            K1LlvmType::Reference(reference) => reference,
+            CgType::Reference(reference) => reference,
             _ => panic!("expected pointer on {}", self.kind_name()),
         }
     }
@@ -397,64 +371,66 @@ impl<'ctx> K1LlvmType<'ctx> {
     #[track_caller]
     pub fn expect_enum(self) -> LlvmEnumType<'ctx> {
         match self {
-            K1LlvmType::EnumType(e) => e,
+            CgType::EnumType(e) => e,
             _ => panic!("expected enum on {}", self.kind_name()),
         }
     }
 
     #[track_caller]
-    fn expect_struct(self) -> LlvmStructType<'ctx> {
+    fn expect_struct(self) -> CgStructType<'ctx> {
         match self {
-            K1LlvmType::StructType(s) => s,
+            CgType::StructType(s) => s,
             _ => panic!("expected struct on {}", self.kind_name()),
         }
     }
 
     #[track_caller]
-    fn expect_array(self) -> LlvmArrayType<'ctx> {
+    fn expect_array(self) -> CgArrayType<'ctx> {
         match self {
-            K1LlvmType::ArrayType(array) => array,
+            CgType::ArrayType(array) => array,
             _ => panic!("expected array on {}", self.kind_name()),
-        }
-    }
-
-    #[allow(unused)]
-    fn type_id(&self) -> TypeId {
-        match self {
-            K1LlvmType::Scalar(value) => value.type_id,
-            K1LlvmType::Reference(pointer) => pointer.type_id,
-            K1LlvmType::EnumType(e) => e.type_id,
-            K1LlvmType::StructType(s) => s.type_id,
-            K1LlvmType::ArrayType(a) => a.type_id,
-            K1LlvmType::Void(_) => NEVER_TYPE_ID,
         }
     }
 
     fn rich_repr_layout(&self) -> Layout {
         match self {
-            K1LlvmType::Scalar(value) => value.layout,
-            K1LlvmType::Reference(pointer) => pointer.layout,
-            K1LlvmType::EnumType(e) => e.layout,
-            K1LlvmType::StructType(s) => s.layout,
-            K1LlvmType::ArrayType(a) => a.layout,
-            K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
+            CgType::Scalar(value) => value.layout,
+            CgType::Reference(pointer) => pointer.layout,
+            CgType::EnumType(e) => e.layout,
+            CgType::StructType(s) => s.layout,
+            CgType::ArrayType(a) => a.layout,
+            CgType::Void(_) => panic!("No rich value type on Void / never"),
+            CgType::Opaque(o) => o.layout,
+        }
+    }
+
+    fn rich_type(&self) -> BasicTypeEnum<'ctx> {
+        match self {
+            CgType::Scalar(value) => value.basic_type,
+            CgType::Reference(r) => r.ptr_basic_type.as_basic_type_enum(),
+            CgType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
+            CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
+            CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
+            CgType::Opaque(o) => o.aligned_struct_repr.as_basic_type_enum(),
+            CgType::Void(_) => panic!("No rich value type on Void / never"),
         }
     }
 
     fn debug_type(&self) -> DIType<'ctx> {
         match self {
-            K1LlvmType::Scalar(value) => value.di_type,
-            K1LlvmType::Reference(pointer) => pointer.di_type,
-            K1LlvmType::EnumType(e) => e.di_type,
-            K1LlvmType::StructType(s) => s.di_type,
-            K1LlvmType::ArrayType(a) => a.di_type,
-            K1LlvmType::Void(v) => v.di_type,
+            CgType::Scalar(value) => value.di_type,
+            CgType::Reference(pointer) => pointer.di_type,
+            CgType::EnumType(e) => e.di_type,
+            CgType::StructType(s) => s.di_type,
+            CgType::ArrayType(a) => a.di_type,
+            CgType::Opaque(o) => o.di_type,
+            CgType::Void(v) => v.di_type,
         }
     }
 
     fn is_void(&self) -> bool {
         match self {
-            K1LlvmType::Void(_) => true,
+            CgType::Void(_) => true,
             _ => false,
         }
     }
@@ -462,7 +438,7 @@ impl<'ctx> K1LlvmType<'ctx> {
     #[allow(unused)]
     fn as_scalar(self) -> Option<LlvmScalarType<'ctx>> {
         match self {
-            K1LlvmType::Scalar(scalar) => Some(scalar),
+            CgType::Scalar(scalar) => Some(scalar),
             _ => None,
         }
     }
@@ -498,26 +474,28 @@ pub struct LoopInfo<'ctx> {
 }
 
 pub struct CodegenedFunction<'ctx> {
-    pub function_type: K1LlvmFunctionType<'ctx>,
+    pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
     pub sret_pointer: Option<PointerValue<'ctx>>,
     pub last_alloca_instr: Option<InstructionValue<'ctx>>,
     pub instruction_count: usize,
+    pub debug_info: DISubprogram<'ctx>,
+    pub debug_file: DIFile<'ctx>,
 }
 
-pub struct CodegenPerm;
+pub struct CgPerm;
 pub struct CodegenTmp;
 
 pub struct Codegen<'ctx, 'k1> {
     ctx: &'ctx Context,
-    pub k1: &'k1 TypedProgram,
+    pub k1: &'k1 mut TypedProgram,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
     builder: Builder<'ctx>,
     pub llvm_functions: FxHashMap<FunctionId, CodegenedFunction<'ctx>>,
     pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
     functions_pending_body_compilation: Vec<FunctionId>,
-    llvm_types: FxHashMap<TypeId, K1LlvmType<'ctx>>,
+    llvm_types: FxHashMap<PhysicalTypeId, CgType<'ctx>>,
     variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
     lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
     loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
@@ -527,7 +505,7 @@ pub struct Codegen<'ctx, 'k1> {
     static_values_globals: FxHashMap<StaticValueId, GlobalValue<'ctx>>,
     debug: DebugContext<'ctx>,
     tmp: kmem::Mem<CodegenTmp>,
-    mem: kmem::Mem<CodegenPerm>,
+    mem: kmem::Mem<CgPerm>,
 }
 
 struct DebugContext<'ctx> {
@@ -583,6 +561,9 @@ impl<'ctx> DebugContext<'ctx> {
     }
     fn current_entry(&self) -> &DebugStackEntry<'ctx> {
         self.debug_stack.last().unwrap()
+    }
+    fn current_span(&self) -> SpanId {
+        self.current_entry().span
     }
     fn current_scope(&self) -> DIScope<'ctx> {
         self.current_entry().scope
@@ -722,7 +703,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     pub fn create(
         ctx: &'ctx Context,
-        module: &'module TypedProgram,
+        module: &'module mut TypedProgram,
         debug: bool,
         optimize: bool,
     ) -> Self {
@@ -793,12 +774,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.k1.types.get_layout(type_id)
     }
 
-    fn offset_of_struct_member(&self, typ: &StructType, field_index: u32) -> u64 {
-        let td = self.llvm_machine.get_target_data();
-        let offset_bytes = td.offset_of_element(typ, field_index).unwrap();
-        offset_bytes * 8
-    }
-
     fn padding_type(&self, size_bytes: u32) -> ArrayType<'ctx> {
         self.ctx.i8_type().array_type(size_bytes)
     }
@@ -851,658 +826,273 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
     }
 
-    fn codegen_type_name(&self, type_id: TypeId, defn_info: Option<TypeDefnInfo>) -> String {
+    fn codegen_type_name(&self, type_id: TypeId) -> String {
+        let defn_info = self.k1.types.get_defn_info(type_id);
         let mut s = String::with_capacity(64);
         self.write_type_name(&mut s, type_id, defn_info);
         s
     }
 
-    fn make_debug_struct_type<'names>(
-        &self,
-        name: &str,
-        type_id: TypeId,
-        struct_type: &StructType,
-        span: SpanId,
-        field_types: &[StructDebugMember<'ctx, 'names>],
-    ) -> DIType<'ctx> {
-        let line_number = self.get_line_number(span);
-        let layout = self.get_layout(type_id);
-        let fields = &field_types
-            .iter()
-            .enumerate()
-            .map(|(member_index, debug_member)| {
-                let offset = self.offset_of_struct_member(struct_type, member_index as u32);
-                let t = self.debug.debug_builder.create_member_type(
-                    self.debug.current_scope(),
-                    debug_member.name,
-                    self.debug.current_file(),
-                    line_number,
-                    debug_member.di_type.get_size_in_bits(),
-                    debug_member.di_type.get_align_in_bits(),
-                    offset,
-                    0,
-                    debug_member.di_type,
-                );
-                t.as_type()
-            })
-            .collect::<Vec<_>>();
-        self.debug
-            .debug_builder
-            .create_struct_type(
-                self.debug.current_scope(),
-                name,
-                self.debug.current_file(),
-                line_number,
-                layout.size as u64,
-                layout.align,
-                0,
-                None,
-                fields,
-                0,
-                None,
-                name,
-            )
-            .as_type()
-    }
+    const DW_ATE_ADDRESS: u32 = 0x01;
+    const DW_ATE_BOOLEAN: u32 = 0x02;
+    const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
+    const DW_ATE_FLOAT: u32 = 0x04;
+    const DW_ATE_SIGNED: u32 = 0x05;
+    const DW_ATE_CHAR: u32 = 0x06;
+    const DW_ATE_UNSIGNED: u32 = 0x07;
+    const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
-    fn make_pointer_type(&self, pointee_di_type: DIType<'ctx>) -> LlvmScalarType<'ctx> {
-        LlvmScalarType {
-            type_id: POINTER_TYPE_ID,
-            basic_type: self.builtin_types.ptr.as_basic_type_enum(),
-            layout: self.get_layout(POINTER_TYPE_ID),
-            di_type: self
-                .debug
-                .debug_builder
-                .create_pointer_type(
-                    "ptr",
-                    pointee_di_type,
-                    self.builtin_types.ptr_sized_int.get_bit_width() as u64,
-                    self.builtin_types.ptr_sized_int.get_bit_width(),
-                    AddressSpace::default(),
-                )
-                .as_type(),
+    fn codegen_type_opt(&mut self, pt: Option<PhysicalType>) -> CgType<'ctx> {
+        match pt {
+            None => CgType::Void(LlvmVoidType {
+                di_type: self
+                    .debug
+                    .debug_builder
+                    .create_basic_type("void", 0, Self::DW_ATE_CHAR, 0)
+                    .unwrap()
+                    .as_type(),
+                void_type: self.ctx.void_type(),
+            }),
+            Some(pt) => self.codegen_type(pt),
         }
     }
 
-    fn codegen_type(&mut self, type_id: TypeId) -> CodegenResult<K1LlvmType<'ctx>> {
-        self.codegen_type_inner(type_id, 0)
-    }
-
-    const DW_ATE_ADDRESS:u32 = 0x01;
-    const DW_ATE_BOOLEAN:u32 = 0x02;
-    const _DW_ATE_COMPLEX_FLOAT:u32 = 0x03;
-    const DW_ATE_FLOAT:u32 = 0x04;
-    const DW_ATE_SIGNED:u32 = 0x05;
-    const DW_ATE_CHAR:u32 = 0x06;
-    const DW_ATE_UNSIGNED:u32 = 0x07;
-    const _DW_ATE_UNSIGNED_CHAR:u32 = 0x08;
-
-    fn codegen_type_inner(
-        &mut self,
-        type_id: TypeId,
-        depth: usize,
-    ) -> CodegenResult<K1LlvmType<'ctx>> {
-        let result = self.llvm_types.get(&type_id).cloned();
-        if let Some(result) = result {
-            return Ok(result);
-        };
-        let make_value_basic_type =
-            |name: &str,
-             type_id: TypeId,
-             basic_type: BasicTypeEnum<'ctx>,
-             encoding: llvm_sys::debuginfo::LLVMDWARFTypeEncoding| {
-                let layout = self.get_layout(type_id);
-                K1LlvmType::Scalar(LlvmScalarType {
-                    type_id,
-                    basic_type,
-                    layout,
-                    di_type: self
-                        .debug
-                        .debug_builder
-                        .create_basic_type(name, layout.size_bits() as u64, encoding, 0)
-                        .unwrap()
-                        .as_type(),
-                })
-            };
-        debug!("codegen for type {} depth {depth}", self.k1.type_id_to_string(type_id));
-        let mut no_cache = false;
-        // Might be better to switch to the debug context span, rather than the type's span
-        let span = self.k1.get_span_for_type_id(type_id).unwrap_or(SpanId::NONE);
-        let codegened_type = match self.k1.types.get_no_follow(type_id) {
-            Type::Unit => Ok(make_value_basic_type(
-                "unit",
-                UNIT_TYPE_ID,
-                self.builtin_types.unit.as_basic_type_enum(),
-                Self::DW_ATE_BOOLEAN,
-            )),
-            Type::Char => Ok(make_value_basic_type(
-                "char",
-                CHAR_TYPE_ID,
-                self.builtin_types.char.as_basic_type_enum(),
-                Self::DW_ATE_CHAR,
-            )),
-            Type::Integer(IntegerType::U8) => Ok(make_value_basic_type(
-                "u8",
-                U8_TYPE_ID,
-                self.ctx.i8_type().as_basic_type_enum(),
-                Self::DW_ATE_UNSIGNED,
-            )),
-            Type::Integer(IntegerType::U16) => Ok(make_value_basic_type(
-                "u16",
-                U16_TYPE_ID,
-                self.ctx.i16_type().as_basic_type_enum(),
-                Self::DW_ATE_UNSIGNED,
-            )),
-            Type::Integer(IntegerType::U32) => Ok(make_value_basic_type(
-                "u32",
-                U32_TYPE_ID,
-                self.ctx.i32_type().as_basic_type_enum(),
-                Self::DW_ATE_UNSIGNED,
-            )),
-            Type::Integer(IntegerType::U64) => Ok(make_value_basic_type(
-                "u64",
-                U64_TYPE_ID,
-                self.ctx.i64_type().as_basic_type_enum(),
-                Self::DW_ATE_UNSIGNED,
-            )),
-            Type::Integer(IntegerType::I8) => Ok(make_value_basic_type(
-                "i8",
-                I8_TYPE_ID,
-                self.ctx.i8_type().as_basic_type_enum(),
-                Self::DW_ATE_SIGNED,
-            )),
-            Type::Integer(IntegerType::I16) => Ok(make_value_basic_type(
-                "i16",
-                I16_TYPE_ID,
-                self.ctx.i16_type().as_basic_type_enum(),
-                Self::DW_ATE_SIGNED,
-            )),
-            Type::Integer(IntegerType::I32) => Ok(make_value_basic_type(
-                "i32",
-                I32_TYPE_ID,
-                self.ctx.i32_type().as_basic_type_enum(),
-                Self::DW_ATE_SIGNED,
-            )),
-            Type::Integer(IntegerType::I64) => Ok(make_value_basic_type(
-                "i64",
-                I64_TYPE_ID,
-                self.ctx.i64_type().as_basic_type_enum(),
-                Self::DW_ATE_SIGNED,
-            )),
-            Type::Float(float_type) => {
-                let llvm_type = match float_type {
-                    FloatType::F32 => self.ctx.f32_type(),
-                    FloatType::F64 => self.ctx.f64_type(),
+    // FIXME(newcodgen): CgType is too big to return by value
+    fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
+        match pt {
+            PhysicalType::Scalar(st) => {
+                let layout = st.get_layout();
+                let (name, encoding): (&'static str, u32) = match st {
+                    ScalarType::U8 => ("u8", Self::DW_ATE_UNSIGNED),
+                    ScalarType::U16 => ("u16", Self::DW_ATE_UNSIGNED),
+                    ScalarType::U32 => ("u32", Self::DW_ATE_UNSIGNED),
+                    ScalarType::U64 => ("u64", Self::DW_ATE_UNSIGNED),
+                    ScalarType::I8 => ("i8", Self::DW_ATE_SIGNED),
+                    ScalarType::I16 => ("i16", Self::DW_ATE_SIGNED),
+                    ScalarType::I32 => ("i32", Self::DW_ATE_SIGNED),
+                    ScalarType::I64 => ("i64", Self::DW_ATE_SIGNED),
+                    ScalarType::F32 => ("f32", Self::DW_ATE_FLOAT),
+                    ScalarType::F64 => ("f64", Self::DW_ATE_FLOAT),
+                    ScalarType::Pointer => ("ptr", Self::DW_ATE_ADDRESS),
                 };
-                let name = match float_type {
-                    FloatType::F32 => "f32",
-                    FloatType::F64 => "f64",
-                };
-                Ok(make_value_basic_type(
-                    name,
-                    type_id,
-                    llvm_type.as_basic_type_enum(),
-                    Self::DW_ATE_FLOAT,
-                ))
-            }
-            Type::Bool => Ok(make_value_basic_type(
-                "bool",
-                BOOL_TYPE_ID,
-                self.builtin_types.boolean.as_basic_type_enum(),
-                Self::DW_ATE_BOOLEAN,
-            )),
-            Type::Pointer => {
-                let llvm_type = self.builtin_types.ptr.as_basic_type_enum();
-                Ok(make_value_basic_type("ptr", POINTER_TYPE_ID, llvm_type, Self::DW_ATE_ADDRESS))
-            }
-            Type::Struct(struc) => {
-                let buffer_element_type = self.k1.types.get_as_buffer_instance(type_id);
-                trace!("generating llvm type for struct type {type_id}");
-                let field_count = struc.fields.len();
-                let mut field_types = self.mem.new_list(field_count);
-                let mut field_basic_types = self.tmp.new_list(field_count);
-                let mut field_di_types = self.tmp.new_list(field_count);
-
-                let name = self.codegen_type_name(type_id, self.k1.types.get_defn_info(type_id));
-                for field in self.k1.types.mem.getn(struc.fields) {
-                    let field_llvm_type = self.codegen_type_inner(field.type_id, depth + 1)?;
-                    let debug_type = if buffer_element_type.is_some()
-                        && field.name == self.k1.ast.idents.b.data
-                    {
-                        let element_type =
-                            self.codegen_type_inner(buffer_element_type.unwrap(), depth + 1)?;
-                        let array_ptr_di_type = self.make_pointer_type(element_type.debug_type());
-                        array_ptr_di_type.di_type
-                    } else {
-                        field_llvm_type.debug_type()
-                    };
-                    field_di_types.push(StructDebugMember {
-                        name: self.k1.ast.idents.get_name(field.name),
-                        di_type: debug_type,
-                    });
-                    field_basic_types.push(self.rich_repr_type(&field_llvm_type));
-                    field_types.push(field_llvm_type);
-                }
-
-                let llvm_struct_type = self.ctx.struct_type(&field_basic_types, false);
-
-                let layout = self.get_layout(type_id);
-                let di_type = self.make_debug_struct_type(
-                    &name,
-                    type_id,
-                    &llvm_struct_type,
-                    span,
-                    &field_di_types,
-                );
-                Ok(LlvmStructType {
-                    type_id,
-                    struct_type: llvm_struct_type,
-                    fields: self.mem.list_to_handle(field_types),
-                    di_type,
-                    layout,
-                }
-                .into())
-            }
-            Type::TypeParameter(_tp) => {
-                failf!(
-                    self.debug.current_entry().span,
-                    "codegen was asked to codegen a type parameter {}",
-                    self.k1.dump_type_id_to_string(type_id)
-                )
-            }
-            Type::FunctionTypeParameter(ftp) => {
-                failf!(span, "codegen was asked to codegen a function type parameter {:?}", ftp)
-            }
-            Type::InferenceHole(h) => {
-                failf!(span, "codegen was asked to codegen a type inference hole {:?}", h)
-            }
-            Type::FunctionPointer(fp) => {
-                let placeholder_pointee = self.codegen_type(I8_TYPE_ID)?;
-                let llvm_function_type = self.make_llvm_function_type(fp.function_type_id)?;
-                let di_types: SV8<_> = self
-                    .mem
-                    .getn_lt(llvm_function_type.param_k1_types)
-                    .iter()
-                    .map(|t| t.debug_type())
-                    .collect();
-                let subroutine_type = self.debug.debug_builder.create_subroutine_type(
-                    self.debug.current_file(),
-                    Some(llvm_function_type.return_k1_type.debug_type()),
-                    &di_types,
-                    0,
-                );
-
-                let ptr_type = self.codegen_type(POINTER_TYPE_ID)?;
-                Ok(LlvmReferenceType {
-                    type_id,
-                    pointer_type: self.mem.push_h(ptr_type),
-                    di_type: self.debug.create_pointer_type(
-                        &format!("fn_ptr_{}", type_id),
-                        // Safety: DISubroutineType and DIType are both just LLVMMetadataRefs
-                        unsafe {
-                            core::mem::transmute::<DISubroutineType<'ctx>, DIType<'ctx>>(
-                                subroutine_type,
-                            )
-                        },
-                    ),
-                    pointee_type: self.mem.push_h(placeholder_pointee),
-                    layout: Layout::from_scalar_bits(
-                        self.builtin_types.ptr_sized_int.get_bit_width(),
-                    ),
-                }
-                .into())
-            }
-            Type::Reference(reference) => {
-                let inner_type = self.codegen_type_inner(reference.inner_type, depth + 1)?;
-                let inner_debug_type = inner_type.debug_type();
-                let ptr_type = self.codegen_type(POINTER_TYPE_ID)?;
-                Ok(LlvmReferenceType {
-                    type_id,
-                    pointer_type: self.mem.push_h(ptr_type),
-                    pointee_type: self.mem.push_h(inner_type),
-                    di_type: self
-                        .debug
-                        .create_pointer_type(&format!("reference_{}", type_id), inner_debug_type),
-                    layout: Layout::from_scalar_bits(
-                        self.builtin_types.ptr_sized_int.get_bit_width(),
-                    ),
-                }
-                .into())
-            }
-            Type::Array(array_type) => {
-                let element_type = self.codegen_type_inner(array_type.element_type, depth + 1)?;
-                let element_basic_type = self.rich_repr_type(&element_type);
-                let Some(size) = array_type.concrete_count else {
-                    self.k1.ice("codegen_type_inner: expected concrete count for array type", None);
-                };
-                let llvm_array_type = element_basic_type.array_type(size as u32);
-
-                let layout = self.get_layout(type_id);
-
+                let basic_type = self.scalar_basic_type(st);
                 let di_type = self
                     .debug
                     .debug_builder
-                    .create_array_type(
-                        element_type.debug_type(),
-                        layout.size_bits() as u64,
-                        layout.align_bits(),
-                        &[],
-                    )
-                    .as_type();
-
-                Ok(K1LlvmType::ArrayType(LlvmArrayType {
-                    type_id,
-                    count: size,
-                    array_type: llvm_array_type,
-                    element_type: self.mem.push_h(element_type),
-                    di_type,
-                    layout,
-                }))
-            }
-            Type::Enum(enum_type) => {
-                let enum_name = self
-                    .k1
-                    .types
-                    .get_defn_info(type_id)
-                    .map(|info| self.codegen_type_name(type_id, Some(info)))
-                    .unwrap_or(type_id.to_string());
-                let enum_layout = self.k1.types.get_layout(type_id);
-                let mut variant_structs = self.mem.new_list(enum_type.variants.len() as u32);
-                if enum_type.variants.len() >= u8::MAX as usize {
-                    panic!("too many enum variants for now");
-                }
-
-                let mut payload_types = self.mem.new_list(enum_type.variants.len() as u32);
-                for variant in enum_type.variants.iter() {
-                    if let Some(payload_type_id) = variant.payload {
-                        let variant_payload_type =
-                            self.codegen_type_inner(payload_type_id, depth + 1)?;
-                        let handle = self.mem.push_h(variant_payload_type);
-                        payload_types.push(Some(handle))
-                    } else {
-                        payload_types.push(None)
-                    }
-                }
-                let tag_k1_type = self.codegen_type(enum_type.tag_type)?;
-                let tag_int_type = self.rich_repr_type(&tag_k1_type).into_int_type();
-                let tag_field_debug = self
-                    .debug
-                    .debug_builder
-                    .create_basic_type(
-                        "tag",
-                        tag_int_type.get_bit_width() as u64,
-                        Self::DW_ATE_UNSIGNED,
-                        0,
-                    )
+                    .create_basic_type(name, layout.size_bits() as u64, encoding, 0)
                     .unwrap()
                     .as_type();
-
-                for (variant, maybe_payload_type) in
-                    enum_type.variants.iter().zip(payload_types.iter())
-                {
-                    let variant_name = format!("{enum_name}.{}", self.get_ident_name(variant.name));
-                    let (variant_struct, variant_struct_debug, payload_type) =
-                        if let Some(_payload_type_id) = variant.payload {
-                            let payload_type_handle = maybe_payload_type.unwrap();
-                            let variant_payload_type = self.mem.get(payload_type_handle);
-                            let fields = &[
-                                tag_int_type.as_basic_type_enum(),
-                                self.rich_repr_type(variant_payload_type),
-                            ];
-                            let variant_struct_type =
-                                Codegen::make_named_struct(self.ctx, &variant_name, fields);
-                            let debug_struct = self.make_debug_struct_type(
-                                &variant_name,
-                                variant.my_type_id,
-                                &variant_struct_type,
-                                SpanId::NONE,
-                                &[
-                                    StructDebugMember { name: "tag", di_type: tag_field_debug },
-                                    StructDebugMember {
-                                        name: "payload",
-                                        di_type: variant_payload_type.debug_type(),
-                                    },
-                                ],
-                            );
-                            (variant_struct_type, debug_struct, Some(payload_type_handle))
-                        } else {
-                            let variant_struct_type = Codegen::make_named_struct(
-                                self.ctx,
-                                &variant_name,
-                                &[tag_int_type.as_basic_type_enum()],
-                            );
-                            let debug_struct = {
-                                self.make_debug_struct_type(
-                                    &variant_name,
-                                    variant.my_type_id,
-                                    &variant_struct_type,
-                                    SpanId::NONE,
-                                    &[StructDebugMember { name: "tag", di_type: tag_field_debug }],
+                CgType::Scalar(LlvmScalarType { pt, basic_type, layout, di_type })
+            }
+            PhysicalType::Agg(agg_id) => {
+                if let Some(k1) = self.llvm_types.get(&agg_id) {
+                    return *k1;
+                }
+                let agg = self.k1.types.phys_types.get(agg_id);
+                let agg_layout = agg.layout;
+                let type_name = self.codegen_type_name(agg.origin_type_id);
+                let cg_type = match agg.agg_type {
+                    AggType::EnumVariant(e) => panic!("Who is asking"),
+                    AggType::Struct { fields } => {
+                        let mut cg_field_types = self.mem.new_list(fields.len());
+                        let mut field_rich_types = self.tmp.new_list(fields.len());
+                        let mut field_di_types = self.tmp.new_list(fields.len());
+                        let k1_struct_type = self.k1.types.get(agg.origin_type_id).expect_struct();
+                        let span = self.debug.current_span();
+                        let line_number = self.get_line_number(span);
+                        for (phys_field, k1_field) in self
+                            .k1
+                            .types
+                            .mem
+                            .getn(fields)
+                            .iter()
+                            .zip(self.k1.types.mem.getn(k1_struct_type.fields))
+                        {
+                            let cg_type = self.codegen_type(phys_field.field_t);
+                            let field_name = self.k1.ident_str(k1_field.name);
+                            cg_field_types.push(cg_type);
+                            field_rich_types.push(cg_type.rich_type());
+                            let debug_member = self
+                                .debug
+                                .debug_builder
+                                .create_member_type(
+                                    self.debug.current_scope(),
+                                    field_name,
+                                    self.debug.current_file(),
+                                    line_number,
+                                    cg_type.rich_repr_layout().size_bits() as u64,
+                                    cg_type.rich_repr_layout().align_bits(),
+                                    phys_field.offset as u64,
+                                    0,
+                                    cg_type.debug_type(),
                                 )
-                            };
-                            (variant_struct_type, debug_struct, None)
-                        };
-                    debug!(
-                        "Variant {} {}, size is {:?}",
-                        variant_name,
-                        variant_struct.print_to_string(),
-                        self.get_layout(variant.my_type_id)
-                    );
-                    variant_structs.push(EnumVariantType {
-                        name: variant.name,
-                        //envelope_type: self.ctx.i8_type().array_type(0),
-                        variant_struct_type: variant_struct,
-                        payload_type,
-                        tag_value: tag_int_type.const_int(variant.tag_value.to_u64_bits(), false),
-                        di_type: variant_struct_debug,
-                        layout: self.get_layout(variant.my_type_id),
-                    });
-                }
-
-                // Enum sizing and layout rules:
-                // - Alignment of the enum is the max(alignment) of the variants
-                // - Size of the enum is the size of the largest variant, not necessarily the same
-                //   variant, plus alignment end padding
-                // - *********** NEW: We no longer rely on fabricating an 'envelope' struct for the
-                //   union. Instead we represent the enum itself as an i8 array, and only the
-                //   variants as structs, and use LLVM's `align` attribute on the actual
-                //   operations, like alloca, to specify the alignment of the enum.
-                // - *********** OLD: In order to get to an actual LLVM type that has this alignment and size, we copy clang,
-                //   and 'devise' a struct that will do it for us. This struct is simply 2 fields:
-                //   - First, the strictestly-aligned variant. This sets the alignment of our
-                //     struct
-                //   - Second, padding bytes such that we're at least as large as the largest
-                //     variant, and aligned to our own alignment
-
-                let aligner_type = self.ctx.custom_width_int_type(enum_layout.align_bits());
-                let padding_bytes = enum_layout.size - (aligner_type.get_bit_width() / 8);
-                let padding = self.padding_type(padding_bytes);
-                let physical_type_correct_align = self.ctx.struct_type(
-                    &[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()],
-                    false,
-                );
-                let physical_type_just_bytes = self.ctx.i8_type().array_type(enum_layout.size);
-
-                let member_types: Vec<_> = variant_structs
-                    .iter()
-                    .map(|variant| {
-                        let name = Codegen::get_di_type_name(variant.di_type);
-                        self.debug
+                                .as_type();
+                            field_di_types.push(debug_member)
+                        }
+                        let struct_type = self.ctx.struct_type(&field_rich_types, false);
+                        let di_type = self
+                            .debug
                             .debug_builder
-                            .create_member_type(
+                            .create_struct_type(
                                 self.debug.current_scope(),
-                                &name,
+                                &type_name,
                                 self.debug.current_file(),
+                                line_number,
+                                agg_layout.size as u64,
+                                agg_layout.align,
                                 0,
-                                variant.layout.size as u64,
-                                variant.layout.align,
+                                None,
+                                &field_di_types,
                                 0,
-                                0,
-                                variant.di_type,
+                                None,
+                                &type_name,
                             )
-                            .as_type()
-                    })
-                    .collect();
-                let debug_union_type = self
-                    .debug
-                    .debug_builder
-                    .create_union_type(
-                        self.debug.current_scope(),
-                        &enum_name,
-                        self.debug.current_file(),
-                        0,
-                        enum_layout.size_bits() as u64,
-                        enum_layout.align_bits(),
-                        0,
-                        &member_types,
-                        0,
-                        &enum_name,
-                    )
-                    .as_type();
-
-                Ok(LlvmEnumType {
-                    type_id,
-                    tag_type: tag_int_type,
-                    envelope_type_just_bytes: physical_type_just_bytes,
-                    envelope_type_with_aligner: physical_type_correct_align,
-                    variants: self.mem.list_to_handle(variant_structs),
-                    di_type: debug_union_type,
-                    layout: enum_layout,
-                }
-                .into())
+                            .as_type();
+                        CgType::StructType(CgStructType {
+                            pt,
+                            struct_type,
+                            fields: cg_field_types.into_handle(&mut self.mem),
+                            di_type,
+                            layout: agg_layout,
+                        })
+                    }
+                    AggType::Array { element_pt, len } => {
+                        let element_type = self.codegen_type(element_pt);
+                        let array_type = element_type.rich_type().array_type(len);
+                        let layout = self.k1.types.get_pt_layout(element_pt);
+                        let di_type = self
+                            .debug
+                            .debug_builder
+                            .create_array_type(
+                                element_type.debug_type(),
+                                layout.size_bits() as u64,
+                                layout.align_bits(),
+                                &[],
+                            )
+                            .as_type();
+                        CgType::ArrayType(CgArrayType {
+                            pt,
+                            count: len,
+                            array_type,
+                            element_type: self.mem.push_h(element_type),
+                            di_type,
+                            layout,
+                        })
+                    }
+                    AggType::Opaque { layout } => {
+                        // For opaque types, which we currently only use to represent our tagged
+                        // unions (`either` in the source), we generate a 2-field struct to trick
+                        // LLVM.
+                        // Field 1 is a synthetic integer wide enough to force the alignment of the
+                        // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
+                        // large enough to get the whole thing to be exactly `size`. This is
+                        // mostly what clang does for unions, and probably what I'll also do for
+                        // unions once I have them
+                        let aligner_type = self.ctx.custom_width_int_type(layout.align_bits());
+                        let padding_bytes = layout.size - (aligner_type.get_bit_width() / 8);
+                        let padding = self.padding_type(padding_bytes);
+                        let aligned_struct_repr = self.ctx.struct_type(
+                            &[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()],
+                            false,
+                        );
+                        // nocommit: Once we introduce 'Union' as a physical aggregate instead of
+                        // using Opaque here, we'll be able to generate a good debug type for our
+                        // tagged unions. But for now, we'll generate a garbage one
+                        let di_type = self
+                            .debug
+                            .debug_builder
+                            .create_basic_type("opaque", layout.size_bits() as u64, 0, 0)
+                            .unwrap()
+                            .as_type();
+                        CgType::Opaque(CgOpaqueType { pt, aligned_struct_repr, layout, di_type })
+                    }
+                };
+                self.llvm_types.insert(agg_id, cg_type);
+                cg_type
             }
-            Type::EnumVariant(ev) => {
-                let parent_enum = self.codegen_type(ev.enum_type_id)?.expect_enum();
-                Ok(parent_enum.into())
-            }
-            Type::Never => {
-                // From DWARF standard:
-                // "Debugging information entries for C void functions
-                // should not have an attribute for the return"
-                let di_type = self
-                    .debug
-                    .debug_builder
-                    .create_basic_type("never", 0, Self::DW_ATE_CHAR, 0)
-                    .unwrap()
-                    .as_type();
-                Ok(LlvmVoidType { void_type: self.ctx.void_type(), di_type }.into())
-            }
-            Type::RecursiveReference(rr) => {
-                if depth == 0 {
-                    // If this is not a recursive call, we already built this type
-                    // and should 'follow the redirect' so that calling code
-                    // gets the actual type
-                    self.codegen_type(rr.root_type_id)
-                } else {
-                    // If this is a recursive call (depth > 0), we are in the process of
-                    // building the type, and should return a placeholder for the 'recursive
-                    // reference' type
-                    // For recursive references, we use an empty struct as the representation,
-                    // and use LLVMs opaque struct type to represent it
-                    let defn_info = self
-                        .k1
-                        .types
-                        .get_defn_info(rr.root_type_id)
-                        .expect("recursive type must have defn info");
-
-                    let name = self.codegen_type_name(type_id, Some(defn_info));
-                    let s = self.ctx.opaque_struct_type(&name);
-
-                    no_cache = true;
-                    Ok(K1LlvmType::StructType(LlvmStructType {
-                        type_id,
-                        struct_type: s,
-                        fields: MSlice::empty(),
-                        di_type: self.make_debug_struct_type(
-                            &name,
-                            rr.root_type_id,
-                            &s,
-                            SpanId::NONE,
-                            &[],
-                        ),
-                        layout: self.get_layout(rr.root_type_id),
-                    }))
-                }
-            }
-            Type::Lambda(lambda_type) => {
-                let struct_type = self.codegen_type(lambda_type.env_type)?.expect_struct();
-                Ok(K1LlvmType::StructType(struct_type))
-            }
-            Type::LambdaObject(lambda_object_type) => {
-                let struct_type =
-                    self.codegen_type(lambda_object_type.struct_representation)?.expect_struct();
-                Ok(K1LlvmType::StructType(struct_type))
-            }
-            Type::Static(stat) => self.codegen_type(stat.inner_type_id),
-            Type::Function(_function_type) => {
-                panic!("Cannot codegen a naked Function type")
-            }
-            Type::Unresolved(_) => {
-                panic!("Cannot codegen type for Unresolved; something went wrong in typecheck")
-            }
-            Type::Generic(_) => {
-                panic!("Cannot codegen type for Generic; something went wrong in typecheck")
-            }
-        }?;
-        if !no_cache {
-            self.llvm_types.insert(type_id, codegened_type);
-        }
-        // let is_never = matches!(self.k1.types.get_no_follow(type_id), Type::Never);
-        // if !is_never {
-        //     let llvm_layout = self.llvm_size_info(&self.rich_repr_type(&codegened_type));
-        //     let k1_layout = self.k1.types.layouts.get(type_id);
-        //     if llvm_layout.size != k1_layout.stride() {
-        //         self.k1.ice(
-        //             format!(
-        //                 "DIFFERENT SIZES for {} (llvm {}) llvm={} k1={}",
-        //                 self.k1.type_id_to_string(type_id),
-        //                 self.rich_repr_type(&codegened_type),
-        //                 llvm_layout.size,
-        //                 k1_layout.stride()
-        //             ),
-        //             None,
-        //         )
-        //     }
-        // }
-        Ok(codegened_type)
-    }
-
-    fn canonical_repr_type(&self, t: &K1LlvmType<'ctx>) -> BasicTypeEnum<'ctx> {
-        match t {
-            K1LlvmType::Scalar(value) => value.basic_type,
-            K1LlvmType::Reference(_) => self.builtin_types.ptr_basic(),
-            K1LlvmType::EnumType(_) => self.builtin_types.ptr_basic(),
-            K1LlvmType::StructType(_) => self.builtin_types.ptr_basic(),
-            K1LlvmType::ArrayType(_) => self.builtin_types.ptr_basic(),
-            K1LlvmType::Void(_) => panic!("No canonical repr type on Void"),
         }
     }
 
-    fn rich_repr_type(&self, t: &K1LlvmType<'ctx>) -> BasicTypeEnum<'ctx> {
+    fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
+        match st {
+            ScalarType::U8 => self.ctx.i8_type().into(),
+            ScalarType::U16 => self.ctx.i16_type().into(),
+            ScalarType::U32 => self.ctx.i32_type().into(),
+            ScalarType::U64 => self.ctx.i64_type().into(),
+            ScalarType::I8 => self.ctx.i8_type().into(),
+            ScalarType::I16 => self.ctx.i16_type().into(),
+            ScalarType::I32 => self.ctx.i32_type().into(),
+            ScalarType::I64 => self.ctx.i64_type().into(),
+            ScalarType::F32 => self.ctx.f32_type().into(),
+            ScalarType::F64 => self.ctx.f64_type().into(),
+            ScalarType::Pointer => self.builtin_types.ptr.into(),
+        }
+    }
+
+    fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
+        match pt {
+            PhysicalType::Scalar(st) => self.scalar_basic_type(st),
+            PhysicalType::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
+        }
+    }
+
+    fn pt_rich_type(&mut self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
+        match pt {
+            PhysicalType::Scalar(st) => self.scalar_basic_type(st),
+            PhysicalType::Agg(_) => {
+                let k1_llvm_ty = self.codegen_type(pt);
+                k1_llvm_ty.rich_type()
+            }
+        }
+    }
+
+    fn pt_debug_type(&mut self, pt: PhysicalType) -> DIType<'ctx> {
+        let k1_llvm_ty = self.codegen_type(pt);
+        k1_llvm_ty.debug_type()
+    }
+
+    fn canonical_repr_type(&self, t: &CgType<'ctx>) -> BasicTypeEnum<'ctx> {
         match t {
-            K1LlvmType::Scalar(value) => value.basic_type,
-            K1LlvmType::Reference(_) => self.builtin_types.ptr_basic(),
-            K1LlvmType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
-            K1LlvmType::StructType(s) => s.struct_type.as_basic_type_enum(),
-            K1LlvmType::ArrayType(a) => a.array_type.as_basic_type_enum(),
-            K1LlvmType::Void(_) => panic!("No rich value type on Void / never"),
+            CgType::Scalar(value) => value.basic_type,
+            CgType::Reference(_) => self.builtin_types.ptr_basic(),
+            CgType::EnumType(_) => self.builtin_types.ptr_basic(),
+            CgType::StructType(_) => self.builtin_types.ptr_basic(),
+            CgType::ArrayType(_) => self.builtin_types.ptr_basic(),
+            CgType::Void(_) => panic!("No canonical repr type on Void"),
+            CgType::Opaque(_) => self.builtin_types.ptr_basic(),
+        }
+    }
+
+    // nocommit does this need to exist by the end
+    fn rich_repr_type(&self, t: &CgType<'ctx>) -> BasicTypeEnum<'ctx> {
+        match t {
+            CgType::Scalar(value) => value.basic_type,
+            CgType::Reference(_) => self.builtin_types.ptr_basic(),
+            CgType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
+            CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
+            CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
+            CgType::Opaque(opaque) => opaque.aligned_struct_repr.as_basic_type_enum(),
+            CgType::Void(_) => panic!("No rich value type on Void / never"),
         }
     }
 
     fn make_llvm_function_type(
         &mut self,
-        function_type_id: TypeId,
-    ) -> CodegenResult<K1LlvmFunctionType<'ctx>> {
-        let function_type = self.k1.types.get(function_type_id).as_function().unwrap();
-        let abi_mode = function_type.abi_mode;
-        let return_k1_type = self.codegen_type(function_type.return_type)?;
-        let return_type_abi_mapping =
-            self.get_abi_param_type(function_type.abi_mode, &return_k1_type, true);
+        param_types: &[PhysicalType],
+        return_type: Option<PhysicalType>,
+        abi_mode: AbiMode,
+    ) -> TyperResult<CgFunctionType<'ctx>> {
+        //let function_type = self.k1.types.get(function_type_id).as_function().unwrap();
+        //let return_k1_type = self.codegen_type(return_type);
+        let return_cg_type = self.codegen_type_opt(return_type);
+        let return_type_abi_mapping = match return_type {
+            None => AbiParamMapping::ScalarInRegister,
+            Some(return_type) => self.get_abi_mapping_for_type(abi_mode, return_type, true),
+        };
         // eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
-        let return_mapped_type = if return_k1_type.is_void() {
-            None
-        } else {
-            Some(self.mapped_abi_type(&return_k1_type, return_type_abi_mapping))
+        let return_mapped_type = match return_type {
+            None => None,
+            Some(return_type) => Some(self.mapped_abi_type(return_type, return_type_abi_mapping)),
         };
         let is_sret = match return_type_abi_mapping {
             AbiParamMapping::ScalarInRegister => false,
@@ -1513,29 +1103,37 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::StructByPtrNoCopy => true,
         };
 
+        let param_count = param_types.len() as u32 + if is_sret { 1 } else { 0 };
+
         // The logical parameters closest to K1 model
-        let param_count = function_type.physical_params.len() + if is_sret { 1 } else { 0 };
-        let mut param_types: MList<K1LlvmType<'ctx>, _> = self.mem.new_list(param_count);
-        // Foreach k1 param above, describe how to map it to physical LLVM params
+        let mut param_llvm_types: MList<CgType<'ctx>, _> = self.mem.new_list(param_count);
+        // Foreach k1 param above, describe how to map it to LLVM params
         let mut param_abi_mappings: MList<AbiParamMapping, _> = self.mem.new_list(param_count);
+
         // The physical LLVM params; the ones the function will have.
         // For now this is 1:1 in count with the logical params, as I choose to pass the int pairs
-        // in a struct, but it need not be
+        // in a struct, but it need not be; that is, 1 k1 param could result in n llvm params,
+        // where n could even be 0 for a ZST or uninhabited type
         let mut function_final_params: MList<BasicMetadataTypeEnum<'ctx>, _> =
             self.mem.new_list(param_count);
 
+        // If a function returns a big (typically > 2 words) struct, its actually
+        // 'returned' in the first parameter, which is a pointer
         if is_sret {
-            debug_assert!(return_mapped_type.unwrap().is_pointer_type());
-            function_final_params.push(return_mapped_type.unwrap().into());
+            let Some(return_mapped_type) = return_mapped_type else {
+                return failf!(self.debug.current_span(), "sret but no return_mapped_type");
+            };
+            debug_assert!(return_mapped_type.is_pointer_type());
+            function_final_params.push(return_mapped_type.into());
         }
 
-        for p in self.k1.types.mem.getn(function_type.physical_params).iter() {
-            let param_type = self.codegen_type(p.type_id)?;
-            let abi_mapping = self.get_abi_param_type(abi_mode, &param_type, false);
+        for p in param_types.iter() {
+            let param_llvm_type = self.codegen_type(*p);
+            let abi_mapping = self.get_abi_mapping_for_type(abi_mode, *p, false);
             // eprintln!("abi mapping for {} is {:?}", self.rich_repr_type(&param_type), abi_mapping);
             param_abi_mappings.push(abi_mapping);
-            param_types.push(param_type);
-            let mapped_type = self.mapped_abi_type(&param_type, abi_mapping);
+            param_llvm_types.push(param_llvm_type);
+            let mapped_type = self.mapped_abi_type(*p, abi_mapping);
             // eprintln!(
             //     "abi mapping for {} is {:?}. Mapped type: {}",
             //     self.rich_repr_type(&param_type),
@@ -1545,21 +1143,16 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             function_final_params.push(mapped_type.into());
         }
 
-        let fn_type = if is_sret {
-            self.ctx.void_type().fn_type(&function_final_params, false)
-        } else {
-            match return_mapped_type {
-                None => self.ctx.void_type().fn_type(&function_final_params, false),
-                Some(rt) => rt.fn_type(&function_final_params, false),
-            }
+        let fn_type = match return_mapped_type {
+            None => self.ctx.void_type().fn_type(&function_final_params, false),
+            Some(t) => t.fn_type(&function_final_params, false),
         };
 
-        Ok(K1LlvmFunctionType {
-            type_id: function_type_id,
+        Ok(CgFunctionType {
             llvm_function_type: fn_type,
-            param_k1_types: self.mem.list_to_handle(param_types),
+            param_k1_types: self.mem.list_to_handle(param_llvm_types),
             param_abi_mappings: self.mem.list_to_handle(param_abi_mappings),
-            return_k1_type,
+            return_cg_type,
             return_abi_mapping: return_type_abi_mapping,
             is_sret,
         })
@@ -1567,11 +1160,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn mapped_abi_type(
         &self,
-        k1_ty: &K1LlvmType<'ctx>,
+        pt: PhysicalType,
         abi_mapping: AbiParamMapping,
     ) -> BasicTypeEnum<'ctx> {
         match abi_mapping {
-            AbiParamMapping::ScalarInRegister => self.canonical_repr_type(k1_ty),
+            AbiParamMapping::ScalarInRegister => self.pt_canon_type(pt),
             AbiParamMapping::StructInInteger { width } => {
                 self.ctx.custom_width_int_type(width).as_basic_type_enum()
             }
@@ -1620,15 +1213,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn canonicalize_abi_param_value(
         &mut self,
         mapping: AbiParamMapping,
-        k1_ty: &K1LlvmType<'ctx>,
+        k1_ty: &CgType<'ctx>,
         abi_value: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        debug!(
-            "canonicalizing {} to {} via {:?}",
-            abi_value,
-            self.rich_repr_type(k1_ty),
-            mapping
-        );
+        debug!("canonicalizing {} to {} via {:?}", abi_value, self.rich_repr_type(k1_ty), mapping);
         match mapping {
             AbiParamMapping::ScalarInRegister => abi_value,
             AbiParamMapping::StructInInteger { width } => {
@@ -1679,20 +1267,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn marshal_abi_param_value(
         &mut self,
         mapping: AbiParamMapping,
-        k1_ty: &K1LlvmType<'ctx>,
+        cg_ty: &CgType<'ctx>,
         k1_value: BasicValueEnum<'ctx>,
         is_return: bool,
     ) -> BasicValueEnum<'ctx> {
+        let pt = cg_ty.pt();
         debug!(
             "marshalling k1 {}: {} with {:?}",
             k1_value,
-            self.k1.type_id_to_string(k1_ty.type_id()),
+            self.k1.types.pt_to_string(pt),
             mapping
         );
         match mapping {
             AbiParamMapping::ScalarInRegister => k1_value,
             AbiParamMapping::StructInInteger { width } => {
-                let abi_type = self.mapped_abi_type(k1_ty, mapping);
+                let abi_type = self.mapped_abi_type(pt, mapping);
                 let integer_ptr = self.build_alloca(abi_type, "abi_struct_int");
 
                 // %1 = alloca %struct.Small2, align 1
@@ -1703,7 +1292,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // %3 = load i64, ptr %2, align 8
                 // call void @takes_small(i64 %3)
 
-                let src_layout = k1_ty.rich_repr_layout();
+                let src_layout = self.k1.types.get_pt_layout(pt);
                 self.builder
                     .build_memcpy(
                         integer_ptr,
@@ -1736,7 +1325,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // Here's clang returning a mixed class eightbyte pair using an aggregate load
                 // %3 = load { i64, float }, ptr %2, align 8
                 // ret { i64, float } %3
-                let abi_type = self.mapped_abi_type(k1_ty, mapping);
+                let abi_type = self.mapped_abi_type(pt, mapping);
 
                 // This load should also accomplish the necessary copy to make this semantically
                 // by-value op
@@ -1753,7 +1342,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 //   call void @eb_pair_mixed([2 x i64] %2)
                 //   ret void
                 // }
-                let abi_type = self.mapped_abi_type(k1_ty, mapping);
+                let abi_type = self.mapped_abi_type(pt, mapping);
 
                 // This load should also accomplish the necessary copy to make this semantically
                 // by-value op
@@ -1774,7 +1363,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 } else {
                     let callers_copy = self.alloca_copy_entire_value(
                         k1_value.into_pointer_value(),
-                        k1_ty,
+                        cg_ty,
                         "abi_callers_copy",
                     );
                     callers_copy.as_basic_value_enum()
@@ -1811,7 +1400,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         struc
     }
 
-    fn codegen_let(&mut self, let_stmt: &LetStmt) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_let(&mut self, let_stmt: &LetStmt) -> TyperResult<LlvmValue<'ctx>> {
         let variable_type = self.codegen_type(let_stmt.variable_type)?;
         let variable = self.k1.variables.get(let_stmt.variable_id);
         let name = self.get_ident_name(variable.name).to_string();
@@ -1899,7 +1488,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         expr_id: TypedExprId,
         match_expr: &TypedMatchExpr,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
+    ) -> TyperResult<LlvmValue<'ctx>> {
         let match_result_type = self.k1.exprs.get_type(expr_id);
         for stmt in self.k1.mem.getn(match_expr.initial_let_statements) {
             if let instr @ LlvmValue::Void(_) = self.codegen_statement(*stmt)? {
@@ -1974,10 +1563,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     /// We expect this expr to produce a value, rather than exiting the program or otherwise crashing
     /// This is the most common case
-    fn codegen_expr_basic_value(
-        &mut self,
-        expr: TypedExprId,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn codegen_expr_basic_value(&mut self, expr: TypedExprId) -> TyperResult<BasicValueEnum<'ctx>> {
         Ok(self.codegen_expr(expr)?.expect_basic_value())
     }
 
@@ -1997,7 +1583,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     /// should not skip pointers... otherwise what are we doing
     fn load_k1_value(
         &mut self,
-        llvm_type: &K1LlvmType<'ctx>,
+        llvm_type: &CgType<'ctx>,
         source: PointerValue<'ctx>,
         name: &str,
         make_copy: bool,
@@ -2023,7 +1609,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     /// Handles the storage of aggregates by doing a (hopefully) correct memcpy
     fn store_k1_value(
         &self,
-        llvm_type: &K1LlvmType<'ctx>,
+        llvm_type: &CgType<'ctx>,
         dest: PointerValue<'ctx>,
         value: BasicValueEnum<'ctx>,
     ) -> InstructionValue<'ctx> {
@@ -2039,7 +1625,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn alloca_copy_entire_value(
         &mut self,
         src: PointerValue<'ctx>,
-        ty: &K1LlvmType<'ctx>,
+        ty: &CgType<'ctx>,
         name: &str,
     ) -> PointerValue<'ctx> {
         let dst = self.build_k1_alloca(ty, name);
@@ -2051,7 +1637,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &self,
         dst: PointerValue<'ctx>,
         src: PointerValue<'ctx>,
-        ty: &K1LlvmType<'ctx>,
+        ty: &CgType<'ctx>,
     ) -> InstructionValue<'ctx> {
         let size = self.builtin_types.ptr_sized_int;
         let layout = ty.rich_repr_layout();
@@ -2066,7 +1652,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
     fn load_variable_value(
         &mut self,
-        k1_llvm_type: &K1LlvmType<'ctx>,
+        k1_llvm_type: &CgType<'ctx>,
         variable_value: VariableValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
         match variable_value {
@@ -2091,7 +1677,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
         depth: usize,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    ) -> TyperResult<BasicValueEnum<'ctx>> {
         if let Some(basic) = self.static_values_basics.get(&static_value_id) {
             return Ok(*basic);
         }
@@ -2139,7 +1725,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     let value = self.codegen_static_value_as_const(*field, depth + 1)?;
                     packed_values.push_grow(&mut self.tmp, value);
-                    let field_size = self.k1.types.get_pt_layout(field_layout.field_t);
+                    let field_size = self.k1.types.get_pt_layout(&field_layout.field_t);
                     debug_assert_eq!(self.llvm_size_info(&value.get_type()).size, field_size.size);
                     last_offset = field_layout.offset + field_size.size;
                 }
@@ -2191,7 +1777,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         packed_values.push(payload_value);
 
                         let payload_pt = variant_agg.payload.unwrap();
-                        let payload_size = self.k1.types.get_pt_layout(payload_pt).size;
+                        let payload_size = self.k1.types.get_pt_layout(&payload_pt).size;
                         let written_so_far = payload_offset + payload_size;
                         let padding_to_end = variant_agg.envelope.size - written_so_far;
                         if padding_to_end > 0 {
@@ -2255,7 +1841,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         element_type: TypeId,
         elements: &[StaticValueId],
         depth: usize,
-    ) -> CodegenResult<StructValue<'ctx>> {
+    ) -> TyperResult<StructValue<'ctx>> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
@@ -2281,7 +1867,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn make_global_for_static_value(
         &mut self,
         static_value_id: StaticValueId,
-    ) -> CodegenResult<GlobalValue<'ctx>> {
+    ) -> TyperResult<GlobalValue<'ctx>> {
         if let Some(global) = self.static_values_globals.get(&static_value_id) {
             return Ok(*global);
         };
@@ -2319,7 +1905,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_static_value_canonical(
         &mut self,
         static_value_id: StaticValueId,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    ) -> TyperResult<BasicValueEnum<'ctx>> {
         debug!(
             "codegen_static_value_canonical {}",
             self.k1.static_value_to_string(static_value_id)
@@ -2373,7 +1959,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         rust_str: &str,
         name: Option<&str>,
-    ) -> CodegenResult<GlobalValue<'ctx>> {
+    ) -> TyperResult<GlobalValue<'ctx>> {
         let string_name = match name {
             None => "string_data",
             Some(n) => &format!("string_data_{n}\0"),
@@ -2435,7 +2021,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         string_id: StringId,
         name: Option<&str>,
-    ) -> CodegenResult<GlobalValue<'ctx>> {
+    ) -> TyperResult<GlobalValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
@@ -2452,7 +2038,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         buffer_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> CodegenResult<StructValue<'ctx>> {
+    ) -> TyperResult<StructValue<'ctx>> {
         let buffer_type = self.codegen_type(buffer_type_id)?.expect_struct();
         let buffer_struct_type = buffer_type.struct_type;
         let buffer_struct_value = buffer_struct_type.const_named_struct(&[
@@ -2467,7 +2053,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         view_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> CodegenResult<StructValue<'ctx>> {
+    ) -> TyperResult<StructValue<'ctx>> {
         let view_type = self.codegen_type(view_type_id)?.expect_struct();
         let buffer_type_id = self.mem.get_nth_lt(view_type.fields, 0).type_id();
         self.make_buffer_struct(buffer_type_id, len, data)
@@ -2487,7 +2073,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         codegened_function
     }
 
-    fn codegen_expr(&mut self, expr_id: TypedExprId) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_expr(&mut self, expr_id: TypedExprId) -> TyperResult<LlvmValue<'ctx>> {
         let expr = self.k1.exprs.get(expr_id);
         let expr_type = self.k1.exprs.get_type(expr_id);
         let expr_span = self.k1.exprs.get_span(expr_id);
@@ -2527,7 +2113,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 } else {
                     let v = self.k1.variables.get(ir_var.variable_id);
                     match v.global_id() {
-                        None => Err(CodegenError {
+                        None => Err(TyperError {
                             message: format!(
                                 "No llvm entry found for variable {} id={}",
                                 self.k1.expr_to_string(expr_id),
@@ -2751,7 +2337,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     None => {
                         let return_abi_mapping =
                             codegened_function.function_type.return_abi_mapping;
-                        let return_k1_type = codegened_function.function_type.return_k1_type;
+                        let return_k1_type = codegened_function.function_type.return_cg_type;
                         let marshalled_value = self.marshal_abi_param_value(
                             return_abi_mapping,
                             &return_k1_type,
@@ -2767,7 +2353,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     }
                     Some(sret_ptr) => {
                         self.store_k1_value(
-                            &codegened_function.function_type.return_k1_type,
+                            &codegened_function.function_type.return_cg_type,
                             sret_ptr,
                             return_value,
                         );
@@ -2790,7 +2376,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TypedExpr::Lambda(lambda_expr) => {
                 debug!("codegen lambda {:?}", lambda_expr);
                 let lambda_type = self.k1.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
-                let llvm_fn = self.codegen_function_signature(lambda_type.function_id)?;
+                let llvm_fn = self.declare_llvm_function(lambda_type.function_id)?;
                 let environment_struct_value = self
                     .codegen_expr_basic_value(lambda_type.environment_struct)?
                     .into_pointer_value();
@@ -2801,14 +2387,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::FunctionPointer(function_pointer_expr) => {
                 let function_value =
-                    self.codegen_function_signature(function_pointer_expr.function_id)?;
+                    self.declare_llvm_function(function_pointer_expr.function_id)?;
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
                 self.set_debug_location_from_span(expr_span);
                 Ok(function_ptr.as_basic_value_enum().into())
             }
             TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
-                let function_value = self.codegen_function_signature(fn_to_lam_obj.function_id)?;
+                let function_value = self.declare_llvm_function(fn_to_lam_obj.function_id)?;
                 self.set_debug_location_from_span(expr_span);
                 let function_ptr =
                     function_value.as_global_value().as_pointer_value().as_basic_value_enum();
@@ -2848,7 +2434,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn build_struct_gep(
         &mut self,
         ptr: PointerValue<'ctx>,
-        struct_type: &LlvmStructType<'ctx>,
+        struct_type: &CgStructType<'ctx>,
         idx: u32,
         name: &str,
     ) -> PointerValue<'ctx> {
@@ -2877,7 +2463,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         target_type_id: TypeId,
         span: SpanId,
         cast: &TypedCast,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
+    ) -> TyperResult<LlvmValue<'ctx>> {
         match cast.cast_type {
             CastType::EnumToVariant
             | CastType::VariantToEnum
@@ -3082,7 +2668,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         payload_ptr
     }
 
-    fn build_k1_alloca(&mut self, ty: &K1LlvmType<'ctx>, name: &str) -> PointerValue<'ctx> {
+    fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
         let ptr = self.build_alloca(self.rich_repr_type(ty), name);
         ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
         ptr
@@ -3117,7 +2703,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         alloca
     }
 
-    fn codegen_function_call(&mut self, call_id: CallId) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_function_call(&mut self, call_id: CallId) -> TyperResult<LlvmValue<'ctx>> {
         let call = self.k1.calls.get(call_id);
         let typed_function = call.callee.maybe_function_id().map(|f| self.k1.get_function(f));
         if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
@@ -3133,7 +2719,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             self.mem.new_list(llvm_function_type.llvm_function_type.count_param_types());
 
         let sret_alloca = if llvm_function_type.is_sret {
-            let rich_type = self.rich_repr_type(&llvm_function_type.return_k1_type);
+            let rich_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
             let sret_alloca = self.build_alloca(rich_type, "call_sret");
             args.push(sret_alloca.into());
             Some(sret_alloca)
@@ -3156,7 +2742,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.k1.ice_with_span("Cannot codegen a call to an abstract function", call.span)
             }
             Callee::StaticFunction(function_id) => {
-                let function_value = self.codegen_function_signature(*function_id)?;
+                let function_value = self.declare_llvm_function(*function_id)?;
 
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, &args, "").unwrap()
@@ -3166,7 +2752,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 args.insert(env_arg_index, lambda_env_struct.expect_basic_value().into());
 
-                let function_value = self.codegen_function_signature(*function_id)?;
+                let function_value = self.declare_llvm_function(*function_id)?;
 
                 self.set_debug_location_from_span(call.span);
                 self.builder.build_call(function_value, &args, "").unwrap()
@@ -3240,7 +2826,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         if llvm_function_type.is_sret {
             let sret_attribute = self.make_sret_attribute(
-                self.rich_repr_type(&llvm_function_type.return_k1_type).as_any_type_enum(),
+                self.rich_repr_type(&llvm_function_type.return_cg_type).as_any_type_enum(),
             );
             callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
         };
@@ -3248,7 +2834,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             ValueKind::Basic(returned_value) => {
                 let canonical_value = self.canonicalize_abi_param_value(
                     llvm_function_type.return_abi_mapping,
-                    &llvm_function_type.return_k1_type,
+                    &llvm_function_type.return_cg_type,
                     returned_value,
                 );
                 Ok(LlvmValue::BasicValue(canonical_value))
@@ -3289,7 +2875,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         intrinsic_type: IntrinsicOperation,
         call: &Call,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
+    ) -> TyperResult<LlvmValue<'ctx>> {
         match intrinsic_type {
             IntrinsicOperation::SizeOf
             | IntrinsicOperation::SizeOfStride
@@ -3546,7 +3132,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         function: &TypedFunction,
         index: usize,
-    ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
+    ) -> TyperResult<BasicMetadataValueEnum<'ctx>> {
         let param = self.k1.mem.get_nth(function.params, index);
         let fn_type = self.k1.types.get(function.type_id).expect_function();
         let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
@@ -3562,7 +3148,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         intrinsic_type: IntrinsicOperation,
         function_id: FunctionId,
         function: &TypedFunction,
-    ) -> CodegenResult<InstructionValue<'ctx>> {
+    ) -> TyperResult<InstructionValue<'ctx>> {
         let function_span =
             self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
         self.set_debug_location_from_span(function_span);
@@ -3770,25 +3356,85 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(instr)
     }
 
-    fn codegen_block(
-        &mut self,
-        block: &TypedBlock,
-        span: SpanId,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
-        let unit_value = self.builtin_types.unit_basic().into();
-        let mut last: LlvmValue<'ctx> = unit_value;
-        self.set_debug_location_from_span(span);
-        for stmt in self.k1.mem.getn(block.statements) {
-            if let LlvmValue::Void(never_instr) = last {
-                eprintln!("Aborting block after generating {}", never_instr);
-                break;
-            }
-            last = self.codegen_statement(*stmt)?;
+    fn codegen_block(&mut self, fv: FunctionValue<'ctx>, block: bc::CompiledBlock) -> TyperResult<BasicBlock<'ctx>> {
+        let llvm_block = self.ctx.append_basic_block(fv, block.name.as_str());
+        self.builder.position_at_end(llvm_block);
+        for inst in self.k1.bytecode.mem.getn(block.instrs) {
+            self.codegen_inst(*inst)?;
         }
-        Ok(last)
+        Ok(llvm_block)
     }
 
-    fn codegen_statement(&mut self, statement: TypedStmtId) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_inst(&mut self, inst: InstId) -> TyperResult<()> {
+        let bc = &self.k1.bytecode;
+        let span = *bc.sources.get(inst);
+        self.set_debug_location_from_span(span);
+        match bc.instrs.get(inst) {
+            bc::Inst::Data(data_inst) => {
+                let value = match data_inst {
+                    bc::DataInst::U64(u) => self.ctx.i64_type().const_int(*u, false),
+                    bc::DataInst::I64(i) => self.ctx.i64_type().const_int(*i, true),
+                    bc::DataInst::Float(f) => {
+                        match f {
+                            TypedFloatValue::F32(_) => todo!(),
+                            TypedFloatValue::F64(_) => todo!(),
+                        }
+                    },
+                }
+            },
+            bc::Inst::Alloca { t, vm_layout } => todo!(),
+            bc::Inst::Store { dst, value, t } => todo!(),
+            bc::Inst::Load { t, src } => todo!(),
+            bc::Inst::Copy { dst, src, t, vm_size } => todo!(),
+            bc::Inst::StructOffset { struct_t, base, field_index, vm_offset } => todo!(),
+            bc::Inst::ArrayOffset { element_t, base, element_index } => todo!(),
+            bc::Inst::Call { id } => todo!(),
+            bc::Inst::Jump(_) => todo!(),
+            bc::Inst::JumpIf { cond, cons, alt } => todo!(),
+            bc::Inst::Unreachable => todo!(),
+            bc::Inst::CameFrom { t, incomings } => todo!(),
+            bc::Inst::Ret(value) => todo!(),
+            bc::Inst::BoolNegate { v } => todo!(),
+            bc::Inst::BitNot { v } => todo!(),
+            bc::Inst::BitCast { v, to } => todo!(),
+            bc::Inst::IntTrunc { v, to } => todo!(),
+            bc::Inst::IntExtU { v, to } => todo!(),
+            bc::Inst::IntExtS { v, to } => todo!(),
+            bc::Inst::FloatTrunc { v, to } => todo!(),
+            bc::Inst::FloatExt { v, to } => todo!(),
+            bc::Inst::Float32ToIntUnsigned { v, to } => todo!(),
+            bc::Inst::Float64ToIntUnsigned { v, to } => todo!(),
+            bc::Inst::Float32ToIntSigned { v, to } => todo!(),
+            bc::Inst::Float64ToIntSigned { v, to } => todo!(),
+            bc::Inst::IntToFloatUnsigned { v, from, to } => todo!(),
+            bc::Inst::IntToFloatSigned { v, from, to } => todo!(),
+            bc::Inst::PtrToWord { v } => todo!(),
+            bc::Inst::WordToPtr { v } => todo!(),
+            bc::Inst::IntAdd { lhs, rhs, width } => todo!(),
+            bc::Inst::IntSub { lhs, rhs, width } => todo!(),
+            bc::Inst::IntMul { lhs, rhs, width } => todo!(),
+            bc::Inst::IntDivUnsigned { lhs, rhs, width } => todo!(),
+            bc::Inst::IntDivSigned { lhs, rhs, width } => todo!(),
+            bc::Inst::IntRemUnsigned { lhs, rhs, width } => todo!(),
+            bc::Inst::IntRemSigned { lhs, rhs, width } => todo!(),
+            bc::Inst::IntCmp { lhs, rhs, pred, width } => todo!(),
+            bc::Inst::FloatAdd { lhs, rhs, width } => todo!(),
+            bc::Inst::FloatSub { lhs, rhs, width } => todo!(),
+            bc::Inst::FloatMul { lhs, rhs, width } => todo!(),
+            bc::Inst::FloatDiv { lhs, rhs, width } => todo!(),
+            bc::Inst::FloatRem { lhs, rhs, width } => todo!(),
+            bc::Inst::FloatCmp { lhs, rhs, pred, width } => todo!(),
+            bc::Inst::BitAnd { lhs, rhs, width } => todo!(),
+            bc::Inst::BitOr { lhs, rhs, width } => todo!(),
+            bc::Inst::BitXor { lhs, rhs, width } => todo!(),
+            bc::Inst::BitShiftLeft { lhs, rhs, width } => todo!(),
+            bc::Inst::BitUnsignedShiftRight { lhs, rhs, width } => todo!(),
+            bc::Inst::BitSignedShiftRight { lhs, rhs, width } => todo!(),
+            bc::Inst::BakeStaticValue { type_id, value } => todo!(),
+        }
+    }
+
+    fn codegen_statement(&mut self, statement: TypedStmtId) -> TyperResult<LlvmValue<'ctx>> {
         match self.k1.stmts.get(statement) {
             TypedStmt::Expr(expr, _) => self.codegen_expr(*expr),
             TypedStmt::Let(let_stmt) => self.codegen_let(let_stmt),
@@ -3846,7 +3492,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         condition: &MatchingCondition,
         cons_block: BasicBlock<'ctx>,
         else_block: BasicBlock<'ctx>,
-    ) -> CodegenResult<()> {
+    ) -> TyperResult<()> {
         for stmt in self.k1.mem.getn(condition.instrs) {
             match stmt {
                 MatchingConditionInstr::Binding { let_stmt, .. } => {
@@ -3872,7 +3518,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(())
     }
 
-    fn codegen_while_expr(&mut self, while_loop: &WhileLoop) -> CodegenResult<LlvmValue<'ctx>> {
+    fn codegen_while_expr(&mut self, while_loop: &WhileLoop) -> TyperResult<LlvmValue<'ctx>> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let loop_entry_block = self.ctx.append_basic_block(current_fn, "while_cond");
@@ -3910,7 +3556,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         &mut self,
         loop_expr: &LoopExpr,
         expr_type: TypeId,
-    ) -> CodegenResult<LlvmValue<'ctx>> {
+    ) -> TyperResult<LlvmValue<'ctx>> {
         let start_block = self.builder.get_insert_block().unwrap();
         let current_fn = start_block.get_parent().unwrap();
         let loop_body_block = self.ctx.append_basic_block(current_fn, "loop_body");
@@ -3955,7 +3601,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         function_span: SpanId,
         return_type: DIType<'ctx>,
         param_debug_types: &[DIType<'ctx>],
-    ) -> CodegenResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
+    ) -> TyperResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
         let span_id = function_span;
         let function_file_id = self.k1.ast.spans.get(span_id).file_id;
         let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
@@ -3984,18 +3630,18 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok((di_subprogram, *function_file))
     }
 
-    fn codegen_function_signature(
+    fn declare_llvm_function(
         &mut self,
         function_id: FunctionId,
-    ) -> CodegenResult<FunctionValue<'ctx>> {
+    ) -> TyperResult<FunctionValue<'ctx>> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
         debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
 
         let typed_function = self.k1.get_function(function_id);
+        let typed_function_linkage = typed_function.linkage;
         let typed_function_params = typed_function.params;
-        let function_type_id = typed_function.type_id;
 
         let llvm_linkage = match typed_function.linkage {
             TyperLinkage::Standard => None,
@@ -4003,11 +3649,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             TyperLinkage::Intrinsic => None,
         };
         let llvm_name = match typed_function.linkage {
-            TyperLinkage::External { fn_name: Some(link_name), .. } => self.k1.ident_str(link_name),
-            _ => &self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
+            TyperLinkage::External { fn_name: Some(link_name), .. } => {
+                self.k1.ident_str(link_name).to_string()
+            }
+            _ => self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
         };
 
-        if self.llvm_module.get_function(llvm_name).is_some() {
+        if self.llvm_module.get_function(&llvm_name).is_some() {
             if let Some(LlvmLinkage::External) = llvm_linkage {
                 eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
             } else {
@@ -4019,14 +3667,36 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
 
-        let llvm_function_type = self.make_llvm_function_type(function_type_id)?;
+        let function_k1_type = self.k1.types.get(typed_function.type_id).expect_function();
+        let abi_mode = function_k1_type.abi_mode;
+        let bytecode_fn = self.k1.bytecode.functions.get(function_id).unwrap();
+
+        let llvm_function_type = self.make_llvm_function_type(
+            self.k1.bytecode.mem.getn(bytecode_fn.fn_params),
+            bytecode_fn.return_type,
+            abi_mode,
+        )?;
+
+        let di_types: SV8<_> = self
+            .mem
+            .getn_lt(llvm_function_type.param_k1_types)
+            .iter()
+            .map(|t| t.debug_type())
+            .collect();
+        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
+        let (di_subprogram, di_file) = self.make_function_debug_info(
+            &llvm_name,
+            function_span,
+            llvm_function_type.return_cg_type.debug_type(),
+            &di_types,
+        )?;
         let is_sret = llvm_function_type.is_sret;
 
         let sret_attribute = if is_sret {
-            let struct_type = self.rich_repr_type(&llvm_function_type.return_k1_type);
+            let struct_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
             let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
             let align_attribute = self.make_align_attribute(
-                llvm_function_type.return_k1_type.rich_repr_layout().align as u64,
+                llvm_function_type.return_cg_type.rich_repr_layout().align as u64,
             );
             Some((sret_attribute, align_attribute))
         } else {
@@ -4035,7 +3705,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
         // TODO: Figure out how to mark all standard functions dso_local
         let function_value = self.llvm_module.add_function(
-            llvm_name,
+            &llvm_name,
             llvm_function_type.llvm_function_type,
             llvm_linkage,
         );
@@ -4076,10 +3746,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
         }
 
-        let compile_body = !typed_function.linkage.is_external();
+        let compile_body = !typed_function_linkage.is_external();
         if compile_body {
             self.functions_pending_body_compilation.push(function_id);
         }
+
+        function_value.set_subprogram(di_subprogram);
+
         self.llvm_functions.insert(
             function_id,
             CodegenedFunction {
@@ -4088,6 +3761,8 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 sret_pointer,
                 last_alloca_instr: None,
                 instruction_count: 0,
+                debug_info: di_subprogram,
+                debug_file: di_file,
             },
         );
         self.llvm_function_to_k1.insert(function_value, function_id);
@@ -4095,10 +3770,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(function_value)
     }
 
-    fn get_abi_param_type(
+    fn get_abi_mapping_for_type(
         &self,
         abi_mode: types::AbiMode,
-        param_type: &K1LlvmType<'ctx>,
+        pt: PhysicalType,
         is_return: bool,
     ) -> AbiParamMapping {
         enum CallConv {
@@ -4116,171 +3791,195 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
-        match param_type {
-            K1LlvmType::Scalar(_) => AbiParamMapping::ScalarInRegister,
-            K1LlvmType::EnumType(_) => {
-                // struct {
-                //   <4> tag;
-                //   [i8 x 12] payload;
-                // }
-                // enum abi mapping eventually; for
-                // now we just say they are always passed by pointer
-                match callconv {
-                    CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
-                    CallConv::AMD64 | CallConv::ARM64 => {
-                        AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
-                    }
-                }
-            }
-            K1LlvmType::StructType(_) | K1LlvmType::ArrayType(_) => {
-                let size = param_type.rich_repr_layout().size;
-                match callconv {
-                    CallConv::InternalK1 => {
-                        if size <= 8 {
-                            AbiParamMapping::ScalarInRegister
-                        } else if size <= 16 {
-                            AbiParamMapping::StructByPtrNoCopy
-                        } else {
-                            AbiParamMapping::StructByPtrNoCopy
-                        }
-                    }
-                    CallConv::ARM64 => {
-                        // nocommit: Check for HFA on ARM64
-                        if size <= 8 {
-                            // Returns use the exact width; otherwise just i64
-                            let width_bits = if is_return { size * 8 } else { 64 };
-                            AbiParamMapping::StructInInteger { width: width_bits }
-                        } else if size <= 16 {
-                            // If the size of the structure is between 9 and 16 bytes, pass the structure as
-                            // [an array of] two integers of 8 bytes each
-                            AbiParamMapping::StructByIntPairArray
-                        } else {
-                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
-                        }
-                    }
-                    CallConv::AMD64 => {
-                        if size <= 8 {
-                            // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
-                            let width_bits = size * 8;
-                            AbiParamMapping::StructInInteger { width: width_bits }
-                        } else if size <= 16 {
-                            // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
-                            // Pass by classified eightbytes
-                            let (eb1, eb2, eb2_bits) =
-                                self.collect_aggregate_eightbytes(param_type);
-                            AbiParamMapping::StructByEightbytePair {
-                                class1: eb1,
-                                class2: eb2,
-                                active_bits2: eb2_bits,
+        match pt {
+            PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
+            PhysicalType::Agg(agg_id) => {
+                let agg_record = self.k1.types.phys_types.get(agg_id);
+                match agg_record.agg_type {
+                    AggType::EnumVariant(_) | AggType::Struct { .. } | AggType::Array { .. } => {
+                        let size_bytes = agg_record.layout.size;
+                        match callconv {
+                            CallConv::InternalK1 => {
+                                if size_bytes <= 8 {
+                                    AbiParamMapping::ScalarInRegister
+                                } else if size_bytes <= 16 {
+                                    AbiParamMapping::StructByPtrNoCopy
+                                } else {
+                                    AbiParamMapping::StructByPtrNoCopy
+                                }
                             }
-                        } else {
-                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
+                            CallConv::ARM64 => {
+                                // nocommit: Check for HFA on ARM64
+                                if size_bytes <= 8 {
+                                    // Returns use the exact width; otherwise just i64
+                                    let width_bits = if is_return { size_bytes * 8 } else { 64 };
+                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                } else if size_bytes <= 16 {
+                                    // If the size of the structure is between 9 and 16 bytes, pass the structure as
+                                    // [an array of] two integers of 8 bytes each
+                                    AbiParamMapping::StructByIntPairArray
+                                } else {
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
+                                }
+                            }
+                            CallConv::AMD64 => {
+                                if size_bytes <= 8 {
+                                    // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
+                                    let width_bits = size_bytes * 8;
+                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                } else if size_bytes <= 16 {
+                                    // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
+                                    // Pass by classified eightbytes
+                                    let (eb1, eb2, eb2_bits) =
+                                        self.collect_aggregate_eightbytes(pt);
+                                    AbiParamMapping::StructByEightbytePair {
+                                        class1: eb1,
+                                        class2: eb2,
+                                        active_bits2: eb2_bits,
+                                    }
+                                } else {
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
+                                }
+                            }
+                        }
+                    }
+                    AggType::Opaque { .. } => {
+                        // enum abi mapping eventually; for
+                        // now we just say they are always passed by pointer
+                        match callconv {
+                            CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
+                            CallConv::AMD64 | CallConv::ARM64 => {
+                                AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
+                            }
                         }
                     }
                 }
             }
-            K1LlvmType::Reference(_) => AbiParamMapping::ScalarInRegister,
-            K1LlvmType::Void(_) => AbiParamMapping::ScalarInRegister,
         }
     }
 
     // What a horrible amount of code for such a small transformation!
     fn collect_aggregate_eightbytes(
         &self,
-        s: &K1LlvmType<'ctx>,
+        pt: PhysicalType,
     ) -> (EightbyteClass, EightbyteClass, u32) {
+        // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
+        // for the HFA detection
+        fn append_type(
+            class1: &mut Option<EightbyteClass>,
+            class2: &mut Option<EightbyteClass>,
+            cur_bits: &mut u32,
+            class: EightbyteClass,
+            size_bits: u32,
+        ) {
+            match (class1, class2) {
+                (c1 @ None, None) => *c1 = Some(class),
+                (Some(c1), c2 @ None) => {
+                    let scalar_size_signed: i32 = size_bits as i32;
+                    let cur_bits_signed: i32 = *cur_bits as i32;
+
+                    let new_bits = scalar_size_signed + cur_bits_signed;
+                    let bleed_bits = new_bits - 8;
+
+                    let new_c1_class = c1.combine(class);
+                    *c1 = new_c1_class;
+                    if bleed_bits > 0 {
+                        // `bleed`: This scalar actually spans the first 8 and last 8 bytes;
+                        // so contributes to the class of both
+                        *c2 = Some(class);
+                        *cur_bits = bleed_bits as u32;
+                    } else if bleed_bits == 0 {
+                        // We completed the first eightbyte exactly; initialize the 2nd and reset
+                        // cur_bits
+                        *c2 = Some(EightbyteClass::Initial);
+                        *cur_bits = 0;
+                    } else {
+                        *cur_bits = new_bits as u32;
+                    }
+                }
+                (Some(_), Some(c2)) => *c2 = c2.combine(class),
+                (None, Some(_)) => unreachable!(),
+            }
+        }
         fn handle_type_rec<'ctx, 'k1>(
             c: &Codegen<'ctx, 'k1>,
             class1: &mut Option<EightbyteClass>,
             class2: &mut Option<EightbyteClass>,
             cur_bits: &mut u32,
-            t: &K1LlvmType<'ctx>,
+            t: PhysicalType,
         ) {
             match t {
-                k1_type @ K1LlvmType::Scalar(llvm_scalar_type) => {
-                    let class = match llvm_scalar_type.basic_type {
-                        BasicTypeEnum::ArrayType(_) => unreachable!(),
-                        BasicTypeEnum::FloatType(_) => EightbyteClass::Float,
-                        BasicTypeEnum::IntType(_) => EightbyteClass::Int,
-                        BasicTypeEnum::PointerType(_) => EightbyteClass::Int,
-                        BasicTypeEnum::StructType(_) => unreachable!(),
-                        BasicTypeEnum::VectorType(_) => unreachable!(),
-                        BasicTypeEnum::ScalableVectorType(_) => unreachable!(),
+                PhysicalType::Scalar(st) => {
+                    let class = match st {
+                        ScalarType::U8 => EightbyteClass::Int,
+                        ScalarType::U16 => EightbyteClass::Int,
+                        ScalarType::U32 => EightbyteClass::Int,
+                        ScalarType::U64 => EightbyteClass::Int,
+                        ScalarType::I8 => EightbyteClass::Int,
+                        ScalarType::I16 => EightbyteClass::Int,
+                        ScalarType::I32 => EightbyteClass::Int,
+                        ScalarType::I64 => EightbyteClass::Int,
+                        ScalarType::F32 => EightbyteClass::Float,
+                        ScalarType::F64 => EightbyteClass::Float,
+                        ScalarType::Pointer => EightbyteClass::Int,
                     };
-                    match (class1, class2) {
-                        (c1 @ None, None) => *c1 = Some(class),
-                        (Some(c1), c2 @ None) => {
-                            let scalar_size_signed: i32 =
-                                k1_type.rich_repr_layout().size_bits() as i32;
-                            let cur_bits_signed: i32 = *cur_bits as i32;
-
-                            let new_bits = scalar_size_signed + cur_bits_signed;
-                            let bleed_bits = new_bits - 8;
-
-                            let new_c1_class = c1.combine(class);
-                            *c1 = new_c1_class;
-                            if bleed_bits > 0 {
-                                // `bleed`: This scalar actually spans the first 8 and last 8 bytes;
-                                // so contributes to the class of both
-                                *c2 = Some(class);
-                                *cur_bits = bleed_bits as u32;
-                            } else if bleed_bits == 0 {
-                                // We completed the first eightbyte exactly; initialize the 2nd and reset
-                                // cur_bits
-                                *c2 = Some(EightbyteClass::Initial);
-                                *cur_bits = 0;
-                            } else {
-                                *cur_bits = new_bits as u32;
+                    append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
+                }
+                PhysicalType::Agg(agg_id) => {
+                    let agg_record = c.k1.types.phys_types.get(agg_id);
+                    match agg_record.agg_type {
+                        AggType::EnumVariant(evl) => {
+                            handle_type_rec(
+                                c,
+                                class1,
+                                class2,
+                                cur_bits,
+                                PhysicalType::Scalar(evl.tag),
+                            );
+                            if let Some(payload) = evl.payload {
+                                handle_type_rec(c, class1, class2, cur_bits, payload)
                             }
                         }
-                        (Some(_), Some(c2)) => *c2 = c2.combine(class),
-                        (None, Some(_)) => unreachable!(),
-                    };
-                }
-                K1LlvmType::EnumType(_) => {
-                    // Since the goal is just to get classified 8-bytes, just add up the opaque
-                    // integer bytes here. yes I could classify the enum's variants payloads (no
-                    // floats, etc) but id also have to incorporate padding; seems insane
-                    todo!(
-                        "classify the payloads like a union; do this last; unions are always the final boss"
-                    )
-                }
-                K1LlvmType::StructType(s2) => {
-                    for sfield in c.mem.getn_lt(s2.fields) {
-                        handle_type_rec(c, class1, class2, cur_bits, sfield);
+                        AggType::Struct { fields } => {
+                            for f in c.k1.types.mem.getn(fields) {
+                                handle_type_rec(c, class1, class2, cur_bits, f.field_t)
+                            }
+                        }
+                        AggType::Array { element_pt: element_t, len } => {
+                            for _ in 0..len {
+                                handle_type_rec(c, class1, class2, cur_bits, element_t)
+                            }
+                        }
+                        AggType::Opaque { layout } => append_type(
+                            class1,
+                            class2,
+                            cur_bits,
+                            EightbyteClass::Int,
+                            layout.size_bits(),
+                        ),
                     }
                 }
-                K1LlvmType::ArrayType(llvm_array_type) => {
-                    for _ in 0..llvm_array_type.count {
-                        let elem_type = c.mem.get(llvm_array_type.element_type);
-                        handle_type_rec(c, class1, class2, cur_bits, elem_type);
-                    }
-                }
-                K1LlvmType::Reference(r) => {
-                    let ptr_type = c.mem.get(r.pointer_type);
-                    handle_type_rec(c, class1, class2, cur_bits, ptr_type);
-                }
-                K1LlvmType::Void(_) => todo!(),
             }
         }
         let mut class1 = Some(EightbyteClass::Initial);
         let mut class2 = None;
         let mut cur_bits = 0;
 
-        handle_type_rec(self, &mut class1, &mut class2, &mut cur_bits, s);
+        handle_type_rec(self, &mut class1, &mut class2, &mut cur_bits, pt);
 
         match (class1, class2) {
             (Some(c1), Some(c2)) => (c1, c2, cur_bits),
             _ => panic!(
                 "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
-                self.rich_repr_type(s)
+                self.k1.types.pt_to_string(pt)
             ),
         }
     }
 
-    fn codegen_function_body(&mut self, function_id: FunctionId) -> CodegenResult<()> {
+    fn codegen_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
         debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, false));
         let typed_function = self.k1.get_function(function_id);
+        let typed_function_params = typed_function.params;
 
         let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
         let function_line_number = self
@@ -4292,26 +3991,13 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             .line_number();
 
         let codegened_function = self.llvm_functions.get(&function_id).unwrap();
-        let llvm_function_type = &codegened_function.function_type;
-        let param_k1_types = llvm_function_type.param_k1_types;
-        let param_abi_mappings = llvm_function_type.param_abi_mappings;
-        let is_sret = llvm_function_type.is_sret;
+        let cg_function_type = &codegened_function.function_type;
+        let param_k1_types = cg_function_type.param_k1_types;
+        let param_abi_mappings = cg_function_type.param_abi_mappings;
+        let is_sret = cg_function_type.is_sret;
         let function_value = codegened_function.function_value;
 
-        let di_types: SV8<_> = self
-            .mem
-            .getn_lt(llvm_function_type.param_k1_types)
-            .iter()
-            .map(|t| t.debug_type())
-            .collect();
-        let (di_subprogram, di_file) = self.make_function_debug_info(
-            function_value.get_name().to_str().unwrap(),
-            function_span,
-            llvm_function_type.return_k1_type.debug_type(),
-            &di_types,
-        )?;
-
-        self.debug.push_scope(function_span, di_subprogram.as_debug_info_scope(), di_file);
+        self.debug.push_scope(function_span, codegened_function.debug_info.as_debug_info_scope(), codegened_function.debug_file);
 
         let entry_block = self.ctx.append_basic_block(function_value, "entry");
         self.builder.position_at_end(entry_block);
@@ -4326,11 +4012,10 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             let param_abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, logical_param_index);
 
             let typed_param_record =
-                self.k1.mem.get_nth(typed_function.params, logical_param_index);
+                self.k1.mem.get_nth(typed_function_params, logical_param_index);
             self.set_debug_location_from_span(typed_param_record.span);
 
             let name = param.get_name().to_str().unwrap();
-            debug!("canonicalizing fn param {i} {name}");
             let mapped_value =
                 self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
 
@@ -4351,18 +4036,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.get_debug_location(),
                 entry_block,
             );
-            debug!(
-                "Inserting variable {i} for function {} id={} {} id={}",
-                self.k1.ident_str(typed_function.name),
-                function_id,
-                name,
-                typed_param_record.variable_id
-            );
-            self.variable_to_value.insert(
-                typed_param_record.variable_id,
-                VariableValue::Direct { value: mapped_value },
-            );
         }
+
+        let typed_function = self.k1.get_function(function_id);
+        // If we got this far and the function has an intrinsic type, then its
+        // the kind that needs to be a physical LLVM function
         match typed_function.intrinsic_type {
             Some(intrinsic_type) => {
                 let _terminator_instr = self.codegen_intrinsic_function_body(
@@ -4372,20 +4050,21 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 )?;
             }
             None => {
-                let function_block_id = typed_function.body_block.unwrap_or_else(|| {
-                    panic!("Function has no block {}", self.get_ident_name(typed_function.name))
-                });
-                let TypedExpr::Block(function_block) = self.k1.exprs.get(function_block_id) else {
-                    panic!("Expected block")
-                };
-                let block_span = self.k1.exprs.get_span(function_block_id);
-                self.codegen_block(function_block, block_span)?;
+                let bc_unit = self.k1.bytecode.functions.get(function_id).unwrap();
+                self.codegen_unit_body(bc_unit.blocks);
+
             }
         };
         self.debug.pop_scope();
-        function_value.set_subprogram(di_subprogram);
 
         Ok(())
+    }
+
+    fn codegen_unit_body(&mut self, function_value: FunctionValue<'ctx>, blocks: MSlice<CompiledBlock, ProgramBytecode>) -> TyperResult<()> {
+        for block in self.k1.bytecode.mem.getn_lt(blocks) {
+            self.codegen_block(block)
+        }
+
     }
 
     fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
@@ -4407,7 +4086,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
     fn codegen_integer_value(
         &mut self,
         integer: TypedIntValue,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    ) -> TyperResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(integer.get_type())?;
         let llvm_int_ty = self.rich_repr_type(&llvm_ty).into_int_type();
         let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
@@ -4419,17 +4098,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(llvm_value.as_basic_value_enum())
     }
 
-    fn codegen_float_value(
-        &mut self,
-        float: TypedFloatValue,
-    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
         let llvm_ty = self.codegen_type(float.get_type())?;
         let llvm_float_ty = self.rich_repr_type(&llvm_ty).into_float_type();
         let llvm_value = llvm_float_ty.const_float(float.as_f64());
         Ok(llvm_value.as_basic_value_enum())
     }
 
-    fn codegen_global(&mut self, global_id: TypedGlobalId) -> CodegenResult<()> {
+    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<()> {
         let global = self.k1.globals.get(global_id);
         let initial_static_value_id = global.initial_value.unwrap();
         let variable = self.k1.variables.get(global.variable_id);
@@ -4483,7 +4159,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         Ok(())
     }
 
-    pub fn codegen_program(&mut self) -> CodegenResult<()> {
+    pub fn codegen_program(&mut self) -> TyperResult<()> {
         let start = std::time::Instant::now();
 
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
@@ -4510,7 +4186,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             if let TyperLinkage::External { fn_name: Some(link_name), .. } = function.linkage {
                 match self.k1.ident_str(link_name) {
                     "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
-                        self.codegen_function_signature(id)?;
+                        self.declare_llvm_function(id)?;
                     }
                     _ => {}
                 };
@@ -4520,7 +4196,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let Some(main_function_id) = self.k1.get_main_function_id() else {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
-        let function_value = self.codegen_function_signature(main_function_id)?;
+        let function_value = self.declare_llvm_function(main_function_id)?;
 
         let mut pending_buffer: Vec<FunctionId> =
             Vec::with_capacity(self.functions_pending_body_compilation.len());
