@@ -11,7 +11,7 @@ mod stack_tests {
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
-            expr_ret_kind: None,
+            return_type: None,
             inst_offset: 0,
             inst_count: 0,
             blocks: MSlice::empty(),

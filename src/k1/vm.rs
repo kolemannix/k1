@@ -1608,7 +1608,7 @@ fn resolve_global(
         k1.types.pt_to_string(t)
     );
     let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-    let layout = k1.types.get_pt_layout(&t);
+    let layout = k1.types.get_pt_layout(t);
     if is_constant {
         let dst = k1.vm_static_stack.push_layout_uninit(layout);
         store_value(&k1.types, t, dst, shared_vm_value);
