@@ -523,8 +523,8 @@ pub fn execute_compiled_unit(
         }
     };
     let top_ret_info = match unit.return_type {
-        None => None,
-        Some(ret_pt) => {
+        InstKind::Void | InstKind::Terminator => None,
+        InstKind::Value(ret_pt) => {
             let pt_layout = k1.types.get_pt_layout(ret_pt);
             let ret_addr = vm.stack.push_layout_uninit(pt_layout);
             debug!(
@@ -755,7 +755,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         )?;
                         builtin_return!(result)
                     }
-                    BcCallee::Builtin(bc_builtin) => match bc_builtin {
+                    BcCallee::Builtin(_, bc_builtin) => match bc_builtin {
                         bc::BcBuiltin::TypeSchema => {
                             // intern fn typeSchema(id: u64): TypeSchema
                             let type_id_arg =
@@ -959,7 +959,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         }
                     },
                     BcCallee::Direct(function_id) => function_id,
-                    BcCallee::Indirect(value) => {
+                    BcCallee::Indirect(_, value) => {
                         // Decode function id from 'pointer'
                         let callee_value = resolve_value!(value);
                         let function_id_u64 = callee_value.bits();
@@ -2352,7 +2352,7 @@ pub fn get_view_element(
     elem_pt: PhysicalType,
     index: usize,
 ) -> Value {
-    let elem_offset = k1.types.get_pt_layout(&elem_pt).offset_at_index(index);
+    let elem_offset = k1.types.get_pt_layout(elem_pt).offset_at_index(index);
     let elem_ptr = unsafe { data_ptr.byte_add(elem_offset) };
     load_value(elem_pt, elem_ptr)
 }
@@ -2383,7 +2383,7 @@ fn render_debug_value(
             render_debug_address(w, vm, value)?;
             w.write_str(" ")?;
             k1.types.display_pt(w, pt)?;
-            let layout = k1.types.get_pt_layout(&pt);
+            let layout = k1.types.get_pt_layout(pt);
             if value.as_usize() == 0 {
                 write!(w, "<null>")?;
             } else if value.as_usize() <= MIN_VALID_PTR_HEUR {

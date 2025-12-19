@@ -103,9 +103,9 @@ pub struct CompiledBlock {
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
     pub unit_id: CompilableUnitId,
-    /// If a compiled expression, the returned type.
-    /// None means void or divergent
-    pub return_type: Option<PhysicalType>,
+    // nocommit: just embed a phys function type
+    pub return_type: InstKind,
+    pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
@@ -114,7 +114,6 @@ pub struct CompiledUnit {
     pub inst_count: u32,
 
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
-    pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
     pub is_debug: bool,
 }
 
@@ -686,9 +685,9 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     b.cur_span = fn_span;
 
     // Set up parameters
-    let param_variables = f.params;
-    let mut params = b.k1.bytecode.mem.new_list(param_variables.len());
-    for (index, param) in b.k1.mem.getn(param_variables).iter().enumerate() {
+    let fn_params = f.params;
+    let fn_phys_type = b.get_physical_fn_type(f.type_id);
+    for (index, param) in b.k1.mem.getn(fn_params).iter().enumerate() {
         let v = b.k1.variables.get(param.variable_id);
         let t = b.get_physical_type(v.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
@@ -696,9 +695,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
             value: Value::FnParam { t, index: index as u32 },
             indirect: false,
         });
-        params.push(t);
     }
-    let params_handle = b.k1.bytecode.mem.list_to_handle(params);
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
@@ -710,7 +707,8 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     };
 
     let unit_id = CompilableUnitId::Function(function_id);
-    let unit = finalize_unit(&mut b, unit_id, params_handle, None, is_debug);
+    let unit =
+        finalize_unit(&mut b, unit_id, fn_phys_type.params, fn_phys_type.return_type, is_debug);
 
     *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
 
@@ -751,13 +749,9 @@ pub fn compile_top_level_expr(
     b.push_block(name);
 
     let _result = compile_expr(&mut b, None, expr)?;
-    let return_pt = match b.type_to_inst_kind(b.k1.exprs.get_type(expr)) {
-        InstKind::Value(pt) => Some(pt),
-        InstKind::Void => None,
-        InstKind::Terminator => None,
-    };
+    let return_kind = b.type_to_inst_kind(b.k1.exprs.get_type(expr));
     let compiled_expr =
-        finalize_unit(&mut b, CompilableUnitId::Expr(expr), MSlice::empty(), return_pt, is_debug);
+        finalize_unit(&mut b, CompilableUnitId::Expr(expr), MSlice::empty(), return_kind, is_debug);
 
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
@@ -772,7 +766,7 @@ fn finalize_unit(
     b: &mut Builder,
     unit_id: CompilableUnitId,
     fn_params: MSlice<PhysicalType, ProgramBytecode>,
-    return_type: Option<PhysicalType>,
+    return_type: InstKind,
     is_debug: bool,
 ) -> CompiledUnit {
     let compiled_blocks = b.bake_blocks();
@@ -1028,18 +1022,17 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
-        let mut param_types = self.k1.bytecode.mem.new_list(call.args.len());
-        for arg in &call.args {
-            let expr_type = self.k1.exprs.get_type(*arg);
-            let pt = self.get_physical_type(expr_type);
+        let function_type = self.k1.types.get(type_id).expect_function();
+        let mut param_types = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
+        for param in self.k1.types.mem.getn(function_type.physical_params) {
+            let pt = self.get_physical_type(param.type_id);
             param_types.push(pt);
         }
-        let return_type = self.type_to_inst_kind(call.return_type);
-        let abi_mode = self.k1.types.get(call.)
+        let return_type = self.type_to_inst_kind(function_type.return_type);
         PhysicalFunctionType {
             params: param_types.into_handle(&mut self.k1.bytecode.mem),
             return_type,
-            abi_mode
+            abi_mode: function_type.abi_mode,
         }
     }
 }
@@ -1436,7 +1429,7 @@ fn compile_expr(
                                         let memset_args =
                                             b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
                                         let Some(memset_function_id) =
-                                            b.k1.functions.iter().find(|f| {
+                                            b.k1.functions.iter_with_ids().find(|(_, f)| {
                                                 f.scope == b.k1.scopes.mem_scope_id
                                                     && f.name == b.k1.ast.idents.b.memset
                                             })
@@ -1447,7 +1440,7 @@ fn compile_expr(
                                             dst: None,
                                             ret_inst_kind: InstKind::UNIT,
                                             callee: BcCallee::Builtin(
-                                                memset_function_id,
+                                                memset_function_id.0,
                                                 BcBuiltin::MemSet,
                                             ),
                                             args: memset_args,
@@ -1489,7 +1482,7 @@ fn compile_expr(
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 let to_pt = b.get_physical_type(type_id);
                                 let from = compile_expr(b, None, call.args[0])?;
-                                let from_pt = b.get_value_kind(&from).expect_value()?;
+                                let from_pt = b.get_value_kind(&from).expect_value().unwrap();
                                 match (from_pt, to_pt) {
                                     (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
                                         // Note that this also covers Pointer to Pointer
@@ -1509,26 +1502,31 @@ fn compile_expr(
                                         let locn = match dst {
                                             Some(dst) => dst,
                                             None => {
-                                                b.push_alloca(to_pt, "bitcast scalar to agg place")
+                                                let spot = b.push_alloca(
+                                                    to_pt,
+                                                    "bitcast scalar to agg place",
+                                                );
+                                                spot.as_value()
                                             }
                                         };
 
                                         // We know a scalar store will work
-                                        let stored =
+                                        let _stored =
                                             b.push_store(locn, from, "bitcast scalar to agg store");
                                         Ok(locn)
                                     }
                                     (PhysicalType::Agg(_), PhysicalType::Scalar(_)) => {
                                         // Perform a 'load' of the scalar type _from_ the
                                         // aggregate's memory
-                                        load_or_copy(
+                                        let loaded = load_or_copy(
                                             b,
                                             to_pt,
                                             dst,
                                             from,
-                                            copy_aggregates,
+                                            false,
                                             "bitcast agg to scalar",
-                                        )
+                                        );
+                                        Ok(loaded)
                                     }
                                     (PhysicalType::Agg(_), PhysicalType::Agg(_)) => {
                                         let bitcast =
@@ -1611,7 +1609,7 @@ fn compile_expr(
                                 b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
                             };
                             BcCallee::Builtin(function_id, bi)
-                        },
+                        }
                         None => {
                             b_ice!(b, "Unhandled intrinsic in bytecode: {:?}", intrinsic)
                         }
@@ -1634,6 +1632,9 @@ fn compile_expr(
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
                     Callee::DynamicLambda(dl) => {
+                        let lambda_object_type =
+                            b.k1.types.get(b.k1.exprs.get_type(*dl)).as_lambda_object().unwrap();
+                        let fn_type_id = lambda_object_type.function_type;
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
                         let lam_obj_pt = b.get_physical_type(lam_obj_type_id).expect_agg();
@@ -1654,12 +1655,11 @@ fn compile_expr(
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
                         args.push(env);
-                        let phys_fn_type = b.get_physical_fn_type(&call);
+                        let phys_fn_type = b.get_physical_fn_type(fn_type_id);
                         BcCallee::Indirect(phys_fn_type, fn_ptr)
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let function_type_id = b.k1.exprs.get_type(*function_pointer_expr);
-                        let function_type = b.k1.types.get(function_type_id).expect_function();
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
                         let phys_fn_type = b.get_physical_fn_type(function_type_id);
                         BcCallee::Indirect(phys_fn_type, callee_inst)
@@ -1694,6 +1694,7 @@ fn compile_expr(
             for arg in &call.args {
                 args.push(compile_expr(b, None, *arg)?);
             }
+            let return_inst_kind = b.type_to_inst_kind(return_type);
             let call_dst = match dst {
                 None => match return_inst_kind {
                     InstKind::Value(PhysicalType::Scalar(_)) => None,
@@ -2863,7 +2864,7 @@ pub fn display_inst(
                     write!(w, " ")?;
                     w.write_str(k1.ident_str(k1.get_function(*function_id).name))?;
                 }
-                BcCallee::Indirect(callee_inst) => {
+                BcCallee::Indirect(_, callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
                 }
                 BcCallee::Extern(lib_name, name, callee_fn) => {

@@ -12372,7 +12372,7 @@ impl TypedProgram {
                         }
 
                         let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
-                            condition: condition,
+                            condition,
                             else_body,
                             span: require.span,
                         }));

@@ -1217,7 +1217,7 @@ impl TypePool {
                     }
                     Some(payload_pt) => {
                         let mut struct_layout = tag_layout;
-                        let payload_layout = self.get_pt_layout(&payload_pt);
+                        let payload_layout = self.get_pt_layout(payload_pt);
                         let payload_offset = struct_layout.append_to_aggregate(payload_layout);
 
                         if struct_layout.align > max_variant_align {
@@ -1759,7 +1759,7 @@ impl TypePool {
                 Some(element_t) => match array.concrete_count {
                     None => None,
                     Some(len) => {
-                        let elem_layout = self.get_pt_layout(&element_t);
+                        let elem_layout = self.get_pt_layout(element_t);
                         let record = PhysicalTypeRecord {
                             agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
                             origin_type_id: type_id,
@@ -1784,7 +1784,7 @@ impl TypePool {
                             not_physical = true;
                         }
                         Some(field_pt) => {
-                            let field_layout = self.get_pt_layout(&field_pt);
+                            let field_layout = self.get_pt_layout(field_pt);
                             let offset = layout.append_to_aggregate(field_layout);
                             fields.push(StructField { field_t: field_pt, offset });
                         }
@@ -1932,7 +1932,7 @@ impl TypePool {
         let chased = self.get_chased_id(type_id);
         match self.type_phys_type_lookup.get(chased) {
             None => Layout::ZERO,
-            Some(pt) => self.get_pt_layout(pt),
+            Some(pt) => self.get_pt_layout(*pt),
         }
     }
 

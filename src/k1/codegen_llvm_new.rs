@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use ahash::HashMapExt;
@@ -15,8 +14,7 @@ use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
-    DISubprogram, DISubroutineType, DIType, DWARFEmissionKind, DWARFSourceLanguage,
-    DebugInfoBuilder,
+    DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
 };
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
@@ -33,29 +31,23 @@ use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, Thr
 use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
-use smallvec::smallvec;
 
-use crate::bc::{BcBuiltin, CompiledBlock, Inst, InstId, ProgramBytecode};
+use crate::bc::{BcBuiltin, BcCallee, CompiledBlock, Inst, InstId, InstKind, ProgramBytecode};
 use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    self, AbiMode, AggType, BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, I8_TYPE_ID, I16_TYPE_ID,
-    I32_TYPE_ID, I64_TYPE_ID, IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, PhysicalType,
-    PhysicalTypeId, PhysicalTypeRecord, STRING_TYPE_ID, ScalarType, Type, TypeDefnInfo, TypeId,
-    U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
+    self, AbiMode, AggType, NEVER_TYPE_ID, PhysicalType, PhysicalTypeId, STRING_TYPE_ID,
+    ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
-    AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
-    IntegerCastDirection, IntrinsicArithOpClass, IntrinsicArithOpOp, IntrinsicBitwiseBinopKind,
-    IntrinsicOperation, Layout, LetStmt, Linkage as TyperLinkage, LoopExpr, MatchingCondition,
-    MatchingConditionInstr, StaticContainerKind, StaticValue, StaticValueId, TypedBlock, TypedCast,
-    TypedExpr, TypedExprId, TypedFloatValue, TypedFunction, TypedGlobalId, TypedIntValue,
-    TypedMatchExpr, TypedProgram, TypedStmt, TypedStmtId, TyperResult, VariableId, WhileLoop,
+    Callee, CastType, FunctionId, IntegerCastDirection, Layout, Linkage as TyperLinkage,
+    StaticContainerKind, StaticValue, StaticValueId, TypedCast, TypedFloatValue, TypedFunction,
+    TypedGlobalId, TypedIntValue, TypedProgram, TyperResult,
 };
-use crate::{SV8, bc, errf, failf, kbail, kmem};
+use crate::{SV8, bc, errf, failf, kmem};
 
 macro_rules! return_void {
     ($e:expr) => {
@@ -83,6 +75,7 @@ impl<T> BuilderResultExt for Result<T, BuilderError> {
     }
 }
 
+#[derive(Clone)]
 pub struct CgFunctionType<'ctx> {
     llvm_function_type: LlvmFunctionType<'ctx>,
     // Does not include sret, or abi mappings
@@ -201,29 +194,6 @@ struct LlvmScalarType<'ctx> {
     layout: Layout,
 }
 
-#[derive(Copy, Clone)]
-struct EnumVariantType<'ctx> {
-    name: Ident,
-    variant_struct_type: StructType<'ctx>,
-    payload_type: Option<MHandle<CgType<'ctx>, CgPerm>>,
-    tag_value: IntValue<'ctx>,
-    di_type: DIType<'ctx>,
-    layout: Layout,
-}
-
-#[derive(Copy, Clone)]
-struct LlvmEnumType<'ctx> {
-    type_id: TypeId,
-    #[allow(unused)]
-    tag_type: IntType<'ctx>,
-    #[allow(unused)]
-    envelope_type_just_bytes: ArrayType<'ctx>,
-    envelope_type_with_aligner: StructType<'ctx>,
-    variants: MSlice<EnumVariantType<'ctx>, CgPerm>,
-    di_type: DIType<'ctx>,
-    layout: Layout,
-}
-
 #[derive(Clone, Copy)]
 struct CgStructType<'ctx> {
     pt: PhysicalType,
@@ -254,7 +224,6 @@ struct CgOpaqueType<'ctx> {
 #[derive(Copy, Clone)]
 enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
-    EnumType(LlvmEnumType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
     Reference(LlvmReferenceType<'ctx>),
@@ -274,12 +243,6 @@ impl<'ctx> From<LlvmScalarType<'ctx>> for CgType<'ctx> {
     }
 }
 
-impl<'ctx> From<LlvmEnumType<'ctx>> for CgType<'ctx> {
-    fn from(value: LlvmEnumType<'ctx>) -> Self {
-        CgType::EnumType(value)
-    }
-}
-
 impl<'ctx> From<CgStructType<'ctx>> for CgType<'ctx> {
     fn from(value: CgStructType<'ctx>) -> Self {
         CgType::StructType(value)
@@ -296,11 +259,10 @@ impl<'ctx> CgType<'ctx> {
     pub fn pt(&self) -> PhysicalType {
         match self {
             CgType::Scalar(s) => s.pt,
-            CgType::EnumType(e) => todo!(),
             CgType::StructType(s) => s.pt,
             CgType::ArrayType(a) => a.pt,
-            CgType::Reference(r) => todo!(),
-            CgType::Void(v) => panic!("no pt on void"),
+            CgType::Reference(_) => PhysicalType::Scalar(ScalarType::Pointer),
+            CgType::Void(_) => panic!("no pt on void"),
             CgType::Opaque(o) => o.pt,
         }
     }
@@ -310,7 +272,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(_) => "Scalar",
             CgType::Reference(_) => "Reference",
             CgType::Void(_) => "Void",
-            CgType::EnumType(_) => "EnumType",
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
             CgType::Opaque(_) => "Opaque",
@@ -322,7 +283,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(_) => false,
             CgType::Reference(_) => false,
             CgType::Void(_) => false,
-            CgType::EnumType(_) => true,
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
             CgType::Opaque(_) => true,
@@ -348,7 +308,6 @@ impl<'ctx> CgType<'ctx> {
     //         CgType::Scalar(_) => false,
     //         CgType::Reference(_) => false,
     //         CgType::Void(_) => false,
-    //         CgType::EnumType(_) => true,
     //         CgType::StructType(_) => false,
     //         CgType::ArrayType(a) => {
     //             // If the array's elements don't have the 'right' alignment in LLVM,
@@ -365,14 +324,6 @@ impl<'ctx> CgType<'ctx> {
         match self {
             CgType::Reference(reference) => reference,
             _ => panic!("expected pointer on {}", self.kind_name()),
-        }
-    }
-
-    #[track_caller]
-    pub fn expect_enum(self) -> LlvmEnumType<'ctx> {
-        match self {
-            CgType::EnumType(e) => e,
-            _ => panic!("expected enum on {}", self.kind_name()),
         }
     }
 
@@ -396,7 +347,6 @@ impl<'ctx> CgType<'ctx> {
         match self {
             CgType::Scalar(value) => value.layout,
             CgType::Reference(pointer) => pointer.layout,
-            CgType::EnumType(e) => e.layout,
             CgType::StructType(s) => s.layout,
             CgType::ArrayType(a) => a.layout,
             CgType::Void(_) => panic!("No rich value type on Void / never"),
@@ -408,7 +358,6 @@ impl<'ctx> CgType<'ctx> {
         match self {
             CgType::Scalar(value) => value.basic_type,
             CgType::Reference(r) => r.ptr_basic_type.as_basic_type_enum(),
-            CgType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Opaque(o) => o.aligned_struct_repr.as_basic_type_enum(),
@@ -420,7 +369,6 @@ impl<'ctx> CgType<'ctx> {
         match self {
             CgType::Scalar(value) => value.di_type,
             CgType::Reference(pointer) => pointer.di_type,
-            CgType::EnumType(e) => e.di_type,
             CgType::StructType(s) => s.di_type,
             CgType::ArrayType(a) => a.di_type,
             CgType::Opaque(o) => o.di_type,
@@ -494,9 +442,9 @@ pub struct Cg<'ctx, 'k1> {
     functions_pending_body_compilation: Vec<FunctionId>,
     llvm_types: FxHashMap<PhysicalTypeId, CgType<'ctx>>,
     globals: FxHashMap<TypedGlobalId, GlobalValue<'ctx>>,
-    variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
-    lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
-    loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
+    //variable_to_value: FxHashMap<VariableId, VariableValue<'ctx>>,
+    //lambda_functions: FxHashMap<TypeId, FunctionValue<'ctx>>,
+    //loops: FxHashMap<ScopeId, LoopInfo<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     strings: FxHashMap<StringId, GlobalValue<'ctx>>,
     static_values_basics: FxHashMap<StaticValueId, BasicValueEnum<'ctx>>,
@@ -728,9 +676,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_machine: machine,
             builder,
             globals: FxHashMap::new(),
-            variable_to_value: FxHashMap::new(),
-            lambda_functions: FxHashMap::new(),
-            loops: FxHashMap::new(),
+            //lambda_functions: FxHashMap::new(),
             llvm_functions: FxHashMap::new(),
             llvm_function_to_k1: FxHashMap::new(),
             functions_pending_body_compilation: Vec::new(),
@@ -825,9 +771,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     const DW_ATE_UNSIGNED: u32 = 0x07;
     const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
-    fn codegen_type_opt(&mut self, pt: Option<PhysicalType>) -> CgType<'ctx> {
-        match pt {
-            None => CgType::Void(LlvmVoidType {
+    fn codegen_inst_kind(&mut self, inst_kind: InstKind) -> CgType<'ctx> {
+        match inst_kind {
+            InstKind::Void | InstKind::Terminator => CgType::Void(LlvmVoidType {
                 di_type: self
                     .debug
                     .debug_builder
@@ -836,7 +782,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .as_type(),
                 void_type: self.ctx.void_type(),
             }),
-            Some(pt) => self.codegen_type(pt),
+            InstKind::Value(pt) => self.codegen_type(pt),
         }
     }
 
@@ -1038,7 +984,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match t {
             CgType::Scalar(value) => value.basic_type,
             CgType::Reference(_) => self.builtin_types.ptr_basic(),
-            CgType::EnumType(_) => self.builtin_types.ptr_basic(),
             CgType::StructType(_) => self.builtin_types.ptr_basic(),
             CgType::ArrayType(_) => self.builtin_types.ptr_basic(),
             CgType::Void(_) => panic!("No canonical repr type on Void"),
@@ -1051,7 +996,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match t {
             CgType::Scalar(value) => value.basic_type,
             CgType::Reference(_) => self.builtin_types.ptr_basic(),
-            CgType::EnumType(e) => e.envelope_type_with_aligner.as_basic_type_enum(),
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Opaque(opaque) => opaque.aligned_struct_repr.as_basic_type_enum(),
@@ -1059,23 +1003,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn make_llvm_function_type(
+    fn make_cg_function_type(
         &mut self,
         param_types: &[PhysicalType],
-        return_type: Option<PhysicalType>,
+        return_type: InstKind,
         abi_mode: AbiMode,
     ) -> TyperResult<CgFunctionType<'ctx>> {
-        //let function_type = self.k1.types.get(function_type_id).as_function().unwrap();
-        //let return_k1_type = self.codegen_type(return_type);
-        let return_cg_type = self.codegen_type_opt(return_type);
+        let return_cg_type = self.codegen_inst_kind(return_type);
         let return_type_abi_mapping = match return_type {
-            None => AbiParamMapping::ScalarInRegister,
-            Some(return_type) => self.get_abi_mapping_for_type(abi_mode, return_type, true),
+            InstKind::Void | InstKind::Terminator => AbiParamMapping::ScalarInRegister,
+            InstKind::Value(return_type) => {
+                self.get_abi_mapping_for_type(abi_mode, return_type, true)
+            }
         };
         // eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
         let return_mapped_type = match return_type {
-            None => None,
-            Some(return_type) => Some(self.mapped_abi_type(return_type, return_type_abi_mapping)),
+            InstKind::Void | InstKind::Terminator => None,
+            InstKind::Value(return_type) => {
+                Some(self.mapped_abi_type(return_type, return_type_abi_mapping))
+            }
         };
         let is_sret = match return_type_abi_mapping {
             AbiParamMapping::ScalarInRegister => false,
@@ -1456,27 +1402,1575 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.memcpy_layout(dst, src, layout)
     }
 
-    fn load_variable_value(
+    fn get_insert_function(&self) -> &CgFunction<'ctx> {
+        let codegened_function = self.llvm_functions.get(&self.current_insert_function).unwrap();
+        codegened_function
+    }
+
+    fn get_nth_block(&self, index: usize) -> TyperResult<BasicBlock<'ctx>> {
+        match self.get_insert_function().function_value.get_basic_block_iter().nth(index) {
+            Some(bb) => Ok(bb),
+            None => failf!(self.debug.current_span(), "Failed to get nth block: {index}"),
+        }
+    }
+
+    fn get_insert_function_mut(&mut self) -> &mut CgFunction<'ctx> {
+        let codegened_function =
+            self.llvm_functions.get_mut(&self.current_insert_function).unwrap();
+        codegened_function
+    }
+
+    fn build_struct_gep(
         &mut self,
-        k1_llvm_type: &CgType<'ctx>,
-        variable_value: VariableValue<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
-        match variable_value {
-            VariableValue::Indirect { pointer_value } => {
-                self.load_k1_value(k1_llvm_type, pointer_value, "", false)
+        ptr: PointerValue<'ctx>,
+        struct_type: &CgStructType<'ctx>,
+        idx: u32,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        // if struct_type.manual_field_geps {
+        //     let struct_agg_id =
+        //         self.k1.types.get_physical_type(struct_type.type_id).unwrap().expect_agg();
+        //     let offset = self.k1.types.get_struct_field_offset(struct_agg_id, idx).unwrap();
+        //     unsafe {
+        //         self.builder
+        //             .build_in_bounds_gep(
+        //                 self.ctx.i8_type(),
+        //                 ptr,
+        //                 &[self.builtin_types.ptr_sized_int.const_int(offset as u64, false)],
+        //                 name,
+        //             )
+        //             .unwrap()
+        //     }
+        // } else {
+        self.builder.build_struct_gep(struct_type.struct_type, ptr, idx, name).unwrap()
+        //}
+    }
+
+    fn append_basic_block(&mut self, name: &str) -> BasicBlock<'ctx> {
+        let origin_block = self.builder.get_insert_block().unwrap();
+        let current_fn = origin_block.get_parent().unwrap();
+        let block = self.ctx.append_basic_block(current_fn, name);
+        block
+    }
+
+    fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
+    }
+
+    fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.builder.build_int_cast_sign_flag(i1, self.builtin_types.boolean, false, name).unwrap()
+    }
+
+    fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
+        let ptr = self.build_alloca(self.rich_repr_type(ty), name);
+        ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
+        ptr
+    }
+
+    /// Inserts an alloca in the entry block of the function
+    fn build_alloca<T: BasicType<'ctx>>(&mut self, ty: T, name: &str) -> PointerValue<'ctx> {
+        let original_block = self.builder.get_insert_block().unwrap();
+        let f = self.get_insert_function();
+        let function_entry_block = f.function_value.get_first_basic_block().unwrap();
+
+        // Position the builder
+        match f.last_alloca_instr {
+            None => match function_entry_block.get_first_instruction() {
+                Some(instr) => {
+                    self.builder.position_at(function_entry_block, &instr);
+                }
+                None => {
+                    self.builder.position_at_end(function_entry_block);
+                }
+            },
+            Some(last_alloca) => {
+                self.builder.position_at(function_entry_block, &last_alloca);
             }
-            VariableValue::Direct { value } => value,
-            VariableValue::ByFunctionCall { function } => {
-                let ptr = self.build_k1_alloca(k1_llvm_type, "load_variable_sret");
-                let callsite_value = self.builder.build_call(function, &[ptr.into()], "").unwrap();
-                // Call-site sret
-                let sret_attribute =
-                    self.make_sret_attribute(self.rich_repr_type(k1_llvm_type).as_any_type_enum());
-                debug!("I generated a call to static maker function: {}", callsite_value);
-                callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
-                ptr.as_basic_value_enum()
+        };
+
+        let alloca = self.builder.build_alloca(ty, name).unwrap();
+        self.get_insert_function_mut().last_alloca_instr = Some(alloca.as_instruction().unwrap());
+
+        // Restore the builder's position
+        self.builder.position_at_end(original_block);
+        alloca
+    }
+
+    fn codegen_function_call(
+        &mut self,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        call_id: bc::BcCallId,
+    ) -> TyperResult<LlvmValue<'ctx>> {
+        let call = self.k1.bytecode.calls.get(call_id);
+        let callee = call.callee;
+        let call_args = call.args;
+
+        enum CallKind<'ctx> {
+            Direct(FunctionId),
+            Indirect(PointerValue<'ctx>),
+        }
+        let (llvm_callee, cg_fn_type) = match callee {
+            BcCallee::Builtin(function_id, _)
+            | BcCallee::Direct(function_id)
+            | BcCallee::Extern(_, _, function_id) => {
+                self.declare_llvm_function(function_id)?;
+                let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type.clone();
+                (CallKind::Direct(function_id), fn_type)
+            }
+            BcCallee::Indirect(fn_type, value) => {
+                let callee_value = self.codegen_value(inst_mappings, value)?.into_pointer_value();
+                let params_slice = self.k1.bytecode.mem.getn(fn_type.params);
+                let cg_fn_type = self.make_cg_function_type(
+                    params_slice,
+                    fn_type.return_type,
+                    fn_type.abi_mode,
+                )?;
+                (CallKind::Indirect(callee_value), cg_fn_type)
+            }
+        };
+
+        let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
+            self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
+
+        let sret_alloca = if cg_fn_type.is_sret {
+            let rich_type = cg_fn_type.return_cg_type.rich_type();
+            let sret_alloca = self.build_alloca(rich_type, "call_sret");
+            args.push(sret_alloca.into());
+            Some(sret_alloca)
+        } else {
+            None
+        };
+        for (index, arg_bc_value) in self.k1.bytecode.mem.getn(call_args).iter().enumerate() {
+            let arg_value = self.codegen_value(inst_mappings, *arg_bc_value)?;
+
+            let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
+            let abi_mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index);
+            let value_marshalled =
+                self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
+            trace!("codegen function call arg type: {}", value_marshalled);
+            args.push(value_marshalled.into())
+        }
+
+        let callsite_value = match llvm_callee {
+            CallKind::Direct(function_id) => {
+                let function_value = self.declare_llvm_function(function_id)?;
+                //self.set_debug_location_from_span(call.span);
+                self.builder.build_call(function_value, &args, "").unwrap()
+            }
+            CallKind::Indirect(fn_ptr) => {
+                //self.set_debug_location_from_span(call.span);
+                let call_site_value = self
+                    .builder
+                    .build_indirect_call(cg_fn_type.llvm_function_type, fn_ptr, &args, "")
+                    .unwrap();
+                call_site_value
+            }
+        };
+
+        if cg_fn_type.is_sret {
+            let sret_attribute = self.make_sret_attribute(
+                self.rich_repr_type(&cg_fn_type.return_cg_type).as_any_type_enum(),
+            );
+            callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
+        };
+        match callsite_value.try_as_basic_value() {
+            ValueKind::Basic(returned_value) => {
+                let canonical_value = self.canonicalize_abi_param_value(
+                    cg_fn_type.return_abi_mapping,
+                    &cg_fn_type.return_cg_type,
+                    returned_value,
+                );
+                Ok(LlvmValue::BasicValue(canonical_value))
+            }
+            ValueKind::Instruction(_instr) => {
+                if cg_fn_type.is_sret {
+                    let sret_pointer = sret_alloca.unwrap();
+                    Ok(sret_pointer.as_basic_value_enum().into())
+                } else if cg_fn_type.return_cg_type.is_void() {
+                    let unreachable = self.builder.build_unreachable().unwrap();
+                    Ok(LlvmValue::Void(unreachable))
+                } else {
+                    panic!("Function returned LLVM void but wasn't typed as never and was not sret")
+                }
             }
         }
+    }
+
+    fn load_function_argument(
+        &mut self,
+        function_id: FunctionId,
+        index: usize,
+    ) -> BasicMetadataValueEnum<'ctx> {
+        let cg_fn = self.llvm_functions.get(&function_id).unwrap();
+        let basic_value = cg_fn.param_values[index];
+        basic_value.into()
+    }
+
+    // nocommit: Can I write these in C, or k1, or llvm, and load them?
+    fn codegen_builtin_function_body(
+        &mut self,
+        builtin_type: BcBuiltin,
+        function_id: FunctionId,
+        function: &TypedFunction,
+    ) -> TyperResult<InstructionValue<'ctx>> {
+        let function_span =
+            self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
+        self.set_debug_location_from_span(function_span);
+        let instr = match builtin_type {
+            BcBuiltin::Allocate => {
+                // intern fn alloc(size: uword, align: uword): Pointer
+                let size_arg = self.load_function_argument(function_id, 0);
+
+                let f = self.llvm_module.get_function("malloc").unwrap();
+                let call = self.builder.build_call(f, &[size_arg], "").unwrap();
+                let result = call.try_as_basic_value().basic().unwrap();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::AllocateZeroed => {
+                // intern fn allocZeroed(size: uword, align: uword): Pointer
+                let size_arg = self.load_function_argument(function_id, 0);
+                let count_one =
+                    self.builtin_types.ptr_sized_int.const_int(1, false).as_basic_value_enum();
+
+                let f = self.llvm_module.get_function("calloc").unwrap();
+                // libc/calloc(count = 1, size = size);
+                let call = self.builder.build_call(f, &[count_one.into(), size_arg], "").unwrap();
+                let result = call.try_as_basic_value().expect_basic("calloc return");
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::Reallocate => {
+                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+                let old_ptr_arg = self.load_function_argument(function_id, 0);
+                let new_size_arg = self.load_function_argument(function_id, 3);
+
+                let f = self.llvm_module.get_function("realloc").unwrap();
+                let call = self.builder.build_call(f, &[old_ptr_arg, new_size_arg], "").unwrap();
+                let result = call.try_as_basic_value().expect_basic("realloc return");
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::Free => {
+                let old_ptr_arg = self.load_function_argument(function_id, 0);
+
+                let f = self.llvm_module.get_function("free").unwrap();
+                let call = self.builder.build_call(f, &[old_ptr_arg], "").unwrap();
+                let result = call.try_as_basic_value().expect_basic("free return");
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::MemCopy => {
+                // intern fn copy(
+                //   dst: Pointer,
+                //   src: Pointer,
+                //   count: uword
+                // ): unit
+                let dst_ptr_arg = self.load_function_argument(function_id, 0).into_pointer_value();
+                let src_ptr_arg = self.load_function_argument(function_id, 1).into_pointer_value();
+                let size_arg = self.load_function_argument(function_id, 2).into_int_value();
+                let dst_align_bytes = 1;
+                let src_align_bytes = 1;
+                let _not_actually_a_ret_ptr = self
+                    .builder
+                    .build_memcpy(
+                        dst_ptr_arg,
+                        dst_align_bytes,
+                        src_ptr_arg,
+                        src_align_bytes,
+                        size_arg,
+                    )
+                    .unwrap();
+                let result = self.builtin_types.unit_basic();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::MemSet => {
+                // intern fn set(dst: Pointer, value: u8, count: uword): unit
+                let dst_arg = self.load_function_argument(function_id, 0);
+                let value_arg = self.load_function_argument(function_id, 1);
+                let count_arg = self.load_function_argument(function_id, 2);
+                let _not_actually_a_ret_ptr = self
+                    .builder
+                    .build_memset(
+                        dst_arg.into_pointer_value(),
+                        1,
+                        value_arg.into_int_value(),
+                        count_arg.into_int_value(),
+                    )
+                    .unwrap();
+                let result = self.builtin_types.unit_basic();
+                self.builder.build_return(Some(&result)).unwrap()
+            }
+            BcBuiltin::MemEquals => {
+                // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+                let p1_arg = self.load_function_argument(function_id, 0);
+                let p2_arg = self.load_function_argument(function_id, 1);
+                let size_arg = self.load_function_argument(function_id, 2);
+
+                let f = self.llvm_module.get_function("memcmp").unwrap();
+                let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
+                let result =
+                    call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
+                let is_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
+                    .unwrap();
+                let bool_equal = self.i1_to_bool(is_zero, "");
+                self.builder.build_return(Some(&bool_equal)).unwrap()
+            }
+            BcBuiltin::Exit => {
+                // intern fn exit(code: i32): never
+                let code_arg = self.load_function_argument(function_id, 0);
+
+                let f = self.llvm_module.get_function("exit").unwrap();
+                let call = self.builder.build_call(f, &[code_arg], "").unwrap();
+                let _result = call.try_as_basic_value();
+                self.builder.build_unreachable().unwrap()
+            }
+
+            BcBuiltin::TypeSchema | BcBuiltin::TypeName => {
+                // intern fn typeSchema(id: u64): TypeSchema
+                let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
+                let is_type_name = builtin_type == BcBuiltin::TypeName;
+                let cg_fn = self.llvm_functions.get(&function_id).unwrap();
+                let return_llvm_type = cg_fn.function_type.return_cg_type;
+                let entry_block = self.builder.get_insert_block().unwrap();
+
+                // typeSchema and typeName return a struct, so we have to do sret shenanigans
+                let sret_ptr = self.llvm_functions.get(&function_id).unwrap().sret_pointer.unwrap();
+
+                let else_block = self.append_basic_block("miss");
+                self.builder.position_at_end(else_block);
+                // TODO: Proper crash
+                self.builder.build_unreachable().unwrap();
+
+                let finish_block = self.append_basic_block("finish");
+
+                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+                    Vec::with_capacity(self.k1.type_schemas.len());
+                if is_type_name {
+                    for (type_id, static_string_id) in self
+                        .k1
+                        .type_names
+                        .iter()
+                        .map(|(x, y)| (*x, *y))
+                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                    {
+                        if self.k1.types.get_contained_type_variable_counts(type_id).is_abstract() {
+                            // No point re-ifying types that don't exist at runtime
+                            // like type parameters
+                            continue;
+                        }
+                        let my_block =
+                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                        self.builder.position_at_end(my_block);
+                        let type_id_int_value =
+                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+
+                        let value = {
+                            let StaticValue::String(string_id) =
+                                self.k1.static_values.get(static_string_id)
+                            else {
+                                panic!("typename should be a string")
+                            };
+                            let global_value = self.codegen_string_id_to_global(
+                                *string_id,
+                                Some(&format!("typename_{}\0", type_id.as_u32())),
+                            )?;
+                            global_value.as_pointer_value().as_basic_value_enum()
+                        };
+                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
+                        self.builder.build_unconditional_branch(finish_block).unwrap();
+                        cases.push((type_id_int_value, my_block));
+                    }
+                } else {
+                    for (type_id, schema_value_id) in self
+                        .k1
+                        .type_schemas
+                        .iter()
+                        .map(|(x, y)| (*x, *y))
+                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                    {
+                        if self.k1.types.get_contained_type_variable_counts(type_id).is_abstract() {
+                            // No point re-ifying types that don't exist at runtime
+                            // like type parameters
+                            continue;
+                        }
+                        let my_block =
+                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                        self.builder.position_at_end(my_block);
+                        let type_id_int_value =
+                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+
+                        let value = self.codegen_static_value_canonical(schema_value_id)?;
+                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
+                        self.builder.build_unconditional_branch(finish_block).unwrap();
+                        cases.push((type_id_int_value, my_block));
+                    }
+                }
+                self.builder.position_at_end(entry_block);
+                let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
+
+                self.builder.position_at_end(finish_block);
+                self.builder.build_return(None).unwrap()
+            }
+            BcBuiltin::CompilerMessage => {
+                return failf!(
+                    function_span,
+                    "Internal Compiler Error: cannot codegen CompilerMessage builtin"
+                );
+            }
+        };
+        Ok(instr)
+    }
+
+    fn codegen_block(
+        &mut self,
+        mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        block_id: u32,
+        block: &bc::CompiledBlock,
+    ) -> TyperResult<BasicBlock<'ctx>> {
+        let current_function = self.get_insert_function().function_value;
+        let llvm_block = current_function.get_basic_block_iter().nth(block_id as usize).unwrap();
+        self.builder.position_at_end(llvm_block);
+        for inst in self.k1.bytecode.mem.getn(block.instrs) {
+            self.codegen_inst(mappings, *inst)?;
+        }
+        Ok(llvm_block)
+    }
+
+    fn codegen_value(
+        &mut self,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        value: bc::Value,
+    ) -> TyperResult<BasicValueEnum<'ctx>> {
+        match value {
+            bc::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
+                Some(v) => Ok(*v),
+                None => {
+                    return failf!(
+                        self.debug.current_span(),
+                        "Whiffed inst id lookup: {}",
+                        inst_id.as_u32()
+                    );
+                }
+            },
+            bc::Value::Global { t, id } => {
+                let Some(global_value) = self.globals.get(&id).copied() else {
+                    return failf!(
+                        self.debug.current_span(),
+                        "Whiffed global id lookup: {}",
+                        id.as_u32()
+                    );
+                };
+                let k1_global = self.k1.globals.get(id);
+                if k1_global.is_referencing {
+                    Ok(global_value.as_pointer_value().into())
+                } else {
+                    let cg_type = self.codegen_type(t);
+                    let loaded =
+                        self.load_k1_value(&cg_type, global_value.as_pointer_value(), "", false);
+                    Ok(loaded)
+                }
+            }
+            bc::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
+            bc::Value::FunctionAddr(function_id) => {
+                let Some(cg_fun) = self.llvm_functions.get(&function_id) else {
+                    return failf!(
+                        self.debug.current_span(),
+                        "Whiffed function id lookup: {}",
+                        function_id.as_u32()
+                    );
+                };
+                Ok(cg_fun.function_value.as_global_value().as_pointer_value().into())
+            }
+            bc::Value::FnParam { index, .. } => {
+                let function = self.get_insert_function();
+                let v = function.param_values[index as usize];
+                Ok(v)
+            }
+            bc::Value::Imm32 { t, data } => {
+                let v: BasicValueEnum<'ctx> = match t {
+                    ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
+                    ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
+                    ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
+                    ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
+                    ScalarType::I8 => self.ctx.i8_type().const_int(data as u64, true).into(),
+                    ScalarType::I16 => self.ctx.i16_type().const_int(data as u64, true).into(),
+                    ScalarType::I32 => self.ctx.i32_type().const_int(data as u64, true).into(),
+                    ScalarType::I64 => self.ctx.i64_type().const_int(data as u64, true).into(),
+                    ScalarType::F32 => {
+                        self.ctx.f32_type().const_float(f32::from_bits(data) as f64).into()
+                    }
+                    ScalarType::F64 => {
+                        self.ctx.f64_type().const_float(f32::from_bits(data) as f64).into()
+                    }
+                    ScalarType::Pointer => unreachable!(),
+                };
+                Ok(v)
+            }
+            bc::Value::PtrZero => Ok(self.builtin_types.ptr.const_null().into()),
+        }
+    }
+
+    fn codegen_inst(
+        &mut self,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_id: InstId,
+    ) -> TyperResult<()> {
+        let bc = &self.k1.bytecode;
+        let span = *bc.sources.get(inst_id);
+        self.set_debug_location_from_span(span);
+        let inst = *bc.instrs.get(inst_id);
+        match inst {
+            Inst::Data(data_inst) => {
+                let value: BasicValueEnum<'ctx> = match data_inst {
+                    bc::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
+                    bc::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
+                    bc::DataInst::Float(f) => match f {
+                        TypedFloatValue::F32(f32) => {
+                            self.ctx.f32_type().const_float(f32 as f64).into()
+                        }
+                        TypedFloatValue::F64(f64) => self.ctx.f64_type().const_float(f64).into(),
+                    },
+                };
+                inst_mappings.insert(inst_id, value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::Alloca { t, .. } => {
+                let cg_type = self.codegen_type(t);
+                // Our helper here hoists the alloca to the top of the function, and sets an explicit align
+                let instr = self.build_k1_alloca(&cg_type, "");
+                inst_mappings.insert(inst_id, instr.as_basic_value_enum());
+
+                // nocommit: Declare variable if we should
+                // let local_variable = self.debug.debug_builder.create_auto_variable(
+                //         self.debug.current_scope(),
+                //         &name,
+                //         self.debug.current_file(),
+                //         self.get_line_number(let_stmt.span),
+                //         variable_type.debug_type(),
+                //         true,
+                //         0,
+                //         variable_type.rich_repr_layout().align,
+                //     );
+
+                Ok(())
+            }
+            Inst::Store { dst, value, t } => {
+                let dst_pointer = self.codegen_value(inst_mappings, dst)?.into_pointer_value();
+                let value = self.codegen_value(inst_mappings, value)?;
+                let _store = self.builder.build_store(dst_pointer, value).unwrap();
+                Ok(())
+            }
+            Inst::Load { t, src } => {
+                let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
+                let src_ptr = self.codegen_value(inst_mappings, src)?.into_pointer_value();
+                let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
+                inst_mappings.insert(inst_id, load);
+                Ok(())
+            }
+            Inst::Copy { dst, src, t, .. } => {
+                let dst_value = self.codegen_value(inst_mappings, dst)?;
+                let src_value = self.codegen_value(inst_mappings, src)?;
+                let layout = self.k1.types.get_pt_layout(t);
+                let _memcpy = self.memcpy_layout(
+                    dst_value.into_pointer_value(),
+                    src_value.into_pointer_value(),
+                    layout,
+                );
+                Ok(())
+            }
+            Inst::StructOffset { struct_t, base, field_index, .. } => {
+                let cg_struct = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
+                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
+                let gep = self.build_struct_gep(base_ptr, &cg_struct, field_index, "");
+                inst_mappings.insert(inst_id, gep.into());
+                Ok(())
+            }
+            Inst::ArrayOffset { element_t, base, element_index } => {
+                let cg_elem_ty = self.codegen_type(element_t);
+                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
+                let index_int = self.codegen_value(inst_mappings, element_index)?.into_int_value();
+                let gep = unsafe {
+                    self.builder
+                        .build_gep(cg_elem_ty.rich_type(), base_ptr, &[index_int], "")
+                        .unwrap()
+                };
+                inst_mappings.insert(inst_id, gep.into());
+                Ok(())
+            }
+            Inst::Call { id } => todo!(),
+            Inst::Jump(block_id) => {
+                let dst_block = self.get_nth_block(block_id as usize)?;
+                let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
+                Ok(())
+            }
+            Inst::JumpIf { cond, cons, alt } => {
+                let cond_value = self.codegen_value(inst_mappings, cond)?;
+                let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
+                let then_block = self.get_nth_block(cons as usize)?;
+                let else_block = self.get_nth_block(alt as usize)?;
+                let _branch = self
+                    .builder
+                    .build_conditional_branch(cond_value_i1, then_block, else_block)
+                    .unwrap();
+                Ok(())
+            }
+            Inst::Unreachable => {
+                self.builder.build_unreachable().unwrap();
+                Ok(())
+            }
+            Inst::CameFrom { t, incomings } => {
+                let phi_ty = self.codegen_type(t);
+                let phi = self.builder.build_phi(phi_ty.rich_type(), "").unwrap();
+                for incoming in self.k1.bytecode.mem.getn(incomings) {
+                    let value = self.codegen_value(inst_mappings, incoming.value)?;
+                    let block = self.get_nth_block(incoming.from as usize)?;
+                    phi.add_incoming(&[(&value, block)])
+                }
+                inst_mappings.insert(inst_id, phi.as_basic_value());
+                Ok(())
+            }
+            Inst::Ret(value) => {
+                let ret_value = self.codegen_value(inst_mappings, value)?;
+                let current_fn = self.get_insert_function();
+                match current_fn.sret_pointer {
+                    None => {
+                        let _return = self.builder.build_return(Some(&ret_value)).unwrap();
+                        Ok(())
+                    }
+                    Some(sret_ptr) => {
+                        let ret_cg_type = &current_fn.function_type.return_cg_type;
+                        let _store = self.store_k1_value(ret_cg_type, sret_ptr, ret_value);
+                        let _return = self.builder.build_return(None).unwrap();
+                        Ok(())
+                    }
+                }
+            }
+            Inst::BoolNegate { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let i1_input = self.bool_to_i1(input, "");
+                let not_i1 = self.builder.build_not(i1_input, "").unwrap();
+                let not_bool = self.i1_to_bool(not_i1, "");
+                inst_mappings.insert(inst_id, not_bool.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitNot { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let not_input = self.builder.build_not(input, "").unwrap();
+                inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitCast { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?;
+
+                // From agg to scalar -> handled by BC
+                // From scalar to agg -> handled by BC
+                match to {
+                    // From agg to agg -> canon type is ptr, nothing to do.
+                    PhysicalType::Agg(_) => {
+                        inst_mappings.insert(inst_id, input);
+                        Ok(())
+                    }
+                    // From scalar to scalar -> do the llvm bitcast
+                    PhysicalType::Scalar(st) => {
+                        let llvm_ty = self.scalar_basic_type(st);
+                        let bitcast = self.builder.build_bit_cast(input, llvm_ty, "").unwrap();
+                        inst_mappings.insert(inst_id, bitcast);
+                        Ok(())
+                    }
+                }
+            }
+            Inst::IntTrunc { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let trunc = self.builder.build_int_truncate(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let signed = matches!(inst, bc::Inst::IntExtS { .. });
+                let ext =
+                    self.builder.build_int_cast_sign_flag(input, to_int_type, signed, "").unwrap();
+                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatTrunc { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let trunc = self.builder.build_float_trunc(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatExt { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let ext = self.builder.build_float_ext(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let int = self.builder.build_float_to_unsigned_int(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let int = self.builder.build_float_to_signed_int(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntToFloatUnsigned { v, from, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let float =
+                    self.builder.build_unsigned_int_to_float(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, float.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntToFloatSigned { v, from, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let float =
+                    self.builder.build_signed_int_to_float(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, float.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::PtrToWord { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_pointer_value();
+                let word_int = self
+                    .builder
+                    .build_ptr_to_int(input, self.builtin_types.ptr_sized_int, "")
+                    .unwrap();
+                inst_mappings.insert(inst_id, word_int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::WordToPtr { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let ptr_value =
+                    self.builder.build_int_to_ptr(input, self.builtin_types.ptr, "").unwrap();
+                inst_mappings.insert(inst_id, ptr_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntAdd { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                // nocommit: decide if overflow traps or not, signed and unsigned
+                //self.builder.build_int_nsw_add
+                let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, sum.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntSub { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let diff = self.builder.build_int_sub(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, diff.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntMul { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let prod = self.builder.build_int_mul(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, prod.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntDivUnsigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, div.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntDivSigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, div.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntRemUnsigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntRemSigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntCmp { lhs, rhs, pred, width } => {
+                let llvm_pred = match pred {
+                    bc::IntCmpPred::Eq => IntPredicate::EQ,
+                    bc::IntCmpPred::Slt => IntPredicate::SLT,
+                    bc::IntCmpPred::Sle => IntPredicate::SLE,
+                    bc::IntCmpPred::Sgt => IntPredicate::SGT,
+                    bc::IntCmpPred::Sge => IntPredicate::SGE,
+                    bc::IntCmpPred::Ult => IntPredicate::ULT,
+                    bc::IntCmpPred::Ule => IntPredicate::ULE,
+                    bc::IntCmpPred::Ugt => IntPredicate::UGT,
+                    bc::IntCmpPred::Uge => IntPredicate::UGE,
+                };
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let cmp =
+                    self.builder.build_int_compare(llvm_pred, lhs_value, rhs_value, "").unwrap();
+                let bool_value = self.i1_to_bool(cmp, "");
+                inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatAdd { lhs, rhs, width }
+            | Inst::FloatSub { lhs, rhs, width }
+            | Inst::FloatMul { lhs, rhs, width }
+            | Inst::FloatDiv { lhs, rhs, width }
+            | Inst::FloatRem { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_float_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+                let result = match inst {
+                    Inst::FloatAdd { .. } => {
+                        self.builder.build_float_add(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatSub { .. } => {
+                        self.builder.build_float_sub(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatMul { .. } => {
+                        self.builder.build_float_mul(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatDiv { .. } => {
+                        self.builder.build_float_div(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatRem { .. } => {
+                        self.builder.build_float_rem(lhs_value, rhs_value, "").unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatCmp { lhs, rhs, pred, width } => {
+                let llvm_pred = match pred {
+                    bc::FloatCmpPred::Eq => FloatPredicate::OEQ,
+                    bc::FloatCmpPred::Lt => FloatPredicate::OLT,
+                    bc::FloatCmpPred::Le => FloatPredicate::OLE,
+                    bc::FloatCmpPred::Gt => FloatPredicate::OGT,
+                    bc::FloatCmpPred::Ge => FloatPredicate::OGE,
+                };
+                let lhs = self.codegen_value(inst_mappings, lhs)?.into_float_value();
+                let rhs = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+                let cmp = self.builder.build_float_compare(llvm_pred, lhs, rhs, "").unwrap();
+                let bool_value = self.i1_to_bool(cmp, "");
+                inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitAnd { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let and = self.builder.build_and(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, and.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitOr { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let or = self.builder.build_or(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, or.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitXor { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let xor = self.builder.build_xor(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, xor.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitShiftLeft { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let shl = self.builder.build_left_shift(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, shl.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitUnsignedShiftRight { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lshr = self.builder.build_right_shift(lhs_value, rhs_value, false, "").unwrap();
+                inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitSignedShiftRight { lhs, rhs, .. } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let ashr = self.builder.build_right_shift(lhs_value, rhs_value, true, "").unwrap();
+                inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BakeStaticValue { .. } => {
+                return failf!(
+                    self.debug.current_span(),
+                    "BakeStaticValue is only available to compile-time code"
+                );
+            }
+        }
+    }
+
+    fn make_function_debug_info(
+        &mut self,
+        function_name: &str,
+        function_span: SpanId,
+        return_type: DIType<'ctx>,
+        param_debug_types: &[DIType<'ctx>],
+    ) -> TyperResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
+        let span_id = function_span;
+        let function_file_id = self.k1.ast.spans.get(span_id).file_id;
+        let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
+        let function_line_number = function_line.line_number();
+        let function_scope_start_line_number = function_line_number;
+        let function_file = self.debug.files.get(&function_file_id).unwrap();
+        let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
+            *function_file,
+            Some(return_type),
+            param_debug_types,
+            0,
+        );
+        let di_subprogram = self.debug.debug_builder.create_function(
+            self.debug.current_scope(),
+            function_name,
+            None,
+            *function_file,
+            function_line_number,
+            dbg_fn_type,
+            false,
+            true,
+            function_scope_start_line_number,
+            0,
+            false,
+        );
+        Ok((di_subprogram, *function_file))
+    }
+
+    fn declare_llvm_function(
+        &mut self,
+        function_id: FunctionId,
+    ) -> TyperResult<FunctionValue<'ctx>> {
+        if let Some(function) = self.llvm_functions.get(&function_id) {
+            return Ok(function.function_value);
+        }
+        debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
+
+        let typed_function = self.k1.get_function(function_id);
+        let typed_function_linkage = typed_function.linkage;
+        let typed_function_params = typed_function.params;
+
+        let llvm_linkage = match typed_function.linkage {
+            TyperLinkage::Standard => None,
+            TyperLinkage::External { .. } => Some(LlvmLinkage::External),
+            TyperLinkage::Intrinsic => None,
+        };
+        let llvm_name = match typed_function.linkage {
+            TyperLinkage::External { fn_name: Some(link_name), .. } => {
+                self.k1.ident_str(link_name).to_string()
+            }
+            _ => self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
+        };
+
+        if self.llvm_module.get_function(&llvm_name).is_some() {
+            if let Some(LlvmLinkage::External) = llvm_linkage {
+                eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
+            } else {
+                return failf!(
+                    self.k1.ast.get_span_for_id(typed_function.parsed_id),
+                    "Dupe function name: {}",
+                    llvm_name
+                );
+            }
+        }
+
+        let function_k1_type = self.k1.types.get(typed_function.type_id).expect_function();
+        let abi_mode = function_k1_type.abi_mode;
+        let bytecode_fn = self.k1.bytecode.functions.get(function_id).unwrap();
+
+        let llvm_function_type = self.make_cg_function_type(
+            self.k1.bytecode.mem.getn(bytecode_fn.fn_params),
+            bytecode_fn.return_type,
+            abi_mode,
+        )?;
+
+        let di_types: SV8<_> = self
+            .mem
+            .getn_lt(llvm_function_type.param_k1_types)
+            .iter()
+            .map(|t| t.debug_type())
+            .collect();
+        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
+        let (di_subprogram, di_file) = self.make_function_debug_info(
+            &llvm_name,
+            function_span,
+            llvm_function_type.return_cg_type.debug_type(),
+            &di_types,
+        )?;
+        let is_sret = llvm_function_type.is_sret;
+
+        let sret_attribute = if is_sret {
+            let struct_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
+            let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
+            let align_attribute = self.make_align_attribute(
+                llvm_function_type.return_cg_type.rich_repr_layout().align as u64,
+            );
+            Some((sret_attribute, align_attribute))
+        } else {
+            None
+        };
+
+        // TODO: Figure out how to mark all standard functions dso_local
+        let function_value = self.llvm_module.add_function(
+            &llvm_name,
+            llvm_function_type.llvm_function_type,
+            llvm_linkage,
+        );
+        let sret_pointer = if is_sret {
+            Some(function_value.get_first_param().unwrap().into_pointer_value())
+        } else {
+            None
+        };
+        if let Some((sret_attribute, align_attribute)) = sret_attribute {
+            function_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
+            function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
+        }
+
+        // We have to make another pass, now that we've actually made an llvm function value,
+        // to set some parameter attributes: names and byval, currently
+        for (i, param) in function_value.get_param_iter().enumerate() {
+            if is_sret && i == 0 {
+                param.set_name("sret")
+            } else {
+                let offset = if is_sret { 1 } else { 0 };
+                let typed_param = self.k1.mem.get_nth(typed_function_params, i - offset);
+                let v = self.k1.variables.get(typed_param.variable_id);
+                param.set_name(self.k1.ident_str(v.name));
+                let abi_mapping =
+                    self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
+                if let AbiParamMapping::BigStructByPtrToCopy { byval_attr } = abi_mapping {
+                    // FIXME: We likely need to be setting param alignments explicitly sometimes
+                    //function_value.set_param_alignment(param_index, alignment);
+                    if *byval_attr {
+                        let k1_type =
+                            self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                        let byval_attribute = self
+                            .make_byval_attribute(self.rich_repr_type(k1_type).as_any_type_enum());
+                        function_value
+                            .add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
+                    }
+                }
+            }
+        }
+
+        let compile_body = !typed_function_linkage.is_external();
+        if compile_body {
+            self.functions_pending_body_compilation.push(function_id);
+        }
+
+        function_value.set_subprogram(di_subprogram);
+
+        self.llvm_functions.insert(
+            function_id,
+            CgFunction {
+                function_type: llvm_function_type,
+                function_value,
+                param_values: Vec::with_capacity(4),
+                sret_pointer,
+                last_alloca_instr: None,
+                instruction_count: 0,
+                debug_info: di_subprogram,
+                debug_file: di_file,
+            },
+        );
+        self.llvm_function_to_k1.insert(function_value, function_id);
+
+        Ok(function_value)
+    }
+
+    fn get_abi_mapping_for_type(
+        &self,
+        abi_mode: AbiMode,
+        pt: PhysicalType,
+        is_return: bool,
+    ) -> AbiParamMapping {
+        enum CallConv {
+            InternalK1,
+            AMD64,
+            ARM64,
+        }
+        let callconv = match abi_mode {
+            types::AbiMode::Internal => CallConv::InternalK1,
+            types::AbiMode::Native => match self.k1.ast.config.target {
+                crate::compiler::Target::LinuxIntel64 => CallConv::AMD64,
+                crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
+                crate::compiler::Target::Wasm64 => CallConv::ARM64,
+            },
+        };
+
+        // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
+        match pt {
+            PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
+            PhysicalType::Agg(agg_id) => {
+                let agg_record = self.k1.types.phys_types.get(agg_id);
+                match agg_record.agg_type {
+                    AggType::EnumVariant(_) | AggType::Struct { .. } | AggType::Array { .. } => {
+                        let size_bytes = agg_record.layout.size;
+                        match callconv {
+                            CallConv::InternalK1 => {
+                                if size_bytes <= 8 {
+                                    AbiParamMapping::ScalarInRegister
+                                } else if size_bytes <= 16 {
+                                    AbiParamMapping::StructByPtrNoCopy
+                                } else {
+                                    AbiParamMapping::StructByPtrNoCopy
+                                }
+                            }
+                            CallConv::ARM64 => {
+                                // nocommit: Check for HFA on ARM64
+                                if size_bytes <= 8 {
+                                    // Returns use the exact width; otherwise just i64
+                                    let width_bits = if is_return { size_bytes * 8 } else { 64 };
+                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                } else if size_bytes <= 16 {
+                                    // If the size of the structure is between 9 and 16 bytes, pass the structure as
+                                    // [an array of] two integers of 8 bytes each
+                                    AbiParamMapping::StructByIntPairArray
+                                } else {
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
+                                }
+                            }
+                            CallConv::AMD64 => {
+                                if size_bytes <= 8 {
+                                    // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
+                                    let width_bits = size_bytes * 8;
+                                    AbiParamMapping::StructInInteger { width: width_bits }
+                                } else if size_bytes <= 16 {
+                                    // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
+                                    // Pass by classified eightbytes
+                                    let (eb1, eb2, eb2_bits) =
+                                        self.collect_aggregate_eightbytes(pt);
+                                    AbiParamMapping::StructByEightbytePair {
+                                        class1: eb1,
+                                        class2: eb2,
+                                        active_bits2: eb2_bits,
+                                    }
+                                } else {
+                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
+                                }
+                            }
+                        }
+                    }
+                    AggType::Opaque { .. } => {
+                        // enum abi mapping eventually; for
+                        // now we just say they are always passed by pointer
+                        match callconv {
+                            CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
+                            CallConv::AMD64 | CallConv::ARM64 => {
+                                AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // What a horrible amount of code for such a small transformation!
+    fn collect_aggregate_eightbytes(
+        &self,
+        pt: PhysicalType,
+    ) -> (EightbyteClass, EightbyteClass, u32) {
+        // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
+        // for the HFA detection
+        fn append_type(
+            class1: &mut Option<EightbyteClass>,
+            class2: &mut Option<EightbyteClass>,
+            cur_bits: &mut u32,
+            class: EightbyteClass,
+            size_bits: u32,
+        ) {
+            match (class1, class2) {
+                (c1 @ None, None) => *c1 = Some(class),
+                (Some(c1), c2 @ None) => {
+                    let scalar_size_signed: i32 = size_bits as i32;
+                    let cur_bits_signed: i32 = *cur_bits as i32;
+
+                    let new_bits = scalar_size_signed + cur_bits_signed;
+                    let bleed_bits = new_bits - 8;
+
+                    let new_c1_class = c1.combine(class);
+                    *c1 = new_c1_class;
+                    if bleed_bits > 0 {
+                        // `bleed`: This scalar actually spans the first 8 and last 8 bytes;
+                        // so contributes to the class of both
+                        *c2 = Some(class);
+                        *cur_bits = bleed_bits as u32;
+                    } else if bleed_bits == 0 {
+                        // We completed the first eightbyte exactly; initialize the 2nd and reset
+                        // cur_bits
+                        *c2 = Some(EightbyteClass::Initial);
+                        *cur_bits = 0;
+                    } else {
+                        *cur_bits = new_bits as u32;
+                    }
+                }
+                (Some(_), Some(c2)) => *c2 = c2.combine(class),
+                (None, Some(_)) => unreachable!(),
+            }
+        }
+        fn handle_type_rec<'ctx, 'k1>(
+            c: &Cg<'ctx, 'k1>,
+            class1: &mut Option<EightbyteClass>,
+            class2: &mut Option<EightbyteClass>,
+            cur_bits: &mut u32,
+            t: PhysicalType,
+        ) {
+            match t {
+                PhysicalType::Scalar(st) => {
+                    let class = match st {
+                        ScalarType::U8 => EightbyteClass::Int,
+                        ScalarType::U16 => EightbyteClass::Int,
+                        ScalarType::U32 => EightbyteClass::Int,
+                        ScalarType::U64 => EightbyteClass::Int,
+                        ScalarType::I8 => EightbyteClass::Int,
+                        ScalarType::I16 => EightbyteClass::Int,
+                        ScalarType::I32 => EightbyteClass::Int,
+                        ScalarType::I64 => EightbyteClass::Int,
+                        ScalarType::F32 => EightbyteClass::Float,
+                        ScalarType::F64 => EightbyteClass::Float,
+                        ScalarType::Pointer => EightbyteClass::Int,
+                    };
+                    append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
+                }
+                PhysicalType::Agg(agg_id) => {
+                    let agg_record = c.k1.types.phys_types.get(agg_id);
+                    match agg_record.agg_type {
+                        AggType::EnumVariant(evl) => {
+                            handle_type_rec(
+                                c,
+                                class1,
+                                class2,
+                                cur_bits,
+                                PhysicalType::Scalar(evl.tag),
+                            );
+                            if let Some(payload) = evl.payload {
+                                handle_type_rec(c, class1, class2, cur_bits, payload)
+                            }
+                        }
+                        AggType::Struct { fields } => {
+                            for f in c.k1.types.mem.getn(fields) {
+                                handle_type_rec(c, class1, class2, cur_bits, f.field_t)
+                            }
+                        }
+                        AggType::Array { element_pt: element_t, len } => {
+                            for _ in 0..len {
+                                handle_type_rec(c, class1, class2, cur_bits, element_t)
+                            }
+                        }
+                        AggType::Opaque { layout } => append_type(
+                            class1,
+                            class2,
+                            cur_bits,
+                            EightbyteClass::Int,
+                            layout.size_bits(),
+                        ),
+                    }
+                }
+            }
+        }
+        let mut class1 = Some(EightbyteClass::Initial);
+        let mut class2 = None;
+        let mut cur_bits = 0;
+
+        handle_type_rec(self, &mut class1, &mut class2, &mut cur_bits, pt);
+
+        match (class1, class2) {
+            (Some(c1), Some(c2)) => (c1, c2, cur_bits),
+            _ => panic!(
+                "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
+                self.k1.types.pt_to_string(pt)
+            ),
+        }
+    }
+
+    fn codegen_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
+        debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, false));
+        self.current_insert_function = function_id;
+        let typed_function = self.k1.get_function(function_id);
+        let typed_function_params = typed_function.params;
+
+        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
+        let function_line_number = self
+            .k1
+            .ast
+            .get_lines_for_span_id(function_span)
+            .expect("line for function span")
+            .0
+            .line_number();
+
+        let codegened_function = self.llvm_functions.get(&function_id).unwrap();
+        let cg_function_type = &codegened_function.function_type;
+        let param_k1_types = cg_function_type.param_k1_types;
+        let param_abi_mappings = cg_function_type.param_abi_mappings;
+        let is_sret = cg_function_type.is_sret;
+        let function_value = codegened_function.function_value;
+
+        self.debug.push_scope(
+            function_span,
+            codegened_function.debug_info.as_debug_info_scope(),
+            codegened_function.debug_file,
+        );
+
+        let entry_block = self.ctx.append_basic_block(function_value, "entry");
+        self.builder.position_at_end(entry_block);
+        for (i, param) in function_value.get_param_iter().enumerate() {
+            let is_sret_param = i == 0 && is_sret;
+            if is_sret_param {
+                continue;
+            }
+
+            let logical_param_index = i - if is_sret { 1 } else { 0 };
+            let param_k1_type = *self.mem.get_nth_lt(param_k1_types, logical_param_index);
+            let param_abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, logical_param_index);
+
+            let typed_param_record =
+                self.k1.mem.get_nth(typed_function_params, logical_param_index);
+            self.set_debug_location_from_span(typed_param_record.span);
+
+            let name = param.get_name().to_str().unwrap();
+            let mapped_value =
+                self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
+
+            let di_local_variable = self.debug.debug_builder.create_parameter_variable(
+                self.debug.current_scope(),
+                name,
+                logical_param_index as u32,
+                self.debug.current_file(),
+                function_line_number,
+                param_k1_type.debug_type(),
+                true,
+                0,
+            );
+
+            self.llvm_functions.get_mut(&function_id).unwrap().param_values[logical_param_index] =
+                mapped_value;
+            self.debug.insert_dbg_value_at_end(
+                mapped_value,
+                di_local_variable,
+                None,
+                self.get_debug_location(),
+                entry_block,
+            );
+        }
+
+        let typed_function = self.k1.get_function(function_id);
+        go get the builtin type from the bytecode
+        // If we got this far and the function has an intrinsic type, then its
+        // the kind that needs to be a physical LLVM function
+        match typed_function.intrinsic_type {
+            Some(intrinsic_type) => {
+                let _terminator_instr = self.codegen_builtin_function_body(
+                    intrinsic_type,
+                    function_id,
+                    typed_function,
+                )?;
+            }
+            None => {
+                let bc_unit = self.k1.bytecode.functions.get(function_id).unwrap();
+                self.codegen_unit_body(bc_unit.blocks);
+            }
+        };
+        self.debug.pop_scope();
+
+        Ok(())
+    }
+
+    fn codegen_unit_body(
+        &mut self,
+        blocks: MSlice<CompiledBlock, ProgramBytecode>,
+    ) -> TyperResult<()> {
+        let fv = self.get_insert_function().function_value;
+        for block in self.k1.bytecode.mem.getn_lt(blocks) {
+            self.ctx.append_basic_block(fv, block.name.as_str());
+        }
+
+        // nocommit: Re-use hashmap allocation
+        let mut mappings = FxHashMap::new();
+        for (index, block) in self.k1.bytecode.mem.getn_lt(blocks).iter().enumerate() {
+            self.codegen_block(&mut mappings, index as u32, block)?;
+        }
+        Ok(())
+    }
+
+    fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
+        let mut count = 0;
+        // eprintln!("counting function {:?}", function_value.get_name().to_str());
+        let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
+        loop {
+            let Some(blk) = cur_blk else { break };
+            let mut cur_inst = blk.get_first_instruction();
+            while let Some(inst) = cur_inst {
+                count += 1;
+                cur_inst = inst.get_next_instruction();
+            }
+            cur_blk = blk.get_next_basic_block();
+        }
+        count
+    }
+
+    fn codegen_integer_value(
+        &mut self,
+        integer: TypedIntValue,
+    ) -> TyperResult<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.codegen_type(integer.get_type())?;
+        let llvm_int_ty = self.rich_repr_type(&llvm_ty).into_int_type();
+        let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
+        let llvm_value = if int_type.is_signed() {
+            llvm_int_ty.const_int(integer.to_u64_bits(), true)
+        } else {
+            llvm_int_ty.const_int(integer.to_u64_bits(), false)
+        };
+        Ok(llvm_value.as_basic_value_enum())
+    }
+
+    fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.codegen_type(float.get_type())?;
+        let llvm_float_ty = self.rich_repr_type(&llvm_ty).into_float_type();
+        let llvm_value = llvm_float_ty.const_float(float.as_f64());
+        Ok(llvm_value.as_basic_value_enum())
+    }
+
+    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<()> {
+        let global = self.k1.globals.get(global_id);
+        let initial_static_value_id = global.initial_value.unwrap();
+        let variable = self.k1.variables.get(global.variable_id);
+
+        // For now let's just use the name, eventually we'll ask the user for a link name
+        let name = if global.is_exported {
+            self.k1.ident_str(variable.name)
+        } else {
+            &self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
+        };
+        let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
+        let is_reference_type = maybe_reference_type.is_some();
+
+        let layout = self.k1.types.get_layout(global.ty);
+        let initializer_basic_value =
+            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+        let llvm_linkage = match global.is_exported {
+            false => LlvmLinkage::Private,
+            true => LlvmLinkage::External,
+        };
+        let llvm_global = self.make_global_from_value(
+            initializer_basic_value,
+            layout.align,
+            name,
+            global.is_constant,
+            llvm_linkage,
+        );
+        if self.k1.program_settings.multithreaded {
+            if global.is_tls {
+                llvm_global.set_thread_local(true);
+                let mode = if self.k1.program_settings.executable {
+                    ThreadLocalMode::LocalExecTLSModel
+                } else {
+                    // We don't yet support dynamic library as a target
+                    // So even libraries can use InitialExec
+                    ThreadLocalMode::InitialExecTLSModel
+                };
+                llvm_global.set_thread_local_mode(Some(mode));
+            }
+        }
+        let variable_value = if is_reference_type {
+            // Direct; global is a ptr, which is the correct type
+            // This will not be 'loaded' by load_variable_value
+            VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
+        } else {
+            // Indirect; global is a ptr to the value of correct type
+            // This will be 'loaded' by load_variable_value
+            VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
+        };
+        self.variable_to_value.insert(global.variable_id, variable_value);
+        Ok(())
+    }
+
+    pub fn codegen_program(&mut self) -> TyperResult<()> {
+        let start = std::time::Instant::now();
+
+        let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
+
+        // Guarantee code generation of exported globals
+        for global_id in &global_ids {
+            let g = self.k1.globals.get(*global_id);
+            if g.is_exported {
+                self.codegen_global(*global_id)?;
+            }
+        }
+
+        // TODO: Codegen the exported functions as well as the called ones
+        // for (id, function) in self.module.function_iter() {
+        //     if function.linkage.is_exported() {
+        //         self.codegen_function_signature(id)?;
+        //     }
+        // }
+
+        // Hack to guarantee presence of required extern declarations
+        // These are all functions that we look up by name in the LLVM module, instead of by
+        // function id via k1. To fix, track or allow lookup of their function ids
+        for (id, function) in self.k1.function_iter() {
+            if let TyperLinkage::External { fn_name: Some(link_name), .. } = function.linkage {
+                match self.k1.ident_str(link_name) {
+                    "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
+                        self.declare_llvm_function(id)?;
+                    }
+                    _ => {}
+                };
+            }
+        }
+
+        let Some(main_function_id) = self.k1.get_main_function_id() else {
+            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
+        };
+        let function_value = self.declare_llvm_function(main_function_id)?;
+
+        let mut pending_buffer: Vec<FunctionId> =
+            Vec::with_capacity(self.functions_pending_body_compilation.len());
+        while !self.functions_pending_body_compilation.is_empty() {
+            pending_buffer.extend(&self.functions_pending_body_compilation);
+            self.functions_pending_body_compilation.clear();
+
+            for id in &pending_buffer {
+                self.codegen_function_body(*id)?;
+            }
+
+            pending_buffer.clear();
+        }
+
+        self.builder.unset_current_debug_location();
+        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
+        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
+        self.builder.position_at_end(entry_block);
+        let params: Vec<BasicMetadataValueEnum<'ctx>> =
+            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
+        let res = self
+            .builder
+            .build_call(function_value, &params, "")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
+        Ok(())
     }
 
     fn codegen_static_value_as_const(
@@ -1860,1864 +3354,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         len: u64,
         data: PointerValue<'ctx>,
     ) -> TyperResult<StructValue<'ctx>> {
-        let buffer_type_id = self.k1.types.mem.get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0).type_id;
-        self.make_buffer_struct(buffer_type_id, len, data)
-    }
-
-    fn get_insert_function(&self) -> &CgFunction<'ctx> {
-        let codegened_function = self.llvm_functions.get(&self.current_insert_function).unwrap();
-        codegened_function
-    }
-
-    fn get_nth_block(&self, index: usize) -> TyperResult<BasicBlock<'ctx>> {
-        match self.get_insert_function().function_value.get_basic_block_iter().nth(index) {
-            Some(bb) => Ok(bb),
-            None => failf!(self.debug.current_span(), "Failed to get nth block: {index}"),
-        }
-    }
-
-    fn get_insert_function_mut(&mut self) -> &mut CgFunction<'ctx> {
-        let codegened_function =
-            self.llvm_functions.get_mut(&self.current_insert_function).unwrap();
-        codegened_function
-    }
-
-    fn build_struct_gep(
-        &mut self,
-        ptr: PointerValue<'ctx>,
-        struct_type: &CgStructType<'ctx>,
-        idx: u32,
-        name: &str,
-    ) -> PointerValue<'ctx> {
-        // if struct_type.manual_field_geps {
-        //     let struct_agg_id =
-        //         self.k1.types.get_physical_type(struct_type.type_id).unwrap().expect_agg();
-        //     let offset = self.k1.types.get_struct_field_offset(struct_agg_id, idx).unwrap();
-        //     unsafe {
-        //         self.builder
-        //             .build_in_bounds_gep(
-        //                 self.ctx.i8_type(),
-        //                 ptr,
-        //                 &[self.builtin_types.ptr_sized_int.const_int(offset as u64, false)],
-        //                 name,
-        //             )
-        //             .unwrap()
-        //     }
-        // } else {
-        self.builder.build_struct_gep(struct_type.struct_type, ptr, idx, name).unwrap()
-        //}
-    }
-
-    #[inline(always)]
-    fn codegen_cast(
-        &mut self,
-        target_type_id: TypeId,
-        span: SpanId,
-        cast: &TypedCast,
-    ) -> TyperResult<LlvmValue<'ctx>> {
-        match cast.cast_type {
-            CastType::EnumToVariant
-            | CastType::VariantToEnum
-            | CastType::ReferenceToReference
-            | CastType::ReferenceToMut
-            | CastType::ReferenceUnMut
-            | CastType::IntegerCast(IntegerCastDirection::NoOp)
-            | CastType::IntegerCast(IntegerCastDirection::SignChange)
-            | CastType::Integer8ToChar
-            | CastType::StaticErase => {
-                let value = self.codegen_expr_basic_value(cast.base_expr)?;
-                Ok(value.into())
-            }
-            CastType::IntegerCast(IntegerCastDirection::Extend)
-            | CastType::IntegerExtendFromChar => {
-                let value = self.codegen_expr_basic_value(cast.base_expr)?;
-                let int_value = value.into_int_value();
-                let llvm_type = self.codegen_type(target_type_id)?;
-                let integer_type = self.k1.types.get(target_type_id).expect_integer();
-                let value: IntValue<'ctx> = if integer_type.is_signed() {
-                    self.builder
-                        .build_int_s_extend(
-                            int_value,
-                            self.rich_repr_type(&llvm_type).into_int_type(),
-                            "extend_cast_sext",
-                        )
-                        .unwrap()
-                } else {
-                    self.builder
-                        .build_int_z_extend(
-                            int_value,
-                            self.rich_repr_type(&llvm_type).into_int_type(),
-                            "extend_cast_zext",
-                        )
-                        .unwrap()
-                };
-                Ok(value.as_basic_value_enum().into())
-            }
-            CastType::BoolToInt => {
-                let value = self.codegen_expr_basic_value(cast.base_expr)?;
-                let int_value = value.into_int_value();
-                let to_type = self.codegen_type(target_type_id)?;
-                let to_int_type = self.rich_repr_type(&to_type).into_int_type();
-                let extended =
-                    self.builder.build_int_z_extend(int_value, to_int_type, "bool_to_int").unwrap();
-                Ok(extended.as_basic_value_enum().into())
-            }
-            CastType::IntegerCast(IntegerCastDirection::Truncate) => {
-                let value = self.codegen_expr_basic_value(cast.base_expr)?;
-                let int_value = value.into_int_value();
-                let int_type = self.codegen_type(target_type_id)?;
-                let truncated_value = self
-                    .builder
-                    .build_int_truncate(
-                        int_value,
-                        self.rich_repr_type(&int_type).into_int_type(),
-                        "trunc_cast",
-                    )
-                    .unwrap();
-                Ok(truncated_value.as_basic_value_enum().into())
-            }
-            CastType::FloatExtend => {
-                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
-                let target_type = self.codegen_type(target_type_id)?;
-                let float_dst_type = self.rich_repr_type(&target_type).into_float_type();
-                let extended_value =
-                    self.builder.build_float_ext(from_value, float_dst_type, "fext").unwrap();
-                Ok(extended_value.as_basic_value_enum().into())
-            }
-            CastType::FloatTruncate => {
-                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
-                let target_type = self.codegen_type(target_type_id)?;
-                let float_dst_type = self.rich_repr_type(&target_type).into_float_type();
-                let extended_value =
-                    self.builder.build_float_trunc(from_value, float_dst_type, "ftrunc").unwrap();
-                Ok(extended_value.as_basic_value_enum().into())
-            }
-            CastType::FloatToUnsignedInteger | CastType::FloatToSignedInteger => {
-                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_float_value();
-                let int_dst_type = self.codegen_type(target_type_id)?;
-                let int_dst_type_llvm = self.rich_repr_type(&int_dst_type).into_int_type();
-                let casted_int_value = if matches!(cast.cast_type, CastType::FloatToSignedInteger) {
-                    self.builder
-                        .build_float_to_signed_int(from_value, int_dst_type_llvm, "")
-                        .unwrap()
-                } else {
-                    self.builder
-                        .build_float_to_unsigned_int(from_value, int_dst_type_llvm, "")
-                        .unwrap()
-                };
-                Ok(casted_int_value.as_basic_value_enum().into())
-            }
-            CastType::IntegerUnsignedToFloat | CastType::IntegerSignedToFloat => {
-                let from_value = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
-                let float_dst_type = self.codegen_type(target_type_id)?;
-                let float_dst_type_llvm = self.rich_repr_type(&float_dst_type).into_float_type();
-                let casted_float_value = if matches!(cast.cast_type, CastType::IntegerSignedToFloat)
-                {
-                    self.builder
-                        .build_signed_int_to_float(from_value, float_dst_type_llvm, "")
-                        .unwrap()
-                } else {
-                    self.builder
-                        .build_unsigned_int_to_float(from_value, float_dst_type_llvm, "")
-                        .unwrap()
-                };
-                Ok(casted_float_value.as_basic_value_enum().into())
-            }
-            CastType::PointerToReference => {
-                // This is a complete no-op in the LLVM ir
-                // since llvm 'ptr' is untyped, and all we're doing
-                // here is adding a type to our pointer
-                let pointer = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
-                Ok(pointer.as_basic_value_enum().into())
-            }
-            CastType::ReferenceToPointer => {
-                // This is a complete no-op in the LLVM ir
-                // since llvm 'ptr' is untyped, and all we're doing
-                // here is removing the type from our pointer
-                let reference = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
-                Ok(reference.as_basic_value_enum().into())
-            }
-            CastType::PointerToWord => {
-                let ptr = self.codegen_expr_basic_value(cast.base_expr)?.into_pointer_value();
-                let as_int = self
-                    .builder
-                    .build_ptr_to_int(ptr, self.builtin_types.ptr_sized_int, "ptrtoint_cast")
-                    .unwrap();
-                Ok(as_int.as_basic_value_enum().into())
-            }
-            CastType::WordToPointer => {
-                let int = self.codegen_expr_basic_value(cast.base_expr)?.into_int_value();
-                let as_ptr = self
-                    .builder
-                    .build_int_to_ptr(int, self.builtin_types.ptr, "inttoptr_cast")
-                    .unwrap();
-                Ok(as_ptr.as_basic_value_enum().into())
-            }
-            CastType::LambdaToLambdaObject => {
-                // Produces just the lambda's environment as a value. We don't need the function
-                // pointer because we know it from the type still
-                let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
-                let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
-                // fixme: this stores an aggregate
-                self.builder.build_store(env_pointer, lambda_env_value).unwrap();
-
-                let fn_value =
-                    self.lambda_functions.get(&self.k1.exprs.get_type(cast.base_expr)).unwrap();
-                let fn_ptr = fn_value.as_global_value().as_pointer_value();
-
-                let lam_obj = self.builtin_types.dynamic_lambda_object.get_undef();
-                let lam_obj = self.builder.build_insert_value(lam_obj, fn_ptr, 0, "").unwrap();
-                let lam_obj =
-                    self.builder.build_insert_value(lam_obj, lambda_env_value, 1, "").unwrap();
-
-                let lam_obj_ptr =
-                    self.build_alloca(self.builtin_types.dynamic_lambda_object, "lam_obj_ptr");
-                self.builder.build_store(lam_obj_ptr, lam_obj).unwrap();
-
-                Ok(lam_obj_ptr.as_basic_value_enum().into())
-            }
-            CastType::Transmute => {
-                self.k1.ice_with_span("Cast Transmute unsupported by codegen", span)
-            }
-        }
-    }
-
-    fn append_basic_block(&mut self, name: &str) -> BasicBlock<'ctx> {
-        let origin_block = self.builder.get_insert_block().unwrap();
-        let current_fn = origin_block.get_parent().unwrap();
-        let block = self.ctx.append_basic_block(current_fn, name);
-        block
-    }
-
-    fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
-    }
-
-    fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_cast_sign_flag(i1, self.builtin_types.boolean, false, "").unwrap()
-    }
-
-    fn get_enum_tag(
-        &self,
-        tag_type: IntType<'ctx>,
-        enum_value: PointerValue<'ctx>,
-    ) -> IntValue<'ctx> {
-        // Just interpret the enum memory just as the int tag that is always at the start, no need to
-        // treat it as a struct
-        self.builder.build_load(tag_type, enum_value, "tag").unwrap().into_int_value()
-    }
-
-    fn get_enum_payload_reference(
-        &self,
-        variant_type: StructType<'ctx>,
-        enum_pointer: PointerValue<'ctx>,
-    ) -> PointerValue<'ctx> {
-        let payload_ptr = self
-            .builder
-            .build_struct_gep(variant_type, enum_pointer, 1, "get_payload_ptr")
-            .unwrap();
-        payload_ptr
-    }
-
-    fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
-        let ptr = self.build_alloca(self.rich_repr_type(ty), name);
-        ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
-        ptr
-    }
-
-    /// Inserts an alloca in the entry block of the function
-    fn build_alloca<T: BasicType<'ctx>>(&mut self, ty: T, name: &str) -> PointerValue<'ctx> {
-        let original_block = self.builder.get_insert_block().unwrap();
-        let f = self.get_insert_function();
-        let function_entry_block = f.function_value.get_first_basic_block().unwrap();
-
-        // Position the builder
-        match f.last_alloca_instr {
-            None => match function_entry_block.get_first_instruction() {
-                Some(instr) => {
-                    self.builder.position_at(function_entry_block, &instr);
-                }
-                None => {
-                    self.builder.position_at_end(function_entry_block);
-                }
-            },
-            Some(last_alloca) => {
-                self.builder.position_at(function_entry_block, &last_alloca);
-            }
-        };
-
-        let alloca = self.builder.build_alloca(ty, name).unwrap();
-        self.get_insert_function_mut().last_alloca_instr = Some(alloca.as_instruction().unwrap());
-
-        // Restore the builder's position
-        self.builder.position_at_end(original_block);
-        alloca
-    }
-
-    fn codegen_function_call(&mut self, call_id: bc::BcCallId) -> TyperResult<LlvmValue<'ctx>> {
-        let call = self.k1.bytecode.calls.get(call_id);
-
-        let function_type = self.k1.get_callee_function_type(&call.callee);
-        let llvm_callee = match call.callee {
-            bc::BcCallee::Builtin(function_id, _) => Left(function_id),
-            bc::BcCallee::Direct(function_id) => Left(function_id),
-            bc::BcCallee::Extern(ident, ident1, function_id) => Left(function_id),
-            bc::BcCallee::Indirect(value) => {
-                let callee_value = self.codegen_value(inst_mappings, value)?;
-                Right(callee_value)
-            }
-        };
-        let llvm_function_type = match llvm_callee {
-            Left(function_id) => {
-                self.declare_llvm_function(function_id)?;
-                &self.llvm_functions.get(&function_id).unwrap().function_type
-            }
-            Right(value) => {
-                // We need to be able to call this based on what we have in the callee
-                self.make_llvm_function_type(param_types, return_type, abi_mode)
-            }
-        } ;
-
-        let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
-            self.mem.new_list(llvm_function_type.llvm_function_type.count_param_types());
-
-        let sret_alloca = if llvm_function_type.is_sret {
-            let rich_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
-            let sret_alloca = self.build_alloca(rich_type, "call_sret");
-            args.push(sret_alloca.into());
-            Some(sret_alloca)
-        } else {
-            None
-        };
-        for (index, arg_expr) in call.args.iter().enumerate() {
-            let param_k1_ty = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, index);
-            let abi_mapping = *self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, index);
-            let arg_value = self.codegen_expr_basic_value(*arg_expr)?;
-            let value_marshalled =
-                self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
-            trace!("codegen function call arg type: {}", value_marshalled);
-            args.push(value_marshalled.into())
-        }
-
-        let env_arg_index = if llvm_function_type.is_sret { 1 } else { 0 };
-        let callsite_value = match &call.callee {
-            Callee::Abstract { .. } => {
-                self.k1.ice_with_span("Cannot codegen a call to an abstract function", call.span)
-            }
-            Callee::StaticFunction(function_id) => {
-                let function_value = self.declare_llvm_function(*function_id)?;
-
-                self.set_debug_location_from_span(call.span);
-                self.builder.build_call(function_value, &args, "").unwrap()
-            }
-            Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
-                let lambda_env_struct = self.codegen_expr(*lambda_value_expr)?;
-
-                args.insert(env_arg_index, lambda_env_struct.expect_basic_value().into());
-
-                let function_value = self.declare_llvm_function(*function_id)?;
-
-                self.set_debug_location_from_span(call.span);
-                self.builder.build_call(function_value, &args, "").unwrap()
-            }
-            Callee::DynamicFunction { function_pointer_expr } => {
-                let function_ptr =
-                    self.codegen_expr_basic_value(*function_pointer_expr)?.into_pointer_value();
-
-                self.set_debug_location_from_span(call.span);
-
-                let call_site_value = self
-                    .builder
-                    .build_indirect_call(
-                        llvm_function_type.llvm_function_type,
-                        function_ptr,
-                        &args,
-                        "",
-                    )
-                    .unwrap();
-                call_site_value
-            }
-            Callee::DynamicLambda(callee_struct_expr) => {
-                let lambda_object_type = self.builtin_types.dynamic_lambda_object;
-                let callee_struct =
-                    self.codegen_expr_basic_value(*callee_struct_expr)?.into_pointer_value();
-
-                self.set_debug_location_from_span(call.span);
-                let fn_ptr_gep = self
-                    .builder
-                    .build_struct_gep(lambda_object_type, callee_struct, 0, "fn_ptr_gep")
-                    .unwrap();
-                let fn_ptr = self
-                    .builder
-                    .build_load(
-                        lambda_object_type.get_field_type_at_index(0).unwrap(),
-                        fn_ptr_gep,
-                        "fn_ptr",
-                    )
-                    .unwrap()
-                    .into_pointer_value();
-                let env_ptr_gep = self
-                    .builder
-                    .build_struct_gep(lambda_object_type, callee_struct, 1, "env_ptr_gep")
-                    .unwrap();
-                let env_ptr = self
-                    .builder
-                    .build_load(
-                        lambda_object_type.get_field_type_at_index(1).unwrap(),
-                        env_ptr_gep,
-                        "env_ptr",
-                    )
-                    .unwrap();
-                args.insert(env_arg_index, env_ptr.into());
-
-                debug!(
-                    "The k1 fn type on the lambda object {}",
-                    self.k1.type_id_to_string(function_type)
-                );
-                debug!("Calling indirect with type {}", llvm_function_type.llvm_function_type);
-                self.builder
-                    .build_indirect_call(llvm_function_type.llvm_function_type, fn_ptr, &args, "")
-                    .unwrap()
-            }
-            Callee::DynamicAbstract { .. } => {
-                return failf!(
-                    call.span,
-                    "Internal Compiler Error: cannot codegen an Abstract callee"
-                );
-            }
-        };
-
-        if llvm_function_type.is_sret {
-            let sret_attribute = self.make_sret_attribute(
-                self.rich_repr_type(&llvm_function_type.return_cg_type).as_any_type_enum(),
-            );
-            callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
-        };
-        match callsite_value.try_as_basic_value() {
-            ValueKind::Basic(returned_value) => {
-                let canonical_value = self.canonicalize_abi_param_value(
-                    llvm_function_type.return_abi_mapping,
-                    &llvm_function_type.return_cg_type,
-                    returned_value,
-                );
-                Ok(LlvmValue::BasicValue(canonical_value))
-            }
-            ValueKind::Instruction(_instr) => {
-                if llvm_function_type.is_sret {
-                    let sret_pointer = sret_alloca.unwrap();
-                    Ok(sret_pointer.as_basic_value_enum().into())
-                } else if call.return_type == NEVER_TYPE_ID {
-                    let unreachable = self.builder.build_unreachable().unwrap();
-                    Ok(LlvmValue::Void(unreachable))
-                } else {
-                    panic!("Function returned LLVM void but wasn't typed as never and was not sret")
-                }
-            }
-        }
-    }
-
-    #[allow(unused)]
-    fn const_string_ptr(&mut self, string: &str, name: &str) -> PointerValue<'ctx> {
-        let char_data = self.ctx.const_string(string.as_bytes(), false);
-        let length_value = self.builtin_types.ptr_sized_int.const_int(string.len() as u64, false);
-        let char_data_global =
-            self.llvm_module.add_global(char_data.get_type(), None, &format!("{name}_data"));
-        char_data_global.set_initializer(&char_data);
-        let string_type = self.codegen_type(STRING_TYPE_ID).unwrap();
-        let string_struct_type = self.rich_repr_type(&string_type).into_struct_type();
-        let string_struct = string_struct_type.const_named_struct(&[
-            length_value.as_basic_value_enum(),
-            char_data_global.as_pointer_value().as_basic_value_enum(),
-        ]);
-        let g = self.llvm_module.add_global(string_struct_type, None, name);
-        g.set_initializer(&string_struct);
-        g.as_pointer_value()
-    }
-
-    fn load_function_argument(
-        &mut self,
-        function: &TypedFunction,
-        index: usize,
-    ) -> TyperResult<BasicMetadataValueEnum<'ctx>> {
-        let param = self.k1.mem.get_nth(function.params, index);
-        let fn_type = self.k1.types.get(function.type_id).expect_function();
-        let param_type = self.k1.types.mem.get_nth(fn_type.physical_params, index);
-        let param_llvm_type = self.codegen_type(param_type.type_id)?;
-
-        let variable_value = self.variable_to_value.get(&param.variable_id).unwrap();
-        let basic_value = self.load_variable_value(&param_llvm_type, *variable_value);
-        Ok(basic_value.into())
-    }
-
-    // nocommit: Can I write these in C, or k1, or llvm, and load them?
-    fn codegen_builtin_function_body(
-        &mut self,
-        builtin_type: BcBuiltin,
-        function_id: FunctionId,
-        function: &TypedFunction,
-    ) -> TyperResult<InstructionValue<'ctx>> {
-        let function_span =
-            self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
-        self.set_debug_location_from_span(function_span);
-        let instr = match builtin_type {
-            BcBuiltin::Allocate => {
-                // intern fn alloc(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function, 0)?;
-
-                let f = self.llvm_module.get_function("malloc").unwrap();
-                let call = self.builder.build_call(f, &[size_arg], "").unwrap();
-                let result = call.try_as_basic_value().basic().unwrap();
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::AllocateZeroed => {
-                // intern fn allocZeroed(size: uword, align: uword): Pointer
-                let size_arg = self.load_function_argument(function, 0)?;
-                let count_one =
-                    self.builtin_types.ptr_sized_int.const_int(1, false).as_basic_value_enum();
-
-                let f = self.llvm_module.get_function("calloc").unwrap();
-                // libc/calloc(count = 1, size = size);
-                let call = self.builder.build_call(f, &[count_one.into(), size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("calloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::Reallocate => {
-                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-                let old_ptr_arg = self.load_function_argument(function, 0)?;
-                let new_size_arg = self.load_function_argument(function, 3)?;
-
-                let f = self.llvm_module.get_function("realloc").unwrap();
-                let call = self.builder.build_call(f, &[old_ptr_arg, new_size_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("realloc return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::Free => {
-                let old_ptr_arg = self.load_function_argument(function, 0)?;
-
-                let f = self.llvm_module.get_function("free").unwrap();
-                let call = self.builder.build_call(f, &[old_ptr_arg], "").unwrap();
-                let result = call.try_as_basic_value().expect_basic("free return");
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::MemCopy => {
-                // intern fn copy(
-                //   dst: Pointer,
-                //   src: Pointer,
-                //   count: uword
-                // ): unit
-                let dst_ptr_arg = self.load_function_argument(function, 0)?.into_pointer_value();
-                let src_ptr_arg = self.load_function_argument(function, 1)?.into_pointer_value();
-                let size_arg = self.load_function_argument(function, 2)?.into_int_value();
-                let dst_align_bytes = 1;
-                let src_align_bytes = 1;
-                let _not_actually_a_ret_ptr = self
-                    .builder
-                    .build_memcpy(
-                        dst_ptr_arg,
-                        dst_align_bytes,
-                        src_ptr_arg,
-                        src_align_bytes,
-                        size_arg,
-                    )
-                    .unwrap();
-                let result = self.builtin_types.unit_basic();
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::MemSet => {
-                // intern fn set(dst: Pointer, value: u8, count: uword): unit
-                let dst_arg = self.load_function_argument(function, 0)?;
-                let value_arg = self.load_function_argument(function, 1)?;
-                let count_arg = self.load_function_argument(function, 2)?;
-                let _not_actually_a_ret_ptr = self
-                    .builder
-                    .build_memset(
-                        dst_arg.into_pointer_value(),
-                        1,
-                        value_arg.into_int_value(),
-                        count_arg.into_int_value(),
-                    )
-                    .unwrap();
-                let result = self.builtin_types.unit_basic();
-                self.builder.build_return(Some(&result)).unwrap()
-            }
-            BcBuiltin::MemEquals => {
-                // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
-                let p1_arg = self.load_function_argument(function, 0)?;
-                let p2_arg = self.load_function_argument(function, 1)?;
-                let size_arg = self.load_function_argument(function, 2)?;
-
-                let f = self.llvm_module.get_function("memcmp").unwrap();
-                let call = self.builder.build_call(f, &[p1_arg, p2_arg, size_arg], "").unwrap();
-                let result =
-                    call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
-                let is_zero = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, result, result.get_type().const_zero(), "")
-                    .unwrap();
-                let bool_equal = self.i1_to_bool(is_zero, "");
-                self.builder.build_return(Some(&bool_equal)).unwrap()
-            }
-            BcBuiltin::Exit => {
-                // intern fn exit(code: i32): never
-                let code_arg = self.load_function_argument(function, 0)?;
-
-                let f = self.llvm_module.get_function("exit").unwrap();
-                let call = self.builder.build_call(f, &[code_arg], "").unwrap();
-                let _result = call.try_as_basic_value();
-                self.builder.build_unreachable().unwrap()
-            }
-
-            BcBuiltin::TypeSchema | BcBuiltin::TypeName => {
-                // intern fn typeSchema(id: u64): TypeSchema
-                let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
-                let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
-                let return_llvm_type = if is_type_name {
-                    // typeName returns string
-                    self.codegen_type(STRING_TYPE_ID)?
-                } else {
-                    // typeSchema returns TypeSchema
-                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?
-                };
-                let entry_block = self.builder.get_insert_block().unwrap();
-
-                // typeSchema and typeName return a struct, so we have to do sret shenanigans
-                let sret_ptr = self.llvm_functions.get(&function_id).unwrap().sret_pointer.unwrap();
-
-                let else_block = self.append_basic_block("miss");
-                self.builder.position_at_end(else_block);
-                // TODO: Proper crash
-                self.builder.build_unreachable().unwrap();
-
-                let finish_block = self.append_basic_block("finish");
-
-                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
-                    Vec::with_capacity(self.k1.type_schemas.len());
-                if is_type_name {
-                    for (type_id, static_string_id) in self
-                        .k1
-                        .type_names
-                        .iter()
-                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                    {
-                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
-                        {
-                            // No point re-ifying types that don't exist at runtime
-                            // like type parameters
-                            continue;
-                        }
-                        let my_block =
-                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                        self.builder.position_at_end(my_block);
-                        let type_id_int_value =
-                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-
-                        let value = {
-                            let StaticValue::String(string_id) =
-                                self.k1.static_values.get(*static_string_id)
-                            else {
-                                panic!("typename should be a string")
-                            };
-                            let global_value = self.codegen_string_id_to_global(
-                                *string_id,
-                                Some(&format!("typename_{}\0", type_id.as_u32())),
-                            )?;
-                            global_value.as_pointer_value().as_basic_value_enum()
-                        };
-                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
-                        self.builder.build_unconditional_branch(finish_block).unwrap();
-                        cases.push((type_id_int_value, my_block));
-                    }
-                } else {
-                    for (type_id, schema_value_id) in self
-                        .k1
-                        .type_schemas
-                        .iter()
-                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                    {
-                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
-                        {
-                            // No point re-ifying types that don't exist at runtime
-                            // like type parameters
-                            continue;
-                        }
-                        let my_block =
-                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                        self.builder.position_at_end(my_block);
-                        let type_id_int_value =
-                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-
-                        let value = self.codegen_static_value_canonical(*schema_value_id)?;
-                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
-                        self.builder.build_unconditional_branch(finish_block).unwrap();
-                        cases.push((type_id_int_value, my_block));
-                    }
-                }
-                self.builder.position_at_end(entry_block);
-                let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
-
-                self.builder.position_at_end(finish_block);
-                self.builder.build_return(None).unwrap()
-            }
-            BcBuiltin::CompilerMessage => {
-                return failf!(
-                    function_span,
-                    "Internal Compiler Error: cannot codegen CompilerMessage builtin"
-                );
-            },
-        };
-        Ok(instr)
-    }
-
-    fn codegen_block(
-        &mut self,
-        mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        block_id: u32,
-        block: bc::CompiledBlock,
-    ) -> TyperResult<BasicBlock<'ctx>> {
-        let current_function = self.get_insert_function().function_value;
-        let llvm_block = current_function.get_basic_block_iter().nth(block_id as usize).unwrap();
-        self.builder.position_at_end(llvm_block);
-        for inst in self.k1.bytecode.mem.getn(block.instrs) {
-            self.codegen_inst(mappings, *inst)?;
-        }
-        Ok(llvm_block)
-    }
-
-    fn codegen_value(
-        &mut self,
-        mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        value: bc::Value,
-    ) -> TyperResult<BasicValueEnum<'ctx>> {
-        match value {
-            bc::Value::Inst(inst_id) => match mappings.get(&inst_id) {
-                Some(v) => Ok(*v),
-                None => {
-                    return failf!(
-                        self.debug.current_span(),
-                        "Whiffed inst id lookup: {}",
-                        inst_id.as_u32()
-                    );
-                }
-            },
-            bc::Value::Global { t, id } => {
-                let Some(global_value) = self.globals.get(&id).copied() else {
-                    return failf!(
-                        self.debug.current_span(),
-                        "Whiffed global id lookup: {}",
-                        id.as_u32()
-                    );
-                };
-                let k1_global = self.k1.globals.get(id);
-                if k1_global.is_referencing {
-                    Ok(global_value.as_pointer_value().into())
-                } else {
-                    let cg_type = self.codegen_type(t);
-                    let loaded =
-                        self.load_k1_value(&cg_type, global_value.as_pointer_value(), "", false);
-                    Ok(loaded)
-                }
-            }
-            bc::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
-            bc::Value::FunctionAddr(function_id) => {
-                let Some(cg_fun) = self.llvm_functions.get(&function_id) else {
-                    return failf!(
-                        self.debug.current_span(),
-                        "Whiffed function id lookup: {}",
-                        function_id.as_u32()
-                    );
-                };
-                Ok(cg_fun.function_value.as_global_value().as_pointer_value().into())
-            }
-            bc::Value::FnParam { index, .. } => {
-                let function = self.get_insert_function();
-                let v = function.param_values[index as usize];
-                Ok(v)
-            }
-            bc::Value::Imm32 { t, data } => {
-                let v: BasicValueEnum<'ctx> = match t {
-                    ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
-                    ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
-                    ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
-                    ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
-                    ScalarType::I8 => self.ctx.i8_type().const_int(data as u64, true).into(),
-                    ScalarType::I16 => self.ctx.i16_type().const_int(data as u64, true).into(),
-                    ScalarType::I32 => self.ctx.i32_type().const_int(data as u64, true).into(),
-                    ScalarType::I64 => self.ctx.i64_type().const_int(data as u64, true).into(),
-                    ScalarType::F32 => {
-                        self.ctx.f32_type().const_float(f32::from_bits(data) as f64).into()
-                    }
-                    ScalarType::F64 => {
-                        self.ctx.f64_type().const_float(f32::from_bits(data) as f64).into()
-                    }
-                    ScalarType::Pointer => unreachable!(),
-                };
-                Ok(v)
-            }
-            bc::Value::PtrZero => Ok(self.builtin_types.ptr.const_null().into()),
-        }
-    }
-
-    fn codegen_inst(
-        &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        inst_id: InstId,
-    ) -> TyperResult<()> {
-        let bc = &self.k1.bytecode;
-        let span = *bc.sources.get(inst_id);
-        self.set_debug_location_from_span(span);
-        let inst = *bc.instrs.get(inst_id);
-        match inst {
-            Inst::Data(data_inst) => {
-                let value: BasicValueEnum<'ctx> = match data_inst {
-                    bc::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
-                    bc::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
-                    bc::DataInst::Float(f) => match f {
-                        TypedFloatValue::F32(f32) => {
-                            self.ctx.f32_type().const_float(f32 as f64).into()
-                        }
-                        TypedFloatValue::F64(f64) => self.ctx.f64_type().const_float(f64).into(),
-                    },
-                };
-                inst_mappings.insert(inst_id, value.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::Alloca { t, .. } => {
-                let cg_type = self.codegen_type(t);
-                // Our helper here hoists the alloca to the top of the function, and sets an explicit align
-                let instr = self.build_k1_alloca(&cg_type, "");
-                inst_mappings.insert(inst_id, instr.as_basic_value_enum());
-
-                // nocommit: Declare variable if we should
-                // let local_variable = self.debug.debug_builder.create_auto_variable(
-                //         self.debug.current_scope(),
-                //         &name,
-                //         self.debug.current_file(),
-                //         self.get_line_number(let_stmt.span),
-                //         variable_type.debug_type(),
-                //         true,
-                //         0,
-                //         variable_type.rich_repr_layout().align,
-                //     );
-
-                Ok(())
-            }
-            Inst::Store { dst, value, t } => {
-                let dst_pointer = self.codegen_value(inst_mappings, dst)?.into_pointer_value();
-                let value = self.codegen_value(inst_mappings, value)?;
-                let _store = self.builder.build_store(dst_pointer, value).unwrap();
-                Ok(())
-            }
-            Inst::Load { t, src } => {
-                let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
-                let src_ptr = self.codegen_value(inst_mappings, src)?.into_pointer_value();
-                let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
-                inst_mappings.insert(inst_id, load);
-                Ok(())
-            }
-            Inst::Copy { dst, src, t, .. } => {
-                let dst_value = self.codegen_value(inst_mappings, dst)?;
-                let src_value = self.codegen_value(inst_mappings, src)?;
-                let layout = self.k1.types.get_pt_layout(t);
-                let _memcpy = self.memcpy_layout(
-                    dst_value.into_pointer_value(),
-                    src_value.into_pointer_value(),
-                    layout,
-                );
-                Ok(())
-            }
-            Inst::StructOffset { struct_t, base, field_index, .. } => {
-                let cg_struct = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
-                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
-                let gep = self.build_struct_gep(base_ptr, &cg_struct, field_index, "");
-                inst_mappings.insert(inst_id, gep.into());
-                Ok(())
-            }
-            Inst::ArrayOffset { element_t, base, element_index } => {
-                let cg_elem_ty = self.codegen_type(element_t);
-                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
-                let index_int = self.codegen_value(inst_mappings, element_index)?.into_int_value();
-                let gep = unsafe {
-                    self.builder
-                        .build_gep(cg_elem_ty.rich_type(), base_ptr, &[index_int], "")
-                        .unwrap()
-                };
-                inst_mappings.insert(inst_id, gep.into());
-                Ok(())
-            }
-            Inst::Call { id } => todo!(),
-            Inst::Jump(block_id) => {
-                let dst_block = self.get_nth_block(block_id as usize)?;
-                let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
-                Ok(())
-            }
-            Inst::JumpIf { cond, cons, alt } => {
-                let cond_value = self.codegen_value(inst_mappings, cond)?;
-                let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
-                let then_block = self.get_nth_block(cons as usize)?;
-                let else_block = self.get_nth_block(alt as usize)?;
-                let _branch = self
-                    .builder
-                    .build_conditional_branch(cond_value_i1, then_block, else_block)
-                    .unwrap();
-                Ok(())
-            }
-            Inst::Unreachable => {
-                self.builder.build_unreachable().unwrap();
-                Ok(())
-            }
-            Inst::CameFrom { t, incomings } => {
-                let phi_ty = self.codegen_type(t);
-                let phi = self.builder.build_phi(phi_ty.rich_type(), "").unwrap();
-                for incoming in self.k1.bytecode.mem.getn(incomings) {
-                    let value = self.codegen_value(inst_mappings, incoming.value)?;
-                    let block = self.get_nth_block(incoming.from as usize)?;
-                    phi.add_incoming(&[(&value, block)])
-                }
-                inst_mappings.insert(inst_id, phi.as_basic_value());
-                Ok(())
-            }
-            Inst::Ret(value) => {
-                let ret_value = self.codegen_value(inst_mappings, value)?;
-                let current_fn = self.get_insert_function();
-                match current_fn.sret_pointer {
-                    None => {
-                        let _return = self.builder.build_return(Some(&ret_value)).unwrap();
-                        Ok(())
-                    }
-                    Some(sret_ptr) => {
-                        let ret_cg_type = &current_fn.function_type.return_cg_type;
-                        let _store = self.store_k1_value(ret_cg_type, sret_ptr, ret_value);
-                        let _return = self.builder.build_return(None).unwrap();
-                        Ok(())
-                    }
-                }
-            }
-            Inst::BoolNegate { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let i1_input = self.bool_to_i1(input, "");
-                let not_i1 = self.builder.build_not(i1_input, "").unwrap();
-                let not_bool = self.i1_to_bool(not_i1, "");
-                inst_mappings.insert(inst_id, not_bool.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitNot { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let not_input = self.builder.build_not(input, "").unwrap();
-                inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitCast { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?;
-
-                // From agg to scalar -> handled by BC
-                // From scalar to agg -> handled by BC
-                match to {
-                    // From agg to agg -> canon type is ptr, nothing to do.
-                    PhysicalType::Agg(_) => {
-                        inst_mappings.insert(inst_id, input);
-                        Ok(())
-                    }
-                    // From scalar to scalar -> do the llvm bitcast
-                    PhysicalType::Scalar(st) => {
-                        let llvm_ty = self.scalar_basic_type(st);
-                        let bitcast = self.builder.build_bit_cast(input, to_type, name).unwrap();
-                        inst_mappings.insert(inst_id, bitcast);
-                        Ok(())
-                    }
-                }
-            }
-            Inst::IntTrunc { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let trunc = self.builder.build_int_truncate(input, to_int_type, "").unwrap();
-                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let signed = matches!(inst, bc::Inst::IntExtS { .. });
-                let ext =
-                    self.builder.build_int_cast_sign_flag(input, to_int_type, signed, "").unwrap();
-                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::FloatTrunc { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
-                let to_float_type = self.scalar_basic_type(to).into_float_type();
-                let trunc = self.builder.build_float_truncate(input, to_float_type, "").unwrap();
-                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::FloatExt { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
-                let to_float_type = self.scalar_basic_type(to).into_float_type();
-                let ext = self.builder.build_float_ext(input, to_float_type, "").unwrap();
-                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let int = self.builder.build_float_to_unsigned_int(input, to_int_type, "").unwrap();
-                inst_mappings.insert(inst_id, int.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
-                let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let int = self.builder.build_float_to_signed_int(input, to_int_type, "").unwrap();
-                inst_mappings.insert(inst_id, int.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntToFloatUnsigned { v, from, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let to_float_type = self.scalar_basic_type(to).into_float_type();
-                let float =
-                    self.builder.build_unsigned_int_to_float(input, to_float_type, "").unwrap();
-                inst_mappings.insert(inst_id, float.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntToFloatSigned { v, from, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let to_float_type = self.scalar_basic_type(to).into_float_type();
-                let float =
-                    self.builder.build_signed_int_to_float(input, to_float_type, "").unwrap();
-                inst_mappings.insert(inst_id, float.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::PtrToWord { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_pointer_value();
-                let word_int = self
-                    .builder
-                    .build_ptr_to_int(input, self.builtin_types.ptr_sized_int, "")
-                    .unwrap();
-                inst_mappings.insert(inst_id, word_int.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::WordToPtr { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let ptr_value =
-                    self.builder.build_int_to_ptr(input, self.builtin_types.ptr, "").unwrap();
-                inst_mappings.insert(inst_id, ptr_value.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntAdd { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                // nocommit: decide if overflow traps or not, signed and unsigned
-                //self.builder.build_int_nsw_add
-                let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, sum.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntSub { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let diff = self.builder.build_int_sub(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, diff.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntMul { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let prod = self.builder.build_int_mul(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, prod.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntDivUnsigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, div.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntDivSigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, div.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntRemUnsigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntRemSigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntCmp { lhs, rhs, pred, width } => {
-                let llvm_pred = match pred {
-                    bc::IntCmpPred::Eq => IntPredicate::EQ,
-                    bc::IntCmpPred::Slt => IntPredicate::SLT,
-                    bc::IntCmpPred::Sle => IntPredicate::SLE,
-                    bc::IntCmpPred::Sgt => IntPredicate::SGT,
-                    bc::IntCmpPred::Sge => IntPredicate::SGE,
-                    bc::IntCmpPred::Ult => IntPredicate::ULT,
-                    bc::IntCmpPred::Ule => IntPredicate::ULE,
-                    bc::IntCmpPred::Ugt => IntPredicate::UGT,
-                    bc::IntCmpPred::Uge => IntPredicate::UGE,
-                };
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let cmp =
-                    self.builder.build_int_compare(llvm_pred, lhs_value, rhs_value, "").unwrap();
-                let bool_value = self.i1_to_bool(cmp, "");
-                inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::FloatAdd { lhs, rhs, width }
-            | Inst::FloatSub { lhs, rhs, width }
-            | Inst::FloatMul { lhs, rhs, width }
-            | Inst::FloatDiv { lhs, rhs, width }
-            | Inst::FloatRem { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_float_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_float_value();
-                let result = match inst {
-                    Inst::FloatAdd { .. } => {
-                        self.builder.build_float_add(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatSub { .. } => {
-                        self.builder.build_float_sub(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatMul { .. } => {
-                        self.builder.build_float_mul(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatDiv { .. } => {
-                        self.builder.build_float_div(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatRem { .. } => {
-                        self.builder.build_float_rem(lhs_value, rhs_value, "").unwrap()
-                    }
-                    _ => unreachable!(),
-                };
-                inst_mappings.insert(inst_id, result.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::FloatCmp { lhs, rhs, pred, width } => {
-                let llvm_pred = match pred {
-                    bc::FloatCmpPred::Eq => FloatPredicate::OEQ,
-                    bc::FloatCmpPred::Lt => FloatPredicate::OLT,
-                    bc::FloatCmpPred::Le => FloatPredicate::OLE,
-                    bc::FloatCmpPred::Gt => FloatPredicate::OGT,
-                    bc::FloatCmpPred::Ge => FloatPredicate::OGE,
-                };
-                let lhs = self.codegen_value(inst_mappings, lhs)?.into_float_value();
-                let rhs = self.codegen_value(inst_mappings, rhs)?.into_float_value();
-                let cmp = self.builder.build_float_compare(llvm_pred, lhs, rhs, "").unwrap();
-                let bool_value = self.i1_to_bool(cmp, "");
-                inst_mappings.add(inst_id, bool_value.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitAnd { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let and = self.builder.build_and(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, and.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitOr { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let or = self.builder.build_or(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, or.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitXor { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let xor = self.builder.build_xor(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, xor.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitShiftLeft { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let shl = self.builder.build_left_shift(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, shl.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let lshr = self.builder.build_right_shift(lhs_value, rhs_value, false, "").unwrap();
-                inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitSignedShiftRight { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let ashr = self.builder.build_right_shift(lhs_value, rhs_value, true, "").unwrap();
-                inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BakeStaticValue { type_id, value } => {
-                return failf!(
-                    self.debug.current_span(),
-                    "BakeStaticValue is only available to compile-time code"
-                );
-            }
-        }
-    }
-
-    fn make_function_debug_info(
-        &mut self,
-        function_name: &str,
-        function_span: SpanId,
-        return_type: DIType<'ctx>,
-        param_debug_types: &[DIType<'ctx>],
-    ) -> TyperResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
-        let span_id = function_span;
-        let function_file_id = self.k1.ast.spans.get(span_id).file_id;
-        let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
-        let function_line_number = function_line.line_number();
-        let function_scope_start_line_number = function_line_number;
-        let function_file = self.debug.files.get(&function_file_id).unwrap();
-        let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
-            *function_file,
-            Some(return_type),
-            param_debug_types,
-            0,
-        );
-        let di_subprogram = self.debug.debug_builder.create_function(
-            self.debug.current_scope(),
-            function_name,
-            None,
-            *function_file,
-            function_line_number,
-            dbg_fn_type,
-            false,
-            true,
-            function_scope_start_line_number,
-            0,
-            false,
-        );
-        Ok((di_subprogram, *function_file))
-    }
-
-    fn declare_llvm_function(
-        &mut self,
-        function_id: FunctionId,
-    ) -> TyperResult<FunctionValue<'ctx>> {
-        if let Some(function) = self.llvm_functions.get(&function_id) {
-            return Ok(function.function_value);
-        }
-        debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
-
-        let typed_function = self.k1.get_function(function_id);
-        let typed_function_linkage = typed_function.linkage;
-        let typed_function_params = typed_function.params;
-
-        let llvm_linkage = match typed_function.linkage {
-            TyperLinkage::Standard => None,
-            TyperLinkage::External { .. } => Some(LlvmLinkage::External),
-            TyperLinkage::Intrinsic => None,
-        };
-        let llvm_name = match typed_function.linkage {
-            TyperLinkage::External { fn_name: Some(link_name), .. } => {
-                self.k1.ident_str(link_name).to_string()
-            }
-            _ => self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
-        };
-
-        if self.llvm_module.get_function(&llvm_name).is_some() {
-            if let Some(LlvmLinkage::External) = llvm_linkage {
-                eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
-            } else {
-                return failf!(
-                    self.k1.ast.get_span_for_id(typed_function.parsed_id),
-                    "Dupe function name: {}",
-                    llvm_name
-                );
-            }
-        }
-
-        let function_k1_type = self.k1.types.get(typed_function.type_id).expect_function();
-        let abi_mode = function_k1_type.abi_mode;
-        let bytecode_fn = self.k1.bytecode.functions.get(function_id).unwrap();
-
-        let llvm_function_type = self.make_llvm_function_type(
-            self.k1.bytecode.mem.getn(bytecode_fn.fn_params),
-            bytecode_fn.return_type,
-            abi_mode,
-        )?;
-
-        let di_types: SV8<_> = self
-            .mem
-            .getn_lt(llvm_function_type.param_k1_types)
-            .iter()
-            .map(|t| t.debug_type())
-            .collect();
-        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
-        let (di_subprogram, di_file) = self.make_function_debug_info(
-            &llvm_name,
-            function_span,
-            llvm_function_type.return_cg_type.debug_type(),
-            &di_types,
-        )?;
-        let is_sret = llvm_function_type.is_sret;
-
-        let sret_attribute = if is_sret {
-            let struct_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
-            let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
-            let align_attribute = self.make_align_attribute(
-                llvm_function_type.return_cg_type.rich_repr_layout().align as u64,
-            );
-            Some((sret_attribute, align_attribute))
-        } else {
-            None
-        };
-
-        // TODO: Figure out how to mark all standard functions dso_local
-        let function_value = self.llvm_module.add_function(
-            &llvm_name,
-            llvm_function_type.llvm_function_type,
-            llvm_linkage,
-        );
-        let sret_pointer = if is_sret {
-            Some(function_value.get_first_param().unwrap().into_pointer_value())
-        } else {
-            None
-        };
-        if let Some((sret_attribute, align_attribute)) = sret_attribute {
-            function_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
-            function_value.add_attribute(AttributeLoc::Param(0), align_attribute);
-        }
-
-        // We have to make another pass, now that we've actually made an llvm function value,
-        // to set some parameter attributes: names and byval, currently
-        for (i, param) in function_value.get_param_iter().enumerate() {
-            if is_sret && i == 0 {
-                param.set_name("sret")
-            } else {
-                let offset = if is_sret { 1 } else { 0 };
-                let typed_param = self.k1.mem.get_nth(typed_function_params, i - offset);
-                let v = self.k1.variables.get(typed_param.variable_id);
-                param.set_name(self.k1.ident_str(v.name));
-                let abi_mapping =
-                    self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
-                if let AbiParamMapping::BigStructByPtrToCopy { byval_attr } = abi_mapping {
-                    // FIXME: We likely need to be setting param alignments explicitly sometimes
-                    //function_value.set_param_alignment(param_index, alignment);
-                    if *byval_attr {
-                        let k1_type =
-                            self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                        let byval_attribute = self
-                            .make_byval_attribute(self.rich_repr_type(k1_type).as_any_type_enum());
-                        function_value
-                            .add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
-                    }
-                }
-            }
-        }
-
-        let compile_body = !typed_function_linkage.is_external();
-        if compile_body {
-            self.functions_pending_body_compilation.push(function_id);
-        }
-
-        function_value.set_subprogram(di_subprogram);
-
-        self.llvm_functions.insert(
-            function_id,
-            CgFunction {
-                function_type: llvm_function_type,
-                function_value,
-                param_values: Vec::with_capacity(4),
-                sret_pointer,
-                last_alloca_instr: None,
-                instruction_count: 0,
-                debug_info: di_subprogram,
-                debug_file: di_file,
-            },
-        );
-        self.llvm_function_to_k1.insert(function_value, function_id);
-
-        Ok(function_value)
-    }
-
-    fn get_abi_mapping_for_type(
-        &self,
-        abi_mode: types::AbiMode,
-        pt: PhysicalType,
-        is_return: bool,
-    ) -> AbiParamMapping {
-        enum CallConv {
-            InternalK1,
-            AMD64,
-            ARM64,
-        }
-        let callconv = match abi_mode {
-            types::AbiMode::Internal => CallConv::InternalK1,
-            types::AbiMode::Native => match self.k1.ast.config.target {
-                crate::compiler::Target::LinuxIntel64 => CallConv::AMD64,
-                crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
-                crate::compiler::Target::Wasm64 => CallConv::ARM64,
-            },
-        };
-
-        // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
-        match pt {
-            PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
-            PhysicalType::Agg(agg_id) => {
-                let agg_record = self.k1.types.phys_types.get(agg_id);
-                match agg_record.agg_type {
-                    AggType::EnumVariant(_) | AggType::Struct { .. } | AggType::Array { .. } => {
-                        let size_bytes = agg_record.layout.size;
-                        match callconv {
-                            CallConv::InternalK1 => {
-                                if size_bytes <= 8 {
-                                    AbiParamMapping::ScalarInRegister
-                                } else if size_bytes <= 16 {
-                                    AbiParamMapping::StructByPtrNoCopy
-                                } else {
-                                    AbiParamMapping::StructByPtrNoCopy
-                                }
-                            }
-                            CallConv::ARM64 => {
-                                // nocommit: Check for HFA on ARM64
-                                if size_bytes <= 8 {
-                                    // Returns use the exact width; otherwise just i64
-                                    let width_bits = if is_return { size_bytes * 8 } else { 64 };
-                                    AbiParamMapping::StructInInteger { width: width_bits }
-                                } else if size_bytes <= 16 {
-                                    // If the size of the structure is between 9 and 16 bytes, pass the structure as
-                                    // [an array of] two integers of 8 bytes each
-                                    AbiParamMapping::StructByIntPairArray
-                                } else {
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
-                                }
-                            }
-                            CallConv::AMD64 => {
-                                if size_bytes <= 8 {
-                                    // If the size of the structure is less than 8 bytes, pass the structure as an integer of its size in bits
-                                    let width_bits = size_bytes * 8;
-                                    AbiParamMapping::StructInInteger { width: width_bits }
-                                } else if size_bytes <= 16 {
-                                    // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
-                                    // Pass by classified eightbytes
-                                    let (eb1, eb2, eb2_bits) =
-                                        self.collect_aggregate_eightbytes(pt);
-                                    AbiParamMapping::StructByEightbytePair {
-                                        class1: eb1,
-                                        class2: eb2,
-                                        active_bits2: eb2_bits,
-                                    }
-                                } else {
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
-                                }
-                            }
-                        }
-                    }
-                    AggType::Opaque { .. } => {
-                        // enum abi mapping eventually; for
-                        // now we just say they are always passed by pointer
-                        match callconv {
-                            CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
-                            CallConv::AMD64 | CallConv::ARM64 => {
-                                AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // What a horrible amount of code for such a small transformation!
-    fn collect_aggregate_eightbytes(
-        &self,
-        pt: PhysicalType,
-    ) -> (EightbyteClass, EightbyteClass, u32) {
-        // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
-        // for the HFA detection
-        fn append_type(
-            class1: &mut Option<EightbyteClass>,
-            class2: &mut Option<EightbyteClass>,
-            cur_bits: &mut u32,
-            class: EightbyteClass,
-            size_bits: u32,
-        ) {
-            match (class1, class2) {
-                (c1 @ None, None) => *c1 = Some(class),
-                (Some(c1), c2 @ None) => {
-                    let scalar_size_signed: i32 = size_bits as i32;
-                    let cur_bits_signed: i32 = *cur_bits as i32;
-
-                    let new_bits = scalar_size_signed + cur_bits_signed;
-                    let bleed_bits = new_bits - 8;
-
-                    let new_c1_class = c1.combine(class);
-                    *c1 = new_c1_class;
-                    if bleed_bits > 0 {
-                        // `bleed`: This scalar actually spans the first 8 and last 8 bytes;
-                        // so contributes to the class of both
-                        *c2 = Some(class);
-                        *cur_bits = bleed_bits as u32;
-                    } else if bleed_bits == 0 {
-                        // We completed the first eightbyte exactly; initialize the 2nd and reset
-                        // cur_bits
-                        *c2 = Some(EightbyteClass::Initial);
-                        *cur_bits = 0;
-                    } else {
-                        *cur_bits = new_bits as u32;
-                    }
-                }
-                (Some(_), Some(c2)) => *c2 = c2.combine(class),
-                (None, Some(_)) => unreachable!(),
-            }
-        }
-        fn handle_type_rec<'ctx, 'k1>(
-            c: &Cg<'ctx, 'k1>,
-            class1: &mut Option<EightbyteClass>,
-            class2: &mut Option<EightbyteClass>,
-            cur_bits: &mut u32,
-            t: PhysicalType,
-        ) {
-            match t {
-                PhysicalType::Scalar(st) => {
-                    let class = match st {
-                        ScalarType::U8 => EightbyteClass::Int,
-                        ScalarType::U16 => EightbyteClass::Int,
-                        ScalarType::U32 => EightbyteClass::Int,
-                        ScalarType::U64 => EightbyteClass::Int,
-                        ScalarType::I8 => EightbyteClass::Int,
-                        ScalarType::I16 => EightbyteClass::Int,
-                        ScalarType::I32 => EightbyteClass::Int,
-                        ScalarType::I64 => EightbyteClass::Int,
-                        ScalarType::F32 => EightbyteClass::Float,
-                        ScalarType::F64 => EightbyteClass::Float,
-                        ScalarType::Pointer => EightbyteClass::Int,
-                    };
-                    append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
-                }
-                PhysicalType::Agg(agg_id) => {
-                    let agg_record = c.k1.types.phys_types.get(agg_id);
-                    match agg_record.agg_type {
-                        AggType::EnumVariant(evl) => {
-                            handle_type_rec(
-                                c,
-                                class1,
-                                class2,
-                                cur_bits,
-                                PhysicalType::Scalar(evl.tag),
-                            );
-                            if let Some(payload) = evl.payload {
-                                handle_type_rec(c, class1, class2, cur_bits, payload)
-                            }
-                        }
-                        AggType::Struct { fields } => {
-                            for f in c.k1.types.mem.getn(fields) {
-                                handle_type_rec(c, class1, class2, cur_bits, f.field_t)
-                            }
-                        }
-                        AggType::Array { element_pt: element_t, len } => {
-                            for _ in 0..len {
-                                handle_type_rec(c, class1, class2, cur_bits, element_t)
-                            }
-                        }
-                        AggType::Opaque { layout } => append_type(
-                            class1,
-                            class2,
-                            cur_bits,
-                            EightbyteClass::Int,
-                            layout.size_bits(),
-                        ),
-                    }
-                }
-            }
-        }
-        let mut class1 = Some(EightbyteClass::Initial);
-        let mut class2 = None;
-        let mut cur_bits = 0;
-
-        handle_type_rec(self, &mut class1, &mut class2, &mut cur_bits, pt);
-
-        match (class1, class2) {
-            (Some(c1), Some(c2)) => (c1, c2, cur_bits),
-            _ => panic!(
-                "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
-                self.k1.types.pt_to_string(pt)
-            ),
-        }
-    }
-
-    fn codegen_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
-        debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, false));
-        self.current_insert_function = function_id;
-        let typed_function = self.k1.get_function(function_id);
-        let typed_function_params = typed_function.params;
-
-        let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
-        let function_line_number = self
+        let buffer_type_id = self
             .k1
-            .ast
-            .get_lines_for_span_id(function_span)
-            .expect("line for function span")
-            .0
-            .line_number();
-
-        let codegened_function = self.llvm_functions.get(&function_id).unwrap();
-        let cg_function_type = &codegened_function.function_type;
-        let param_k1_types = cg_function_type.param_k1_types;
-        let param_abi_mappings = cg_function_type.param_abi_mappings;
-        let is_sret = cg_function_type.is_sret;
-        let function_value = codegened_function.function_value;
-
-        self.debug.push_scope(
-            function_span,
-            codegened_function.debug_info.as_debug_info_scope(),
-            codegened_function.debug_file,
-        );
-
-        let entry_block = self.ctx.append_basic_block(function_value, "entry");
-        self.builder.position_at_end(entry_block);
-        for (i, param) in function_value.get_param_iter().enumerate() {
-            let is_sret_param = i == 0 && is_sret;
-            if is_sret_param {
-                continue;
-            }
-
-            let logical_param_index = i - if is_sret { 1 } else { 0 };
-            let param_k1_type = *self.mem.get_nth_lt(param_k1_types, logical_param_index);
-            let param_abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, logical_param_index);
-
-            let typed_param_record =
-                self.k1.mem.get_nth(typed_function_params, logical_param_index);
-            self.set_debug_location_from_span(typed_param_record.span);
-
-            let name = param.get_name().to_str().unwrap();
-            let mapped_value =
-                self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
-
-            let di_local_variable = self.debug.debug_builder.create_parameter_variable(
-                self.debug.current_scope(),
-                name,
-                logical_param_index as u32,
-                self.debug.current_file(),
-                function_line_number,
-                param_k1_type.debug_type(),
-                true,
-                0,
-            );
-
-            self.llvm_functions.get_mut(&function_id).unwrap().param_values[logical_param_index] =
-                mapped_value;
-            self.debug.insert_dbg_value_at_end(
-                mapped_value,
-                di_local_variable,
-                None,
-                self.get_debug_location(),
-                entry_block,
-            );
-        }
-
-        let typed_function = self.k1.get_function(function_id);
-        // If we got this far and the function has an intrinsic type, then its
-        // the kind that needs to be a physical LLVM function
-        match typed_function.intrinsic_type {
-            Some(intrinsic_type) => {
-                let _terminator_instr = self.codegen_intrinsic_function_body(
-                    intrinsic_type,
-                    function_id,
-                    typed_function,
-                )?;
-            }
-            None => {
-                let bc_unit = self.k1.bytecode.functions.get(function_id).unwrap();
-                self.codegen_unit_body(bc_unit.blocks);
-            }
-        };
-        self.debug.pop_scope();
-
-        Ok(())
-    }
-
-    fn codegen_unit_body(
-        &mut self,
-        blocks: MSlice<CompiledBlock, ProgramBytecode>,
-    ) -> TyperResult<()> {
-        let fv = self.get_insert_function().function_value;
-        for block in self.k1.bytecode.mem.getn_lt(blocks) {
-            self.ctx.append_basic_block(fv, block.name.as_str());
-        }
-
-        // nocommit: Re-use hashmap allocation
-        let mut mappings = FxHashMap::new();
-        for (index, block) in self.k1.bytecode.mem.getn_lt(blocks).iter().enumerate() {
-            self.codegen_block(&mut mappings, index as u32, block)?;
-        }
-        Ok(())
-    }
-
-    fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
-        let mut count = 0;
-        // eprintln!("counting function {:?}", function_value.get_name().to_str());
-        let mut cur_blk: Option<BasicBlock<'ctx>> = function_value.get_first_basic_block();
-        loop {
-            let Some(blk) = cur_blk else { break };
-            let mut cur_inst = blk.get_first_instruction();
-            while let Some(inst) = cur_inst {
-                count += 1;
-                cur_inst = inst.get_next_instruction();
-            }
-            cur_blk = blk.get_next_basic_block();
-        }
-        count
-    }
-
-    fn codegen_integer_value(
-        &mut self,
-        integer: TypedIntValue,
-    ) -> TyperResult<BasicValueEnum<'ctx>> {
-        let llvm_ty = self.codegen_type(integer.get_type())?;
-        let llvm_int_ty = self.rich_repr_type(&llvm_ty).into_int_type();
-        let Type::Integer(int_type) = self.k1.types.get(llvm_ty.type_id()) else { panic!() };
-        let llvm_value = if int_type.is_signed() {
-            llvm_int_ty.const_int(integer.to_u64_bits(), true)
-        } else {
-            llvm_int_ty.const_int(integer.to_u64_bits(), false)
-        };
-        Ok(llvm_value.as_basic_value_enum())
-    }
-
-    fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
-        let llvm_ty = self.codegen_type(float.get_type())?;
-        let llvm_float_ty = self.rich_repr_type(&llvm_ty).into_float_type();
-        let llvm_value = llvm_float_ty.const_float(float.as_f64());
-        Ok(llvm_value.as_basic_value_enum())
-    }
-
-    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<()> {
-        let global = self.k1.globals.get(global_id);
-        let initial_static_value_id = global.initial_value.unwrap();
-        let variable = self.k1.variables.get(global.variable_id);
-
-        // For now let's just use the name, eventually we'll ask the user for a link name
-        let name = if global.is_exported {
-            self.k1.ident_str(variable.name)
-        } else {
-            &self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
-        };
-        let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
-        let is_reference_type = maybe_reference_type.is_some();
-
-        let layout = self.k1.types.get_layout(global.ty);
-        let initializer_basic_value =
-            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
-        let llvm_linkage = match global.is_exported {
-            false => LlvmLinkage::Private,
-            true => LlvmLinkage::External,
-        };
-        let llvm_global = self.make_global_from_value(
-            initializer_basic_value,
-            layout.align,
-            name,
-            global.is_constant,
-            llvm_linkage,
-        );
-        if self.k1.program_settings.multithreaded {
-            if global.is_tls {
-                llvm_global.set_thread_local(true);
-                let mode = if self.k1.program_settings.executable {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    // We don't yet support dynamic library as a target
-                    // So even libraries can use InitialExec
-                    ThreadLocalMode::InitialExecTLSModel
-                };
-                llvm_global.set_thread_local_mode(Some(mode));
-            }
-        }
-        let variable_value = if is_reference_type {
-            // Direct; global is a ptr, which is the correct type
-            // This will not be 'loaded' by load_variable_value
-            VariableValue::Direct { value: llvm_global.as_basic_value_enum() }
-        } else {
-            // Indirect; global is a ptr to the value of correct type
-            // This will be 'loaded' by load_variable_value
-            VariableValue::Indirect { pointer_value: llvm_global.as_pointer_value() }
-        };
-        self.variable_to_value.insert(global.variable_id, variable_value);
-        Ok(())
-    }
-
-    pub fn codegen_program(&mut self) -> TyperResult<()> {
-        let start = std::time::Instant::now();
-
-        let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
-
-        // Guarantee code generation of exported globals
-        for global_id in &global_ids {
-            let g = self.k1.globals.get(*global_id);
-            if g.is_exported {
-                self.codegen_global(*global_id)?;
-            }
-        }
-
-        // TODO: Codegen the exported functions as well as the called ones
-        // for (id, function) in self.module.function_iter() {
-        //     if function.linkage.is_exported() {
-        //         self.codegen_function_signature(id)?;
-        //     }
-        // }
-
-        // Hack to guarantee presence of required extern declarations
-        // These are all functions that we look up by name in the LLVM module, instead of by
-        // function id via k1. To fix, track or allow lookup of their function ids
-        for (id, function) in self.k1.function_iter() {
-            if let TyperLinkage::External { fn_name: Some(link_name), .. } = function.linkage {
-                match self.k1.ident_str(link_name) {
-                    "malloc" | "calloc" | "realloc" | "free" | "memcmp" | "exit" => {
-                        self.declare_llvm_function(id)?;
-                    }
-                    _ => {}
-                };
-            }
-        }
-
-        let Some(main_function_id) = self.k1.get_main_function_id() else {
-            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
-        };
-        let function_value = self.declare_llvm_function(main_function_id)?;
-
-        let mut pending_buffer: Vec<FunctionId> =
-            Vec::with_capacity(self.functions_pending_body_compilation.len());
-        while !self.functions_pending_body_compilation.is_empty() {
-            pending_buffer.extend(&self.functions_pending_body_compilation);
-            self.functions_pending_body_compilation.clear();
-
-            for id in &pending_buffer {
-                self.codegen_function_body(*id)?;
-            }
-
-            pending_buffer.clear();
-        }
-
-        self.builder.unset_current_debug_location();
-        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
-        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
-        self.builder.position_at_end(entry_block);
-        let params: Vec<BasicMetadataValueEnum<'ctx>> =
-            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
-        let res = self
-            .builder
-            .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic()
-            .unwrap();
-        self.builder.build_return(Some(&res)).unwrap();
-
-        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
-        Ok(())
+            .types
+            .mem
+            .get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0)
+            .type_id;
+        self.make_buffer_struct(buffer_type_id, len, data)
     }
 
     pub fn name(&self) -> &str {

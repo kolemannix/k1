@@ -209,12 +209,6 @@ fn pt_to_ffi_type(
     match pt {
         PhysicalType::Scalar(st) => Ok(scalar_to_ffi_type(st)),
         PhysicalType::Agg(agg_id) => match k1.types.phys_types.get(agg_id).agg_type {
-            AggType::Struct1(physical_type) => {
-                let mut element_storage = k1.mem.new_list(1);
-                element_storage.push(pt_to_ffi_type(k1, physical_type)?);
-                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
-                Ok(t)
-            }
             AggType::EnumVariant(enum_variant_layout) => {
                 let count = if enum_variant_layout.payload.is_some() { 2 } else { 1 };
                 let mut element_storage = k1.mem.new_list(count);
