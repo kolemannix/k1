@@ -155,11 +155,18 @@ pub enum BcBuiltin {
     CompilerMessage,
 }
 
+#[derive(Copy, Clone)]
+pub struct PhysicalFunctionType {
+    pub return_type: InstKind,
+    pub params: MSlice<PhysicalType, ProgramBytecode>,
+    pub abi_mode: AbiMode,
+}
+
 #[derive(Clone, Copy)]
 pub enum BcCallee {
-    Builtin(BcBuiltin),
+    Builtin(FunctionId, BcBuiltin),
     Direct(FunctionId),
-    Indirect(Value),
+    Indirect(PhysicalFunctionType, Value),
     Extern(Option<parse::Ident>, parse::Ident, FunctionId),
     // No lambda call; been compiled down to just calls and args by now
 }
@@ -1019,6 +1026,22 @@ impl<'k1> Builder<'k1> {
             InstKind::Value(t)
         }
     }
+
+    fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
+        let mut param_types = self.k1.bytecode.mem.new_list(call.args.len());
+        for arg in &call.args {
+            let expr_type = self.k1.exprs.get_type(*arg);
+            let pt = self.get_physical_type(expr_type);
+            param_types.push(pt);
+        }
+        let return_type = self.type_to_inst_kind(call.return_type);
+        let abi_mode = self.k1.types.get(call.)
+        PhysicalFunctionType {
+            params: param_types.into_handle(&mut self.k1.bytecode.mem),
+            return_type,
+            abi_mode
+        }
+    }
 }
 
 fn store_simple_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Value {
@@ -1412,10 +1435,21 @@ fn compile_expr(
                                         };
                                         let memset_args =
                                             b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
+                                        let Some(memset_function_id) =
+                                            b.k1.functions.iter().find(|f| {
+                                                f.scope == b.k1.scopes.mem_scope_id
+                                                    && f.name == b.k1.ast.idents.b.memset
+                                            })
+                                        else {
+                                            b_ice!(b, "Missing memset function");
+                                        };
                                         let memset_call = BcCall {
                                             dst: None,
                                             ret_inst_kind: InstKind::UNIT,
-                                            callee: BcCallee::Builtin(BcBuiltin::MemSet),
+                                            callee: BcCallee::Builtin(
+                                                memset_function_id,
+                                                BcBuiltin::MemSet,
+                                            ),
                                             args: memset_args,
                                         };
                                         let call_id = b.k1.bytecode.calls.add(memset_call);
@@ -1453,17 +1487,62 @@ fn compile_expr(
                         IntrinsicOperation::BitCast => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                let pt = b.get_physical_type(type_id);
-                                let base = compile_expr(b, None, call.args[0])?;
-                                let bitcast = b.push_inst_anon(Inst::BitCast { v: base, to: pt });
-                                let stored = store_rich_if_dst(
-                                    b,
-                                    dst,
-                                    pt,
-                                    bitcast.as_value(),
-                                    "fulfill bitcast destination",
-                                );
-                                Ok(stored)
+                                let to_pt = b.get_physical_type(type_id);
+                                let from = compile_expr(b, None, call.args[0])?;
+                                let from_pt = b.get_value_kind(&from).expect_value()?;
+                                match (from_pt, to_pt) {
+                                    (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
+                                        // Note that this also covers Pointer to Pointer
+                                        let bitcast =
+                                            b.push_inst_anon(Inst::BitCast { v: from, to: to_pt });
+                                        let stored = store_rich_if_dst(
+                                            b,
+                                            dst,
+                                            to_pt,
+                                            bitcast.as_value(),
+                                            "fulfill bitcast destination",
+                                        );
+                                        Ok(stored)
+                                    }
+                                    (PhysicalType::Scalar(_), PhysicalType::Agg(_)) => {
+                                        // We need a place, so sadly its alloca time
+                                        let locn = match dst {
+                                            Some(dst) => dst,
+                                            None => {
+                                                b.push_alloca(to_pt, "bitcast scalar to agg place")
+                                            }
+                                        };
+
+                                        // We know a scalar store will work
+                                        let stored =
+                                            b.push_store(locn, from, "bitcast scalar to agg store");
+                                        Ok(locn)
+                                    }
+                                    (PhysicalType::Agg(_), PhysicalType::Scalar(_)) => {
+                                        // Perform a 'load' of the scalar type _from_ the
+                                        // aggregate's memory
+                                        load_or_copy(
+                                            b,
+                                            to_pt,
+                                            dst,
+                                            from,
+                                            copy_aggregates,
+                                            "bitcast agg to scalar",
+                                        )
+                                    }
+                                    (PhysicalType::Agg(_), PhysicalType::Agg(_)) => {
+                                        let bitcast =
+                                            b.push_inst_anon(Inst::BitCast { v: from, to: to_pt });
+                                        let stored = store_rich_if_dst(
+                                            b,
+                                            dst,
+                                            to_pt,
+                                            bitcast.as_value(),
+                                            "fulfill bitcast destination",
+                                        );
+                                        Ok(stored)
+                                    }
+                                }
                             };
                         }
                         IntrinsicOperation::ArithBinop(op) => {
@@ -1527,7 +1606,12 @@ fn compile_expr(
                         IntrinsicOperation::Exit => Some(BcBuiltin::Exit),
                     };
                     match builtin {
-                        Some(bi) => BcCallee::Builtin(bi),
+                        Some(bi) => {
+                            let Some(function_id) = maybe_function_id else {
+                                b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
+                            };
+                            BcCallee::Builtin(function_id, bi)
+                        },
                         None => {
                             b_ice!(b, "Unhandled intrinsic in bytecode: {:?}", intrinsic)
                         }
@@ -1570,11 +1654,15 @@ fn compile_expr(
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
                         args.push(env);
-                        BcCallee::Indirect(fn_ptr)
+                        let phys_fn_type = b.get_physical_fn_type(&call);
+                        BcCallee::Indirect(phys_fn_type, fn_ptr)
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
+                        let function_type_id = b.k1.exprs.get_type(*function_pointer_expr);
+                        let function_type = b.k1.types.get(function_type_id).expect_function();
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        BcCallee::Indirect(callee_inst)
+                        let phys_fn_type = b.get_physical_fn_type(function_type_id);
+                        BcCallee::Indirect(phys_fn_type, callee_inst)
                     }
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "bc abstract call");
@@ -1603,7 +1691,6 @@ fn compile_expr(
                 }
             }
 
-            let return_inst_kind: InstKind = b.type_to_inst_kind(return_type);
             for arg in &call.args {
                 args.push(compile_expr(b, None, *arg)?);
             }
@@ -1842,7 +1929,6 @@ fn compile_expr(
             let tag_scalar = b.get_physical_type(tag_type);
 
             // Load straight from the enum base, dont bother with a struct gep
-            // task(bc): Copy if dst
             Ok(load_or_copy(
                 b,
                 tag_scalar,
@@ -2044,7 +2130,8 @@ fn compile_cast(
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
             let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
-            let stored = store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
+            let stored =
+                store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
             Ok(stored)
         }
         CastType::Transmute => {
@@ -2318,7 +2405,10 @@ fn load_or_copy(
     comment: &str,
 ) -> Value {
     match dst {
-        Some(dst) => b.push_copy(dst, src, pt, comment).as_value(),
+        Some(dst) => {
+            let _copy = b.push_copy(dst, src, pt, comment).as_value();
+            dst
+        }
         None => load_value(b, pt, src, copy_aggregates, comment),
     }
 }
@@ -2766,7 +2856,7 @@ pub fn display_inst(
                 write!(w, " into {}", *dst)?;
             }
             match &call.callee {
-                BcCallee::Builtin(intrinsic_operation) => {
+                BcCallee::Builtin(_, intrinsic_operation) => {
                     write!(w, " builtin {:?}", intrinsic_operation)?;
                 }
                 BcCallee::Direct(function_id) => {

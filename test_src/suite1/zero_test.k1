@@ -7,9 +7,22 @@ fn testBitcast(): unit {
   let y: u32 = mem/bitcast(x);
   assertEquals(y, 0xffff_ffff);
 
+  // From agg to agg
   let s: string = "foo";
   let sWrap = { inner: s };
   let sAgain: string = mem/bitcast(sWrap);
+
+  // From agg to scalar
+  let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
+  let scalar = mem/bitcast[i64](p2);
+
+  // From scalar to scalar
+  nocommit!();
+
+  // From scalar to agg
+  nocommit!();
+  
+
   assert(testCompile(
     mem/bitcast[u8, u16](4)
   ).isSome());

@@ -1513,7 +1513,7 @@ impl_copy_if_small!(16, AssignmentStmt);
 
 #[derive(Clone)]
 pub struct TypedRequireStmt {
-    pub condition: Box<MatchingCondition>,
+    pub condition: MatchingCondition,
     pub else_body: TypedExprId,
     pub span: SpanId,
 }
@@ -12372,7 +12372,7 @@ impl TypedProgram {
                         }
 
                         let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
-                            condition: Box::new(condition),
+                            condition: condition,
                             else_body,
                             span: require.span,
                         }));

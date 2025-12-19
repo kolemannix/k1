@@ -35,7 +35,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
 use smallvec::smallvec;
 
-use crate::bc::{CompiledBlock, InstId, ProgramBytecode};
+use crate::bc::{BcBuiltin, CompiledBlock, Inst, InstId, ProgramBytecode};
 use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
@@ -466,13 +466,6 @@ impl<'ctx> BuiltinTypes<'ctx> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct LoopInfo<'ctx> {
-    pub break_value_ptr: Option<PointerValue<'ctx>>,
-    pub break_type: Option<TypeId>,
-    pub end_block: BasicBlock<'ctx>,
-}
-
 pub struct CgFunction<'ctx> {
     pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
@@ -578,26 +571,6 @@ impl<'ctx> DebugContext<'ctx> {
     fn current_file(&self) -> DIFile<'ctx> {
         self.current_entry().file
     }
-}
-
-#[derive(Copy, Clone, Debug)]
-enum VariableValue<'ctx> {
-    Indirect {
-        pointer_value: PointerValue<'ctx>,
-    },
-    Direct {
-        value: BasicValueEnum<'ctx>,
-    },
-    /// Call this function using sret to get the value of this variable
-    /// Used for complex static values that cannot be built using LLVM's
-    /// constant and global mechanisms
-    ///
-    /// Turns out we had the technology after all (packed structs that mix global references in
-    /// with binary data!)
-    #[allow(unused)]
-    ByFunctionCall {
-        function: FunctionValue<'ctx>,
-    },
 }
 
 #[derive(Debug)]
@@ -1395,16 +1368,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn make_named_struct(
-        ctx: &'ctx Context,
-        name: &str,
-        fields: &[BasicTypeEnum<'ctx>],
-    ) -> StructType<'ctx> {
-        let struc = ctx.opaque_struct_type(name);
-        struc.set_body(fields, false);
-        struc
-    }
-
     /// This function is responsible for 'loading' a value of some arbitrary type and giving
     /// it in its usable, canonical form to the caller.
     /// Example 1: struct field access
@@ -1897,8 +1860,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         len: u64,
         data: PointerValue<'ctx>,
     ) -> TyperResult<StructValue<'ctx>> {
-        let view_type = self.codegen_type(view_type_id)?.expect_struct();
-        let buffer_type_id = self.mem.get_nth_lt(view_type.fields, 0).type_id();
+        let buffer_type_id = self.k1.types.mem.get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0).type_id;
         self.make_buffer_struct(buffer_type_id, len, data)
     }
 
@@ -2192,17 +2154,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         alloca
     }
 
-    fn codegen_function_call(&mut self, call_id: CallId) -> TyperResult<LlvmValue<'ctx>> {
-        let call = self.k1.calls.get(call_id);
-        let typed_function = call.callee.maybe_function_id().map(|f| self.k1.get_function(f));
-        if let Some(intrinsic_type) = typed_function.and_then(|f| f.intrinsic_type) {
-            if intrinsic_type.is_inlined() {
-                return self.codegen_intrinsic_inline(intrinsic_type, call);
-            }
-        }
+    fn codegen_function_call(&mut self, call_id: bc::BcCallId) -> TyperResult<LlvmValue<'ctx>> {
+        let call = self.k1.bytecode.calls.get(call_id);
 
         let function_type = self.k1.get_callee_function_type(&call.callee);
-        let llvm_function_type = self.make_llvm_function_type(function_type)?;
+        let llvm_callee = match call.callee {
+            bc::BcCallee::Builtin(function_id, _) => Left(function_id),
+            bc::BcCallee::Direct(function_id) => Left(function_id),
+            bc::BcCallee::Extern(ident, ident1, function_id) => Left(function_id),
+            bc::BcCallee::Indirect(value) => {
+                let callee_value = self.codegen_value(inst_mappings, value)?;
+                Right(callee_value)
+            }
+        };
+        let llvm_function_type = match llvm_callee {
+            Left(function_id) => {
+                self.declare_llvm_function(function_id)?;
+                &self.llvm_functions.get(&function_id).unwrap().function_type
+            }
+            Right(value) => {
+                // We need to be able to call this based on what we have in the callee
+                self.make_llvm_function_type(param_types, return_type, abi_mode)
+            }
+        } ;
 
         let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
             self.mem.new_list(llvm_function_type.llvm_function_type.count_param_types());
@@ -2360,263 +2334,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         g.as_pointer_value()
     }
 
-    fn codegen_intrinsic_inline(
-        &mut self,
-        intrinsic_type: IntrinsicOperation,
-        call: &Call,
-    ) -> TyperResult<LlvmValue<'ctx>> {
-        match intrinsic_type {
-            IntrinsicOperation::SizeOf
-            | IntrinsicOperation::SizeOfStride
-            | IntrinsicOperation::AlignOf => {
-                unreachable!("Handled by typer phase {:?}", intrinsic_type)
-            }
-            IntrinsicOperation::Zeroed => {
-                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
-                let k1_type = self.codegen_type(type_param.type_id)?;
-                if k1_type.is_aggregate() {
-                    let ptr = self.build_k1_alloca(&k1_type, "zeroed");
-                    self.builder
-                        .build_memset(
-                            ptr,
-                            k1_type.rich_repr_layout().align,
-                            self.ctx.i8_type().const_zero(),
-                            self.ctx
-                                .i32_type()
-                                .const_int(k1_type.rich_repr_layout().size as u64, false),
-                        )
-                        .unwrap();
-                    Ok(ptr.as_basic_value_enum().into())
-                } else {
-                    let zero_value = self.rich_repr_type(&k1_type).const_zero();
-                    Ok(zero_value.into())
-                }
-            }
-            IntrinsicOperation::BoolNegate => {
-                let input_value = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
-                let truncated = self.bool_to_i1(input_value, "");
-                let negated = self.builder.build_not(truncated, "").unwrap();
-                let promoted = self.i1_to_bool(negated, "");
-                Ok(promoted.as_basic_value_enum().into())
-            }
-            IntrinsicOperation::BitNot => {
-                let input_value = return_void!(self.codegen_expr(call.args[0])?);
-                let input_value_int = input_value.into_int_value();
-                let not_value = self.builder.build_not(input_value_int, "not").unwrap();
-                Ok(not_value.as_basic_value_enum().into())
-            }
-            IntrinsicOperation::BitCast => {
-                // intern fn bitcast[T, U](t: T): U
-                let input_value = return_void!(self.codegen_expr(call.args[0])?);
-                let type_param = self.k1.named_types.get_nth(call.type_args, 0);
-                let k1_type = self.codegen_type(type_param.type_id)?;
-                let to_type = self.rich_repr_type(&k1_type);
-                if k1_type.is_aggregate() {
-                    debug_assert!(input_value.get_type().is_pointer_type());
-                    // Just point at the same place!
-                    Ok(input_value.into())
-                } else {
-                    let cast_op = self.builder.build_bit_cast(input_value, to_type, "").unwrap();
-                    Ok(cast_op.into())
-                }
-            }
-            IntrinsicOperation::ArithBinop(op_kind) => {
-                let lhs = return_void!(self.codegen_expr(call.args[0])?);
-                let rhs = return_void!(self.codegen_expr(call.args[1])?);
-                use IntrinsicArithOpOp as Op;
-                match op_kind.class {
-                    IntrinsicArithOpClass::SignedInt | IntrinsicArithOpClass::UnsignedInt => {
-                        let is_signed = op_kind.class.is_signed_int();
-                        let lhs_int = lhs.into_int_value();
-                        let rhs_int = rhs.into_int_value();
-                        match op_kind.op {
-                            Op::Equals => {
-                                let cmp_result = self
-                                    .builder
-                                    .build_int_compare(IntPredicate::EQ, lhs_int, rhs_int, "")
-                                    .unwrap();
-                                Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
-                            }
-                            Op::Add => {
-                                let add_result =
-                                    self.builder.build_int_add(lhs_int, rhs_int, "").unwrap();
-                                Ok(add_result.as_basic_value_enum().into())
-                            }
-                            Op::Sub => {
-                                let sub_result =
-                                    self.builder.build_int_sub(lhs_int, rhs_int, "").unwrap();
-                                Ok(sub_result.as_basic_value_enum().into())
-                            }
-                            Op::Mul => {
-                                let mul_result =
-                                    self.builder.build_int_mul(lhs_int, rhs_int, "").unwrap();
-                                Ok(mul_result.as_basic_value_enum().into())
-                            }
-                            Op::Div => {
-                                let div_result = if is_signed {
-                                    self.builder.build_int_signed_div(lhs_int, rhs_int, "").unwrap()
-                                } else {
-                                    self.builder
-                                        .build_int_unsigned_div(lhs_int, rhs_int, "")
-                                        .unwrap()
-                                };
-                                Ok(div_result.as_basic_value_enum().into())
-                            }
-                            Op::Rem => {
-                                let rem_result = if is_signed {
-                                    self.builder.build_int_signed_rem(lhs_int, rhs_int, "").unwrap()
-                                } else {
-                                    self.builder
-                                        .build_int_unsigned_rem(lhs_int, rhs_int, "")
-                                        .unwrap()
-                                };
-                                Ok(rem_result.as_basic_value_enum().into())
-                            }
-                            Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                                let pred = match (is_signed, op_kind.op) {
-                                    (true, Op::Lt) => IntPredicate::SLT,
-                                    (true, Op::Le) => IntPredicate::SLE,
-                                    (true, Op::Gt) => IntPredicate::SGT,
-                                    (true, Op::Ge) => IntPredicate::SGE,
-                                    (false, Op::Lt) => IntPredicate::ULT,
-                                    (false, Op::Le) => IntPredicate::ULE,
-                                    (false, Op::Gt) => IntPredicate::UGT,
-                                    (false, Op::Ge) => IntPredicate::UGE,
-                                    _ => unreachable!("unexpected binop kind"),
-                                };
-                                let i1_compare = self
-                                    .builder
-                                    .build_int_compare(pred, lhs_int, rhs_int, "")
-                                    .unwrap();
-                                Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
-                            }
-                        }
-                    }
-                    IntrinsicArithOpClass::Float => {
-                        let lhs_f = lhs.into_float_value();
-                        let rhs_f = rhs.into_float_value();
-                        match op_kind.op {
-                            Op::Equals => {
-                                let cmp_result = self
-                                    .builder
-                                    .build_float_compare(FloatPredicate::OEQ, lhs_f, rhs_f, "")
-                                    .unwrap();
-                                Ok(self.i1_to_bool(cmp_result, "").as_basic_value_enum().into())
-                            }
-                            Op::Add => {
-                                let add_result =
-                                    self.builder.build_float_add(lhs_f, rhs_f, "").unwrap();
-                                Ok(add_result.as_basic_value_enum().into())
-                            }
-                            Op::Sub => {
-                                let result =
-                                    self.builder.build_float_sub(lhs_f, rhs_f, "").unwrap();
-                                Ok(result.as_basic_value_enum().into())
-                            }
-                            Op::Mul => {
-                                let result =
-                                    self.builder.build_float_mul(lhs_f, rhs_f, "").unwrap();
-                                Ok(result.as_basic_value_enum().into())
-                            }
-                            Op::Div => {
-                                let result =
-                                    self.builder.build_float_div(lhs_f, rhs_f, "").unwrap();
-                                Ok(result.as_basic_value_enum().into())
-                            }
-                            Op::Rem => {
-                                let result =
-                                    self.builder.build_float_rem(lhs_f, rhs_f, "").unwrap();
-                                Ok(result.as_basic_value_enum().into())
-                            }
-                            Op::Lt | Op::Le | Op::Gt | Op::Ge => {
-                                let pred = match op_kind.op {
-                                    Op::Lt => FloatPredicate::OLT,
-                                    Op::Le => FloatPredicate::OLE,
-                                    Op::Gt => FloatPredicate::OGT,
-                                    Op::Ge => FloatPredicate::OGE,
-                                    _ => unreachable!("unexpected binop kind"),
-                                };
-                                let i1_compare = self
-                                    .builder
-                                    .build_float_compare(pred, lhs_f, rhs_f, "")
-                                    .unwrap();
-                                Ok(self.i1_to_bool(i1_compare, "").as_basic_value_enum().into())
-                            }
-                        }
-                    }
-                }
-            }
-            IntrinsicOperation::BitwiseBinop(op_kind) => {
-                let lhs = return_void!(self.codegen_expr(call.args[0])?).into_int_value();
-                let rhs = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
-                let result = match op_kind {
-                    IntrinsicBitwiseBinopKind::And => self.builder.build_and(lhs, rhs, ""),
-                    IntrinsicBitwiseBinopKind::Xor => self.builder.build_xor(lhs, rhs, ""),
-                    IntrinsicBitwiseBinopKind::Or => self.builder.build_or(lhs, rhs, ""),
-                    IntrinsicBitwiseBinopKind::ShiftLeft
-                    | IntrinsicBitwiseBinopKind::SignedShiftRight
-                    | IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
-                        let rhs_casted =
-                            if lhs.get_type().get_bit_width() != rhs.get_type().get_bit_width() {
-                                // rhs is always a u32
-                                self.builder
-                                    .build_int_cast_sign_flag(
-                                        rhs,
-                                        lhs.get_type(),
-                                        false,
-                                        "shift_magnitude_cast",
-                                    )
-                                    .unwrap()
-                            } else {
-                                rhs
-                            };
-                        match op_kind {
-                            IntrinsicBitwiseBinopKind::ShiftLeft => {
-                                self.builder.build_left_shift(lhs, rhs_casted, "")
-                            }
-                            IntrinsicBitwiseBinopKind::SignedShiftRight => {
-                                self.builder.build_right_shift(lhs, rhs_casted, true, "")
-                            }
-                            IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
-                                self.builder.build_right_shift(lhs, rhs_casted, false, "")
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                };
-                let result = result.to_err(call.span)?;
-                Ok(result.as_basic_value_enum().into())
-            }
-            IntrinsicOperation::TypeId => {
-                unreachable!("TypeId is handled in typer phase")
-            }
-            IntrinsicOperation::PointerIndex => {
-                //  Reference:
-                //  intern fn refAtIndex[T](self: Pointer, index: uword): T*
-                let pointee_ty_arg = self.k1.named_types.get_nth(call.type_args, 0);
-                let elem_type = self.codegen_type(pointee_ty_arg.type_id)?;
-                let ptr = return_void!(self.codegen_expr(call.args[0])?).into_pointer_value();
-                let index = return_void!(self.codegen_expr(call.args[1])?).into_int_value();
-                let result_pointer = unsafe {
-                    self.builder
-                        .build_in_bounds_gep(
-                            self.rich_repr_type(&elem_type),
-                            ptr,
-                            &[index],
-                            "refAtIndex",
-                        )
-                        .unwrap()
-                };
-                Ok(result_pointer.as_basic_value_enum().into())
-            }
-            IntrinsicOperation::CompilerMessage => Ok(self.builtin_types.unit_basic().into()),
-            IntrinsicOperation::CompilerSourceLocation => {
-                unreachable!("CompilerSourceLocation is handled in typechecking phase")
-            }
-            _ => panic!("Unexpected inline intrinsic {:?}", intrinsic_type),
-        }
-    }
-
     fn load_function_argument(
         &mut self,
         function: &TypedFunction,
@@ -2632,17 +2349,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(basic_value.into())
     }
 
-    fn codegen_intrinsic_function_body(
+    // nocommit: Can I write these in C, or k1, or llvm, and load them?
+    fn codegen_builtin_function_body(
         &mut self,
-        intrinsic_type: IntrinsicOperation,
+        builtin_type: BcBuiltin,
         function_id: FunctionId,
         function: &TypedFunction,
     ) -> TyperResult<InstructionValue<'ctx>> {
         let function_span =
             self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
         self.set_debug_location_from_span(function_span);
-        let instr = match intrinsic_type {
-            IntrinsicOperation::Allocate => {
+        let instr = match builtin_type {
+            BcBuiltin::Allocate => {
                 // intern fn alloc(size: uword, align: uword): Pointer
                 let size_arg = self.load_function_argument(function, 0)?;
 
@@ -2651,7 +2369,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = call.try_as_basic_value().basic().unwrap();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::AllocateZeroed => {
+            BcBuiltin::AllocateZeroed => {
                 // intern fn allocZeroed(size: uword, align: uword): Pointer
                 let size_arg = self.load_function_argument(function, 0)?;
                 let count_one =
@@ -2663,7 +2381,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = call.try_as_basic_value().expect_basic("calloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::Reallocate => {
+            BcBuiltin::Reallocate => {
                 // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
                 let old_ptr_arg = self.load_function_argument(function, 0)?;
                 let new_size_arg = self.load_function_argument(function, 3)?;
@@ -2673,7 +2391,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = call.try_as_basic_value().expect_basic("realloc return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::Free => {
+            BcBuiltin::Free => {
                 let old_ptr_arg = self.load_function_argument(function, 0)?;
 
                 let f = self.llvm_module.get_function("free").unwrap();
@@ -2681,7 +2399,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = call.try_as_basic_value().expect_basic("free return");
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::MemCopy => {
+            BcBuiltin::MemCopy => {
                 // intern fn copy(
                 //   dst: Pointer,
                 //   src: Pointer,
@@ -2705,7 +2423,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = self.builtin_types.unit_basic();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::MemSet => {
+            BcBuiltin::MemSet => {
                 // intern fn set(dst: Pointer, value: u8, count: uword): unit
                 let dst_arg = self.load_function_argument(function, 0)?;
                 let value_arg = self.load_function_argument(function, 1)?;
@@ -2722,7 +2440,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let result = self.builtin_types.unit_basic();
                 self.builder.build_return(Some(&result)).unwrap()
             }
-            IntrinsicOperation::MemEquals => {
+            BcBuiltin::MemEquals => {
                 // intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
                 let p1_arg = self.load_function_argument(function, 0)?;
                 let p2_arg = self.load_function_argument(function, 1)?;
@@ -2739,7 +2457,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let bool_equal = self.i1_to_bool(is_zero, "");
                 self.builder.build_return(Some(&bool_equal)).unwrap()
             }
-            IntrinsicOperation::Exit => {
+            BcBuiltin::Exit => {
                 // intern fn exit(code: i32): never
                 let code_arg = self.load_function_argument(function, 0)?;
 
@@ -2749,7 +2467,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap()
             }
 
-            IntrinsicOperation::TypeSchema | IntrinsicOperation::TypeName => {
+            BcBuiltin::TypeSchema | BcBuiltin::TypeName => {
                 // intern fn typeSchema(id: u64): TypeSchema
                 let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
                 let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
@@ -2840,7 +2558,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.position_at_end(finish_block);
                 self.builder.build_return(None).unwrap()
             }
-            _ => unreachable!("Unexpected non-inline intrinsic function"),
+            BcBuiltin::CompilerMessage => {
+                return failf!(
+                    function_span,
+                    "Internal Compiler Error: cannot codegen CompilerMessage builtin"
+                );
+            },
         };
         Ok(instr)
     }
@@ -2942,8 +2665,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let bc = &self.k1.bytecode;
         let span = *bc.sources.get(inst_id);
         self.set_debug_location_from_span(span);
-        match *bc.instrs.get(inst_id) {
-            bc::Inst::Data(data_inst) => {
+        let inst = *bc.instrs.get(inst_id);
+        match inst {
+            Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
                     bc::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
                     bc::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
@@ -2957,7 +2681,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, value.as_basic_value_enum());
                 Ok(())
             }
-            bc::Inst::Alloca { t, .. } => {
+            Inst::Alloca { t, .. } => {
                 let cg_type = self.codegen_type(t);
                 // Our helper here hoists the alloca to the top of the function, and sets an explicit align
                 let instr = self.build_k1_alloca(&cg_type, "");
@@ -2977,20 +2701,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 Ok(())
             }
-            bc::Inst::Store { dst, value, t } => {
+            Inst::Store { dst, value, t } => {
                 let dst_pointer = self.codegen_value(inst_mappings, dst)?.into_pointer_value();
                 let value = self.codegen_value(inst_mappings, value)?;
                 let _store = self.builder.build_store(dst_pointer, value).unwrap();
                 Ok(())
             }
-            bc::Inst::Load { t, src } => {
+            Inst::Load { t, src } => {
                 let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
                 let src_ptr = self.codegen_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 inst_mappings.insert(inst_id, load);
                 Ok(())
             }
-            bc::Inst::Copy { dst, src, t, .. } => {
+            Inst::Copy { dst, src, t, .. } => {
                 let dst_value = self.codegen_value(inst_mappings, dst)?;
                 let src_value = self.codegen_value(inst_mappings, src)?;
                 let layout = self.k1.types.get_pt_layout(t);
@@ -3001,14 +2725,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 );
                 Ok(())
             }
-            bc::Inst::StructOffset { struct_t, base, field_index, .. } => {
+            Inst::StructOffset { struct_t, base, field_index, .. } => {
                 let cg_struct = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
                 let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
                 let gep = self.build_struct_gep(base_ptr, &cg_struct, field_index, "");
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
-            bc::Inst::ArrayOffset { element_t, base, element_index } => {
+            Inst::ArrayOffset { element_t, base, element_index } => {
                 let cg_elem_ty = self.codegen_type(element_t);
                 let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
                 let index_int = self.codegen_value(inst_mappings, element_index)?.into_int_value();
@@ -3020,13 +2744,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
-            bc::Inst::Call { id } => todo!(),
-            bc::Inst::Jump(block_id) => {
+            Inst::Call { id } => todo!(),
+            Inst::Jump(block_id) => {
                 let dst_block = self.get_nth_block(block_id as usize)?;
                 let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
                 Ok(())
             }
-            bc::Inst::JumpIf { cond, cons, alt } => {
+            Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = self.codegen_value(inst_mappings, cond)?;
                 let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
                 let then_block = self.get_nth_block(cons as usize)?;
@@ -3037,11 +2761,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .unwrap();
                 Ok(())
             }
-            bc::Inst::Unreachable => {
+            Inst::Unreachable => {
                 self.builder.build_unreachable().unwrap();
                 Ok(())
-            },
-            bc::Inst::CameFrom { t, incomings } => {
+            }
+            Inst::CameFrom { t, incomings } => {
                 let phi_ty = self.codegen_type(t);
                 let phi = self.builder.build_phi(phi_ty.rich_type(), "").unwrap();
                 for incoming in self.k1.bytecode.mem.getn(incomings) {
@@ -3051,8 +2775,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
-            },
-            bc::Inst::Ret(value) => {
+            }
+            Inst::Ret(value) => {
                 let ret_value = self.codegen_value(inst_mappings, value)?;
                 let current_fn = self.get_insert_function();
                 match current_fn.sret_pointer {
@@ -3066,53 +2790,280 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let _return = self.builder.build_return(None).unwrap();
                         Ok(())
                     }
-
                 }
-            },
-            bc::Inst::BoolNegate { v } => {
-                let value = self.codegen_value(inst_mappings, v)?.into_int_value();
-                let i1_value = self.bool_to_i1(value, "");
-                let not_i1 = self.builder.build_not(i1_value, "").unwrap();
+            }
+            Inst::BoolNegate { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let i1_input = self.bool_to_i1(input, "");
+                let not_i1 = self.builder.build_not(i1_input, "").unwrap();
                 let not_bool = self.i1_to_bool(not_i1, "");
                 inst_mappings.insert(inst_id, not_bool.as_basic_value_enum());
                 Ok(())
-            },
-            bc::Inst::BitNot { v } => todo!(),
-            bc::Inst::BitCast { v, to } => todo!(),
-            bc::Inst::IntTrunc { v, to } => todo!(),
-            bc::Inst::IntExtU { v, to } => todo!(),
-            bc::Inst::IntExtS { v, to } => todo!(),
-            bc::Inst::FloatTrunc { v, to } => todo!(),
-            bc::Inst::FloatExt { v, to } => todo!(),
-            bc::Inst::Float32ToIntUnsigned { v, to } => todo!(),
-            bc::Inst::Float64ToIntUnsigned { v, to } => todo!(),
-            bc::Inst::Float32ToIntSigned { v, to } => todo!(),
-            bc::Inst::Float64ToIntSigned { v, to } => todo!(),
-            bc::Inst::IntToFloatUnsigned { v, from, to } => todo!(),
-            bc::Inst::IntToFloatSigned { v, from, to } => todo!(),
-            bc::Inst::PtrToWord { v } => todo!(),
-            bc::Inst::WordToPtr { v } => todo!(),
-            bc::Inst::IntAdd { lhs, rhs, width } => todo!(),
-            bc::Inst::IntSub { lhs, rhs, width } => todo!(),
-            bc::Inst::IntMul { lhs, rhs, width } => todo!(),
-            bc::Inst::IntDivUnsigned { lhs, rhs, width } => todo!(),
-            bc::Inst::IntDivSigned { lhs, rhs, width } => todo!(),
-            bc::Inst::IntRemUnsigned { lhs, rhs, width } => todo!(),
-            bc::Inst::IntRemSigned { lhs, rhs, width } => todo!(),
-            bc::Inst::IntCmp { lhs, rhs, pred, width } => todo!(),
-            bc::Inst::FloatAdd { lhs, rhs, width } => todo!(),
-            bc::Inst::FloatSub { lhs, rhs, width } => todo!(),
-            bc::Inst::FloatMul { lhs, rhs, width } => todo!(),
-            bc::Inst::FloatDiv { lhs, rhs, width } => todo!(),
-            bc::Inst::FloatRem { lhs, rhs, width } => todo!(),
-            bc::Inst::FloatCmp { lhs, rhs, pred, width } => todo!(),
-            bc::Inst::BitAnd { lhs, rhs, width } => todo!(),
-            bc::Inst::BitOr { lhs, rhs, width } => todo!(),
-            bc::Inst::BitXor { lhs, rhs, width } => todo!(),
-            bc::Inst::BitShiftLeft { lhs, rhs, width } => todo!(),
-            bc::Inst::BitUnsignedShiftRight { lhs, rhs, width } => todo!(),
-            bc::Inst::BitSignedShiftRight { lhs, rhs, width } => todo!(),
-            bc::Inst::BakeStaticValue { type_id, value } => todo!(),
+            }
+            Inst::BitNot { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let not_input = self.builder.build_not(input, "").unwrap();
+                inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitCast { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?;
+
+                // From agg to scalar -> handled by BC
+                // From scalar to agg -> handled by BC
+                match to {
+                    // From agg to agg -> canon type is ptr, nothing to do.
+                    PhysicalType::Agg(_) => {
+                        inst_mappings.insert(inst_id, input);
+                        Ok(())
+                    }
+                    // From scalar to scalar -> do the llvm bitcast
+                    PhysicalType::Scalar(st) => {
+                        let llvm_ty = self.scalar_basic_type(st);
+                        let bitcast = self.builder.build_bit_cast(input, to_type, name).unwrap();
+                        inst_mappings.insert(inst_id, bitcast);
+                        Ok(())
+                    }
+                }
+            }
+            Inst::IntTrunc { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let trunc = self.builder.build_int_truncate(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let signed = matches!(inst, bc::Inst::IntExtS { .. });
+                let ext =
+                    self.builder.build_int_cast_sign_flag(input, to_int_type, signed, "").unwrap();
+                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatTrunc { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let trunc = self.builder.build_float_truncate(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatExt { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let ext = self.builder.build_float_ext(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, ext.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let int = self.builder.build_float_to_unsigned_int(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let to_int_type = self.scalar_basic_type(to).into_int_type();
+                let int = self.builder.build_float_to_signed_int(input, to_int_type, "").unwrap();
+                inst_mappings.insert(inst_id, int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntToFloatUnsigned { v, from, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let float =
+                    self.builder.build_unsigned_int_to_float(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, float.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntToFloatSigned { v, from, to } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let to_float_type = self.scalar_basic_type(to).into_float_type();
+                let float =
+                    self.builder.build_signed_int_to_float(input, to_float_type, "").unwrap();
+                inst_mappings.insert(inst_id, float.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::PtrToWord { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_pointer_value();
+                let word_int = self
+                    .builder
+                    .build_ptr_to_int(input, self.builtin_types.ptr_sized_int, "")
+                    .unwrap();
+                inst_mappings.insert(inst_id, word_int.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::WordToPtr { v } => {
+                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let ptr_value =
+                    self.builder.build_int_to_ptr(input, self.builtin_types.ptr, "").unwrap();
+                inst_mappings.insert(inst_id, ptr_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntAdd { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                // nocommit: decide if overflow traps or not, signed and unsigned
+                //self.builder.build_int_nsw_add
+                let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, sum.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntSub { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let diff = self.builder.build_int_sub(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, diff.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntMul { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let prod = self.builder.build_int_mul(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, prod.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntDivUnsigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, div.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntDivSigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, div.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntRemUnsigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntRemSigned { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntCmp { lhs, rhs, pred, width } => {
+                let llvm_pred = match pred {
+                    bc::IntCmpPred::Eq => IntPredicate::EQ,
+                    bc::IntCmpPred::Slt => IntPredicate::SLT,
+                    bc::IntCmpPred::Sle => IntPredicate::SLE,
+                    bc::IntCmpPred::Sgt => IntPredicate::SGT,
+                    bc::IntCmpPred::Sge => IntPredicate::SGE,
+                    bc::IntCmpPred::Ult => IntPredicate::ULT,
+                    bc::IntCmpPred::Ule => IntPredicate::ULE,
+                    bc::IntCmpPred::Ugt => IntPredicate::UGT,
+                    bc::IntCmpPred::Uge => IntPredicate::UGE,
+                };
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let cmp =
+                    self.builder.build_int_compare(llvm_pred, lhs_value, rhs_value, "").unwrap();
+                let bool_value = self.i1_to_bool(cmp, "");
+                inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatAdd { lhs, rhs, width }
+            | Inst::FloatSub { lhs, rhs, width }
+            | Inst::FloatMul { lhs, rhs, width }
+            | Inst::FloatDiv { lhs, rhs, width }
+            | Inst::FloatRem { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_float_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+                let result = match inst {
+                    Inst::FloatAdd { .. } => {
+                        self.builder.build_float_add(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatSub { .. } => {
+                        self.builder.build_float_sub(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatMul { .. } => {
+                        self.builder.build_float_mul(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatDiv { .. } => {
+                        self.builder.build_float_div(lhs_value, rhs_value, "").unwrap()
+                    }
+                    Inst::FloatRem { .. } => {
+                        self.builder.build_float_rem(lhs_value, rhs_value, "").unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatCmp { lhs, rhs, pred, width } => {
+                let llvm_pred = match pred {
+                    bc::FloatCmpPred::Eq => FloatPredicate::OEQ,
+                    bc::FloatCmpPred::Lt => FloatPredicate::OLT,
+                    bc::FloatCmpPred::Le => FloatPredicate::OLE,
+                    bc::FloatCmpPred::Gt => FloatPredicate::OGT,
+                    bc::FloatCmpPred::Ge => FloatPredicate::OGE,
+                };
+                let lhs = self.codegen_value(inst_mappings, lhs)?.into_float_value();
+                let rhs = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+                let cmp = self.builder.build_float_compare(llvm_pred, lhs, rhs, "").unwrap();
+                let bool_value = self.i1_to_bool(cmp, "");
+                inst_mappings.add(inst_id, bool_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitAnd { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let and = self.builder.build_and(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, and.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitOr { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let or = self.builder.build_or(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, or.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitXor { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let xor = self.builder.build_xor(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, xor.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitShiftLeft { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let shl = self.builder.build_left_shift(lhs_value, rhs_value, "").unwrap();
+                inst_mappings.insert(inst_id, shl.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lshr = self.builder.build_right_shift(lhs_value, rhs_value, false, "").unwrap();
+                inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BitSignedShiftRight { lhs, rhs, width } => {
+                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let ashr = self.builder.build_right_shift(lhs_value, rhs_value, true, "").unwrap();
+                inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::BakeStaticValue { type_id, value } => {
+                return failf!(
+                    self.debug.current_span(),
+                    "BakeStaticValue is only available to compile-time code"
+                );
+            }
         }
     }
 
@@ -3279,6 +3230,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             CgFunction {
                 function_type: llvm_function_type,
                 function_value,
+                param_values: Vec::with_capacity(4),
                 sret_pointer,
                 last_alloca_instr: None,
                 instruction_count: 0,
@@ -3599,8 +3551,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         // nocommit: Re-use hashmap allocation
         let mut mappings = FxHashMap::new();
-        for block in self.k1.bytecode.mem.getn_lt(blocks) {
-            self.codegen_block(&mut mappings, block)?;
+        for (index, block) in self.k1.bytecode.mem.getn_lt(blocks).iter().enumerate() {
+            self.codegen_block(&mut mappings, index as u32, block)?;
         }
         Ok(())
     }
