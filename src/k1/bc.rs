@@ -673,6 +673,9 @@ impl InstKind {
 
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
+    if k1.bytecode.functions.get(function_id).is_some() {
+        return Ok(())
+    }
 
     let mut b = Builder::new(k1);
 

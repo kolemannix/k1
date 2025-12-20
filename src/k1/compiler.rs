@@ -15,6 +15,7 @@ use inkwell::context::Context;
 use log::info;
 
 use crate::codegen_llvm::Codegen;
+use crate::codegen_llvm_new::Cg;
 use parse::ParsedProgram;
 
 use std::path::PathBuf;
@@ -516,10 +517,14 @@ pub fn write_executable(
 pub fn codegen_module<'ctx, 'module>(
     args: &Args,
     ctx: &'ctx Context,
-    typed_module: &'module TypedProgram,
+    typed_module: &'module mut TypedProgram,
     out_dir: &Path,
     do_write_executable: bool,
 ) -> Result<Codegen<'ctx, 'module>> {
+    let mut codegen_2 = Cg::create(ctx, typed_module, args.debug, args.optimize);
+    codegen_2.codegen_program()?;
+    drop(codegen_2);
+
     let mut codegen = Codegen::create(ctx, typed_module, args.debug, args.optimize);
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);

@@ -5,7 +5,6 @@ use std::path::Path;
 
 use ahash::HashMapExt;
 use anyhow::bail;
-use either::Either;
 use fxhash::FxHashMap;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
@@ -20,7 +19,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
-    FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
+    FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
@@ -112,52 +111,9 @@ impl EightbyteClass {
     }
 }
 
-//#[derive(Debug, Clone, Copy)]
-//enum LlvmValue<'ctx> {
-//    BasicValue(BasicValueEnum<'ctx>),
-//    Void(InstructionValue<'ctx>),
-//}
-//impl<'ctx> LlvmValue<'ctx> {
-//    fn as_basic_value(self) -> Either<InstructionValue<'ctx>, BasicValueEnum<'ctx>> {
-//        match self {
-//            LlvmValue::BasicValue(bv) => Either::Right(bv),
-//            LlvmValue::Void(instr) => Either::Left(instr),
-//        }
-//    }
-//    fn expect_basic_value(self) -> BasicValueEnum<'ctx> {
-//        self.as_basic_value().expect_right("Expected BasicValue on never value")
-//    }
-//
-//    #[allow(unused)]
-//    fn as_never(&self) -> Option<InstructionValue<'ctx>> {
-//        match self {
-//            LlvmValue::Void(instr) => Some(*instr),
-//            _ => None,
-//        }
-//    }
-//}
-//
-//impl<'ctx> From<BasicValueEnum<'ctx>> for LlvmValue<'ctx> {
-//    fn from(value: BasicValueEnum<'ctx>) -> Self {
-//        LlvmValue::BasicValue(value)
-//    }
-//}
-
-#[derive(Copy, Clone)]
-struct LlvmReferenceType<'ctx> {
-    type_id: TypeId,
-    ptr_basic_type: PointerType<'ctx>,
-    pointer_type: MHandle<CgType<'ctx>, CgPerm>,
-    #[allow(unused)]
-    pointee_type: MHandle<CgType<'ctx>, CgPerm>,
-    di_type: DIType<'ctx>,
-    layout: Layout,
-}
-
 #[derive(Copy, Clone)]
 struct LlvmVoidType<'ctx> {
     di_type: DIType<'ctx>,
-    void_type: VoidType<'ctx>,
 }
 
 #[derive(Copy, Clone)]
@@ -181,8 +137,10 @@ struct CgStructType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgArrayType<'ctx> {
     pt: PhysicalType,
+    #[allow(unused)]
     count: u32,
     array_type: ArrayType<'ctx>,
+    #[allow(unused)]
     element_type: MHandle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
@@ -201,7 +159,6 @@ enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
-    Reference(LlvmReferenceType<'ctx>),
     Void(LlvmVoidType<'ctx>),
     Opaque(CgOpaqueType<'ctx>),
 }
@@ -224,19 +181,12 @@ impl<'ctx> From<CgStructType<'ctx>> for CgType<'ctx> {
     }
 }
 
-impl<'ctx> From<LlvmReferenceType<'ctx>> for CgType<'ctx> {
-    fn from(value: LlvmReferenceType<'ctx>) -> Self {
-        CgType::Reference(value)
-    }
-}
-
 impl<'ctx> CgType<'ctx> {
     pub fn pt(&self) -> PhysicalType {
         match self {
             CgType::Scalar(s) => s.pt,
             CgType::StructType(s) => s.pt,
             CgType::ArrayType(a) => a.pt,
-            CgType::Reference(_) => PhysicalType::Scalar(ScalarType::Pointer),
             CgType::Void(_) => panic!("no pt on void"),
             CgType::Opaque(o) => o.pt,
         }
@@ -245,7 +195,6 @@ impl<'ctx> CgType<'ctx> {
     pub fn kind_name(&self) -> &'static str {
         match self {
             CgType::Scalar(_) => "Scalar",
-            CgType::Reference(_) => "Reference",
             CgType::Void(_) => "Void",
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
@@ -256,7 +205,6 @@ impl<'ctx> CgType<'ctx> {
     pub fn is_aggregate(&self) -> bool {
         match self {
             CgType::Scalar(_) => false,
-            CgType::Reference(_) => false,
             CgType::Void(_) => false,
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
@@ -281,7 +229,6 @@ impl<'ctx> CgType<'ctx> {
     // pub fn requires_custom_alignment(&self) -> bool {
     //     match self {
     //         CgType::Scalar(_) => false,
-    //         CgType::Reference(_) => false,
     //         CgType::Void(_) => false,
     //         CgType::StructType(_) => false,
     //         CgType::ArrayType(a) => {
@@ -294,15 +241,6 @@ impl<'ctx> CgType<'ctx> {
     // }
 
     #[track_caller]
-    #[allow(unused)]
-    pub fn expect_reference(&self) -> &LlvmReferenceType<'ctx> {
-        match self {
-            CgType::Reference(reference) => reference,
-            _ => panic!("expected pointer on {}", self.kind_name()),
-        }
-    }
-
-    #[track_caller]
     fn expect_struct(self) -> CgStructType<'ctx> {
         match self {
             CgType::StructType(s) => s,
@@ -311,6 +249,7 @@ impl<'ctx> CgType<'ctx> {
     }
 
     #[track_caller]
+    #[allow(unused)]
     fn expect_array(self) -> CgArrayType<'ctx> {
         match self {
             CgType::ArrayType(array) => array,
@@ -321,7 +260,6 @@ impl<'ctx> CgType<'ctx> {
     fn rich_repr_layout(&self) -> Layout {
         match self {
             CgType::Scalar(value) => value.layout,
-            CgType::Reference(pointer) => pointer.layout,
             CgType::StructType(s) => s.layout,
             CgType::ArrayType(a) => a.layout,
             CgType::Void(_) => panic!("No rich value type on Void / never"),
@@ -332,7 +270,6 @@ impl<'ctx> CgType<'ctx> {
     fn rich_type(&self) -> BasicTypeEnum<'ctx> {
         match self {
             CgType::Scalar(value) => value.basic_type,
-            CgType::Reference(r) => r.ptr_basic_type.as_basic_type_enum(),
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Opaque(o) => o.aligned_struct_repr.as_basic_type_enum(),
@@ -343,7 +280,6 @@ impl<'ctx> CgType<'ctx> {
     fn debug_type(&self) -> DIType<'ctx> {
         match self {
             CgType::Scalar(value) => value.di_type,
-            CgType::Reference(pointer) => pointer.di_type,
             CgType::StructType(s) => s.di_type,
             CgType::ArrayType(a) => a.di_type,
             CgType::Opaque(o) => o.di_type,
@@ -368,7 +304,6 @@ impl<'ctx> CgType<'ctx> {
 }
 
 struct BuiltinTypes<'ctx> {
-    unit: IntType<'ctx>,
     unit_value: IntValue<'ctx>,
     boolean: IntType<'ctx>,
     true_value: IntValue<'ctx>,
@@ -377,7 +312,6 @@ struct BuiltinTypes<'ctx> {
     char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
-    dynamic_lambda_object: StructType<'ctx>,
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
@@ -624,21 +558,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let ptr = ctx.ptr_type(AddressSpace::default());
         let builtin_types = BuiltinTypes {
-            unit: ctx.i8_type(),
             unit_value: ctx.i8_type().const_int(crate::typer::UNIT_BYTE_VALUE as u64, false),
-            // If we switch bools to i8, we need to cast to i1 for branches
-            // If we keep i1, we need to do more alignment / padding work
             boolean: ctx.i8_type(),
             true_value: ctx.i8_type().const_int(1, false),
             false_value: ctx.i8_type().const_int(0, false),
             i1: ctx.bool_type(),
             char: char_type,
-            // It doesn't matter what type the pointer points to; its irrelevant in LLVM
-            // since pointers do not actually have types
             ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
-            dynamic_lambda_object: ctx
-                .struct_type(&[ptr.as_basic_type_enum(), ptr.as_basic_type_enum()], false),
         };
 
         Cg {
@@ -703,10 +630,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.get_current_debug_location().unwrap()
     }
 
-    fn get_ident_name(&self, id: Ident) -> &str {
-        self.k1.ast.idents.get_name(id)
-    }
-
     fn get_line_number(&self, span: SpanId) -> u32 {
         let span = self.k1.ast.spans.get(span);
         let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
@@ -752,7 +675,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .create_basic_type("void", 0, Self::DW_ATE_CHAR, 0)
                     .unwrap()
                     .as_type(),
-                void_type: self.ctx.void_type(),
             }),
             InstKind::Value(pt) => self.codegen_type(pt),
         }
@@ -793,7 +715,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let agg_layout = agg.layout;
                 let type_name = self.codegen_type_name(agg.origin_type_id);
                 let cg_type = match agg.agg_type {
-                    AggType::EnumVariant(e) => panic!("Who is asking"),
+                    AggType::EnumVariant(e) => {
+                        let opaque = self.codegen_opaque_type(pt, e.envelope);
+                        CgType::Opaque(opaque)
+                    }
                     AggType::Struct { fields } => {
                         let mut cg_field_types = self.mem.new_list(fields.len());
                         let mut field_rich_types = self.tmp.new_list(fields.len());
@@ -881,37 +806,41 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         })
                     }
                     AggType::Opaque { layout } => {
-                        // For opaque types, which we currently only use to represent our tagged
-                        // unions (`either` in the source), we generate a 2-field struct to trick
-                        // LLVM.
-                        // Field 1 is a synthetic integer wide enough to force the alignment of the
-                        // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
-                        // large enough to get the whole thing to be exactly `size`. This is
-                        // mostly what clang does for unions, and probably what I'll also do for
-                        // unions once I have them
-                        let aligner_type = self.ctx.custom_width_int_type(layout.align_bits());
-                        let padding_bytes = layout.size - (aligner_type.get_bit_width() / 8);
-                        let padding = self.padding_type(padding_bytes);
-                        let aligned_struct_repr = self.ctx.struct_type(
-                            &[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()],
-                            false,
-                        );
-                        // nocommit: Once we introduce 'Union' as a physical aggregate instead of
-                        // using Opaque here, we'll be able to generate a good debug type for our
-                        // tagged unions. But for now, we'll generate a garbage one
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_basic_type("opaque", layout.size_bits() as u64, 0, 0)
-                            .unwrap()
-                            .as_type();
-                        CgType::Opaque(CgOpaqueType { pt, aligned_struct_repr, layout, di_type })
+                        let opaque = self.codegen_opaque_type(pt, layout);
+                        CgType::Opaque(opaque)
                     }
                 };
                 self.llvm_types.insert(agg_id, cg_type);
                 cg_type
             }
         }
+    }
+
+    fn codegen_opaque_type(&self, pt: PhysicalType, layout: Layout) -> CgOpaqueType<'ctx> {
+        // For opaque types, which we currently only use to represent our tagged
+        // unions (`either` in the source), we generate a 2-field struct to trick
+        // LLVM.
+        // Field 1 is a synthetic integer wide enough to force the alignment of the
+        // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
+        // large enough to get the whole thing to be exactly `size`. This is
+        // mostly what clang does for unions, and probably what I'll also do for
+        // unions once I have them
+        let aligner_type = self.ctx.custom_width_int_type(layout.align_bits());
+        let padding_bytes = layout.size - (aligner_type.get_bit_width() / 8);
+        let padding = self.padding_type(padding_bytes);
+        let aligned_struct_repr = self
+            .ctx
+            .struct_type(&[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()], false);
+        // nocommit: Once we introduce 'Union' as a physical aggregate instead of
+        // using Opaque here, we'll be able to generate a good debug type for our
+        // tagged unions. But for now, we'll generate a garbage one
+        let di_type = self
+            .debug
+            .debug_builder
+            .create_basic_type("opaque", layout.size_bits() as u64, 0, 0)
+            .unwrap()
+            .as_type();
+        CgOpaqueType { pt, aligned_struct_repr, layout, di_type }
     }
 
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
@@ -937,37 +866,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn pt_rich_type(&mut self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
-        match pt {
-            PhysicalType::Scalar(st) => self.scalar_basic_type(st),
-            PhysicalType::Agg(_) => {
-                let k1_llvm_ty = self.codegen_type(pt);
-                k1_llvm_ty.rich_type()
-            }
-        }
-    }
-
-    fn pt_debug_type(&mut self, pt: PhysicalType) -> DIType<'ctx> {
-        let k1_llvm_ty = self.codegen_type(pt);
-        k1_llvm_ty.debug_type()
-    }
-
-    fn canonical_repr_type(&self, t: &CgType<'ctx>) -> BasicTypeEnum<'ctx> {
-        match t {
-            CgType::Scalar(value) => value.basic_type,
-            CgType::Reference(_) => self.builtin_types.ptr_basic(),
-            CgType::StructType(_) => self.builtin_types.ptr_basic(),
-            CgType::ArrayType(_) => self.builtin_types.ptr_basic(),
-            CgType::Void(_) => panic!("No canonical repr type on Void"),
-            CgType::Opaque(_) => self.builtin_types.ptr_basic(),
-        }
-    }
-
     // nocommit does this need to exist by the end
     fn rich_repr_type(&self, t: &CgType<'ctx>) -> BasicTypeEnum<'ctx> {
         match t {
             CgType::Scalar(value) => value.basic_type,
-            CgType::Reference(_) => self.builtin_types.ptr_basic(),
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Opaque(opaque) => opaque.aligned_struct_repr.as_basic_type_enum(),
@@ -1115,10 +1017,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn canonicalize_abi_param_value(
         &mut self,
         mapping: AbiParamMapping,
-        k1_ty: &CgType<'ctx>,
+        cg_ty: &CgType<'ctx>,
         abi_value: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        debug!("canonicalizing {} to {} via {:?}", abi_value, self.rich_repr_type(k1_ty), mapping);
+        debug!("canonicalizing {} to {} via {:?}", abi_value, cg_ty.rich_type(), mapping);
         match mapping {
             AbiParamMapping::ScalarInRegister => abi_value,
             AbiParamMapping::StructInInteger { width } => {
@@ -1130,12 +1032,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         "",
                     )
                     .unwrap();
-                let ptr = self.build_k1_alloca(k1_ty, "struct_in_integer_storage");
+                let ptr = self.build_k1_alloca(cg_ty, "struct_in_integer_storage");
                 self.builder.build_store(ptr, truncated).unwrap();
                 ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByEightbytePair { .. } => {
-                let dst_ptr = self.build_k1_alloca(k1_ty, "struct_by_ebpair_storage");
+                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_ebpair_storage");
                 debug_assert!(abi_value.get_type().is_struct_type());
                 // Yes its a struct store but its guaranteed to be only 2 members, so lets try it out.
                 // clang for x86 actually has 2 scalar BasicValues at this point (2 params vs 1 struct),
@@ -1144,7 +1046,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::StructByIntPairArray => {
-                let dst_ptr = self.build_k1_alloca(k1_ty, "struct_by_intpairarray_storage");
+                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_intpairarray_storage");
                 debug_assert!(abi_value.get_type().is_array_type());
                 // Clang performs this exact array store ([2 x i64])
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
@@ -1998,7 +1900,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     inst_mappings.insert(inst_id, return_value);
                 }
                 Ok(())
-            },
+            }
             Inst::Jump(block_id) => {
                 let dst_block = self.get_nth_block(block_id as usize)?;
                 let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
@@ -2363,7 +2265,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
+        eprintln!("declare_llvm_function\n{}", self.k1.function_id_to_string(function_id, false));
 
         let typed_function = self.k1.get_function(function_id);
         let typed_function_linkage = typed_function.linkage;
@@ -2394,7 +2296,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         }
 
-        let bytecode_fn = self.k1.bytecode.functions.get(function_id).unwrap();
+        bc::compile_function(self.k1, function_id)?;
+        let Some(bytecode_fn) = self.k1.bytecode.functions.get(function_id) else {
+            return failf!(
+                function_span,
+                "Internal Compiler Error: missing bytecode for function {}",
+                self.k1.function_id_to_string(function_id, false)
+            );
+        };
+        let bytecode_fn = *bytecode_fn;
 
         let llvm_function_type = self.make_cg_function_type(&bytecode_fn.fn_type)?;
 
@@ -2698,7 +2608,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
-        debug!("codegen function body\n{}", self.k1.function_id_to_string(function_id, false));
+        eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
         let typed_function_params = typed_function.params;
@@ -2839,7 +2749,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let global = self.k1.globals.get(global_id).clone();
         let initial_static_value_id = global.initial_value.unwrap();
         let initializer_basic_value =
-        self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
 
         let variable = self.k1.variables.get(global.variable_id);
 

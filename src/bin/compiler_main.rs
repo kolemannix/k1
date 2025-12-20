@@ -46,10 +46,9 @@ fn run() -> anyhow::Result<ExitCode> {
     let out_dir: PathBuf = ".k1-out".into();
     std::fs::create_dir_all(&out_dir)?;
 
-    let Ok(program) = compiler::compile_program(&args, &out_dir) else {
+    let Ok(mut program) = compiler::compile_program(&args, &out_dir) else {
         return Ok(ExitCode::FAILURE);
     };
-    let program_name = program.program_name();
     if matches!(args.command, Command::Check { .. }) {
         // Note: I wouldn't mind switching back to exit for the faster
         // exit, but this was hiding a memory bug that causes the lsp
@@ -57,12 +56,12 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let llvm_ctx = inkwell::context::Context::create();
-    return match compiler::codegen_module(&args, &llvm_ctx, &program, &out_dir, true) {
-        Ok(_codegen) => {
+    return match compiler::codegen_module(&args, &llvm_ctx, &mut program, &out_dir, true) {
+        Ok(cg) => {
             if matches!(args.command, Command::Build { .. }) {
                 Ok(ExitCode::SUCCESS)
             } else {
-                compiler::run_compiled_program(&out_dir, program_name);
+                compiler::run_compiled_program(&out_dir, cg.name());
                 Ok(ExitCode::SUCCESS)
             }
         }
