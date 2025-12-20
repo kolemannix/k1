@@ -5,18 +5,19 @@
 mod stack_tests {
 
     use crate::kmem::MSlice;
+    use crate::typer::types::AbiMode;
     use crate::typer::*;
     use crate::vm::*;
 
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
-            return_type: None,
+            fn_type: bc::PhysicalFunctionType { return_type: InstKind::Void, params: MSlice::empty(), abi_mode: AbiMode::Internal },
             inst_offset: 0,
             inst_count: 0,
             blocks: MSlice::empty(),
-            fn_params: MSlice::empty(),
             is_debug: false,
+            function_builtin_kind: None
         }
     }
 
@@ -31,7 +32,7 @@ mod stack_tests {
         let mut stack = test_stack();
         let mut unit = fake_unit();
         unit.inst_count = 42;
-        unit.fn_params = MSlice::forged(1, 10);
+        unit.fn_type.params = MSlice::forged(1, 10);
         stack.push_new_frame(None, &unit, None);
         let frame_space_for_registers = stack.cursor().addr() - stack.current_frame().base_ptr.addr();
         assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());

@@ -269,6 +269,10 @@ impl IntegerType {
             IntegerType::I64 => ScalarType::I64,
         }
     }
+
+    pub fn get_pt(&self) -> PhysicalType {
+        PhysicalType::Scalar(self.get_scalar_type())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -984,7 +988,7 @@ pub struct StructField {
 
 #[derive(Clone, Copy)]
 pub struct EnumVariantLayout {
-    pub tag: ScalarType,
+    pub tag: TypedIntValue,
     pub payload: Option<PhysicalType>,
     pub payload_offset: Option<u32>,
     pub envelope: Layout,
@@ -1228,7 +1232,7 @@ impl TypePool {
                         };
 
                         physical_types.push(EnumVariantLayout {
-                            tag: tag_scalar,
+                            tag: v.tag_value,
                             payload: Some(payload_pt),
                             payload_offset: Some(payload_offset),
                             // To be filled in once all variants are known
@@ -1238,7 +1242,7 @@ impl TypePool {
                 }
             } else {
                 physical_types.push(EnumVariantLayout {
-                    tag: tag_scalar,
+                    tag: v.tag_value,
                     payload: None,
                     payload_offset: None,
                     // To be filled in once all variants are known
@@ -1891,7 +1895,10 @@ impl TypePool {
         match self.phys_types.get(struct_agg_id).agg_type {
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::EnumVariant(evl) => {
-                let tag_field = StructField { offset: 0, field_t: PhysicalType::Scalar(evl.tag) };
+                let tag_field = StructField {
+                    offset: 0,
+                    field_t: PhysicalType::Scalar(evl.tag.get_scalar_type()),
+                };
                 match evl.payload {
                     None => {
                         smallvec![tag_field]

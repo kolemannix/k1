@@ -288,7 +288,7 @@ impl Vm {
             writeln!(w).unwrap();
         }
         let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
-        for (i, pt) in k1.bytecode.mem.getn(unit.fn_params).iter().enumerate() {
+        for (i, pt) in k1.bytecode.mem.getn(unit.fn_type.params).iter().enumerate() {
             writeln!(w, "Param {i}: ").unwrap();
             let value = self.stack.get_param_value(frame_index, i as u32);
             render_debug_value(w, self, k1, *pt, value).unwrap();
@@ -522,7 +522,7 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_ret_info = match unit.return_type {
+    let top_ret_info = match unit.fn_type.return_type {
         InstKind::Void | InstKind::Terminator => None,
         InstKind::Value(ret_pt) => {
             let pt_layout = k1.types.get_pt_layout(ret_pt);
@@ -756,7 +756,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         builtin_return!(result)
                     }
                     BcCallee::Builtin(_, bc_builtin) => match bc_builtin {
-                        bc::BcBuiltin::TypeSchema => {
+                        bc::BackendBuiltin::TypeSchema => {
                             // intern fn typeSchema(id: u64): TypeSchema
                             let type_id_arg =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
@@ -774,7 +774,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
                             builtin_return!(schema_vm_value);
                         }
-                        bc::BcBuiltin::TypeName => {
+                        bc::BackendBuiltin::TypeName => {
                             // intern fn typeName(id: u64): string
                             let type_id_arg =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
@@ -786,9 +786,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 static_value_to_vm_value(k1, name_value_id, vm.eval_span);
                             builtin_return!(name_string_value);
                         }
-                        bc::BcBuiltin::Allocate | bc::BcBuiltin::AllocateZeroed => {
+                        bc::BackendBuiltin::Allocate | bc::BackendBuiltin::AllocateZeroed => {
                             // intern fn allocZeroed(size: uword, align: uword): Pointer
-                            let zero = bc_builtin == bc::BcBuiltin::AllocateZeroed;
+                            let zero = bc_builtin == bc::BackendBuiltin::AllocateZeroed;
                             let size: Value =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let align: Value =
@@ -809,7 +809,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(Value::ptr(ptr.cast_const()));
                         }
-                        bc::BcBuiltin::Reallocate => {
+                        bc::BackendBuiltin::Reallocate => {
                             // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
                             let old_ptr: Value =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
@@ -834,7 +834,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(Value::ptr(ptr.cast_const()));
                         }
-                        bc::BcBuiltin::Free => {
+                        bc::BackendBuiltin::Free => {
                             // intern fn free(ptr: Pointer, size: uword, align: uword): unit
                             let ptr =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
@@ -850,7 +850,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(Value::ptr(ptr))
                         }
-                        bc::BcBuiltin::MemCopy => {
+                        bc::BackendBuiltin::MemCopy => {
                             // intern fn copy( dst: Pointer, src: Pointer, count: uword): unit
                             let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let src: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
@@ -860,7 +860,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(Value::UNIT)
                         }
-                        bc::BcBuiltin::MemSet => {
+                        bc::BackendBuiltin::MemSet => {
                             //intern fn set(dst: Pointer, value: u8, count: uword): unit
                             let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let value: u8 =
@@ -877,7 +877,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(Value::UNIT)
                         }
-                        bc::BcBuiltin::MemEquals => {
+                        bc::BackendBuiltin::MemEquals => {
                             //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
                             let p1: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
                             let p2: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
@@ -898,12 +898,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                             builtin_return!(value)
                         }
-                        bc::BcBuiltin::Exit => {
+                        bc::BackendBuiltin::Exit => {
                             let exit_code =
                                 resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
                             break exit_code as i32;
                         }
-                        bc::BcBuiltin::CompilerMessage => {
+                        bc::BackendBuiltin::CompilerMessage => {
                             // intern fn emitCompilerMessage(
                             //    locn: compiler/SourceLocation,
                             //    level: (either(u8) Info, Warn, Error),
@@ -1833,7 +1833,7 @@ pub fn store_byte(dst: *mut u8, u8: u8) {
 }
 
 pub fn store_typed_int(dst: *mut u8, int: TypedIntValue) {
-    store_scalar(int.get_integer_type().get_scalar_type(), dst, Value::typed_int(int))
+    store_scalar(int.get_scalar_type(), dst, Value::typed_int(int))
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1960,7 +1960,7 @@ impl StackFrameRecord {
             inst_slice,
             call_span,
             unit: owner.unit_id,
-            param_count: owner.fn_params.len(),
+            param_count: owner.fn_type.params.len(),
             blocks: owner.blocks,
             inst_offset: owner.inst_offset,
             ret_info,
@@ -2006,7 +2006,7 @@ impl Stack {
         self.mem.align_to_bytes(8);
         let base_ptr = self.cursor();
 
-        let param_count = owner.fn_params.len();
+        let param_count = owner.fn_type.params.len();
         let inst_count = owner.inst_count;
         let inst_base = unsafe { base_ptr.byte_add(param_count as usize * size_of::<Value>()) };
         let inst_slice =

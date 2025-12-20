@@ -41,7 +41,9 @@ use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    self, FloatType, IntegerType, Type, TypeDefnInfo, TypeId, BOOL_TYPE_ID, CHAR_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID, UNIT_TYPE_ID
+    self, BOOL_TYPE_ID, CHAR_TYPE_ID, FloatType, I8_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
+    IntegerType, NEVER_TYPE_ID, POINTER_TYPE_ID, STRING_TYPE_ID, Type, TypeDefnInfo, TypeId,
+    U8_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, UNIT_TYPE_ID,
 };
 use crate::typer::{
     AssignmentKind, Call, CallId, Callee, CastType, FieldAccessKind, FunctionId,
@@ -928,14 +930,14 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         self.codegen_type_inner(type_id, 0)
     }
 
-    const DW_ATE_ADDRESS:u32 = 0x01;
-    const DW_ATE_BOOLEAN:u32 = 0x02;
-    const _DW_ATE_COMPLEX_FLOAT:u32 = 0x03;
-    const DW_ATE_FLOAT:u32 = 0x04;
-    const DW_ATE_SIGNED:u32 = 0x05;
-    const DW_ATE_CHAR:u32 = 0x06;
-    const DW_ATE_UNSIGNED:u32 = 0x07;
-    const _DW_ATE_UNSIGNED_CHAR:u32 = 0x08;
+    const DW_ATE_ADDRESS: u32 = 0x01;
+    const DW_ATE_BOOLEAN: u32 = 0x02;
+    const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
+    const DW_ATE_FLOAT: u32 = 0x04;
+    const DW_ATE_SIGNED: u32 = 0x05;
+    const DW_ATE_CHAR: u32 = 0x06;
+    const DW_ATE_UNSIGNED: u32 = 0x07;
+    const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
     fn codegen_type_inner(
         &mut self,
@@ -1623,12 +1625,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         k1_ty: &K1LlvmType<'ctx>,
         abi_value: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
-        debug!(
-            "canonicalizing {} to {} via {:?}",
-            abi_value,
-            self.rich_repr_type(k1_ty),
-            mapping
-        );
+        debug!("canonicalizing {} to {} via {:?}", abi_value, self.rich_repr_type(k1_ty), mapping);
         match mapping {
             AbiParamMapping::ScalarInRegister => abi_value,
             AbiParamMapping::StructInInteger { width } => {
@@ -2164,10 +2161,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let variant_agg =
                     self.k1.types.phys_types.get(variant_pt_id).agg_type.expect_enum_variant();
                 packed_values.push(variant.tag_value.as_basic_value_enum());
+                let tag_scalar = variant_agg.tag.get_scalar_type();
                 match e.payload {
                     None => {
                         let padding_to_end =
-                            variant_agg.envelope.size - variant_agg.tag.get_layout().size;
+                            variant_agg.envelope.size - tag_scalar.get_layout().size;
                         if padding_to_end > 0 {
                             packed_values.push(
                                 self.padding_type(padding_to_end).get_undef().as_basic_value_enum(),
@@ -2175,7 +2173,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                     }
                     Some(payload) => {
-                        let tag_end = variant_agg.tag.get_layout().size;
+                        let tag_end = tag_scalar.get_layout().size;
                         let payload_offset = variant_agg.payload_offset.unwrap();
                         let payload_padding = payload_offset - tag_end;
                         if payload_padding > 0 {

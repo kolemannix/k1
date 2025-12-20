@@ -103,9 +103,7 @@ pub struct CompiledBlock {
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
     pub unit_id: CompilableUnitId,
-    // nocommit: just embed a phys function type
-    pub return_type: InstKind,
-    pub fn_params: MSlice<PhysicalType, ProgramBytecode>,
+    pub fn_type: PhysicalFunctionType,
     // The offset of the first instruction id
     // used by this compiled unit.
     // Subtract this to get sane indices for dense storage
@@ -114,6 +112,7 @@ pub struct CompiledUnit {
     pub inst_count: u32,
 
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
+    pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 }
 
@@ -133,7 +132,7 @@ impl InstId {
 pub type BlockId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BcBuiltin {
+pub enum BackendBuiltin {
     // In LLVM backend, this is becomes a runtime switch
     // In the VM, just a lookup. So we leave it as a builtin
     // rather than generate bytecode for it due to that difference
@@ -163,7 +162,7 @@ pub struct PhysicalFunctionType {
 
 #[derive(Clone, Copy)]
 pub enum BcCallee {
-    Builtin(FunctionId, BcBuiltin),
+    Builtin(FunctionId, BackendBuiltin),
     Direct(FunctionId),
     Indirect(PhysicalFunctionType, Value),
     Extern(Option<parse::Ident>, parse::Ident, FunctionId),
@@ -236,6 +235,7 @@ pub struct BcCall {
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
 //task(bc): Get inst to 32 bytes at the most
+#[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
 
@@ -680,6 +680,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let name = b.k1.bytecode.mem.push_str("entry");
     b.push_block(name);
     let f = b.k1.get_function(function_id);
+    let intrinsic_type = f.intrinsic_type;
     let is_debug = f.compiler_debug;
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
@@ -707,8 +708,14 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     };
 
     let unit_id = CompilableUnitId::Function(function_id);
-    let unit =
-        finalize_unit(&mut b, unit_id, fn_phys_type.params, fn_phys_type.return_type, is_debug);
+    let builtin_kind = match intrinsic_type {
+        None => None,
+        Some(i) => match intrinsic_handler(i) {
+            FunctionHandler::BcBuiltin(bc_builtin) => Some(bc_builtin),
+            _ => None,
+        },
+    };
+    let unit = finalize_unit(&mut b, unit_id, fn_phys_type, is_debug, builtin_kind);
 
     *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
 
@@ -750,8 +757,13 @@ pub fn compile_top_level_expr(
 
     let _result = compile_expr(&mut b, None, expr)?;
     let return_kind = b.type_to_inst_kind(b.k1.exprs.get_type(expr));
+    let phys_fn_type = PhysicalFunctionType {
+        return_type: return_kind,
+        params: MSlice::empty(),
+        abi_mode: AbiMode::Internal,
+    };
     let compiled_expr =
-        finalize_unit(&mut b, CompilableUnitId::Expr(expr), MSlice::empty(), return_kind, is_debug);
+        finalize_unit(&mut b, CompilableUnitId::Expr(expr), phys_fn_type, is_debug, None);
 
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
@@ -765,19 +777,19 @@ pub fn compile_top_level_expr(
 fn finalize_unit(
     b: &mut Builder,
     unit_id: CompilableUnitId,
-    fn_params: MSlice<PhysicalType, ProgramBytecode>,
-    return_type: InstKind,
+    fn_type: PhysicalFunctionType,
     is_debug: bool,
+    builtin_kind: Option<BackendBuiltin>,
 ) -> CompiledUnit {
     let compiled_blocks = b.bake_blocks();
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
     let unit = CompiledUnit {
         unit_id,
-        return_type,
+        fn_type,
         inst_offset: b.inst_offset,
         inst_count,
         blocks: compiled_blocks,
-        fn_params,
+        function_builtin_kind: builtin_kind,
         is_debug,
     };
     b.reset_compilation_unit();
@@ -951,7 +963,7 @@ impl<'k1> Builder<'k1> {
             TypedIntValue::U32(i) => Value::Imm32 { t: ScalarType::U32, data: *i },
             TypedIntValue::U64(i) => {
                 if *i <= u32::MAX as u64 {
-                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
+                    Value::imm32(int_value.get_scalar_type(), *i as u32)
                 } else {
                     let inst = self.push_inst(Inst::Data(DataInst::U64(*i)), comment);
                     inst.as_value()
@@ -959,12 +971,10 @@ impl<'k1> Builder<'k1> {
             }
             TypedIntValue::I8(i) => Value::byte(*i as u8),
             TypedIntValue::I16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
-            TypedIntValue::I32(i) => {
-                Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as u32)
-            }
+            TypedIntValue::I32(i) => Value::imm32(int_value.get_scalar_type(), *i as u32),
             TypedIntValue::I64(i) => {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
-                    Value::imm32(int_value.get_integer_type().get_scalar_type(), *i as i32 as u32)
+                    Value::imm32(int_value.get_scalar_type(), *i as i32 as u32)
                 } else {
                     let inst = self.push_inst(Inst::Data(DataInst::I64(*i)), comment);
                     inst.as_value()
@@ -1193,6 +1203,54 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
     }
 }
 
+enum FunctionHandler {
+    BcBakeStaticValue,
+    BcZeroed,
+    BcBoolNegate,
+    BcBitNot,
+    BcBitCast,
+    BcArithBinop(IntrinsicArithOpKind),
+    BcBitwiseBinop(IntrinsicBitwiseBinopKind),
+    BcPointerIndex,
+    Typer,
+    BcBuiltin(BackendBuiltin),
+}
+fn intrinsic_handler(intrinsic_op: IntrinsicOperation) -> FunctionHandler {
+    use FunctionHandler as H;
+    match intrinsic_op {
+        IntrinsicOperation::SizeOf => H::Typer,
+        IntrinsicOperation::SizeOfStride => H::Typer,
+        IntrinsicOperation::AlignOf => H::Typer,
+        IntrinsicOperation::CompilerSourceLocation => H::Typer,
+        IntrinsicOperation::GetStaticValue => H::Typer,
+        IntrinsicOperation::StaticTypeToValue => H::Typer,
+        IntrinsicOperation::TypeId => H::Typer,
+
+        IntrinsicOperation::BakeStaticValue => H::BcBakeStaticValue,
+        IntrinsicOperation::CompilerMessage => H::BcBuiltin(BackendBuiltin::CompilerMessage),
+        IntrinsicOperation::Zeroed => H::BcZeroed,
+
+        IntrinsicOperation::TypeName => H::BcBuiltin(BackendBuiltin::TypeName),
+        IntrinsicOperation::TypeSchema => H::BcBuiltin(BackendBuiltin::TypeSchema),
+
+        IntrinsicOperation::BoolNegate => H::BcBoolNegate,
+        IntrinsicOperation::BitNot => H::BcBitNot,
+        IntrinsicOperation::BitCast => H::BcBitCast,
+        IntrinsicOperation::ArithBinop(kind) => H::BcArithBinop(kind),
+        IntrinsicOperation::BitwiseBinop(kind) => H::BcBitwiseBinop(kind),
+        IntrinsicOperation::PointerIndex => H::BcPointerIndex,
+
+        IntrinsicOperation::Allocate => H::BcBuiltin(BackendBuiltin::Allocate),
+        IntrinsicOperation::AllocateZeroed => H::BcBuiltin(BackendBuiltin::AllocateZeroed),
+        IntrinsicOperation::Reallocate => H::BcBuiltin(BackendBuiltin::Reallocate),
+        IntrinsicOperation::Free => H::BcBuiltin(BackendBuiltin::Free),
+        IntrinsicOperation::MemCopy => H::BcBuiltin(BackendBuiltin::MemCopy),
+        IntrinsicOperation::MemSet => H::BcBuiltin(BackendBuiltin::MemSet),
+        IntrinsicOperation::MemEquals => H::BcBuiltin(BackendBuiltin::MemEquals),
+        IntrinsicOperation::Exit => H::BcBuiltin(BackendBuiltin::Exit),
+    }
+}
+
 fn compile_expr(
     b: &mut Builder,
     // Where to put the result; aka value placement or destination-aware codegen
@@ -1387,16 +1445,8 @@ fn compile_expr(
             };
             let callee = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
-                    let builtin = match intrinsic {
-                        IntrinsicOperation::SizeOf => unreachable!(),
-                        IntrinsicOperation::SizeOfStride => unreachable!(),
-                        IntrinsicOperation::AlignOf => unreachable!(),
-                        IntrinsicOperation::CompilerSourceLocation => unreachable!(),
-                        IntrinsicOperation::GetStaticValue => unreachable!(),
-                        IntrinsicOperation::StaticTypeToValue => unreachable!(),
-                        IntrinsicOperation::TypeId => unreachable!(),
-
-                        IntrinsicOperation::BakeStaticValue => {
+                    let backend_builtin = match intrinsic_handler(intrinsic) {
+                        FunctionHandler::BcBakeStaticValue => {
                             return {
                                 // intern fn bakeStaticValue[T](value: T): u64
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
@@ -1409,8 +1459,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        IntrinsicOperation::CompilerMessage => Some(BcBuiltin::CompilerMessage),
-                        IntrinsicOperation::Zeroed => {
+                        FunctionHandler::BcZeroed => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 match b.get_physical_type(type_id) {
@@ -1428,20 +1477,18 @@ fn compile_expr(
                                         };
                                         let memset_args =
                                             b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
-                                        let Some(memset_function_id) =
-                                            b.k1.functions.iter_with_ids().find(|(_, f)| {
-                                                f.scope == b.k1.scopes.mem_scope_id
-                                                    && f.name == b.k1.ast.idents.b.memset
-                                            })
-                                        else {
+                                        let Some(memset_function_id) = b.k1.scopes.find_function(
+                                            b.k1.scopes.mem_scope_id,
+                                            b.k1.ast.idents.b.set,
+                                        ) else {
                                             b_ice!(b, "Missing memset function");
                                         };
                                         let memset_call = BcCall {
                                             dst: None,
                                             ret_inst_kind: InstKind::UNIT,
                                             callee: BcCallee::Builtin(
-                                                memset_function_id.0,
-                                                BcBuiltin::MemSet,
+                                                memset_function_id,
+                                                BackendBuiltin::MemSet,
                                             ),
                                             args: memset_args,
                                         };
@@ -1457,11 +1504,7 @@ fn compile_expr(
                                 }
                             };
                         }
-
-                        IntrinsicOperation::TypeName => Some(BcBuiltin::TypeName),
-                        IntrinsicOperation::TypeSchema => Some(BcBuiltin::TypeSchema),
-
-                        IntrinsicOperation::BoolNegate => {
+                        FunctionHandler::BcBoolNegate => {
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
@@ -1469,7 +1512,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        IntrinsicOperation::BitNot => {
+                        FunctionHandler::BcBitNot => {
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BitNot { v: base });
@@ -1477,7 +1520,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        IntrinsicOperation::BitCast => {
+                        FunctionHandler::BcBitCast => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 let to_pt = b.get_physical_type(type_id);
@@ -1543,10 +1586,10 @@ fn compile_expr(
                                 }
                             };
                         }
-                        IntrinsicOperation::ArithBinop(op) => {
+                        FunctionHandler::BcArithBinop(op) => {
                             return compile_arith_binop(b, op, &call, dst);
                         }
-                        IntrinsicOperation::BitwiseBinop(op) => {
+                        FunctionHandler::BcBitwiseBinop(op) => {
                             return {
                                 let lhs = compile_expr(b, None, call.args[0])?;
                                 let rhs = compile_expr(b, None, call.args[1])?;
@@ -1577,7 +1620,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        IntrinsicOperation::PointerIndex => {
+                        FunctionHandler::BcPointerIndex => {
                             return {
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                                 let elem_type_id =
@@ -1593,27 +1636,13 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-
-                        IntrinsicOperation::Allocate => Some(BcBuiltin::Allocate),
-                        IntrinsicOperation::AllocateZeroed => Some(BcBuiltin::AllocateZeroed),
-                        IntrinsicOperation::Reallocate => Some(BcBuiltin::Reallocate),
-                        IntrinsicOperation::Free => Some(BcBuiltin::Free),
-                        IntrinsicOperation::MemCopy => Some(BcBuiltin::MemCopy),
-                        IntrinsicOperation::MemSet => Some(BcBuiltin::MemSet),
-                        IntrinsicOperation::MemEquals => Some(BcBuiltin::MemEquals),
-                        IntrinsicOperation::Exit => Some(BcBuiltin::Exit),
+                        FunctionHandler::Typer => unreachable!(),
+                        FunctionHandler::BcBuiltin(bc_builtin) => bc_builtin,
                     };
-                    match builtin {
-                        Some(bi) => {
-                            let Some(function_id) = maybe_function_id else {
-                                b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
-                            };
-                            BcCallee::Builtin(function_id, bi)
-                        }
-                        None => {
-                            b_ice!(b, "Unhandled intrinsic in bytecode: {:?}", intrinsic)
-                        }
-                    }
+                    let Some(function_id) = maybe_function_id else {
+                        b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
+                    };
+                    BcCallee::Builtin(function_id, backend_builtin)
                 }
                 (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
@@ -1659,9 +1688,18 @@ fn compile_expr(
                         BcCallee::Indirect(phys_fn_type, fn_ptr)
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
-                        let function_type_id = b.k1.exprs.get_type(*function_pointer_expr);
-                        let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
+                        let function_ptr_type_id = b.k1.exprs.get_type(*function_pointer_expr);
+                        let function_type_id = match b.k1.types.get(function_ptr_type_id) {
+                            Type::FunctionPointer(fp) => fp.function_type_id,
+                            _ => {
+                                return failf!(
+                                    b.cur_span,
+                                    "Expected function pointer type for dynamic function callee"
+                                );
+                            }
+                        };
                         let phys_fn_type = b.get_physical_fn_type(function_type_id);
+                        let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
                         BcCallee::Indirect(phys_fn_type, callee_inst)
                     }
                     Callee::DynamicAbstract { .. } => {

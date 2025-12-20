@@ -14,7 +14,7 @@ pub struct StaticStruct {
     pub fields: StaticValueSlice,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct StaticEnum {
     pub variant_type_id: TypeId,
     pub variant_index: u32,
@@ -30,7 +30,7 @@ pub enum StaticContainerKind {
     Array,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct StaticContainer {
     pub elements: StaticValueSlice,
     pub kind: StaticContainerKind,

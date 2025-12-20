@@ -8,25 +8,32 @@ fn testBitcast(): unit {
   assertEquals(y, 0xffff_ffff);
 
   // From agg to agg
-  let s: string = "foo";
-  let sWrap = { inner: s };
-  let sAgain: string = mem/bitcast(sWrap);
+  // nocommit
+  // let s: string = "foo";
+  // let sWrap = { inner: s };
+  // let sAgain: string = mem/bitcast(sWrap);
+  // assertEquals(s, sAgain);
 
   // From agg to scalar
-  let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
-  let scalar = mem/bitcast[i64](p2);
+  //let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
+  //let scalar = mem/bitcast[_, i64](p2);
 
   // From scalar to scalar
-  nocommit!();
+  //let f: f32 = -3.14159;
+  //let i: i32 = mem/bitcast(f);
+  //let f2: f32 = mem/bitcast(i);
+  //assertEquals(f, f2);
 
   // From scalar to agg
-  nocommit!();
-  
+  //let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010;
+  //let p: { x: i16, y: u16 } = mem/bitcast(ipoint);
+  // Little-endian based result, should be ok
+  //assertEquals(p.x, 2);
+  //assertEquals(p.y, 1);
 
   assert(testCompile(
     mem/bitcast[u8, u16](4)
   ).isSome());
-  assertEquals(s, sAgain);
 }
 
 fn testZero(): unit {

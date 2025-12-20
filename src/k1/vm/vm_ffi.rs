@@ -28,7 +28,7 @@ pub(super) fn handle_ffi_call(
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
-    let function_params = k1.bytecode.functions.get(function_id).unwrap().fn_params;
+    let function_params = k1.bytecode.functions.get(function_id).unwrap().fn_type.params;
 
     for (arg_value, arg_pt) in
         k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
@@ -132,8 +132,8 @@ fn prep_ffi_cif(
             k1.bytecode.b_units_pending_compile.len()
         );
     };
-    let nargs = compiled_function.fn_params.len() as usize;
-    let fn_params = compiled_function.fn_params;
+    let nargs = compiled_function.fn_type.params.len() as usize;
+    let fn_params = compiled_function.fn_type.params;
     let mut ffi_args_types_storage = k1.mem.new_list(nargs as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(nargs as u32);
     for arg_pt in k1.bytecode.mem.getn(fn_params) {
@@ -213,7 +213,9 @@ fn pt_to_ffi_type(
                 let count = if enum_variant_layout.payload.is_some() { 2 } else { 1 };
                 let mut element_storage = k1.mem.new_list(count);
 
-                element_storage.push(scalar_to_ffi_type(enum_variant_layout.tag));
+                element_storage.push(scalar_to_ffi_type(
+                    enum_variant_layout.tag.get_scalar_type(),
+                ));
                 if let Some(payload) = enum_variant_layout.payload {
                     let payload_ffi_type = pt_to_ffi_type(k1, payload)?;
                     element_storage.push(payload_ffi_type);

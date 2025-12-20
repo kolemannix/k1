@@ -3,6 +3,8 @@
 
 use std::fmt::{Display, Formatter};
 
+use crate::typer::types::ScalarType;
+
 use super::{IntegerType, TypeId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypedIntValue {
@@ -141,6 +143,10 @@ impl TypedIntValue {
             TypedIntValue::I32(_) => IntegerType::I32,
             TypedIntValue::I64(_) => IntegerType::I64,
         }
+    }
+
+    pub fn get_scalar_type(&self) -> ScalarType {
+        self.get_integer_type().get_scalar_type()
     }
 
     pub fn is_signed(&self) -> bool {
