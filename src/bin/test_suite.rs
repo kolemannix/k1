@@ -156,8 +156,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
         Err(CompileProgramError::ParseFailure(_parsed_module)) => {
             bail!("{} Failed during parsing", filename)
         }
-        Ok(typed_program) => {
-            let name = typed_program.program_name();
+        Ok(mut typed_program) => {
+            let name = typed_program.program_name().to_string();
             let expect_exit = matches!(
                 expectation,
                 TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
@@ -167,7 +167,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 let codegen = compiler::codegen_module(
                     &args,
                     ctx,
-                    &typed_program,
+                    &mut typed_program,
                     &out_dir,
                     output_executable,
                 )?;

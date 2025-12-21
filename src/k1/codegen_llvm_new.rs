@@ -23,7 +23,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
+    GlobalValue, InstructionValue, IntValue, PhiValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
@@ -31,8 +31,8 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
 
 use crate::bc::{
-    BackendBuiltin, BcCallee, CompiledBlock, Inst, InstId, InstKind, PhysicalFunctionType,
-    ProgramBytecode,
+    BackendBuiltin, BcCallee, CompilableUnitId, CompiledBlock, Inst, InstId, InstKind,
+    PhysicalFunctionType, ProgramBytecode,
 };
 use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
@@ -40,7 +40,7 @@ use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::types::{
-    AbiMode, AggType, PhysicalType, PhysicalTypeId, STRING_TYPE_ID, ScalarType, TypeDefnInfo,
+    AbiMode, AggType, PhysicalType, PhysicalTypeId, STRING_TYPE_ID, ScalarType, Type, TypeDefnInfo,
     TypeId,
 };
 use crate::typer::{
@@ -155,12 +155,22 @@ struct CgOpaqueType<'ctx> {
 }
 
 #[derive(Copy, Clone)]
+struct CgEnumVariant<'ctx> {
+    pt: PhysicalType,
+    /// Used for GEPs only, not for value transfer or representation!
+    variant_struct_type: StructType<'ctx>,
+    aligned_envelope_repr: StructType<'ctx>,
+    layout: Layout,
+    di_type: DIType<'ctx>,
+}
+#[derive(Copy, Clone)]
 enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
     Void(LlvmVoidType<'ctx>),
     Opaque(CgOpaqueType<'ctx>),
+    EnumVariant(CgEnumVariant<'ctx>),
 }
 
 impl<'ctx> From<LlvmVoidType<'ctx>> for CgType<'ctx> {
@@ -189,6 +199,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.pt,
             CgType::Void(_) => panic!("no pt on void"),
             CgType::Opaque(o) => o.pt,
+            CgType::EnumVariant(ev) => ev.pt,
         }
     }
 
@@ -199,6 +210,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
             CgType::Opaque(_) => "Opaque",
+            CgType::EnumVariant(_) => "EnumVariant",
         }
     }
 
@@ -209,6 +221,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
             CgType::Opaque(_) => true,
+            CgType::EnumVariant(_) => true,
         }
     }
 
@@ -264,6 +277,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.layout,
             CgType::Void(_) => panic!("No rich value type on Void / never"),
             CgType::Opaque(o) => o.layout,
+            CgType::EnumVariant(ev) => ev.layout,
         }
     }
 
@@ -274,6 +288,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Opaque(o) => o.aligned_struct_repr.as_basic_type_enum(),
             CgType::Void(_) => panic!("No rich value type on Void / never"),
+            CgType::EnumVariant(ev) => ev.aligned_envelope_repr.as_basic_type_enum(),
         }
     }
 
@@ -284,6 +299,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.di_type,
             CgType::Opaque(o) => o.di_type,
             CgType::Void(v) => v.di_type,
+            CgType::EnumVariant(ev) => ev.di_type,
         }
     }
 
@@ -315,9 +331,6 @@ struct BuiltinTypes<'ctx> {
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
-    pub fn ptr_basic(&self) -> BasicTypeEnum<'ctx> {
-        self.ptr.as_basic_type_enum()
-    }
     pub fn unit_basic(&self) -> BasicValueEnum<'ctx> {
         self.unit_value.as_basic_value_enum()
     }
@@ -393,18 +406,6 @@ impl<'ctx> DebugContext<'ctx> {
                 block.as_mut_ptr(),
             )
         };
-    }
-
-    fn create_pointer_type(&self, name: &str, pointee: DIType<'ctx>) -> DIType<'ctx> {
-        self.debug_builder
-            .create_pointer_type(
-                name,
-                pointee,
-                crate::WORD_SIZE_BITS as u64,
-                crate::WORD_SIZE_BITS as u32,
-                AddressSpace::default(),
-            )
-            .as_type()
     }
 
     fn push_scope(&mut self, span: SpanId, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
@@ -592,14 +593,114 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    /// `codegen_program` is the module Entrypoint
+    pub fn codegen_program(&mut self) -> TyperResult<()> {
+        let start = std::time::Instant::now();
+
+        let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
+
+        // Guarantee code generation of exported globals
+        for global_id in &global_ids {
+            let g = self.k1.globals.get(*global_id);
+            if g.is_exported {
+                self.codegen_global(*global_id)?;
+            }
+        }
+
+        // TODO: Codegen the exported functions as well as the called ones
+        // for (id, function) in self.module.function_iter() {
+        //     if function.linkage.is_exported() {
+        //         self.codegen_function_signature(id)?;
+        //     }
+        // }
+
+        let Some(main_function_id) = self.k1.get_main_function_id() else {
+            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
+        };
+        let function_value = self.declare_llvm_function(main_function_id)?;
+
+        let mut pending_buffer: Vec<FunctionId> =
+            Vec::with_capacity(self.functions_pending_body_compilation.len());
+        while !self.functions_pending_body_compilation.is_empty() {
+            pending_buffer.extend(&self.functions_pending_body_compilation);
+            self.functions_pending_body_compilation.clear();
+
+            for id in &pending_buffer {
+                self.codegen_function_body(*id)?;
+            }
+
+            pending_buffer.clear();
+        }
+
+        self.builder.unset_current_debug_location();
+        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
+        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
+        self.builder.position_at_end(entry_block);
+        let params: Vec<BasicMetadataValueEnum<'ctx>> =
+            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
+        let res = self
+            .builder
+            .build_call(function_value, &params, "")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
+        Ok(())
+    }
+
+    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<GlobalValue<'ctx>> {
+        if let Some(g) = self.globals.get(&global_id) {
+            return Ok(*g);
+        }
+        let global = self.k1.globals.get(global_id).clone();
+        let initial_static_value_id = global.initial_value.unwrap();
+        let initializer_basic_value =
+            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+
+        let variable = self.k1.variables.get(global.variable_id);
+
+        let layout = self.k1.types.get_layout(global.ty);
+        let llvm_linkage = match global.is_exported {
+            false => LlvmLinkage::Private,
+            true => LlvmLinkage::External,
+        };
+        // For now let's just use the name, eventually we'll ask the user for a link name
+        let name = if global.is_exported {
+            self.k1.ident_str(variable.name).to_string()
+        } else {
+            self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
+        };
+        let llvm_global = self.make_global_from_value(
+            initializer_basic_value,
+            layout.align,
+            &name,
+            global.is_constant,
+            llvm_linkage,
+        );
+        if self.k1.program_settings.multithreaded {
+            if global.is_tls {
+                llvm_global.set_thread_local(true);
+                let mode = if self.k1.program_settings.executable {
+                    ThreadLocalMode::LocalExecTLSModel
+                } else {
+                    // We don't yet support dynamic library as a target
+                    // So even libraries can use InitialExec
+                    ThreadLocalMode::InitialExecTLSModel
+                };
+                llvm_global.set_thread_local_mode(Some(mode));
+            }
+        }
+        self.globals.insert(global_id, llvm_global);
+        Ok(llvm_global)
+    }
+
     #[allow(unused)]
     fn llvm_size_info(&self, typ: &dyn AnyType) -> Layout {
         let td = self.llvm_machine.get_target_data();
         llvm_size_info(&td, typ)
-    }
-
-    fn get_layout(&self, type_id: TypeId) -> Layout {
-        self.k1.types.get_layout(type_id)
     }
 
     fn padding_type(&self, size_bytes: u32) -> ArrayType<'ctx> {
@@ -716,14 +817,49 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let type_name = self.codegen_type_name(agg.origin_type_id);
                 let cg_type = match agg.agg_type {
                     AggType::EnumVariant(e) => {
+                        let tag_scalar = e.tag.get_scalar_type();
+                        let tag_int_type = self.scalar_basic_type(tag_scalar);
+                        let variant_struct_type = match e.payload {
+                            None => self.ctx.struct_type(&[tag_int_type], false),
+                            Some(payload_pt) => {
+                                let payload_cg_type = self.codegen_type(payload_pt);
+                                self.ctx.struct_type(
+                                    &[tag_int_type, payload_cg_type.rich_type()],
+                                    false,
+                                )
+                            }
+                        };
+
                         let opaque = self.codegen_opaque_type(pt, e.envelope);
-                        CgType::Opaque(opaque)
+                        let aligned_envelope_repr = opaque.aligned_struct_repr;
+                        // FIXME: All of this will go away once we move to representing this as
+                        // a union
+                        let cg_variant = CgEnumVariant {
+                            pt,
+                            variant_struct_type,
+                            aligned_envelope_repr,
+                            layout: opaque.layout,
+                            di_type: opaque.di_type,
+                        };
+                        CgType::EnumVariant(cg_variant)
                     }
                     AggType::Struct { fields } => {
                         let mut cg_field_types = self.mem.new_list(fields.len());
                         let mut field_rich_types = self.tmp.new_list(fields.len());
                         let mut field_di_types = self.tmp.new_list(fields.len());
-                        let k1_struct_type = self.k1.types.get(agg.origin_type_id).expect_struct();
+
+                        // The solution for this is for physical struct fields to also have names
+                        let k1_struct_type = match self.k1.types.get(agg.origin_type_id) {
+                            Type::Struct(s) => s,
+                            Type::LambdaObject(lo) => {
+                                self.k1.types.get(lo.struct_representation).expect_struct()
+                            }
+                            Type::Lambda(l) => self.k1.types.get(l.env_type).expect_struct(),
+                            _ => panic!(
+                                "Expected struct type for physical struct: {}",
+                                self.k1.type_id_to_string(agg.origin_type_id)
+                            ),
+                        };
                         let span = self.debug.current_span();
                         let line_number = self.get_line_number(span);
                         for (phys_field, k1_field) in self
@@ -866,17 +1002,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    // nocommit does this need to exist by the end
-    fn rich_repr_type(&self, t: &CgType<'ctx>) -> BasicTypeEnum<'ctx> {
-        match t {
-            CgType::Scalar(value) => value.basic_type,
-            CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
-            CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
-            CgType::Opaque(opaque) => opaque.aligned_struct_repr.as_basic_type_enum(),
-            CgType::Void(_) => panic!("No rich value type on Void / never"),
-        }
-    }
-
     fn make_cg_function_type(
         &mut self,
         phys_fn_type: &PhysicalFunctionType,
@@ -907,7 +1032,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByPtrNoCopy => true,
         };
 
-        let param_count = param_types.len() as u32 + if is_sret { 1 } else { 0 };
+        let param_count = param_types.len() + if is_sret { 1 } else { 0 };
 
         // The logical parameters closest to K1 model
         let mut param_llvm_types: MList<CgType<'ctx>, _> = self.mem.new_list(param_count);
@@ -932,24 +1057,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         for p in self.k1.bytecode.mem.getn(param_types) {
-            let param_llvm_type = self.codegen_type(*p);
+            let param_cg_type = self.codegen_type(*p);
             let abi_mapping = self.get_abi_mapping_for_type(abi_mode, *p, false);
-            // eprintln!("abi mapping for {} is {:?}", self.rich_repr_type(&param_type), abi_mapping);
             param_abi_mappings.push(abi_mapping);
-            param_llvm_types.push(param_llvm_type);
+            param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type(*p, abi_mapping);
-            // eprintln!(
-            //     "abi mapping for {} is {:?}. Mapped type: {}",
-            //     self.rich_repr_type(&param_type),
-            //     abi_mapping,
-            //     mapped_type
-            // );
+            eprintln!(
+                "abi mapping for {} is {:?}. Mapped type: {}",
+                param_cg_type.rich_type(),
+                abi_mapping,
+                mapped_type
+            );
             function_final_params.push(mapped_type.into());
         }
 
         let fn_type = match return_mapped_type {
             None => self.ctx.void_type().fn_type(&function_final_params, false),
-            Some(t) => t.fn_type(&function_final_params, false),
+            Some(t) => {
+                if is_sret {
+                    self.ctx.void_type().fn_type(&function_final_params, false)
+                } else {
+                    t.fn_type(&function_final_params, false)
+                }
+            }
         };
 
         Ok(CgFunctionType {
@@ -1179,16 +1309,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn get_di_type_name(di_type: DIType<'ctx>) -> String {
-        use llvm_sys::debuginfo::LLVMDITypeGetName;
-        unsafe {
-            let mut length = 0;
-            let buf = LLVMDITypeGetName(di_type.as_mut_ptr(), &mut length);
-            let slice: &[u8] = std::slice::from_raw_parts(buf as *const u8, length);
-            String::from_utf8_lossy(slice).to_string()
-        }
-    }
-
     /// This function is responsible for 'loading' a value of some arbitrary type and giving
     /// it in its usable, canonical form to the caller.
     /// Example 1: struct field access
@@ -1221,7 +1341,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         } else {
             // Scalars must be truly loaded
-            self.builder.build_load(self.rich_repr_type(cg_type), source, name).unwrap()
+            self.builder.build_load(cg_type.rich_type(), source, name).unwrap()
         }
     }
 
@@ -1282,10 +1402,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         codegened_function
     }
 
-    fn get_nth_block(&self, index: usize) -> TyperResult<BasicBlock<'ctx>> {
-        match self.get_insert_function().function_value.get_basic_block_iter().nth(index) {
+    fn get_block_id(&self, block_id: u32) -> TyperResult<BasicBlock<'ctx>> {
+        // We skip the 'prelude' block
+        let real_index = block_id as usize + 1;
+        match self.get_insert_function().function_value.get_basic_block_iter().nth(real_index) {
             Some(bb) => Ok(bb),
-            None => failf!(self.debug.current_span(), "Failed to get nth block: {index}"),
+            None => failf!(self.debug.current_span(), "Failed to get nth block: {real_index}"),
         }
     }
 
@@ -1298,7 +1420,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn build_struct_gep(
         &mut self,
         ptr: PointerValue<'ctx>,
-        struct_type: &CgStructType<'ctx>,
+        struct_type: StructType<'ctx>,
         idx: u32,
         name: &str,
     ) -> PointerValue<'ctx> {
@@ -1317,7 +1439,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         //             .unwrap()
         //     }
         // } else {
-        self.builder.build_struct_gep(struct_type.struct_type, ptr, idx, name).unwrap()
+        self.builder.build_struct_gep(struct_type, ptr, idx, name).unwrap()
         //}
     }
 
@@ -1337,7 +1459,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
-        let ptr = self.build_alloca(self.rich_repr_type(ty), name);
+        let ptr = self.build_alloca(ty.rich_type(), name);
         ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
         ptr
     }
@@ -1378,6 +1500,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> TyperResult<Option<BasicValueEnum<'ctx>>> {
         let call = self.k1.bytecode.calls.get(call_id);
         let callee = call.callee;
+        let call_dst = call.dst;
         let call_args = call.args;
 
         enum CallKind<'ctx> {
@@ -1393,7 +1516,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 (CallKind::Direct(function_id), fn_type)
             }
             BcCallee::Indirect(fn_type, value) => {
-                let callee_value = self.codegen_value(inst_mappings, value)?.into_pointer_value();
+                let callee_value = self.resolve_value(inst_mappings, value)?.into_pointer_value();
                 let cg_fn_type = self.make_cg_function_type(&fn_type)?;
                 (CallKind::Indirect(callee_value), cg_fn_type)
             }
@@ -1402,16 +1525,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
             self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
 
+        let dst_value = match call_dst {
+            None => None,
+            Some(dst) => {
+                let dst = self.resolve_value(inst_mappings, dst)?;
+                Some(dst.into_pointer_value())
+            }
+        };
+
         let sret_alloca = if cg_fn_type.is_sret {
-            let rich_type = cg_fn_type.return_cg_type.rich_type();
-            let sret_alloca = self.build_alloca(rich_type, "call_sret");
-            args.push(sret_alloca.into());
-            Some(sret_alloca)
+            let sret_ptr = match dst_value {
+                Some(sret_dst) => sret_dst,
+                None => {
+                    let rich_type = cg_fn_type.return_cg_type.rich_type();
+                    let sret_alloca = self.build_alloca(rich_type, "call_sret");
+                    sret_alloca
+                }
+            };
+            args.push(sret_ptr.into());
+            Some(sret_ptr)
         } else {
             None
         };
         for (index, arg_bc_value) in self.k1.bytecode.mem.getn(call_args).iter().enumerate() {
-            let arg_value = self.codegen_value(inst_mappings, *arg_bc_value)?;
+            let arg_value = self.resolve_value(inst_mappings, *arg_bc_value)?;
 
             let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
             let abi_mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index);
@@ -1425,6 +1562,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             CallKind::Direct(function_id) => {
                 let function_value = self.declare_llvm_function(function_id)?;
                 //self.set_debug_location_from_span(call.span);
+
                 self.builder.build_call(function_value, &args, "").unwrap()
             }
             CallKind::Indirect(fn_ptr) => {
@@ -1438,9 +1576,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         if cg_fn_type.is_sret {
-            let sret_attribute = self.make_sret_attribute(
-                self.rich_repr_type(&cg_fn_type.return_cg_type).as_any_type_enum(),
-            );
+            let sret_attribute =
+                self.make_sret_attribute(cg_fn_type.return_cg_type.rich_type().as_any_type_enum());
             callsite_value.add_attribute(AttributeLoc::Param(0), sret_attribute);
         };
         match callsite_value.try_as_basic_value() {
@@ -1450,7 +1587,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     &cg_fn_type.return_cg_type,
                     returned_value,
                 );
-                Ok(Some(canonical_value))
+                match dst_value {
+                    Some(dst) => {
+                        let _stored =
+                            self.store_k1_value(&cg_fn_type.return_cg_type, dst, canonical_value);
+                        Ok(Some(dst.as_basic_value_enum()))
+                    }
+                    None => Ok(Some(canonical_value)),
+                }
             }
             ValueKind::Instruction(_instr) => {
                 if cg_fn_type.is_sret {
@@ -1477,11 +1621,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn find_libc_function_id(&self, ident: Ident) -> Option<FunctionId> {
-        self.k1
-            .functions
-            .iter_with_ids()
-            .find(|(_, f)| f.scope == self.k1.scopes.mem_scope_id && f.name == ident)
-            .map(|(id, _)| id)
+        self.k1.scopes.find_function(self.k1.scopes.libc_scope_id, ident)
     }
 
     // nocommit: Can I write these in C, or k1, or llvm, and load them?
@@ -1575,7 +1715,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&result)).unwrap()
             }
             BackendBuiltin::MemSet => {
-                // intern fn set(dst: Pointer, value: u8, count: uword): unit
+                // intern fn set(dst: ptr, value: u8, count: int): unit
                 let dst_arg = self.load_function_argument(function_id, 0);
                 let value_arg = self.load_function_argument(function_id, 1);
                 let count_arg = self.load_function_argument(function_id, 2);
@@ -1710,10 +1850,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::CompilerMessage => {
-                return failf!(
-                    function_span,
-                    "Internal Compiler Error: cannot codegen CompilerMessage builtin"
-                );
+                self.builder.build_return(Some(&self.builtin_types.unit_value)).unwrap()
             }
         };
         Ok(instr)
@@ -1721,63 +1858,44 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_block(
         &mut self,
-        mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         block_id: u32,
         block: &bc::CompiledBlock,
     ) -> TyperResult<BasicBlock<'ctx>> {
-        let current_function = self.get_insert_function().function_value;
-        let llvm_block = current_function.get_basic_block_iter().nth(block_id as usize).unwrap();
+        let llvm_block = self.get_block_id(block_id)?;
         self.builder.position_at_end(llvm_block);
         for inst in self.k1.bytecode.mem.getn(block.instrs) {
-            self.codegen_inst(mappings, *inst)?;
+            self.codegen_inst(inst_mappings, *inst)?;
         }
         Ok(llvm_block)
     }
 
-    fn codegen_value(
+    fn resolve_value(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         value: bc::Value,
     ) -> TyperResult<BasicValueEnum<'ctx>> {
+        //eprintln!("codegen_value {}", value);
         match value {
             bc::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
                 Some(v) => Ok(*v),
                 None => {
-                    return failf!(
+                    failf!(
                         self.debug.current_span(),
-                        "Whiffed inst id lookup: {}",
-                        inst_id.as_u32()
-                    );
+                        "Whiffed inst id lookup: {} {}",
+                        inst_id.as_u32(),
+                        bc::inst_to_string(self.k1, inst_id)
+                    )
                 }
             },
-            bc::Value::Global { t, id } => {
-                let Some(global_value) = self.globals.get(&id).copied() else {
-                    return failf!(
-                        self.debug.current_span(),
-                        "Whiffed global id lookup: {}",
-                        id.as_u32()
-                    );
-                };
-                let k1_global = self.k1.globals.get(id);
-                if k1_global.is_referencing {
-                    Ok(global_value.as_pointer_value().into())
-                } else {
-                    let cg_type = self.codegen_type(t);
-                    let loaded =
-                        self.load_k1_value(&cg_type, global_value.as_pointer_value(), "", false);
-                    Ok(loaded)
-                }
+            bc::Value::Global { id, .. } => {
+                let global_value = self.codegen_global(id)?;
+                Ok(global_value.as_pointer_value().as_basic_value_enum())
             }
             bc::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
             bc::Value::FunctionAddr(function_id) => {
-                let Some(cg_fun) = self.llvm_functions.get(&function_id) else {
-                    return failf!(
-                        self.debug.current_span(),
-                        "Whiffed function id lookup: {}",
-                        function_id.as_u32()
-                    );
-                };
-                Ok(cg_fun.function_value.as_global_value().as_pointer_value().into())
+                let function_value = self.declare_llvm_function(function_id)?;
+                Ok(function_value.as_global_value().as_pointer_value().into())
             }
             bc::Value::FnParam { index, .. } => {
                 let function = self.get_insert_function();
@@ -1816,6 +1934,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let bc = &self.k1.bytecode;
         let span = *bc.sources.get(inst_id);
         self.set_debug_location_from_span(span);
+        //eprintln!("codegen_inst {} {}", inst_id.as_u32(), bc::inst_to_string(self.k1, inst_id));
         let inst = *bc.instrs.get(inst_id);
         match inst {
             Inst::Data(data_inst) => {
@@ -1852,22 +1971,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 Ok(())
             }
-            Inst::Store { dst, value, t } => {
-                let dst_pointer = self.codegen_value(inst_mappings, dst)?.into_pointer_value();
-                let value = self.codegen_value(inst_mappings, value)?;
+            Inst::Store { dst, value, .. } => {
+                let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                let value = self.resolve_value(inst_mappings, value)?;
                 let _store = self.builder.build_store(dst_pointer, value).unwrap();
                 Ok(())
             }
             Inst::Load { t, src } => {
                 let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
-                let src_ptr = self.codegen_value(inst_mappings, src)?.into_pointer_value();
+                let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 inst_mappings.insert(inst_id, load);
                 Ok(())
             }
             Inst::Copy { dst, src, t, .. } => {
-                let dst_value = self.codegen_value(inst_mappings, dst)?;
-                let src_value = self.codegen_value(inst_mappings, src)?;
+                let dst_value = self.resolve_value(inst_mappings, dst)?;
+                let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.types.get_pt_layout(t);
                 let _memcpy = self.memcpy_layout(
                     dst_value.into_pointer_value(),
@@ -1877,16 +1996,26 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::StructOffset { struct_t, base, field_index, .. } => {
-                let cg_struct = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
-                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
-                let gep = self.build_struct_gep(base_ptr, &cg_struct, field_index, "");
+                let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
+
+                let struct_type_llvm = match self.codegen_type(PhysicalType::Agg(struct_t)) {
+                    CgType::StructType(cg_struct_type) => cg_struct_type.struct_type,
+                    CgType::EnumVariant(cg_enum_variant) => cg_enum_variant.variant_struct_type,
+                    _ => {
+                        return failf!(
+                            self.debug.current_span(),
+                            "Expected struct or enum variant type for StructOffset"
+                        );
+                    }
+                };
+                let gep = self.build_struct_gep(base_ptr, struct_type_llvm, field_index, "");
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
             Inst::ArrayOffset { element_t, base, element_index } => {
                 let cg_elem_ty = self.codegen_type(element_t);
-                let base_ptr = self.codegen_value(inst_mappings, base)?.into_pointer_value();
-                let index_int = self.codegen_value(inst_mappings, element_index)?.into_int_value();
+                let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
+                let index_int = self.resolve_value(inst_mappings, element_index)?.into_int_value();
                 let gep = unsafe {
                     self.builder
                         .build_gep(cg_elem_ty.rich_type(), base_ptr, &[index_int], "")
@@ -1902,15 +2031,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Jump(block_id) => {
-                let dst_block = self.get_nth_block(block_id as usize)?;
+                let dst_block = self.get_block_id(block_id)?;
                 let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
                 Ok(())
             }
             Inst::JumpIf { cond, cons, alt } => {
-                let cond_value = self.codegen_value(inst_mappings, cond)?;
+                let cond_value = self.resolve_value(inst_mappings, cond)?;
                 let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
-                let then_block = self.get_nth_block(cons as usize)?;
-                let else_block = self.get_nth_block(alt as usize)?;
+                let then_block = self.get_block_id(cons)?;
+                let else_block = self.get_block_id(alt)?;
                 let _branch = self
                     .builder
                     .build_conditional_branch(cond_value_i1, then_block, else_block)
@@ -1922,22 +2051,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::CameFrom { t, incomings } => {
-                let phi_ty = self.codegen_type(t);
-                let phi = self.builder.build_phi(phi_ty.rich_type(), "").unwrap();
-                for incoming in self.k1.bytecode.mem.getn(incomings) {
-                    let value = self.codegen_value(inst_mappings, incoming.value)?;
-                    let block = self.get_nth_block(incoming.from as usize)?;
-                    phi.add_incoming(&[(&value, block)])
-                }
+                let phi_ty = self.pt_canon_type(t);
+                let phi = self.builder.build_phi(phi_ty, "").unwrap();
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
             }
             Inst::Ret(value) => {
-                let ret_value = self.codegen_value(inst_mappings, value)?;
+                let ret_value = self.resolve_value(inst_mappings, value)?;
                 let current_fn = self.get_insert_function();
                 match current_fn.sret_pointer {
                     None => {
-                        let _return = self.builder.build_return(Some(&ret_value)).unwrap();
+                        let current_fn_ty = current_fn.function_type.clone();
+                        let ret_value_marshalled = self.marshal_abi_param_value(
+                            current_fn_ty.return_abi_mapping,
+                            &current_fn_ty.return_cg_type,
+                            ret_value,
+                            true,
+                        );
+                        let _return =
+                            self.builder.build_return(Some(&ret_value_marshalled)).unwrap();
                         Ok(())
                     }
                     Some(sret_ptr) => {
@@ -1949,7 +2081,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
             }
             Inst::BoolNegate { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let i1_input = self.bool_to_i1(input, "");
                 let not_i1 = self.builder.build_not(i1_input, "").unwrap();
                 let not_bool = self.i1_to_bool(not_i1, "");
@@ -1957,13 +2089,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::BitNot { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let not_input = self.builder.build_not(input, "").unwrap();
                 inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitCast { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?;
+                let input = self.resolve_value(inst_mappings, v)?;
 
                 // From agg to scalar -> handled by BC
                 // From scalar to agg -> handled by BC
@@ -1983,14 +2115,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
             }
             Inst::IntTrunc { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let trunc = self.builder.build_int_truncate(input, to_int_type, "").unwrap();
                 inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let signed = matches!(inst, bc::Inst::IntExtS { .. });
                 let ext =
@@ -1999,43 +2131,43 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::FloatTrunc { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let trunc = self.builder.build_float_trunc(input, to_float_type, "").unwrap();
                 inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
                 Ok(())
             }
             Inst::FloatExt { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let ext = self.builder.build_float_ext(input, to_float_type, "").unwrap();
                 inst_mappings.insert(inst_id, ext.as_basic_value_enum());
                 Ok(())
             }
             Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let int = self.builder.build_float_to_unsigned_int(input, to_int_type, "").unwrap();
                 inst_mappings.insert(inst_id, int.as_basic_value_enum());
                 Ok(())
             }
             Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_float_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let int = self.builder.build_float_to_signed_int(input, to_int_type, "").unwrap();
                 inst_mappings.insert(inst_id, int.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntToFloatUnsigned { v, from, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+            Inst::IntToFloatUnsigned { v, from: _, to } => {
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let float =
                     self.builder.build_unsigned_int_to_float(input, to_float_type, "").unwrap();
                 inst_mappings.insert(inst_id, float.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntToFloatSigned { v, from, to } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+            Inst::IntToFloatSigned { v, from: _, to } => {
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let float =
                     self.builder.build_signed_int_to_float(input, to_float_type, "").unwrap();
@@ -2043,7 +2175,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::PtrToWord { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_pointer_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_pointer_value();
                 let word_int = self
                     .builder
                     .build_ptr_to_int(input, self.builtin_types.ptr_sized_int, "")
@@ -2052,64 +2184,64 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::WordToPtr { v } => {
-                let input = self.codegen_value(inst_mappings, v)?.into_int_value();
+                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let ptr_value =
                     self.builder.build_int_to_ptr(input, self.builtin_types.ptr, "").unwrap();
                 inst_mappings.insert(inst_id, ptr_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntAdd { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntAdd { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 // nocommit: decide if overflow traps or not, signed and unsigned
                 //self.builder.build_int_nsw_add
                 let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, sum.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntSub { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntSub { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let diff = self.builder.build_int_sub(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, diff.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntMul { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntMul { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let prod = self.builder.build_int_mul(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, prod.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntDivUnsigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntDivUnsigned { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntDivSigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntDivSigned { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntRemUnsigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntRemUnsigned { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntRemSigned { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+            Inst::IntRemSigned { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntCmp { lhs, rhs, pred, width } => {
+            Inst::IntCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
                     bc::IntCmpPred::Eq => IntPredicate::EQ,
                     bc::IntCmpPred::Slt => IntPredicate::SLT,
@@ -2121,21 +2253,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     bc::IntCmpPred::Ugt => IntPredicate::UGT,
                     bc::IntCmpPred::Uge => IntPredicate::UGE,
                 };
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let cmp =
                     self.builder.build_int_compare(llvm_pred, lhs_value, rhs_value, "").unwrap();
                 let bool_value = self.i1_to_bool(cmp, "");
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::FloatAdd { lhs, rhs, width }
-            | Inst::FloatSub { lhs, rhs, width }
-            | Inst::FloatMul { lhs, rhs, width }
-            | Inst::FloatDiv { lhs, rhs, width }
-            | Inst::FloatRem { lhs, rhs, width } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_float_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+            Inst::FloatAdd { lhs, rhs, .. }
+            | Inst::FloatSub { lhs, rhs, .. }
+            | Inst::FloatMul { lhs, rhs, .. }
+            | Inst::FloatDiv { lhs, rhs, .. }
+            | Inst::FloatRem { lhs, rhs, .. } => {
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_float_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_float_value();
                 let result = match inst {
                     Inst::FloatAdd { .. } => {
                         self.builder.build_float_add(lhs_value, rhs_value, "").unwrap()
@@ -2157,7 +2289,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
-            Inst::FloatCmp { lhs, rhs, pred, width } => {
+            Inst::FloatCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
                     bc::FloatCmpPred::Eq => FloatPredicate::OEQ,
                     bc::FloatCmpPred::Lt => FloatPredicate::OLT,
@@ -2165,60 +2297,76 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     bc::FloatCmpPred::Gt => FloatPredicate::OGT,
                     bc::FloatCmpPred::Ge => FloatPredicate::OGE,
                 };
-                let lhs = self.codegen_value(inst_mappings, lhs)?.into_float_value();
-                let rhs = self.codegen_value(inst_mappings, rhs)?.into_float_value();
+                let lhs = self.resolve_value(inst_mappings, lhs)?.into_float_value();
+                let rhs = self.resolve_value(inst_mappings, rhs)?.into_float_value();
                 let cmp = self.builder.build_float_compare(llvm_pred, lhs, rhs, "").unwrap();
                 let bool_value = self.i1_to_bool(cmp, "");
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitAnd { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let and = self.builder.build_and(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, and.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitOr { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let or = self.builder.build_or(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, or.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitXor { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let xor = self.builder.build_xor(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, xor.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitShiftLeft { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
-                let shl = self.builder.build_left_shift(lhs_value, rhs_value, "").unwrap();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
+                let rhs_casted = if lhs_value.get_type().get_bit_width()
+                    != rhs_value.get_type().get_bit_width()
+                {
+                    // rhs is always a u32
+                    self.builder
+                        .build_int_cast_sign_flag(
+                            rhs_value,
+                            lhs_value.get_type(),
+                            false,
+                            "shift_magnitude_cast",
+                        )
+                        .unwrap()
+                } else {
+                    rhs_value
+                };
+
+                let shl = self.builder.build_left_shift(lhs_value, rhs_casted, "").unwrap();
                 inst_mappings.insert(inst_id, shl.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitUnsignedShiftRight { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let lshr = self.builder.build_right_shift(lhs_value, rhs_value, false, "").unwrap();
                 inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitSignedShiftRight { lhs, rhs, .. } => {
-                let lhs_value = self.codegen_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.codegen_value(inst_mappings, rhs)?.into_int_value();
+                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
                 let ashr = self.builder.build_right_shift(lhs_value, rhs_value, true, "").unwrap();
                 inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
                 Ok(())
             }
             Inst::BakeStaticValue { .. } => {
-                return failf!(
+                failf!(
                     self.debug.current_span(),
                     "BakeStaticValue is only available to compile-time code"
-                );
+                )
             }
         }
     }
@@ -2307,6 +2455,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let bytecode_fn = *bytecode_fn;
 
         let llvm_function_type = self.make_cg_function_type(&bytecode_fn.fn_type)?;
+        eprintln!(
+            "-> res (is_sret={}) {}",
+            llvm_function_type.is_sret, llvm_function_type.llvm_function_type
+        );
 
         let di_types: SV8<_> = self
             .mem
@@ -2323,7 +2475,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let is_sret = llvm_function_type.is_sret;
 
         let sret_attribute = if is_sret {
-            let struct_type = self.rich_repr_type(&llvm_function_type.return_cg_type);
+            let struct_type = llvm_function_type.return_cg_type.rich_type();
             let sret_attribute = self.make_sret_attribute(struct_type.as_any_type_enum());
             let align_attribute = self.make_align_attribute(
                 llvm_function_type.return_cg_type.rich_repr_layout().align as u64,
@@ -2367,8 +2519,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     if *byval_attr {
                         let k1_type =
                             self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                        let byval_attribute = self
-                            .make_byval_attribute(self.rich_repr_type(k1_type).as_any_type_enum());
+                        let byval_attribute =
+                            self.make_byval_attribute(k1_type.rich_type().as_any_type_enum());
                         function_value
                             .add_attribute(AttributeLoc::Param(i as u32), byval_attribute);
                     }
@@ -2386,9 +2538,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.llvm_functions.insert(
             function_id,
             CgFunction {
+                param_values: Vec::with_capacity(llvm_function_type.param_k1_types.len() as usize),
                 function_type: llvm_function_type,
                 function_value,
-                param_values: Vec::with_capacity(4),
                 sret_pointer,
                 last_alloca_instr: None,
                 instruction_count: 0,
@@ -2433,8 +2585,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             CallConv::InternalK1 => {
                                 if size_bytes <= 8 {
                                     AbiParamMapping::ScalarInRegister
-                                } else if size_bytes <= 16 {
-                                    AbiParamMapping::StructByPtrNoCopy
                                 } else {
                                     AbiParamMapping::StructByPtrNoCopy
                                 }
@@ -2608,7 +2758,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
-        eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
+        //eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
         let typed_function_params = typed_function.params;
@@ -2635,8 +2785,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             codegened_function.debug_file,
         );
 
-        let entry_block = self.ctx.append_basic_block(function_value, "entry");
-        self.builder.position_at_end(entry_block);
+        let prelude_block = self.ctx.append_basic_block(function_value, "prelude");
+        self.builder.position_at_end(prelude_block);
         for (i, param) in function_value.get_param_iter().enumerate() {
             let is_sret_param = i == 0 && is_sret;
             if is_sret_param {
@@ -2666,14 +2816,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 0,
             );
 
-            self.llvm_functions.get_mut(&function_id).unwrap().param_values[logical_param_index] =
-                mapped_value;
+            let ps = &mut self.llvm_functions.get_mut(&function_id).unwrap().param_values;
+            //eprintln!("pushing param value {}: {}", ps.len(), mapped_value);
+            ps.push(mapped_value);
             self.debug.insert_dbg_value_at_end(
                 mapped_value,
                 di_local_variable,
                 None,
                 self.get_debug_location(),
-                entry_block,
+                prelude_block,
             );
         }
 
@@ -2686,7 +2837,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.codegen_builtin_function_body(builtin_kind, function_id)?;
             }
             None => {
-                self.codegen_unit_body(bc_unit.blocks);
+                //eprintln!(
+                //    "codegen unit {}",
+                //    bc::compiled_unit_to_string(
+                //        self.k1,
+                //        CompilableUnitId::Function(function_id),
+                //        true
+                //    )
+                //);
+                self.codegen_unit_body(bc_unit.blocks)?;
             }
         };
         self.debug.pop_scope();
@@ -2704,9 +2863,31 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         // nocommit: Re-use hashmap allocation
-        let mut mappings = FxHashMap::new();
+        let mut inst_mappings = FxHashMap::new();
         for (index, block) in self.k1.bytecode.mem.getn(blocks).iter().enumerate() {
-            self.codegen_block(&mut mappings, index as u32, block)?;
+            if index == 0 {
+                let entry = self.get_block_id(0)?;
+                self.builder.build_unconditional_branch(entry).unwrap();
+            }
+            self.codegen_block(&mut inst_mappings, index as u32, block)?;
+        }
+
+        // Fulfill phis later, since they're uniquely out-of-order
+        // Is that true? Could for example simple add or store reference an inst from another
+        // block? allocas are hoisted... so, yeah, but phis can't be
+        for block in self.k1.bytecode.mem.getn(blocks) {
+            for inst in self.k1.bytecode.mem.getn(block.instrs) {
+                if let Inst::CameFrom { incomings, .. } = self.k1.bytecode.instrs.get(*inst) {
+                    let phi_inst = inst_mappings.get(inst).unwrap();
+                    // nocommit check if Phi for safety
+                    let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
+                    for incoming in self.k1.bytecode.mem.getn(*incomings) {
+                        let value = self.resolve_value(&mut inst_mappings, incoming.value)?;
+                        let block = self.get_block_id(incoming.from)?;
+                        phi.add_incoming(&[(&value, block)])
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -2743,108 +2924,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_float_ty = cg_ty.rich_type().into_float_type();
         let llvm_value = llvm_float_ty.const_float(float.as_f64());
         Ok(llvm_value.as_basic_value_enum())
-    }
-
-    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<()> {
-        let global = self.k1.globals.get(global_id).clone();
-        let initial_static_value_id = global.initial_value.unwrap();
-        let initializer_basic_value =
-            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
-
-        let variable = self.k1.variables.get(global.variable_id);
-
-        let maybe_reference_type = self.k1.types.get(global.ty).as_reference();
-
-        let layout = self.k1.types.get_layout(global.ty);
-        let llvm_linkage = match global.is_exported {
-            false => LlvmLinkage::Private,
-            true => LlvmLinkage::External,
-        };
-        // For now let's just use the name, eventually we'll ask the user for a link name
-        let name = if global.is_exported {
-            self.k1.ident_str(variable.name).to_string()
-        } else {
-            self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
-        };
-        let llvm_global = self.make_global_from_value(
-            initializer_basic_value,
-            layout.align,
-            &name,
-            global.is_constant,
-            llvm_linkage,
-        );
-        if self.k1.program_settings.multithreaded {
-            if global.is_tls {
-                llvm_global.set_thread_local(true);
-                let mode = if self.k1.program_settings.executable {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    // We don't yet support dynamic library as a target
-                    // So even libraries can use InitialExec
-                    ThreadLocalMode::InitialExecTLSModel
-                };
-                llvm_global.set_thread_local_mode(Some(mode));
-            }
-        }
-        self.globals.insert(global_id, llvm_global);
-        Ok(())
-    }
-
-    pub fn codegen_program(&mut self) -> TyperResult<()> {
-        let start = std::time::Instant::now();
-
-        let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
-
-        // Guarantee code generation of exported globals
-        for global_id in &global_ids {
-            let g = self.k1.globals.get(*global_id);
-            if g.is_exported {
-                self.codegen_global(*global_id)?;
-            }
-        }
-
-        // TODO: Codegen the exported functions as well as the called ones
-        // for (id, function) in self.module.function_iter() {
-        //     if function.linkage.is_exported() {
-        //         self.codegen_function_signature(id)?;
-        //     }
-        // }
-
-        let Some(main_function_id) = self.k1.get_main_function_id() else {
-            return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
-        };
-        let function_value = self.declare_llvm_function(main_function_id)?;
-
-        let mut pending_buffer: Vec<FunctionId> =
-            Vec::with_capacity(self.functions_pending_body_compilation.len());
-        while !self.functions_pending_body_compilation.is_empty() {
-            pending_buffer.extend(&self.functions_pending_body_compilation);
-            self.functions_pending_body_compilation.clear();
-
-            for id in &pending_buffer {
-                self.codegen_function_body(*id)?;
-            }
-
-            pending_buffer.clear();
-        }
-
-        self.builder.unset_current_debug_location();
-        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
-        let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
-        self.builder.position_at_end(entry_block);
-        let params: Vec<BasicMetadataValueEnum<'ctx>> =
-            entrypoint.get_params().iter().map(|p| (*p).into()).collect();
-        let res = self
-            .builder
-            .build_call(function_value, &params, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic()
-            .unwrap();
-        self.builder.build_return(Some(&res)).unwrap();
-
-        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
-        Ok(())
     }
 
     fn codegen_static_value_as_const(
@@ -3295,12 +3374,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
                 .expect("Failed to create .ll file");
             std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+            anyhow::anyhow!("Module '{}' failed validation NEW: {}", self.name(), err.to_string_lossy())
         })?;
 
         if optimize {
             self.llvm_module
-                .run_passes("default<O3>", &self.llvm_machine, PassBuilderOptions::create())
+                .run_passes("default<O2>", &self.llvm_machine, PassBuilderOptions::create())
                 .unwrap();
         } else {
             // self.llvm_module
@@ -3313,7 +3392,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // self.llvm_machine.add_analysis_passes(&module_pass_manager);
         // module_pass_manager.run_on(&self.llvm_module);
 
-        info!("codegen phase 'optimize' took {}ms", start.elapsed().as_millis());
+        info!("codegen_new phase 'optimize' took {}ms", start.elapsed().as_millis());
         //for (_, function) in self.llvm_functions.iter_mut() {
         //    let new_count = Codegen::count_function_instructions(function.function_value);
         //    function.instruction_count = new_count;

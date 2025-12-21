@@ -24,6 +24,7 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 use log::debug;
 use std::fmt::Write;
+use std::io::stderr;
 
 macro_rules! b_ice {
     ($b:expr, $($format_args:expr),*) => {
@@ -188,14 +189,29 @@ pub struct CameFromCase {
 #[derive(Clone, Copy)]
 pub enum Value {
     Inst(InstId),
-    Global { t: PhysicalType, id: TypedGlobalId },
-    StaticValue { t: PhysicalType, id: StaticValueId },
+    /// `Global` is always a storage location, regardless
+    /// of the `k1` global declaration kind (referencing or not!)
+    /// This greatly simplifies downstream code
+    Global {
+        t: PhysicalType,
+        id: TypedGlobalId,
+    },
+    StaticValue {
+        t: PhysicalType,
+        id: StaticValueId,
+    },
     FunctionAddr(FunctionId),
-    FnParam { t: PhysicalType, index: u32 },
+    FnParam {
+        t: PhysicalType,
+        index: u32,
+    },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
-    Imm32 { t: ScalarType, data: u32 },
+    Imm32 {
+        t: ScalarType,
+        data: u32,
+    },
     PtrZero,
 }
 
@@ -674,7 +690,7 @@ impl InstKind {
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
     let start = k1.timing.clock.raw();
     if k1.bytecode.functions.get(function_id).is_some() {
-        return Ok(())
+        return Ok(());
     }
 
     let mut b = Builder::new(k1);
@@ -704,10 +720,6 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
         compile_block_stmts(&mut b, None, body_block)?;
-    } else {
-        if !f.linkage.is_external() {
-            return failf!(fn_span, "Function has no body to compile");
-        }
     };
 
     let unit_id = CompilableUnitId::Function(function_id);
@@ -1473,11 +1485,11 @@ fn compile_expr(
                                             Some(dst) => dst,
                                         };
                                         let zero_u8 = Value::byte(0);
-                                        // intern fn set(dst: Pointer, value: u8, count: uword): unit
-                                        let count = Value::Imm32 {
-                                            t: ScalarType::U8,
-                                            data: pt_layout.size,
-                                        };
+                                        // intern fn set(dst: ptr, value: u8, count: size): unit
+                                        let count = b.make_int_value(
+                                            &TypedIntValue::I64(pt_layout.size as i64),
+                                            "memset size",
+                                        );
                                         let memset_args =
                                             b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
                                         let Some(memset_function_id) = b.k1.scopes.find_function(
@@ -1659,7 +1671,14 @@ fn compile_expr(
                     Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
-                        args.push(lambda_env);
+                        let env_pt = b.get_physical_type(b.k1.exprs.get_type(*lambda_value_expr));
+                        //b.k1.write_location(&mut stderr(), b.cur_span);
+                        // TODO: Lambda environments really need to go on the arena
+                        // Here is where we literally put the env on the stack, even if it contains
+                        // no stack-volatile things!
+                        let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
+                        store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
+                        args.push(env_ptr);
                         BcCallee::Direct(*function_id)
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),

@@ -984,6 +984,7 @@ impl PhysicalType {
 pub struct StructField {
     pub offset: u32,
     pub field_t: PhysicalType,
+    // nocommit: add name to physical struct field, to decrease backend dependence on this layer
 }
 
 #[derive(Clone, Copy)]

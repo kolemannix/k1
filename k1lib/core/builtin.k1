@@ -459,12 +459,12 @@ ns mem {
   intern fn copy(
     dst: ptr,
     src: ptr,
-    count: int
+    count: size
   ): unit
   intern fn set(
     dst: ptr,
     value: u8,
-    count: int
+    count: size
   ): unit
   intern fn equals(p1: ptr, p2: ptr, size: int): bool
 

@@ -23,7 +23,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine, TargetTriple};
 use inkwell::types::{
     AnyType, AnyTypeEnum, ArrayType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
-    FunctionType as LlvmFunctionType, IntType, PointerType, StructType, VoidType,
+    FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
@@ -227,7 +227,6 @@ struct LlvmReferenceType<'ctx> {
 #[derive(Copy, Clone)]
 struct LlvmVoidType<'ctx> {
     di_type: DIType<'ctx>,
-    void_type: VoidType<'ctx>,
 }
 
 #[derive(Copy, Clone)]
@@ -1387,7 +1386,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                     .create_basic_type("never", 0, Self::DW_ATE_CHAR, 0)
                     .unwrap()
                     .as_type();
-                Ok(LlvmVoidType { void_type: self.ctx.void_type(), di_type }.into())
+                Ok(LlvmVoidType { di_type }.into())
             }
             Type::RecursiveReference(rr) => {
                 if depth == 0 {
@@ -1500,7 +1499,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         let return_k1_type = self.codegen_type(function_type.return_type)?;
         let return_type_abi_mapping =
             self.get_abi_param_type(function_type.abi_mode, &return_k1_type, true);
-        // eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
+        eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
         let return_mapped_type = if return_k1_type.is_void() {
             None
         } else {
@@ -1515,8 +1514,9 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             AbiParamMapping::StructByPtrNoCopy => true,
         };
 
-        // The logical parameters closest to K1 model
         let param_count = function_type.physical_params.len() + if is_sret { 1 } else { 0 };
+
+        // The logical parameters closest to K1 model
         let mut param_types: MList<K1LlvmType<'ctx>, _> = self.mem.new_list(param_count);
         // Foreach k1 param above, describe how to map it to physical LLVM params
         let mut param_abi_mappings: MList<AbiParamMapping, _> = self.mem.new_list(param_count);
@@ -1538,12 +1538,12 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             param_abi_mappings.push(abi_mapping);
             param_types.push(param_type);
             let mapped_type = self.mapped_abi_type(&param_type, abi_mapping);
-            // eprintln!(
-            //     "abi mapping for {} is {:?}. Mapped type: {}",
-            //     self.rich_repr_type(&param_type),
-            //     abi_mapping,
-            //     mapped_type
-            // );
+            eprintln!(
+                "abi mapping for {} is {:?}. Mapped type: {}",
+                self.rich_repr_type(&param_type),
+                abi_mapping,
+                mapped_type
+            );
             function_final_params.push(mapped_type.into());
         }
 
@@ -3138,13 +3138,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         } else {
             None
         };
+        let is_lambda = call.callee.is_lambda();
         for (index, arg_expr) in call.args.iter().enumerate() {
-            let param_k1_ty = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, index);
-            let abi_mapping = *self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, index);
+            let logical_index = if is_lambda { index + 1 } else { index };
+            let param_k1_ty = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, logical_index);
+            let abi_mapping = *self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, logical_index);
             let arg_value = self.codegen_expr_basic_value(*arg_expr)?;
             let value_marshalled =
                 self.marshal_abi_param_value(abi_mapping, &param_k1_ty, arg_value, false);
-            trace!("codegen function call arg type: {}", value_marshalled);
+            eprintln!("codegen function call arg type: {}", value_marshalled);
             args.push(value_marshalled.into())
         }
 
@@ -3672,20 +3674,15 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap()
             }
 
-            IntrinsicOperation::TypeSchema | IntrinsicOperation::TypeName => {
+            IntrinsicOperation::TypeSchema => {
                 // intern fn typeSchema(id: u64): TypeSchema
                 let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
-                let is_type_name = intrinsic_type == IntrinsicOperation::TypeName;
-                let return_llvm_type = if is_type_name {
-                    // typeName returns string
-                    self.codegen_type(STRING_TYPE_ID)?
-                } else {
-                    // typeSchema returns TypeSchema
-                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?
-                };
+                let return_llvm_type =
+                    self.codegen_type(self.k1.types.builtins.types_type_schema.unwrap())?;
                 let entry_block = self.builder.get_insert_block().unwrap();
 
                 // typeSchema and typeName return a struct, so we have to do sret shenanigans
+                // string is no longer sret, since its smol (16 bytes)
                 let sret_ptr = self.llvm_functions.get(&function_id).unwrap().sret_pointer.unwrap();
 
                 let else_block = self.append_basic_block("miss");
@@ -3697,71 +3694,74 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
 
                 let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(self.k1.type_schemas.len());
-                if is_type_name {
-                    for (type_id, static_string_id) in self
-                        .k1
-                        .type_names
-                        .iter()
-                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                    {
-                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
-                        {
-                            // No point re-ifying types that don't exist at runtime
-                            // like type parameters
-                            continue;
-                        }
-                        let my_block =
-                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                        self.builder.position_at_end(my_block);
-                        let type_id_int_value =
-                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-
-                        let value = {
-                            let StaticValue::String(string_id) =
-                                self.k1.static_values.get(*static_string_id)
-                            else {
-                                panic!("typename should be a string")
-                            };
-                            let global_value = self.codegen_string_id_to_global(
-                                *string_id,
-                                Some(&format!("typename_{}\0", type_id.as_u32())),
-                            )?;
-                            global_value.as_pointer_value().as_basic_value_enum()
-                        };
-                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
-                        self.builder.build_unconditional_branch(finish_block).unwrap();
-                        cases.push((type_id_int_value, my_block));
+                for (type_id, schema_value_id) in self
+                    .k1
+                    .type_schemas
+                    .iter()
+                    .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                {
+                    if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract() {
+                        // No point re-ifying types that don't exist at runtime
+                        // like type parameters
+                        continue;
                     }
-                } else {
-                    for (type_id, schema_value_id) in self
-                        .k1
-                        .type_schemas
-                        .iter()
-                        .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                    {
-                        if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract()
-                        {
-                            // No point re-ifying types that don't exist at runtime
-                            // like type parameters
-                            continue;
-                        }
-                        let my_block =
-                            self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                        self.builder.position_at_end(my_block);
-                        let type_id_int_value =
-                            self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+                    let my_block =
+                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                    self.builder.position_at_end(my_block);
+                    let type_id_int_value =
+                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
 
-                        let value = self.codegen_static_value_canonical(*schema_value_id)?;
-                        self.store_k1_value(&return_llvm_type, sret_ptr, value);
-                        self.builder.build_unconditional_branch(finish_block).unwrap();
-                        cases.push((type_id_int_value, my_block));
-                    }
+                    let value = self.codegen_static_value_canonical(*schema_value_id)?;
+                    self.store_k1_value(&return_llvm_type, sret_ptr, value);
+                    self.builder.build_unconditional_branch(finish_block).unwrap();
+                    cases.push((type_id_int_value, my_block));
                 }
                 self.builder.position_at_end(entry_block);
                 let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
 
                 self.builder.position_at_end(finish_block);
                 self.builder.build_return(None).unwrap()
+            }
+            IntrinsicOperation::TypeName => {
+                // intern fn typeName(id: u64): string
+                let type_id_arg = self.load_function_argument(function, 0)?.into_int_value();
+                let llvm_fn = self.llvm_functions.get(&function_id).unwrap();
+                let return_abi = llvm_fn.function_type.return_abi_mapping;
+                let return_ty = llvm_fn.function_type.return_k1_type.clone();
+                let entry_block = self.builder.get_insert_block().unwrap();
+
+                let else_block = self.append_basic_block("miss");
+                self.builder.position_at_end(else_block);
+                // TODO: Proper crash
+                self.builder.build_unreachable().unwrap();
+
+                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+                    Vec::with_capacity(self.k1.type_schemas.len());
+                for (type_id, static_string_id) in self
+                    .k1
+                    .type_names
+                    .iter()
+                    .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
+                {
+                    if self.k1.types.get_contained_type_variable_counts(*type_id).is_abstract() {
+                        // No point re-ifying types that don't exist at runtime
+                        // like type parameters
+                        continue;
+                    }
+                    let my_block =
+                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
+                    self.builder.position_at_end(my_block);
+                    let type_id_int_value =
+                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
+
+                    let value = self.codegen_static_value_canonical(*static_string_id)?;
+                    let value_marshalled = self.marshal_abi_param_value(return_abi, &return_ty, value, true);
+                    self.builder.build_return(Some(&value_marshalled)).unwrap();
+                    cases.push((type_id_int_value, my_block));
+                }
+                self.builder.position_at_end(entry_block);
+                let switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
+                switch
             }
             _ => unreachable!("Unexpected non-inline intrinsic function"),
         };
@@ -3989,7 +3989,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        debug!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
+        eprintln!("codegen function signature\n{}", self.k1.function_id_to_string(function_id, false));
 
         let typed_function = self.k1.get_function(function_id);
         let typed_function_params = typed_function.params;
@@ -4109,7 +4109,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             types::AbiMode::Native => match self.k1.ast.config.target {
                 crate::compiler::Target::LinuxIntel64 => CallConv::AMD64,
                 crate::compiler::Target::MacOsArm64 => CallConv::ARM64,
-                crate::compiler::Target::Wasm64 => CallConv::ARM64,
+                crate::compiler::Target::Wasm64 => CallConv::InternalK1,
             },
         };
 
@@ -4137,7 +4137,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         if size <= 8 {
                             AbiParamMapping::ScalarInRegister
                         } else if size <= 16 {
-                            AbiParamMapping::StructByPtrNoCopy
+                            AbiParamMapping::StructByIntPairArray
                         } else {
                             AbiParamMapping::StructByPtrNoCopy
                         }

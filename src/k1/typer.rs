@@ -1040,6 +1040,16 @@ impl Callee {
             Callee::DynamicAbstract { .. } => None,
         }
     }
+
+    pub fn is_lambda(&self) -> bool {
+        match self {
+            Callee::StaticLambda { .. } | Callee::DynamicLambda(_) => true,
+            Callee::StaticFunction(_) => false,
+            Callee::Abstract { .. } => false,
+            Callee::DynamicFunction { .. } => false,
+            Callee::DynamicAbstract { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -14740,7 +14750,8 @@ impl TypedProgram {
         if is_sys {
             self.scopes.sys_scope_id = ns_scope_id
         }
-        let is_libc = parent_scope_id == self.scopes.libc_scope_id && name == self.ast.idents.b.libc;
+        let is_libc =
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.libc;
         if is_libc {
             self.scopes.libc_scope_id = ns_scope_id
         }

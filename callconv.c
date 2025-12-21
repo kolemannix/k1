@@ -5,6 +5,7 @@ typedef struct { int i; int j; float k; } ClassesEz;
 typedef struct { int i; int j; char k; } ClassesEz2;
 typedef struct { char i[7]; short j; float k; } Classes;
 typedef struct { int a; int b; union { double x; double y; int z; } c; } Union1;
+typedef struct { long *a; long *b; } DoublePtr;
 
 void takes_small(Small2 foo1) {
   return;
@@ -31,5 +32,9 @@ ClassesEz return_ebpair_mixed() {
 
 void take_big1(Big1 big1) {
   big1.i[3] = 77;
+  return;
+}
+
+void take_ptrs(DoublePtr dp) {
   return;
 }
