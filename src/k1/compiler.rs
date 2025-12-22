@@ -520,21 +520,21 @@ pub fn codegen_module<'ctx, 'module>(
     typed_module: &'module mut TypedProgram,
     out_dir: &Path,
     do_write_executable: bool,
-) -> Result<Codegen<'ctx, 'module>> {
-    //let mut codegen2 = Cg::create(ctx, typed_module, args.debug, args.optimize);
-    //let mut module_name = codegen2.name().to_string();
-    //module_name.push_str("_new");
-    //let module_name_path = PathBuf::from(&module_name);
-    //codegen2.codegen_program()?;
-    //codegen2.optimize_verify(true)?;
-    //let llvm_text = codegen2.output_llvm_ir_text();
-    //let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
-    //    .expect("Failed to create .ll file");
-    //f.write_all(llvm_text.as_bytes()).unwrap();
-    //drop(codegen2);
+) -> Result<Cg<'ctx, 'module>> {
+    // let mut codegen2 = Cg::create(ctx, typed_module, args.debug, args.optimize);
+    // let mut module_name = codegen2.name().to_string();
+    // module_name.push_str("_new");
+    // let module_name_path = PathBuf::from(&module_name);
+    // codegen2.codegen_program()?;
+    // codegen2.optimize_verify(true)?;
+    // let llvm_text = codegen2.output_llvm_ir_text();
+    // let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
+    //     .expect("Failed to create .ll file");
+    // f.write_all(llvm_text.as_bytes()).unwrap();
+    // drop(codegen2);
 
-    let mut codegen = Codegen::create(ctx, typed_module, args.debug, args.optimize);
-    // let mut codegen = Cg::create(ctx, typed_module, args.debug, args.optimize);
+    // let mut codegen = Codegen::create(ctx, typed_module, args.debug, args.optimize);
+    let mut codegen = Cg::create(ctx, typed_module, args.debug, args.optimize);
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_program() {

@@ -24,7 +24,6 @@ use fxhash::FxHashMap;
 use itertools::Itertools;
 use log::debug;
 use std::fmt::Write;
-use std::io::stderr;
 
 macro_rules! b_ice {
     ($b:expr, $($format_args:expr),*) => {
@@ -3167,7 +3166,7 @@ pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::StaticValue { id, .. } => write!(w, "static{}", id.as_u32()),
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
-        Value::Imm32 { t: _, data } => write!(w, "data32({})", data),
+        Value::Imm32 { t, data } => write!(w, "data32({}, {})", t, data),
         Value::PtrZero => write!(w, "ptr0"),
     }
 }

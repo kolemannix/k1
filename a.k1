@@ -1,15 +1,4 @@
 fn main(): i32  {
-  let foo = 10;
-  if foo is f {
-    ();
-    assert(foo == 10);
-  };
-
-  let bar = { x: 1, y: "asdf" };
-  if bar is b {
-    ();
-    assert(bar.x == 1)
-  };
+  assertEquals(-1 % 2, -1);
   0
-
 }

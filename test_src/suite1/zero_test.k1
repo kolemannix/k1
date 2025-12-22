@@ -8,15 +8,15 @@ fn testBitcast(): unit {
   assertEquals(y, 0xffff_ffff);
 
   // From agg to agg
-  // nocommit
+  // nocommit bitcast fixes and tests
   // let s: string = "foo";
   // let sWrap = { inner: s };
   // let sAgain: string = mem/bitcast(sWrap);
   // assertEquals(s, sAgain);
 
   // From agg to scalar
-  //let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
-  //let scalar = mem/bitcast[_, i64](p2);
+  // let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
+  // let scalar = mem/bitcast[_, i64](p2);
 
   // From scalar to scalar
   //let f: f32 = -3.14159;

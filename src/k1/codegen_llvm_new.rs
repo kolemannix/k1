@@ -381,8 +381,6 @@ struct DebugContext<'ctx> {
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
     debug_stack: Vec<DebugStackEntry<'ctx>>,
-    #[allow(unused)]
-    scopes: FxHashMap<ScopeId, DIScope<'ctx>>,
     strip_debug: bool,
 }
 
@@ -529,7 +527,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
-            scopes: FxHashMap::new(),
             strip_debug: !debug,
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
@@ -1062,12 +1059,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             param_abi_mappings.push(abi_mapping);
             param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type(*p, abi_mapping);
-            eprintln!(
-                "abi mapping for {} is {:?}. Mapped type: {}",
-                param_cg_type.rich_type(),
-                abi_mapping,
-                mapped_type
-            );
+            //eprintln!(
+            //    "abi mapping for {} is {:?}. Mapped type: {}",
+            //    param_cg_type.rich_type(),
+            //    abi_mapping,
+            //    mapped_type
+            //);
             function_final_params.push(mapped_type.into());
         }
 
@@ -1497,6 +1494,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         call_id: bc::BcCallId,
+        span: SpanId,
     ) -> TyperResult<Option<BasicValueEnum<'ctx>>> {
         let call = self.k1.bytecode.calls.get(call_id);
         let callee = call.callee;
@@ -1561,12 +1559,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let callsite_value = match llvm_callee {
             CallKind::Direct(function_id) => {
                 let function_value = self.declare_llvm_function(function_id)?;
-                //self.set_debug_location_from_span(call.span);
+                self.set_debug_location_from_span(span);
 
                 self.builder.build_call(function_value, &args, "").unwrap()
             }
             CallKind::Indirect(fn_ptr) => {
-                //self.set_debug_location_from_span(call.span);
+                self.set_debug_location_from_span(span);
                 let call_site_value = self
                     .builder
                     .build_indirect_call(cg_fn_type.llvm_function_type, fn_ptr, &args, "")
@@ -1908,10 +1906,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
                     ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
                     ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
-                    ScalarType::I8 => self.ctx.i8_type().const_int(data as u64, true).into(),
-                    ScalarType::I16 => self.ctx.i16_type().const_int(data as u64, true).into(),
-                    ScalarType::I32 => self.ctx.i32_type().const_int(data as u64, true).into(),
-                    ScalarType::I64 => self.ctx.i64_type().const_int(data as u64, true).into(),
+                    ScalarType::I8 => {
+                        self.ctx.i8_type().const_int(data as i32 as i64 as u64, true).into()
+                    }
+                    ScalarType::I16 => {
+                        self.ctx.i16_type().const_int(data as i32 as i64 as u64, true).into()
+                    }
+                    ScalarType::I32 => {
+                        self.ctx.i32_type().const_int(data as i32 as i64 as u64, true).into()
+                    }
+                    ScalarType::I64 => {
+                        self.ctx.i64_type().const_int(data as i32 as i64 as u64, true).into()
+                    }
                     ScalarType::F32 => {
                         self.ctx.f32_type().const_float(f32::from_bits(data) as f64).into()
                     }
@@ -2025,7 +2031,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Call { id } => {
-                if let Some(return_value) = self.codegen_function_call(inst_mappings, id)? {
+                if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
                 }
                 Ok(())
@@ -2377,6 +2383,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_span: SpanId,
         return_type: DIType<'ctx>,
         param_debug_types: &[DIType<'ctx>],
+        is_definition: bool,
     ) -> TyperResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
         let span_id = function_span;
         let function_file_id = self.k1.ast.spans.get(span_id).file_id;
@@ -2390,15 +2397,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             param_debug_types,
             0,
         );
+        let parent_scope = function_file.as_debug_info_scope();
         let di_subprogram = self.debug.debug_builder.create_function(
-            self.debug.current_scope(),
+            parent_scope,
             function_name,
             None,
             *function_file,
             function_line_number,
             dbg_fn_type,
             false,
-            true,
+            is_definition,
             function_scope_start_line_number,
             0,
             false,
@@ -2413,7 +2421,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
-        eprintln!("declare_llvm_function\n{}", self.k1.function_id_to_string(function_id, false));
+        debug!("declare_llvm_function\n{}", self.k1.function_id_to_string(function_id, false));
 
         let typed_function = self.k1.get_function(function_id);
         let typed_function_linkage = typed_function.linkage;
@@ -2421,10 +2429,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let function_span = self.k1.ast.get_span_for_id(typed_function.parsed_id);
 
         let llvm_linkage = match typed_function.linkage {
-            TyperLinkage::Standard => None,
-            TyperLinkage::External { .. } => Some(LlvmLinkage::External),
-            TyperLinkage::Intrinsic => None,
+            TyperLinkage::Standard => LlvmLinkage::Internal,
+            TyperLinkage::External { .. } => LlvmLinkage::External,
+            TyperLinkage::Intrinsic => LlvmLinkage::Internal,
         };
+        let is_definition = llvm_linkage != LlvmLinkage::External;
         let llvm_name = match typed_function.linkage {
             TyperLinkage::External { fn_name: Some(link_name), .. } => {
                 self.k1.ident_str(link_name).to_string()
@@ -2433,7 +2442,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         if self.llvm_module.get_function(&llvm_name).is_some() {
-            if let Some(LlvmLinkage::External) = llvm_linkage {
+            if let LlvmLinkage::External = llvm_linkage {
                 eprintln!("Allowing duplicate external name declaration: {}", llvm_name)
             } else {
                 return failf!(
@@ -2455,7 +2464,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let bytecode_fn = *bytecode_fn;
 
         let llvm_function_type = self.make_cg_function_type(&bytecode_fn.fn_type)?;
-        eprintln!(
+        debug!(
             "-> res (is_sret={}) {}",
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
         );
@@ -2471,6 +2480,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_span,
             llvm_function_type.return_cg_type.debug_type(),
             &di_types,
+            is_definition
         )?;
         let is_sret = llvm_function_type.is_sret;
 
@@ -2489,7 +2499,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let function_value = self.llvm_module.add_function(
             &llvm_name,
             llvm_function_type.llvm_function_type,
-            llvm_linkage,
+            Some(llvm_linkage),
         );
         let sret_pointer = if is_sret {
             Some(function_value.get_first_param().unwrap().into_pointer_value())
@@ -2829,8 +2839,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let bc_unit = self.k1.bytecode.functions.get(function_id).unwrap();
-        // If we got this far and the function has an intrinsic type, then its
-        // the kind that needs to be a physical LLVM function
+        self.set_debug_location_from_span(function_span);
         match bc_unit.function_builtin_kind {
             Some(builtin_kind) => {
                 let _terminator_instr =
@@ -3374,7 +3383,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
                 .expect("Failed to create .ll file");
             std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!("Module '{}' failed validation NEW: {}", self.name(), err.to_string_lossy())
+            anyhow::anyhow!(
+                "Module '{}' failed validation NEW: {}",
+                self.name(),
+                err.to_string_lossy()
+            )
         })?;
 
         if optimize {
