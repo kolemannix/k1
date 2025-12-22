@@ -8,7 +8,7 @@
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
 use crate::kmem::MList;
-use crate::parse::{self, NumericWidth};
+use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::{failf, mformat};
@@ -35,12 +35,18 @@ macro_rules! b_ice {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct BcDebugInfo {
+    pub variable_info: Option<Ident>,
+}
+
 nz_u32_id!(BcCallId);
 pub struct ProgramBytecode {
     pub mem: kmem::Mem<ProgramBytecode>,
     pub instrs: VPool<Inst, InstId>,
     pub sources: VPool<SpanId, InstId>,
     pub comments: VPool<BcStr, InstId>,
+    pub debug_info: VPool<BcDebugInfo, InstId>,
     /// Compiled bytecode for actual functions
     pub functions: VPool<Option<CompiledUnit>, FunctionId>,
     /// Compiled bytecode for #static exprs and global initializers
@@ -72,6 +78,7 @@ impl ProgramBytecode {
             instrs: VPool::make_with_hint("bytecode_soa_instrs", instr_count_hint),
             sources: VPool::make_with_hint("bytecode_soa_sources", instr_count_hint),
             comments: VPool::make_with_hint("bytecode_soa_comments", instr_count_hint),
+            debug_info: VPool::make_with_hint("bytecode_soa_debug_info", instr_count_hint),
             functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
             calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
             exprs: FxHashMap::new(),
@@ -149,7 +156,6 @@ pub enum BackendBuiltin {
     MemEquals,
     Exit,
 
-    // Implemented by the compile-time interpreter
     CompilerMessage,
 }
 
@@ -725,7 +731,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let builtin_kind = match intrinsic_type {
         None => None,
         Some(i) => match intrinsic_handler(i) {
-            FunctionHandler::BcBuiltin(bc_builtin) => Some(bc_builtin),
+            BuiltinHandler::Backend(bc_builtin) => Some(bc_builtin),
             _ => None,
         },
     };
@@ -872,29 +878,39 @@ impl<'k1> Builder<'k1> {
         self.k1.bytecode.mem.push_str(s.as_ref())
     }
 
-    fn make_inst(&mut self, inst: Inst, comment: BcStr) -> InstId {
+    fn make_inst(&mut self, inst: Inst, comment: BcStr, debug_info: BcDebugInfo) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
-        let ids = self.k1.bytecode.sources.add(self.cur_span);
-        let idc = self.k1.bytecode.comments.add(comment);
-        debug_assert!(id == ids && id == idc);
+        self.k1.bytecode.sources.add_expected_id(self.cur_span, id);
+        self.k1.bytecode.comments.add_expected_id(comment, id);
+        self.k1.bytecode.debug_info.add_expected_id(debug_info, id);
         id
     }
 
     fn push_inst_to(&mut self, block: BlockId, inst: Inst, comment: BcStr) -> InstId {
-        let id = self.make_inst(inst, comment);
+        let id = self.make_inst(inst, comment, BcDebugInfo::default());
 
         self.k1.bytecode.b_blocks[block as usize].instrs.push(id);
         id
     }
 
     fn push_alloca(&mut self, pt: PhysicalType, comment: &str) -> InstId {
+        let comment = self.make_str(comment);
+        self.push_alloca_mstr(pt, comment, BcDebugInfo::default())
+    }
+
+    fn push_alloca_mstr(
+        &mut self,
+        pt: PhysicalType,
+        comment: MStr<ProgramBytecode>,
+        debug_info: BcDebugInfo,
+    ) -> InstId {
         let layout = self.k1.types.get_pt_layout(pt);
         let index = match self.last_alloca_index {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let comment = self.make_str(comment);
-        let inst_id = self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment);
+        let inst_id =
+            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment, debug_info);
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
         inst_id
     }
@@ -1125,12 +1141,15 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 return Ok(v);
             }
 
-            let var_pt_id = b.get_physical_type(let_stmt.variable_type);
+            let var_pt = b.get_physical_type(let_stmt.variable_type);
 
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
-            let variable_alloca = b.push_alloca(var_pt_id, "variable alloca");
+            let var_name = b.k1.variables.get(let_stmt.variable_id).name;
+            let comment = b.k1.bytecode.mem.push_str("let");
+            let variable_alloca =
+                b.push_alloca_mstr(var_pt, comment, BcDebugInfo { variable_info: Some(var_name) });
 
             // value_ptr means a pointer matching the type of the rhs
             // For a referencing let, the original alloca a ptr
@@ -1217,51 +1236,51 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
     }
 }
 
-enum FunctionHandler {
+pub enum BuiltinHandler {
     BcBakeStaticValue,
     BcZeroed,
     BcBoolNegate,
     BcBitNot,
     BcBitCast,
-    BcArithBinop(IntrinsicArithOpKind),
-    BcBitwiseBinop(IntrinsicBitwiseBinopKind),
+    BcArithBinop(ArithOpKind),
+    BcBitwiseBinop(BitwiseBinopKind),
     BcPointerIndex,
     Typer,
-    BcBuiltin(BackendBuiltin),
+    Backend(BackendBuiltin),
 }
-fn intrinsic_handler(intrinsic_op: IntrinsicOperation) -> FunctionHandler {
-    use FunctionHandler as H;
+pub fn intrinsic_handler(intrinsic_op: Builtin) -> BuiltinHandler {
+    use BuiltinHandler as H;
     match intrinsic_op {
-        IntrinsicOperation::SizeOf => H::Typer,
-        IntrinsicOperation::SizeOfStride => H::Typer,
-        IntrinsicOperation::AlignOf => H::Typer,
-        IntrinsicOperation::CompilerSourceLocation => H::Typer,
-        IntrinsicOperation::GetStaticValue => H::Typer,
-        IntrinsicOperation::StaticTypeToValue => H::Typer,
-        IntrinsicOperation::TypeId => H::Typer,
+        Builtin::SizeOf => H::Typer,
+        Builtin::SizeOfStride => H::Typer,
+        Builtin::AlignOf => H::Typer,
+        Builtin::CompilerSourceLocation => H::Typer,
+        Builtin::GetStaticValue => H::Typer,
+        Builtin::StaticTypeToValue => H::Typer,
+        Builtin::TypeId => H::Typer,
 
-        IntrinsicOperation::BakeStaticValue => H::BcBakeStaticValue,
-        IntrinsicOperation::CompilerMessage => H::BcBuiltin(BackendBuiltin::CompilerMessage),
-        IntrinsicOperation::Zeroed => H::BcZeroed,
+        Builtin::BakeStaticValue => H::BcBakeStaticValue,
+        Builtin::CompilerMessage => H::Backend(BackendBuiltin::CompilerMessage),
+        Builtin::Zeroed => H::BcZeroed,
 
-        IntrinsicOperation::TypeName => H::BcBuiltin(BackendBuiltin::TypeName),
-        IntrinsicOperation::TypeSchema => H::BcBuiltin(BackendBuiltin::TypeSchema),
+        Builtin::TypeName => H::Backend(BackendBuiltin::TypeName),
+        Builtin::TypeSchema => H::Backend(BackendBuiltin::TypeSchema),
 
-        IntrinsicOperation::BoolNegate => H::BcBoolNegate,
-        IntrinsicOperation::BitNot => H::BcBitNot,
-        IntrinsicOperation::BitCast => H::BcBitCast,
-        IntrinsicOperation::ArithBinop(kind) => H::BcArithBinop(kind),
-        IntrinsicOperation::BitwiseBinop(kind) => H::BcBitwiseBinop(kind),
-        IntrinsicOperation::PointerIndex => H::BcPointerIndex,
+        Builtin::BoolNegate => H::BcBoolNegate,
+        Builtin::BitNot => H::BcBitNot,
+        Builtin::BitCast => H::BcBitCast,
+        Builtin::ArithBinop(kind) => H::BcArithBinop(kind),
+        Builtin::BitwiseBinop(kind) => H::BcBitwiseBinop(kind),
+        Builtin::PointerIndex => H::BcPointerIndex,
 
-        IntrinsicOperation::Allocate => H::BcBuiltin(BackendBuiltin::Allocate),
-        IntrinsicOperation::AllocateZeroed => H::BcBuiltin(BackendBuiltin::AllocateZeroed),
-        IntrinsicOperation::Reallocate => H::BcBuiltin(BackendBuiltin::Reallocate),
-        IntrinsicOperation::Free => H::BcBuiltin(BackendBuiltin::Free),
-        IntrinsicOperation::MemCopy => H::BcBuiltin(BackendBuiltin::MemCopy),
-        IntrinsicOperation::MemSet => H::BcBuiltin(BackendBuiltin::MemSet),
-        IntrinsicOperation::MemEquals => H::BcBuiltin(BackendBuiltin::MemEquals),
-        IntrinsicOperation::Exit => H::BcBuiltin(BackendBuiltin::Exit),
+        Builtin::Allocate => H::Backend(BackendBuiltin::Allocate),
+        Builtin::AllocateZeroed => H::Backend(BackendBuiltin::AllocateZeroed),
+        Builtin::Reallocate => H::Backend(BackendBuiltin::Reallocate),
+        Builtin::Free => H::Backend(BackendBuiltin::Free),
+        Builtin::MemCopy => H::Backend(BackendBuiltin::MemCopy),
+        Builtin::MemSet => H::Backend(BackendBuiltin::MemSet),
+        Builtin::MemEquals => H::Backend(BackendBuiltin::MemEquals),
+        Builtin::Exit => H::Backend(BackendBuiltin::Exit),
     }
 }
 
@@ -1460,7 +1479,7 @@ fn compile_expr(
             let callee = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
                     let backend_builtin = match intrinsic_handler(intrinsic) {
-                        FunctionHandler::BcBakeStaticValue => {
+                        BuiltinHandler::BcBakeStaticValue => {
                             return {
                                 // intern fn bakeStaticValue[T](value: T): u64
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
@@ -1473,7 +1492,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        FunctionHandler::BcZeroed => {
+                        BuiltinHandler::BcZeroed => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 match b.get_physical_type(type_id) {
@@ -1518,7 +1537,7 @@ fn compile_expr(
                                 }
                             };
                         }
-                        FunctionHandler::BcBoolNegate => {
+                        BuiltinHandler::BcBoolNegate => {
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
@@ -1526,7 +1545,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        FunctionHandler::BcBitNot => {
+                        BuiltinHandler::BcBitNot => {
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BitNot { v: base });
@@ -1534,17 +1553,24 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        FunctionHandler::BcBitCast => {
+                        BuiltinHandler::BcBitCast => {
                             return {
-                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                let to_pt = b.get_physical_type(type_id);
-                                let from = compile_expr(b, None, call.args[0])?;
-                                let from_pt = b.get_value_kind(&from).expect_value().unwrap();
+                                let from_type_id =
+                                    b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let to_type_id =
+                                    b.k1.named_types.get_nth(call.type_args, 1).type_id;
+
+                                let from_pt = b.get_physical_type(from_type_id);
+                                let to_pt = b.get_physical_type(to_type_id);
+
+                                let from_value = compile_expr(b, None, call.args[0])?;
                                 match (from_pt, to_pt) {
                                     (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
                                         // Note that this also covers Pointer to Pointer
-                                        let bitcast =
-                                            b.push_inst_anon(Inst::BitCast { v: from, to: to_pt });
+                                        let bitcast = b.push_inst_anon(Inst::BitCast {
+                                            v: from_value,
+                                            to: to_pt,
+                                        });
                                         let stored = store_rich_if_dst(
                                             b,
                                             dst,
@@ -1555,21 +1581,20 @@ fn compile_expr(
                                         Ok(stored)
                                     }
                                     (PhysicalType::Scalar(_), PhysicalType::Agg(_)) => {
-                                        // We need a place, so sadly its alloca time
+                                        // We need a place, so its alloca time
                                         let locn = match dst {
                                             Some(dst) => dst,
-                                            None => {
-                                                let spot = b.push_alloca(
-                                                    to_pt,
-                                                    "bitcast scalar to agg place",
-                                                );
-                                                spot.as_value()
-                                            }
+                                            None => b
+                                                .push_alloca(to_pt, "bitcast scalar to agg place")
+                                                .as_value(),
                                         };
 
                                         // We know a scalar store will work
-                                        let _stored =
-                                            b.push_store(locn, from, "bitcast scalar to agg store");
+                                        let _stored = b.push_store(
+                                            locn,
+                                            from_value,
+                                            "bitcast scalar to agg store",
+                                        );
                                         Ok(locn)
                                     }
                                     (PhysicalType::Agg(_), PhysicalType::Scalar(_)) => {
@@ -1579,53 +1604,51 @@ fn compile_expr(
                                             b,
                                             to_pt,
                                             dst,
-                                            from,
+                                            from_value,
                                             false,
                                             "bitcast agg to scalar",
                                         );
                                         Ok(loaded)
                                     }
                                     (PhysicalType::Agg(_), PhysicalType::Agg(_)) => {
-                                        let bitcast =
-                                            b.push_inst_anon(Inst::BitCast { v: from, to: to_pt });
-                                        let stored = store_rich_if_dst(
-                                            b,
-                                            dst,
-                                            to_pt,
-                                            bitcast.as_value(),
-                                            "fulfill bitcast destination",
+                                        // Make a copy to a definitely-aligned destination.
+                                        let locn = match dst {
+                                            Some(dst) => dst,
+                                            None => b
+                                                .push_alloca(to_pt, "bitcast agg to agg place")
+                                                .as_value(),
+                                        };
+                                        let _copied = b.push_copy(
+                                            locn,
+                                            from_value,
+                                            from_pt,
+                                            "bitcast agg to agg copy",
                                         );
-                                        Ok(stored)
+                                        Ok(locn)
                                     }
                                 }
                             };
                         }
-                        FunctionHandler::BcArithBinop(op) => {
+                        BuiltinHandler::BcArithBinop(op) => {
                             return compile_arith_binop(b, op, &call, dst);
                         }
-                        FunctionHandler::BcBitwiseBinop(op) => {
+                        BuiltinHandler::BcBitwiseBinop(op) => {
                             return {
                                 let lhs = compile_expr(b, None, call.args[0])?;
                                 let rhs = compile_expr(b, None, call.args[1])?;
                                 let lhs_pt = b.get_value_kind(&lhs).expect_value().unwrap();
                                 let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
                                 let inst = match op {
-                                    IntrinsicBitwiseBinopKind::And => {
-                                        Inst::BitAnd { lhs, rhs, width }
-                                    }
-                                    IntrinsicBitwiseBinopKind::Or => {
-                                        Inst::BitOr { lhs, rhs, width }
-                                    }
-                                    IntrinsicBitwiseBinopKind::Xor => {
-                                        Inst::BitXor { lhs, rhs, width }
-                                    }
-                                    IntrinsicBitwiseBinopKind::ShiftLeft => {
+                                    BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, width },
+                                    BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, width },
+                                    BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, width },
+                                    BitwiseBinopKind::ShiftLeft => {
                                         Inst::BitShiftLeft { lhs, rhs, width }
                                     }
-                                    IntrinsicBitwiseBinopKind::UnsignedShiftRight => {
+                                    BitwiseBinopKind::UnsignedShiftRight => {
                                         Inst::BitUnsignedShiftRight { lhs, rhs, width }
                                     }
-                                    IntrinsicBitwiseBinopKind::SignedShiftRight => {
+                                    BitwiseBinopKind::SignedShiftRight => {
                                         Inst::BitSignedShiftRight { lhs, rhs, width }
                                     }
                                 };
@@ -1634,7 +1657,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        FunctionHandler::BcPointerIndex => {
+                        BuiltinHandler::BcPointerIndex => {
                             return {
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                                 let elem_type_id =
@@ -1650,8 +1673,8 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        FunctionHandler::Typer => unreachable!(),
-                        FunctionHandler::BcBuiltin(bc_builtin) => bc_builtin,
+                        BuiltinHandler::Typer => unreachable!(),
+                        BuiltinHandler::Backend(bc_builtin) => bc_builtin,
                     };
                     let Some(function_id) = maybe_function_id else {
                         b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
@@ -2335,14 +2358,14 @@ fn compile_cast(
 
 fn compile_arith_binop(
     b: &mut Builder,
-    op: IntrinsicArithOpKind,
+    op: ArithOpKind,
     call: &Call,
     dst: Option<Value>,
 ) -> TyperResult<Value> {
     let lhs = compile_expr(b, None, call.args[0])?;
     let rhs = compile_expr(b, None, call.args[1])?;
-    use IntrinsicArithOpClass as Class;
-    use IntrinsicArithOpOp as Op;
+    use ArithOpClass as Class;
+    use ArithOpOp as Op;
     let lhs_type = b.k1.exprs.get_type(call.args[0]);
     let lhs_width = b.k1.types.get_layout(lhs_type).size_bits() as u8;
     let inst = match (op.op, op.class) {

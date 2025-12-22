@@ -856,7 +856,7 @@ pub struct TypedFunction {
     pub type_params: NamedTypeSlice,
     pub function_type_params: SliceHandle<FunctionTypeParamId>,
     pub body_block: Option<TypedExprId>,
-    pub intrinsic_type: Option<IntrinsicOperation>,
+    pub intrinsic_type: Option<Builtin>,
     pub linkage: Linkage,
     pub child_specializations: Vec<SpecializationInfo>,
     pub specialization_info: Option<SpecializationInfo>,
@@ -1745,7 +1745,7 @@ impl Namespaces {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicBitwiseBinopKind {
+pub enum BitwiseBinopKind {
     And,
     Or,
     Xor,
@@ -1755,27 +1755,23 @@ pub enum IntrinsicBitwiseBinopKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicArithOpClass {
+pub enum ArithOpClass {
     Float,
     UnsignedInt,
     SignedInt,
 }
 
-impl IntrinsicArithOpClass {
+impl ArithOpClass {
     pub fn is_signed_int(self) -> bool {
-        matches!(self, IntrinsicArithOpClass::SignedInt)
+        matches!(self, ArithOpClass::SignedInt)
     }
     pub fn from_int_type(i: IntegerType) -> Self {
-        if i.is_signed() {
-            IntrinsicArithOpClass::SignedInt
-        } else {
-            IntrinsicArithOpClass::UnsignedInt
-        }
+        if i.is_signed() { ArithOpClass::SignedInt } else { ArithOpClass::UnsignedInt }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicArithOpOp {
+pub enum ArithOpOp {
     Equals,
     Add,
     Sub,
@@ -1789,25 +1785,33 @@ pub enum IntrinsicArithOpOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntrinsicArithOpKind {
-    pub class: IntrinsicArithOpClass,
-    pub op: IntrinsicArithOpOp,
+pub struct ArithOpKind {
+    pub class: ArithOpClass,
+    pub op: ArithOpOp,
 }
 
-impl IntrinsicArithOpKind {
-    pub fn uint(op: IntrinsicArithOpOp) -> Self {
-        IntrinsicArithOpKind { class: IntrinsicArithOpClass::UnsignedInt, op }
+impl ArithOpKind {
+    pub fn uint(op: ArithOpOp) -> Self {
+        ArithOpKind { class: ArithOpClass::UnsignedInt, op }
     }
-    pub fn sint(op: IntrinsicArithOpOp) -> Self {
-        IntrinsicArithOpKind { class: IntrinsicArithOpClass::SignedInt, op }
+    pub fn sint(op: ArithOpOp) -> Self {
+        ArithOpKind { class: ArithOpClass::SignedInt, op }
     }
-    pub fn float(op: IntrinsicArithOpOp) -> Self {
-        IntrinsicArithOpKind { class: IntrinsicArithOpClass::Float, op }
+    pub fn float(op: ArithOpOp) -> Self {
+        ArithOpKind { class: ArithOpClass::Float, op }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IntrinsicOperation {
+pub enum BitCastKind {
+    ScalarToScalar,
+    AggToAgg,
+    AggToScalar,
+    ScalarToAgg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Builtin {
     SizeOf,
     SizeOfStride,
     AlignOf,
@@ -1822,8 +1826,8 @@ pub enum IntrinsicOperation {
     BitNot,
     /// Bit-for-bit no-op reinterpretation from A to B
     BitCast,
-    ArithBinop(IntrinsicArithOpKind),
-    BitwiseBinop(IntrinsicBitwiseBinopKind),
+    ArithBinop(ArithOpKind),
+    BitwiseBinop(BitwiseBinopKind),
     PointerIndex,
 
     // Actual functions
@@ -1842,79 +1846,36 @@ pub enum IntrinsicOperation {
     StaticTypeToValue,
 }
 
-impl IntrinsicOperation {
+impl Builtin {
     pub fn is_typer_phase(self) -> bool {
         match self {
-            IntrinsicOperation::SizeOf => true,
-            IntrinsicOperation::SizeOfStride => true,
-            IntrinsicOperation::AlignOf => true,
-            IntrinsicOperation::TypeId => true,
-            IntrinsicOperation::CompilerSourceLocation => true,
-            IntrinsicOperation::GetStaticValue => true,
-            IntrinsicOperation::StaticTypeToValue => true,
+            Builtin::SizeOf => true,
+            Builtin::SizeOfStride => true,
+            Builtin::AlignOf => true,
+            Builtin::TypeId => true,
+            Builtin::CompilerSourceLocation => true,
+            Builtin::GetStaticValue => true,
+            Builtin::StaticTypeToValue => true,
             //
-            IntrinsicOperation::Zeroed => false,
-            IntrinsicOperation::BoolNegate => false,
-            IntrinsicOperation::BitNot => false,
-            IntrinsicOperation::BitCast => false,
-            IntrinsicOperation::ArithBinop(_) => false,
-            IntrinsicOperation::BitwiseBinop(_) => false,
-            IntrinsicOperation::PointerIndex => false,
-            IntrinsicOperation::CompilerMessage => false,
-            IntrinsicOperation::Allocate => false,
-            IntrinsicOperation::AllocateZeroed => false,
-            IntrinsicOperation::Reallocate => false,
-            IntrinsicOperation::Free => false,
-            IntrinsicOperation::MemCopy => false,
-            IntrinsicOperation::MemSet => false,
-            IntrinsicOperation::MemEquals => false,
-            IntrinsicOperation::Exit => false,
-            IntrinsicOperation::TypeName => false,
-            IntrinsicOperation::TypeSchema => false,
-            IntrinsicOperation::BakeStaticValue => false,
-        }
-    }
-
-    pub fn is_typer_phase_check_only(&self) -> bool {
-        match self {
-            IntrinsicOperation::BitCast => true,
-            _ => false,
-        }
-    }
-
-    /// Determines whether a physical function should be generated for this
-    /// operation; currently used by the LLVM backend
-    pub fn is_inlined(self) -> bool {
-        match self {
-            IntrinsicOperation::SizeOf => true,
-            IntrinsicOperation::SizeOfStride => true,
-            IntrinsicOperation::AlignOf => true,
-            IntrinsicOperation::Zeroed => true,
-            IntrinsicOperation::TypeId => true,
-            IntrinsicOperation::BoolNegate => true,
-            IntrinsicOperation::BitNot => true,
-            IntrinsicOperation::BitCast => true,
-            IntrinsicOperation::ArithBinop(_) => true,
-            IntrinsicOperation::BitwiseBinop(_) => true,
-            IntrinsicOperation::PointerIndex => true,
-            IntrinsicOperation::CompilerSourceLocation => true,
-            IntrinsicOperation::CompilerMessage => true,
-            // System-level
-            IntrinsicOperation::Allocate => false,
-            IntrinsicOperation::AllocateZeroed => false,
-            IntrinsicOperation::Reallocate => false,
-            IntrinsicOperation::Free => false,
-            IntrinsicOperation::MemCopy => false,
-            IntrinsicOperation::MemSet => false,
-            IntrinsicOperation::MemEquals => false,
-            IntrinsicOperation::Exit => false,
-            // Runtime switch on typeId, likely inlined
-            IntrinsicOperation::TypeName => false,
-            IntrinsicOperation::TypeSchema => false,
-            // Metaprogramming
-            IntrinsicOperation::GetStaticValue => true,
-            IntrinsicOperation::BakeStaticValue => true,
-            IntrinsicOperation::StaticTypeToValue => true,
+            Builtin::Zeroed => false,
+            Builtin::BoolNegate => false,
+            Builtin::BitNot => false,
+            Builtin::BitCast => false,
+            Builtin::ArithBinop(_) => false,
+            Builtin::BitwiseBinop(_) => false,
+            Builtin::PointerIndex => false,
+            Builtin::CompilerMessage => false,
+            Builtin::Allocate => false,
+            Builtin::AllocateZeroed => false,
+            Builtin::Reallocate => false,
+            Builtin::Free => false,
+            Builtin::MemCopy => false,
+            Builtin::MemSet => false,
+            Builtin::MemEquals => false,
+            Builtin::Exit => false,
+            Builtin::TypeName => false,
+            Builtin::TypeSchema => false,
+            Builtin::BakeStaticValue => false,
         }
     }
 }
@@ -2469,9 +2430,6 @@ pub struct TypedProgram {
     pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
     pub vm_process_dlopen_handle: *mut std::ffi::c_void,
 
-    // nocommit shutdown tasks (important for lsp use-case)
-    // - close these dlopens
-    // - scan for other things to close in TypedProgram
     pub vm_dylib_handles: FxHashMap<(ModuleId, Ident), *mut std::ffi::c_void>,
     pub vm_ffi_functions: FxHashMap<FunctionId, vm::VmFfiHandle>,
 
@@ -2485,6 +2443,17 @@ pub struct TypedProgram {
     pub timing: Timing,
 
     pub global_id_k1_arena: Option<TypedGlobalId>,
+}
+
+impl Drop for TypedProgram {
+    fn drop(&mut self) {
+        for (id, vm_dylib_handle) in self.vm_dylib_handles.iter() {
+            unsafe {
+                libc::dlclose(*vm_dylib_handle);
+            }
+            debug!("Closed dylib handle for module {:?} ident {:?}", id.0, id.1);
+        }
+    }
 }
 
 pub struct Timing {
@@ -2511,9 +2480,8 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let types = TypePool::empty();
-
         let ast = ParsedProgram::make(program_name, config);
+        let types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
         let root_ident = ast.idents.b.root_module_name;
         let mut scopes = Scopes::make(root_ident, 8192);
         let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
@@ -5306,7 +5274,7 @@ impl TypedProgram {
                 let call = self.calls.get(*call_id);
                 if let Some(function_id) = call.callee.maybe_function_id() {
                     let function = self.functions.get(function_id);
-                    if let Some(IntrinsicOperation::Zeroed) = function.intrinsic_type {
+                    if let Some(Builtin::Zeroed) = function.intrinsic_type {
                         let return_type_id = self.exprs.get_type(expr_id);
                         let static_value_id =
                             self.static_values.add(StaticValue::Zero(return_type_id));
@@ -10531,10 +10499,10 @@ impl TypedProgram {
                                 "Cannot call toDyn or toRef with a generic function"
                             );
                         }
-                        if function.intrinsic_type.is_some_and(|t| t.is_inlined()) {
+                        if function.intrinsic_type.is_some() {
                             return failf!(
                                 call_span,
-                                "Cannot call toDyn or toRef with an intrinsic operation"
+                                "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
                             );
                         }
                         return if fn_name == self.ast.idents.b.toDyn {
@@ -11629,9 +11597,7 @@ impl TypedProgram {
             if intrinsic.is_typer_phase() {
                 self.handle_intrinsic(call, intrinsic, ctx)
             } else {
-                if intrinsic.is_typer_phase_check_only() {
-                    self.check_intrinsic(&call, intrinsic, ctx)?;
-                }
+                self.check_intrinsic(&call, intrinsic, ctx)?;
                 let call_id = self.calls.add(call);
                 Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
             }
@@ -11686,12 +11652,12 @@ impl TypedProgram {
     fn handle_intrinsic(
         &mut self,
         call: Call,
-        intrinsic: IntrinsicOperation,
+        intrinsic: Builtin,
         _ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = call.span;
         match intrinsic {
-            IntrinsicOperation::GetStaticValue => {
+            Builtin::GetStaticValue => {
                 let static_value_id_arg = self.exprs.get(call.args[0]);
                 // For now, require a literal. We could relax this and evaluate it
                 // if that's useful
@@ -11713,7 +11679,7 @@ impl TypedProgram {
                 };
                 Ok(self.exprs.add_static(static_value_id, value.get_type(), false, span))
             }
-            IntrinsicOperation::StaticTypeToValue => {
+            Builtin::StaticTypeToValue => {
                 // intern fn staticTypeToValue[T, ST: static T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
                 let static_type_arg = self.named_types.get_nth(call.type_args, 1);
@@ -11739,11 +11705,11 @@ impl TypedProgram {
                     Ok(self.synth_cast(unit_expr, return_type, CastType::Transmute, None))
                 }
             }
-            IntrinsicOperation::CompilerSourceLocation => {
+            Builtin::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
             }
-            IntrinsicOperation::TypeId => {
+            Builtin::TypeId => {
                 let type_arg = self.named_types.get_nth(call.type_args, 0);
                 let type_id = type_arg.type_id;
                 let type_id_u64 = type_arg.type_id.as_u32() as u64;
@@ -11757,15 +11723,13 @@ impl TypedProgram {
                 let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
                 Ok(int_expr)
             }
-            IntrinsicOperation::SizeOf
-            | IntrinsicOperation::SizeOfStride
-            | IntrinsicOperation::AlignOf => {
+            Builtin::SizeOf | Builtin::SizeOfStride | Builtin::AlignOf => {
                 let type_id = self.named_types.get_nth(call.type_args, 0).type_id;
                 let layout = self.types.get_layout(type_id);
                 let value_bytes = match intrinsic {
-                    IntrinsicOperation::SizeOf => layout.size as u64,
-                    IntrinsicOperation::SizeOfStride => layout.stride() as u64,
-                    IntrinsicOperation::AlignOf => layout.align as u64,
+                    Builtin::SizeOf => layout.size as u64,
+                    Builtin::SizeOfStride => layout.stride() as u64,
+                    Builtin::AlignOf => layout.align as u64,
                     _ => unreachable!(),
                 };
                 Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
@@ -11777,20 +11741,15 @@ impl TypedProgram {
     fn check_intrinsic(
         &mut self,
         call: &Call,
-        intrinsic: IntrinsicOperation,
+        intrinsic: Builtin,
         _ctx: EvalExprContext,
     ) -> TyperResult<()> {
         match intrinsic {
-            IntrinsicOperation::BitCast => {
+            Builtin::BitCast => {
                 let type_from = self.named_types.get_nth(call.type_args, 0).type_id;
                 let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
                 let layout_from = self.types.get_layout(type_from);
                 let layout_to = self.types.get_layout(type_to);
-                // nocommit: implement correct alignment enforcement for all cases
-                // agg -> agg
-                // scalar -> scalar
-                // agg -> scalar
-                // scalar -> agg
                 if layout_from.size != layout_to.size {
                     kbail!(
                         self,
@@ -12194,11 +12153,11 @@ impl TypedProgram {
     }
 
     pub fn is_function_concrete(&self, function: &TypedFunction) -> bool {
-        if let Some(intrinsic) = function.intrinsic_type {
-            if intrinsic.is_inlined() {
-                return false;
-            }
-        }
+        //if let Some(intrinsic) = function.intrinsic_type {
+        //    if intrinsic.is_inlined() {
+        //        return false;
+        //    }
+        //}
         if function.is_generic() {
             return false;
         }
@@ -12639,22 +12598,22 @@ impl TypedProgram {
         fn_name: Ident,
         namespace_chain: &[Ident],
         ability_impl_info: Option<(AbilityId, TypeId)>,
-    ) -> Result<IntrinsicOperation, String> {
+    ) -> Result<Builtin, String> {
         let fn_name_str = self.ast.idents.get_name(fn_name);
         let second = namespace_chain.get(2).map(|id| self.ident_str(*id));
         let result = if let Some((ability_id, ability_impl_type_id)) = ability_impl_info {
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            use IntrinsicArithOpClass as Class;
-            use IntrinsicArithOpKind as OpKind;
-            use IntrinsicArithOpOp as Op;
+            use ArithOpClass as Class;
+            use ArithOpKind as OpKind;
+            use ArithOpOp as Op;
             macro_rules! mk_arith {
                 ($e: expr) => {
-                    Some(IntrinsicOperation::ArithBinop($e))
+                    Some(Builtin::ArithBinop($e))
                 };
             }
             macro_rules! mk_bitwise {
                 ($e: expr) => {
-                    Some(IntrinsicOperation::BitwiseBinop($e))
+                    Some(Builtin::BitwiseBinop($e))
                 };
             }
             let t = self.types.get(ability_impl_type_id);
@@ -12677,25 +12636,25 @@ impl TypedProgram {
                     Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
                     _ => None,
                 },
-                (BITWISE_ABILITY_ID, "bitNot") if is_integer => Some(IntrinsicOperation::BitNot),
+                (BITWISE_ABILITY_ID, "bitNot") if is_integer => Some(Builtin::BitNot),
                 (BITWISE_ABILITY_ID, "bitAnd") if is_integer => {
-                    mk_bitwise!(IntrinsicBitwiseBinopKind::And)
+                    mk_bitwise!(BitwiseBinopKind::And)
                 }
                 (BITWISE_ABILITY_ID, "bitOr") if is_integer => {
-                    mk_bitwise!(IntrinsicBitwiseBinopKind::Or)
+                    mk_bitwise!(BitwiseBinopKind::Or)
                 }
                 (BITWISE_ABILITY_ID, "xor") if is_integer => {
-                    mk_bitwise!(IntrinsicBitwiseBinopKind::Xor)
+                    mk_bitwise!(BitwiseBinopKind::Xor)
                 }
                 (BITWISE_ABILITY_ID, "shiftLeft") if is_integer => {
-                    mk_bitwise!(IntrinsicBitwiseBinopKind::ShiftLeft)
+                    mk_bitwise!(BitwiseBinopKind::ShiftLeft)
                 }
                 (BITWISE_ABILITY_ID, "shiftRight") if is_integer => {
                     let int_type = t.expect_integer();
                     if int_type.is_signed() {
-                        mk_bitwise!(IntrinsicBitwiseBinopKind::SignedShiftRight)
+                        mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
                     } else {
-                        mk_bitwise!(IntrinsicBitwiseBinopKind::UnsignedShiftRight)
+                        mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
                     }
                 }
                 (ADD_ABILITY_ID, "add") => match t {
@@ -12704,21 +12663,21 @@ impl TypedProgram {
                         // just in case it ever is, (for example if we want to make signed wrap UB
                         // instead of wrapping)
                         if i.is_signed() {
-                            mk_arith!(IntrinsicArithOpKind::sint(Op::Add))
+                            mk_arith!(ArithOpKind::sint(Op::Add))
                         } else {
-                            mk_arith!(IntrinsicArithOpKind::uint(Op::Add))
+                            mk_arith!(ArithOpKind::uint(Op::Add))
                         }
                     }
                     Type::Float(_) => {
-                        mk_arith!(IntrinsicArithOpKind::float(Op::Add))
+                        mk_arith!(ArithOpKind::float(Op::Add))
                     }
                     _ => None,
                 },
                 (SUB_ABILITY_ID, "sub") => {
                     let class = if let Type::Integer(i) = t {
-                        IntrinsicArithOpClass::from_int_type(*i)
+                        ArithOpClass::from_int_type(*i)
                     } else {
-                        IntrinsicArithOpClass::Float
+                        ArithOpClass::Float
                     };
                     mk_arith!(OpKind { class, op: Op::Sub })
                 }
@@ -12732,25 +12691,25 @@ impl TypedProgram {
                 }
                 (DIV_ABILITY_ID, "div") => {
                     let class = if let Type::Integer(i) = t {
-                        IntrinsicArithOpClass::from_int_type(*i)
+                        ArithOpClass::from_int_type(*i)
                     } else {
-                        IntrinsicArithOpClass::Float
+                        ArithOpClass::Float
                     };
                     mk_arith!(OpKind { class, op: Op::Div })
                 }
                 (REM_ABILITY_ID, "rem") => {
                     let class = if let Type::Integer(i) = t {
-                        IntrinsicArithOpClass::from_int_type(*i)
+                        ArithOpClass::from_int_type(*i)
                     } else {
-                        IntrinsicArithOpClass::Float
+                        ArithOpClass::Float
                     };
                     mk_arith!(OpKind { class, op: Op::Rem })
                 }
                 (SCALAR_CMP_ABILITY_ID, _) => {
                     let class = if let Type::Integer(i) = t {
-                        IntrinsicArithOpClass::from_int_type(*i)
+                        ArithOpClass::from_int_type(*i)
                     } else {
-                        IntrinsicArithOpClass::Float
+                        ArithOpClass::Float
                     };
                     match fn_name_str {
                         "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
@@ -12770,53 +12729,53 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("sys") => match fn_name_str {
-                    "exit" => Some(IntrinsicOperation::Exit),
+                    "exit" => Some(Builtin::Exit),
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {
-                    "alloc" => Some(IntrinsicOperation::Allocate),
-                    "allocZeroed" => Some(IntrinsicOperation::AllocateZeroed),
-                    "realloc" => Some(IntrinsicOperation::Reallocate),
-                    "free" => Some(IntrinsicOperation::Free),
-                    "copy" => Some(IntrinsicOperation::MemCopy),
-                    "set" => Some(IntrinsicOperation::MemSet),
-                    "equals" => Some(IntrinsicOperation::MemEquals),
-                    "zeroed" => Some(IntrinsicOperation::Zeroed),
-                    "bitcast" => Some(IntrinsicOperation::BitCast),
+                    "alloc" => Some(Builtin::Allocate),
+                    "allocZeroed" => Some(Builtin::AllocateZeroed),
+                    "realloc" => Some(Builtin::Reallocate),
+                    "free" => Some(Builtin::Free),
+                    "copy" => Some(Builtin::MemCopy),
+                    "set" => Some(Builtin::MemSet),
+                    "equals" => Some(Builtin::MemEquals),
+                    "zeroed" => Some(Builtin::Zeroed),
+                    "bitcast" => Some(Builtin::BitCast),
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
-                    "typeId" => Some(IntrinsicOperation::TypeId),
-                    "typeName" => Some(IntrinsicOperation::TypeName),
-                    "typeSchema" => Some(IntrinsicOperation::TypeSchema),
-                    "sizeOf" => Some(IntrinsicOperation::SizeOf),
-                    "sizeOfStride" => Some(IntrinsicOperation::SizeOfStride),
-                    "alignOf" => Some(IntrinsicOperation::AlignOf),
+                    "typeId" => Some(Builtin::TypeId),
+                    "typeName" => Some(Builtin::TypeName),
+                    "typeSchema" => Some(Builtin::TypeSchema),
+                    "sizeOf" => Some(Builtin::SizeOf),
+                    "sizeOfStride" => Some(Builtin::SizeOfStride),
+                    "alignOf" => Some(Builtin::AlignOf),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {
-                    "location" => Some(IntrinsicOperation::CompilerSourceLocation),
+                    "location" => Some(Builtin::CompilerSourceLocation),
                     _ => None,
                 },
                 Some("bool") => match fn_name_str {
-                    "negated" => Some(IntrinsicOperation::BoolNegate),
+                    "negated" => Some(Builtin::BoolNegate),
                     _ => None,
                 },
                 Some("string") => None,
                 Some("List") => None,
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
-                    "refAtIndex" => Some(IntrinsicOperation::PointerIndex),
+                    "refAtIndex" => Some(Builtin::PointerIndex),
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
-                    "bakeStaticValue" => Some(IntrinsicOperation::BakeStaticValue),
-                    "getStaticValue" => Some(IntrinsicOperation::GetStaticValue),
-                    "staticTypeToValue" => Some(IntrinsicOperation::StaticTypeToValue),
+                    "bakeStaticValue" => Some(Builtin::BakeStaticValue),
+                    "getStaticValue" => Some(Builtin::GetStaticValue),
+                    "staticTypeToValue" => Some(Builtin::StaticTypeToValue),
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
-                    "emitCompilerMessage" => Some(IntrinsicOperation::CompilerMessage),
+                    "emitCompilerMessage" => Some(Builtin::CompilerMessage),
                     _ => None,
                 },
                 Some(_) => None,

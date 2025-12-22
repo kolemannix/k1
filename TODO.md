@@ -1,9 +1,8 @@
 "C with typeclasses and tagged unions"
 
-IDEAS 11/13
-A let* that goes to the heap, mark/reset on function return. (function arenas)
-Similarly, put lambda environments in the arena
-Inline all small functions in typer or bc
+GOOD IDEAS 11/13
+Put lambda environments in the arena
+Implement inlining in typer or bc
 AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
 - let context(impl Alloc) temp = mem/AllocMode.Arena;
 - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
@@ -18,6 +17,8 @@ fn write[T](t: View[T]) {
 
     }
 }
+A let* that goes to the heap, mark/reset on function return. (function arenas)
+Support ".c" sources; compiles your c and adds it to the main compilation unit
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -52,6 +53,7 @@ Syntax/elegance
   - [x] Also: do safe integer coercions automatically
 
 Simple but missing
+- [ ] Decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] Get an addr2line implementation linked in for better backtraces, likely (https://github.com/gimli-rs/addr2line)
 - [x] Support ability constraints on generics
 - [ ] Support explicit type args in AnonEnumConstructor syntax 
@@ -67,12 +69,13 @@ Simple but missing
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
-## Project: Make llvm codegen run off our bytecode
-It currently runs directly off the typed tree
+## Project: di. Debug Info tidyups
+- [ ] Fix random jumping to function header
+- [ ] Annotate U8s with boolean somehow where they are actually booleans
 
 ## VM Profiler: Instrument the vm itself
 
-## K1 Profiler: core code to allow block profiling of k1 programs
+## K1 Profiler: Add `core` and/or compiler support to allow block profiling of k1 programs
 
 ## Project: Redesign the physical representation of enums
 - [ ] Implement `union` as a thing
@@ -92,7 +95,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
-- [ ] transmute function (for struct ABI workarounds right now)
+- [ ] bitcast function (for struct ABI workarounds right now)
 
 ## Project: Ability objects; dyn[<ability expr>]
 
@@ -103,12 +106,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
 - [ ] 'Type predicate': functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] 'Type predicate' functions as type bounds
-
-## Project: struct passing ABI for aarch64 and x86_64
-- [x] Add abi mapping step to function type generation
-- [x] Classify eightbytes for x86
-- [x] Add marshal/re-canonicalize steps in caller/callee code
-- [x] Commit a test in test suite
 
 ## Introduce Warnings
 - [x] Unused var
@@ -140,10 +137,23 @@ Primarily an execution target for the VM, but also would DRY up the significant 
   - [x] Dependencies: local module
   - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
   - [ ] serialize typedprogram at each module completion (for incremental compilation)
-  - [ ] Support ".c" sources; compiles your c and adds it to the main compilation unit
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker
+
+## Project: Make llvm codegen run off our bytecode
+It currently runs directly off the typed tree
+- [x] Rewrite llvm type generation in terms of PhysicalType
+- [x] Rewrite Dwarf type generation in terms of PhysicalType
+- [x] Implement every instruction
+- [x] Augment bytecode function metadata and signatures
+
+## Project: struct passing ABI for aarch64 and x86_64
+- [x] Add abi mapping step to function type generation
+- [x] Classify eightbytes for x86
+- [x] Add marshal/re-canonicalize steps in caller/callee code
+- [x] Commit a test in test suite
+
 
 # Profiler dogfood round
 - [x] Introduce an "uninitialized" specifier, similar to `zeroed()`

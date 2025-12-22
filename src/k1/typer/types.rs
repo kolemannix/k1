@@ -984,7 +984,7 @@ impl PhysicalType {
 pub struct StructField {
     pub offset: u32,
     pub field_t: PhysicalType,
-    // nocommit: add name to physical struct field, to decrease backend dependence on this layer
+    pub name: Ident,
 }
 
 #[derive(Clone, Copy)]
@@ -1028,6 +1028,11 @@ pub struct PhysicalTypeRecord {
     pub layout: Layout,
 }
 
+pub struct TypePoolIdents {
+    tag: Ident,
+    payload: Ident,
+}
+
 pub struct TypePool {
     pub types: VPool<Type, TypeId>,
     /// We use this to efficiently check if we already have seen a type,
@@ -1052,10 +1057,12 @@ pub struct TypePool {
     pub phys_types: VPool<PhysicalTypeRecord, PhysicalTypeId>,
 
     pub mem: kmem::Mem<TypePool>,
+
+    pub idents: TypePoolIdents,
 }
 
 impl TypePool {
-    pub fn empty() -> TypePool {
+    pub fn empty(tag_ident: Ident, payload_ident: Ident) -> TypePool {
         const EXPECTED_TYPE_COUNT: usize = 65536;
         TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
@@ -1082,12 +1089,14 @@ impl TypePool {
             phys_types: VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2),
 
             mem: kmem::Mem::make(),
+
+            idents: TypePoolIdents { tag: tag_ident, payload: payload_ident },
         }
     }
 
     #[cfg(test)]
     pub fn with_builtin_types() -> TypePool {
-        let mut this = TypePool::empty();
+        let mut this = TypePool::empty(Ident::forged(), Ident::forged());
         this.add_anon(Type::Integer(IntegerType::U8));
         this.add_anon(Type::Integer(IntegerType::U16));
         this.add_anon(Type::Integer(IntegerType::U32));
@@ -1791,7 +1800,11 @@ impl TypePool {
                         Some(field_pt) => {
                             let field_layout = self.get_pt_layout(field_pt);
                             let offset = layout.append_to_aggregate(field_layout);
-                            fields.push(StructField { field_t: field_pt, offset });
+                            fields.push(StructField {
+                                field_t: field_pt,
+                                offset,
+                                name: field.name,
+                            });
                         }
                     }
                 }
@@ -1899,6 +1912,7 @@ impl TypePool {
                 let tag_field = StructField {
                     offset: 0,
                     field_t: PhysicalType::Scalar(evl.tag.get_scalar_type()),
+                    name: self.idents.tag,
                 };
                 match evl.payload {
                     None => {
@@ -1906,7 +1920,11 @@ impl TypePool {
                     }
                     Some(pt) => smallvec![
                         tag_field,
-                        StructField { offset: evl.payload_offset.unwrap(), field_t: pt },
+                        StructField {
+                            offset: evl.payload_offset.unwrap(),
+                            field_t: pt,
+                            name: self.idents.payload
+                        },
                     ],
                 }
             }
@@ -1953,14 +1971,14 @@ impl TypePool {
         }
     }
 
-    pub fn is_aggregate_repr(&self, type_id: TypeId) -> bool {
+    pub fn is_aggregate(&self, type_id: TypeId) -> bool {
         match self.get(type_id) {
             Type::Struct(_) => true,
             Type::Enum(_) => true,
             Type::EnumVariant(_) => true,
             Type::Lambda(_) => true,
             Type::LambdaObject(_) => true,
-            Type::Static(stat) => self.is_aggregate_repr(stat.inner_type_id),
+            Type::Static(stat) => self.is_aggregate(stat.inner_type_id),
             Type::Array(_) => true,
             Type::Unit => false,
             Type::Char => false,

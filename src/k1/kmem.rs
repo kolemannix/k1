@@ -408,6 +408,11 @@ impl<Tag> Mem<Tag> {
         MStr::make(bytes)
     }
 
+    pub fn push_str_raw(&mut self, ptr: *const u8, len: usize) -> MStr<Tag> {
+        let s = str::from_utf8(unsafe { core::slice::from_raw_parts(ptr, len) }).unwrap();
+        self.push_str(s)
+    }
+
     // Zero-allocation formatted strings.
     // Formats a string directly into our backing buffer, then
     // bump cursor based on final length

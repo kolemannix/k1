@@ -4,8 +4,8 @@
 use smallvec::SmallVec;
 
 pub mod bc;
+pub mod codegen_llvm_old;
 pub mod codegen_llvm;
-pub mod codegen_llvm_new;
 pub mod compiler;
 mod fixmap;
 mod kmem;

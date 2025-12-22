@@ -1,4 +1,7 @@
-fn main(): i32  {
-  assertEquals(-1 % 2, -1);
+#debug fn main(): i32  {
+  let s: string = "foo";
+  let sWrap = { inner: s };
+  let sAgain: string = mem/bitcast(sWrap);
+  assertEquals(s, sAgain);
   0
 }
