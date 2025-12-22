@@ -393,15 +393,15 @@ impl Value {
     }
 
     const fn i8(i8: i8) -> Value {
-        Value(i8 as u64)
+        Value(i8 as u8 as u64)
     }
 
     const fn i16(i16: i16) -> Value {
-        Value(i16 as u64)
+        Value(i16 as u16 as u64)
     }
 
     const fn i32(i32: i32) -> Value {
-        Value(i32 as u64)
+        Value(i32 as u32 as u64)
     }
 
     const fn i64(i64: i64) -> Value {
@@ -1354,7 +1354,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 let b = match (width, pred) {
-                    (_, bc::IntCmpPred::Eq) => lhs == rhs,
+                    (8, bc::IntCmpPred::Eq) => (lhs as u8) == (rhs as u8),
+                    (16, bc::IntCmpPred::Eq) => (lhs as u16) == (rhs as u16),
+                    (32, bc::IntCmpPred::Eq) => (lhs as u32) == (rhs as u32),
+                    (64, bc::IntCmpPred::Eq) => lhs == rhs,
+
                     (8, bc::IntCmpPred::Slt) => (lhs as i8) < (rhs as i8),
                     (8, bc::IntCmpPred::Sle) => (lhs as i8) <= (rhs as i8),
                     (8, bc::IntCmpPred::Sgt) => (lhs as i8) > (rhs as i8),
@@ -1553,13 +1557,16 @@ fn resolve_value(
             // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
             Ok(value)
         }
-        BcValue::Imm32 { t, data } => {
+        BcValue::Data32 { t, data } => {
             let u32_data = data;
             let value = match t {
                 ScalarType::F32 => Value(u32_data as u64),
                 ScalarType::F64 => Value::f64(data as f32 as f64),
                 ScalarType::Pointer => Value(data as u64),
-                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 => Value(u32_data as u64),
+                ScalarType::I64 => {
+                    // This is the only case, since its wider, that we need to ensure
+                    // sign-extension occurs
                     Value(u32_data as i32 as i64 as u64)
                 }
                 ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {

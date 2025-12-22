@@ -9803,7 +9803,12 @@ impl TypedProgram {
             | K::Less
             | K::LessEqual
             | K::Greater
-            | K::GreaterEqual => {
+            | K::GreaterEqual
+            | K::BitAnd
+            | K::BitOr
+            | K::BitXor
+            | K::BitShiftLeft
+            | K::BitShiftRight => {
                 let fn_ident = match binary_op.op_kind {
                     K::Add => self.ast.idents.f.Add_add,
                     K::Subtract => self.ast.idents.f.Sub_sub,
@@ -9814,6 +9819,11 @@ impl TypedProgram {
                     K::LessEqual => self.ast.idents.f.ScalarCmp_le,
                     K::Greater => self.ast.idents.f.ScalarCmp_gt,
                     K::GreaterEqual => self.ast.idents.f.ScalarCmp_ge,
+                    K::BitAnd => self.ast.idents.f.Bitwise_and,
+                    K::BitOr => self.ast.idents.f.Bitwise_or,
+                    K::BitXor => self.ast.idents.f.Bitwise_xor,
+                    K::BitShiftLeft => self.ast.idents.f.Bitwise_shl,
+                    K::BitShiftRight => self.ast.idents.f.Bitwise_shr,
                     _ => unreachable!(),
                 };
                 self.synth_typed_call_parsed_args(

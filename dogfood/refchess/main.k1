@@ -45,8 +45,8 @@ deftype GameState = {
 }
 
 fn valueAtSquare(b: Bitboard, index: u64): u64 {
-  let shifted = Bitwise/shiftRight(b, index as u32);
-  let masked = Bitwise/bitAnd(shifted, 1u64);
+  let shifted = b >> (index as u32);
+  let masked = shifted & 1u64;
   masked
 }
 

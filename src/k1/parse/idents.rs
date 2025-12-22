@@ -168,6 +168,7 @@ pub struct BuiltinIdents {
     pub Some: Ident,
     pub None: Ident,
     pub StringBuilder: Ident,
+    pub Bitwise: Ident,
     pub arena: Ident,
 }
 
@@ -209,6 +210,11 @@ pub struct BuiltinFunctions {
     pub StringBuilder_new: QIdent,
     pub StringBuilder_build: QIdent,
     pub StringBuilder_buildTmp: QIdent,
+    pub Bitwise_and: QIdent,
+    pub Bitwise_or: QIdent,
+    pub Bitwise_xor: QIdent,
+    pub Bitwise_shl: QIdent,
+    pub Bitwise_shr: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -356,6 +362,7 @@ impl IdentPool {
             Some: intern!("Some"),
             None: intern!("None"),
             StringBuilder: intern!("StringBuilder"),
+            Bitwise: intern!("Bitwise"),
             arena: intern!("arena"),
         };
 
@@ -418,6 +425,12 @@ impl IdentPool {
         let StringBuilder_buildTmp: QIdent =
             make_fn!(&[b.core, b.StringBuilder], intern!("buildTmp"));
 
+        let Bitwise_and = make_fn!(&[b.core, b.Bitwise], intern!("bitAnd"));
+        let Bitwise_or = make_fn!(&[b.core, b.Bitwise], intern!("bitOr"));
+        let Bitwise_xor = make_fn!(&[b.core, b.Bitwise], intern!("xor"));
+        let Bitwise_shl = make_fn!(&[b.core, b.Bitwise], intern!("shiftLeft"));
+        let Bitwise_shr = make_fn!(&[b.core, b.Bitwise], intern!("shiftRight"));
+
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
@@ -455,6 +468,11 @@ impl IdentPool {
             StringBuilder_new,
             StringBuilder_build,
             StringBuilder_buildTmp,
+            Bitwise_and,
+            Bitwise_or,
+            Bitwise_xor,
+            Bitwise_shl,
+            Bitwise_shr,
         };
 
         Self { intern_pool: pool, slices, b, f }

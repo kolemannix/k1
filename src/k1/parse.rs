@@ -408,6 +408,13 @@ pub enum BinaryOpKind {
     And,
     Or,
 
+    // Bitwise
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitShiftLeft,
+    BitShiftRight,
+
     // Equality
     Equals,
     NotEquals,
@@ -431,6 +438,11 @@ impl BinaryOpKind {
             BinaryOpKind::GreaterEqual => "ge",
             BinaryOpKind::And => "and",
             BinaryOpKind::Or => "or",
+            BinaryOpKind::BitAnd => "bitand",
+            BinaryOpKind::BitOr => "bitor",
+            BinaryOpKind::BitXor => "bitxor",
+            BinaryOpKind::BitShiftLeft => "bitshl",
+            BinaryOpKind::BitShiftRight => "bitshr",
             BinaryOpKind::Equals => "eq",
             BinaryOpKind::NotEquals => "neq",
             BinaryOpKind::OptionalElse => "else",
@@ -439,25 +451,36 @@ impl BinaryOpKind {
     }
 }
 
+impl AsRef<str> for BinaryOpKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            BinaryOpKind::Add => "+",
+            BinaryOpKind::Subtract => "-",
+            BinaryOpKind::Multiply => "*",
+            BinaryOpKind::Divide => "/",
+            BinaryOpKind::Rem => "%",
+            BinaryOpKind::Less => "<",
+            BinaryOpKind::Greater => ">",
+            BinaryOpKind::LessEqual => "<=",
+            BinaryOpKind::GreaterEqual => ">=",
+            BinaryOpKind::And => "and",
+            BinaryOpKind::Or => "or",
+            BinaryOpKind::BitAnd => "&",
+            BinaryOpKind::BitOr => "|",
+            BinaryOpKind::BitXor => "^",
+            BinaryOpKind::BitShiftLeft => "<<",
+            BinaryOpKind::BitShiftRight => ">>",
+            BinaryOpKind::Equals => "==",
+            BinaryOpKind::NotEquals => "!=",
+            BinaryOpKind::OptionalElse => "?",
+            BinaryOpKind::Pipe => "|",
+        }
+    }
+}
+
 impl Display for BinaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinaryOpKind::Add => f.write_char('+'),
-            BinaryOpKind::Subtract => f.write_char('-'),
-            BinaryOpKind::Multiply => f.write_char('*'),
-            BinaryOpKind::Divide => f.write_char('/'),
-            BinaryOpKind::Rem => f.write_char('%'),
-            BinaryOpKind::Less => f.write_char('<'),
-            BinaryOpKind::Greater => f.write_char('>'),
-            BinaryOpKind::LessEqual => f.write_str("<="),
-            BinaryOpKind::GreaterEqual => f.write_str(">="),
-            BinaryOpKind::And => f.write_str("and"),
-            BinaryOpKind::Or => f.write_str("or"),
-            BinaryOpKind::Equals => f.write_str("=="),
-            BinaryOpKind::NotEquals => f.write_str("!="),
-            BinaryOpKind::OptionalElse => f.write_str("?"),
-            BinaryOpKind::Pipe => f.write_str("|"),
-        }
+        f.write_str(self.as_ref())
     }
 }
 
@@ -465,7 +488,8 @@ impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         use BinaryOpKind as B;
         match self {
-            B::Pipe => 102,
+            B::Pipe => 103,
+            B::BitAnd | B::BitOr | B::BitXor | B::BitShiftLeft | B::BitShiftRight => 102,
             B::Rem => 101,
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,
@@ -482,8 +506,10 @@ impl BinaryOpKind {
             TokenKind::Minus => Some(BinaryOpKind::Subtract),
             TokenKind::Asterisk => Some(BinaryOpKind::Multiply),
             TokenKind::Slash => Some(BinaryOpKind::Divide),
-            TokenKind::LeftAngle => Some(BinaryOpKind::Less),
-            TokenKind::RightAngle => Some(BinaryOpKind::Greater),
+            TokenKind::LAngle => Some(BinaryOpKind::Less),
+            TokenKind::RAngle => Some(BinaryOpKind::Greater),
+            TokenKind::LAngleLAngle => Some(BinaryOpKind::BitShiftLeft),
+            TokenKind::RAngleRAngle => Some(BinaryOpKind::BitShiftRight),
             TokenKind::LessThanEqual => Some(BinaryOpKind::LessEqual),
             TokenKind::GreaterThanEqual => Some(BinaryOpKind::GreaterEqual),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
@@ -492,7 +518,10 @@ impl BinaryOpKind {
             TokenKind::BangEquals => Some(BinaryOpKind::NotEquals),
             TokenKind::QuestionMark => Some(BinaryOpKind::OptionalElse),
             TokenKind::Percent => Some(BinaryOpKind::Rem),
-            TokenKind::Pipe => Some(BinaryOpKind::Pipe),
+            TokenKind::PipePipe => Some(BinaryOpKind::Pipe),
+            TokenKind::Amp => Some(BinaryOpKind::BitAnd),
+            TokenKind::Pipe => Some(BinaryOpKind::BitOr),
+            TokenKind::Caret => Some(BinaryOpKind::BitXor),
             _ => None,
         }
     }
@@ -2008,7 +2037,8 @@ pub fn parse_file(
     file_id: FileId,
     tokens: &[Token],
 ) -> ParseResult<()> {
-    let mut parser = Parser::make_for_file(module_id, module_name, module_namespace_id, ast, tokens, file_id);
+    let mut parser =
+        Parser::make_for_file(module_id, module_name, module_namespace_id, ast, tokens, file_id);
     parser.parse_file();
     Ok(())
 }
@@ -2998,14 +3028,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
                 let target = match self.peek().kind {
                     K::Ident => self.tokens.next(),
-                    K::Ampersand => self.tokens.next(),
                     K::Asterisk => self.tokens.next(),
                     K::Bang => self.tokens.next(),
                     _k => {
-                        return Err(error_expected(
-                            "Field name, or postfix &, *, or !",
-                            self.peek(),
-                        ));
+                        return Err(error_expected("Field name, or postfix *, or !", self.peek()));
                     }
                 };
                 let (type_args, _) = self.parse_bracketed_type_args()?;

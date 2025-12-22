@@ -555,7 +555,7 @@ ns ptr {
 
   fn alignAddr(baseAddress: size, alignBytes: size): int {
     let mask = alignBytes - 1;
-    Bitwise/bitAnd(baseAddress + mask, mask.bitNot())
+    (baseAddress + mask) & mask.bitNot()
   }
 
   fn aligned(self: ptr, alignBytes: int): ptr {

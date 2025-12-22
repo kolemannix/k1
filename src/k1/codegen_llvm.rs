@@ -1840,7 +1840,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let v = function.param_values[index as usize];
                 Ok(v)
             }
-            bc::Value::Imm32 { t, data } => {
+            bc::Value::Data32 { t, data } => {
                 let v: BasicValueEnum<'ctx> = match t {
                     ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
                     ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),

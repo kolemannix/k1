@@ -1,7 +1,0 @@
-fn main(): i32 {
-  let context allocMode: mem/AllocMode = .Arena;
-  let name = "raylib [core] example - basic window";
-  let name2 = name.toCString();
-  0
-}
-

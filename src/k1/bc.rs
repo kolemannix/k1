@@ -213,7 +213,7 @@ pub enum Value {
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
-    Imm32 {
+    Data32 {
         t: ScalarType,
         data: u32,
     },
@@ -227,10 +227,10 @@ impl Value {
     #[allow(unused)]
     const TRUE: Value = Value::byte(1);
     const fn byte(u8: u8) -> Value {
-        Value::Imm32 { t: ScalarType::U8, data: u8 as u32 }
+        Value::Data32 { t: ScalarType::U8, data: u8 as u32 }
     }
     const fn imm32(t: ScalarType, u32: u32) -> Value {
-        Value::Imm32 { t, data: u32 }
+        Value::Data32 { t, data: u32 }
     }
 }
 
@@ -550,7 +550,7 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
         Value::StaticValue { t, id: _ } => InstKind::Value(*t),
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
-        Value::Imm32 { t: scalar_type, data: _ } => {
+        Value::Data32 { t: scalar_type, data: _ } => {
             InstKind::Value(PhysicalType::Scalar(*scalar_type))
         }
         Value::PtrZero => InstKind::PTR,
@@ -957,7 +957,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_jump_if(&mut self, cond: Value, cons: BlockId, alt: BlockId, comment: &str) -> InstId {
-        if let Value::Imm32 { t: ScalarType::U8, data: b32 } = cond {
+        if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond {
             if b32 == 1 {
                 // JMPIF true ...
                 self.push_jump(cons, comment)
@@ -988,23 +988,23 @@ impl<'k1> Builder<'k1> {
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: &str) -> Value {
         match int_value {
-            TypedIntValue::U8(i) => Value::Imm32 { t: ScalarType::U8, data: *i as u32 },
-            TypedIntValue::U16(i) => Value::Imm32 { t: ScalarType::U16, data: *i as u32 },
-            TypedIntValue::U32(i) => Value::Imm32 { t: ScalarType::U32, data: *i },
+            TypedIntValue::U8(i) => Value::Data32 { t: ScalarType::U8, data: *i as u32 },
+            TypedIntValue::U16(i) => Value::Data32 { t: ScalarType::U16, data: *i as u32 },
+            TypedIntValue::U32(i) => Value::Data32 { t: ScalarType::U32, data: *i },
             TypedIntValue::U64(i) => {
                 if *i <= u32::MAX as u64 {
-                    Value::imm32(int_value.get_scalar_type(), *i as u32)
+                    Value::imm32(ScalarType::U64, *i as u32)
                 } else {
                     let inst = self.push_inst(Inst::Data(DataInst::U64(*i)), comment);
                     inst.as_value()
                 }
             }
-            TypedIntValue::I8(i) => Value::byte(*i as u8),
-            TypedIntValue::I16(i) => Value::Imm32 { t: ScalarType::I16, data: *i as u32 },
-            TypedIntValue::I32(i) => Value::imm32(int_value.get_scalar_type(), *i as u32),
+            TypedIntValue::I8(i) => Value::Data32 { t: ScalarType::I8, data: *i as u8 as u32 },
+            TypedIntValue::I16(i) => Value::Data32 { t: ScalarType::I16, data: *i as u16 as u32 },
+            TypedIntValue::I32(i) => Value::imm32(ScalarType::I32, *i as u32),
             TypedIntValue::I64(i) => {
                 if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
-                    Value::imm32(int_value.get_scalar_type(), *i as i32 as u32)
+                    Value::imm32(ScalarType::I64, *i as i32 as u32)
                 } else {
                     let inst = self.push_inst(Inst::Data(DataInst::I64(*i)), comment);
                     inst.as_value()
@@ -2535,18 +2535,18 @@ fn compile_matching_condition(
 
 pub fn zero(t: ScalarType) -> Value {
     match t {
-        ScalarType::U8 => Value::Imm32 { t: ScalarType::U8, data: 0 },
-        ScalarType::U16 => Value::Imm32 { t: ScalarType::U16, data: 0 },
-        ScalarType::U32 => Value::Imm32 { t: ScalarType::U32, data: 0 },
-        ScalarType::U64 => Value::Imm32 { t: ScalarType::U64, data: 0 },
-        ScalarType::I8 => Value::Imm32 { t: ScalarType::I8, data: 0 },
-        ScalarType::I16 => Value::Imm32 { t: ScalarType::I16, data: 0 },
-        ScalarType::I32 => Value::Imm32 { t: ScalarType::I32, data: 0 },
-        ScalarType::I64 => Value::Imm32 { t: ScalarType::I64, data: 0 },
-        ScalarType::F32 => Value::Imm32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
+        ScalarType::U8 => Value::Data32 { t: ScalarType::U8, data: 0 },
+        ScalarType::U16 => Value::Data32 { t: ScalarType::U16, data: 0 },
+        ScalarType::U32 => Value::Data32 { t: ScalarType::U32, data: 0 },
+        ScalarType::U64 => Value::Data32 { t: ScalarType::U64, data: 0 },
+        ScalarType::I8 => Value::Data32 { t: ScalarType::I8, data: 0 },
+        ScalarType::I16 => Value::Data32 { t: ScalarType::I16, data: 0 },
+        ScalarType::I32 => Value::Data32 { t: ScalarType::I32, data: 0 },
+        ScalarType::I64 => Value::Data32 { t: ScalarType::I64, data: 0 },
+        ScalarType::F32 => Value::Data32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
         ScalarType::F64 => {
             // Bit pattern is all zeroes anyway
-            Value::Imm32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
+            Value::Data32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
         }
         ScalarType::Pointer => Value::PtrZero,
     }
@@ -3189,7 +3189,7 @@ pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::StaticValue { id, .. } => write!(w, "static{}", id.as_u32()),
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
-        Value::Imm32 { t, data } => write!(w, "data32({}, {})", t, data),
+        Value::Data32 { t, data } => write!(w, "data32({}, {})", t, data),
         Value::PtrZero => write!(w, "ptr0"),
     }
 }

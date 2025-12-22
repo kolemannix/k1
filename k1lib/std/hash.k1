@@ -28,7 +28,7 @@ fn fnv1a_hash(key: string): u64 {
   let FNV_OFFSET: u64 = 14695981039346656037;
   let hash_value = FNV_OFFSET;
   for c in key {
-    hash_value := Bitwise/xor(hash_value, c as u8 as u64);
+    hash_value := hash_value ^ c as u8 as u64;
     hash_value := hash_value * FNV_PRIME;
   };
   hash_value

@@ -48,7 +48,7 @@ fn someFnParam2(i: int, f: some \int -> int, g: some \int -> int): int {
 }
 
 fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> ?T): ?T {
-  t | f | g
+  t || f || g
 }
 
 fn runThings(thunks: List[dyn[\()-> unit]]): unit {
@@ -94,8 +94,8 @@ fn test(): unit {
 
   use List/filter; use List/map;
   let result = [1,2,3,5,6,7,8]
-    | map(\x. x + 1)
-    | filter(\x. x % 2 == 0);
+    || map(\x. x + 1)
+    || filter(\x. x % 2 == 0);
   assert(result == [2, 4, 6, 8]);
 
   let* x = 10;
