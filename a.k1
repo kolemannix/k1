@@ -1,8 +1,10 @@
 #debug fn t(): unit {
+  println("-1i16 as u32: {-1i16 as u32}");
   assertEquals(-10.1 as i32, -10);
 }
 
 fn main(): i32  {
   #static t();
+  t();
   0
 }

@@ -6367,6 +6367,7 @@ impl TypedProgram {
                 result.map(|int| TypedIntValue::$int_type(int))
             }};
         }
+        eprintln!("parsing from '{parsed_text}': {}", num_to_parse);
         let ret = if num_to_parse.starts_with("0x") {
             let hex_base = 16;
             let offset = 2;
@@ -9010,7 +9011,18 @@ impl TypedProgram {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
                     let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
-                        Ordering::Less => CastType::IntegerCast(IntegerCastDirection::Extend),
+                        Ordering::Less => {
+                            // Extend
+                            if from_integer_type.is_signed() && !to_integer_type.is_signed() {
+                                return failf!(
+                                    cast.span,
+                                    "Cannot widen from {} to {}; its too confusing",
+                                    from_integer_type,
+                                    to_integer_type
+                                );
+                            }
+                            CastType::IntegerCast(IntegerCastDirection::Extend)
+                        },
                         Ordering::Greater => CastType::IntegerCast(IntegerCastDirection::Truncate),
                         // Likely a sign change
                         Ordering::Equal => CastType::IntegerCast(IntegerCastDirection::NoOp),

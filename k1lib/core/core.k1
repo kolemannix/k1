@@ -438,8 +438,19 @@ ns u8 {
   }
 }
 
+ns u32 {
+  let maxValue: u32 = 0xFFFFFFFF;
+  let minValue: u32 = 0x00000000;
+}
+
+ns i32 {
+  let maxValue: i32 = 0x7FFFFFFF;
+  let minValue: i32 = -0x80000000;
+}
+
 ns i64 {
   let maxValue: i64 = 0x7FFFFFFFFFFFFFFF;
+  let minValue: i64 = 0x8000000000000000;
   fn nextPow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/nextPow2: value must be positive") else
