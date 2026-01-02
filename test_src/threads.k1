@@ -28,7 +28,7 @@ fn main(): i32 {
   std/thread/join(thread.*, output);
 
   // output returned has been incremented 
-  assertEquals(input.*.as[ptr], output.*.as[ptr]);
+  assertEquals(input.as[ptr], output.*.as[ptr]);
   assertEquals(output.*.*, 43);
 
   // myvar is unchanged by the thread since its threadlocal

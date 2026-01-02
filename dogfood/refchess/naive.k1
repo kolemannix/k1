@@ -42,7 +42,7 @@ ns Square {
        'h' or 'H' -> 7,
        _ -> crash("bad tile name: {s}")
     };
-    let rank = (s.get(1).toDigitValue().! - 1);
+    let rank = (s.get(1).toAsciiDigit().! - 1);
     fromRankFile(file, rank)
   }
 }

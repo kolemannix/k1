@@ -172,8 +172,8 @@ ns GameState {
      println("White double push");
      printBitboard(doublePush);
      if self.enPassantFile != -1 {
-        let enPassantTargetSquareIndex = self.enPassantFile + 5*8;
-        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex.as[u64]);
+        let enPassantTargetSquareIndex: u64 = self.enPassantFile.as[u8].as[u64] + 5*8;
+        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex);
         let enPassantTargetSquareOccupied = enPassantTargetSquareBit.bitAnd(self.bOccupied());
         let enPassantAttackers = enPassantTargetSquareOccupied.bitAnd(enPassantTargetSquareBit.shiftLeft(1)).bitAnd(enPassantTargetSquareBit.shiftRight(1));
         printBitboard(enPassantTargetSquareOccupied);
