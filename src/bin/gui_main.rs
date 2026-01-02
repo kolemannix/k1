@@ -2,18 +2,24 @@
 // All rights reserved.
 
 use std::{
-    ffi::{CStr, CString},
+    path::Path,
     sync::{Arc, RwLock, mpsc},
+    thread::{self, JoinHandle},
 };
 
-use crate::typer::{FunctionId, TypedModule};
+use clap::Parser;
+use k1::{
+    compiler,
+    typer::{FunctionId, TypedProgram},
+};
+use log::info;
 use raylib::prelude::*;
 
 pub struct Gui {
     pub rl: raylib::RaylibHandle,
     pub rl_thread: raylib::RaylibThread,
     jb_mono: Font,
-    module_handle: Arc<RwLock<Option<TypedModule>>>,
+    module_handle: Arc<RwLock<Option<TypedProgram>>>,
     compile_sender: mpsc::SyncSender<()>,
     run_sender: mpsc::SyncSender<()>,
     state: GuiState,
@@ -27,7 +33,7 @@ pub struct GuiState {
 
 impl Gui {
     pub fn init(
-        module_handle: Arc<RwLock<Option<TypedModule>>>,
+        module_handle: Arc<RwLock<Option<TypedProgram>>>,
         compile_sender: mpsc::SyncSender<()>,
         run_sender: mpsc::SyncSender<()>,
     ) -> Self {
@@ -44,10 +50,10 @@ impl Gui {
             )
             .expect("font load");
         rl.gui_set_font(&jb_mono);
-        rl.gui_set_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SIZE as i32, 24);
+        rl.gui_set_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SIZE, 24);
         // Default TEXT_SPACING: 12
-        dbg!(rl.gui_get_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SPACING as i32));
-        rl.gui_set_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SPACING as i32, 1);
+        dbg!(rl.gui_get_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SPACING));
+        rl.gui_set_style(GuiControl::DEFAULT, GuiDefaultProperty::TEXT_SPACING, 1);
         // let arial: Font =
         // gui.rl.load_font(&thread, "/Users/knix/Library/Fonts/Arial.ttf").expect("font load");
         // rl.gui_set_font(&jb_mono);
@@ -77,15 +83,13 @@ impl Gui {
 
             let compile_clicked = d.gui_label_button(
                 Rectangle { x: 30.0, y: 50.0, width: 50.0, height: 30.0 },
-                Some(rstr!("Compile")),
+                "Compile",
             );
             if compile_clicked {
                 self.compile_sender.send(()).unwrap();
             }
-            let run_clicked = d.gui_label_button(
-                Rectangle { x: 30.0, y: 80.0, width: 50.0, height: 30.0 },
-                Some(rstr!("Run")),
-            );
+            let run_clicked = d
+                .gui_label_button(Rectangle { x: 30.0, y: 80.0, width: 50.0, height: 30.0 }, "Run");
             if run_clicked {
                 self.run_sender.send(()).unwrap();
             }
@@ -99,7 +103,7 @@ impl Gui {
                 continue;
             };
 
-            let name = module.name();
+            let name = module.program_name();
 
             d.draw_text_ex(
                 &self.jb_mono,
@@ -112,30 +116,26 @@ impl Gui {
 
             let function_names: Vec<_> = module
                 .function_iter()
-                .map(|(_, f)| {
-                    CString::new(module.ast.identifiers.get_name(f.name).to_string()).unwrap()
-                })
+                .map(|(_, f)| module.ast.idents.get_name(f.name).to_string())
                 .collect();
-            let mut function_name_cstrs = Vec::with_capacity(function_names.len());
-            for name in &function_names {
-                function_name_cstrs.push(name.as_c_str())
-            }
             gui_list_view_fixed(
                 &mut d,
                 Rectangle { x: 100.0, y: 100.0, width: 300.0, height: 500.0 },
-                &function_name_cstrs,
+                &function_names,
                 &mut focus,
                 &mut self.state.function_list_scroll_index,
                 &mut active,
             );
             self.state.selected_function = active;
             if self.state.selected_function >= 0 {
-                let fun = module.get_function(FunctionId(self.state.selected_function as u32));
+                let fun = module.get_function(
+                    FunctionId::from_u32(self.state.selected_function as u32).unwrap(),
+                );
                 //let mut buf = [u8; 1024];
                 // todo: text box
                 d.gui_label(
                     Rectangle { x: 450.0, y: 100.0, width: 300.0, height: 300.0 },
-                    Some(CString::new(module.function_to_string(fun, true)).unwrap().as_c_str()),
+                    &module.function_to_string(fun, true),
                 );
             }
         }
@@ -145,23 +145,23 @@ impl Gui {
 fn gui_list_view_fixed(
     d: &mut RaylibDrawHandle,
     bounds: impl Into<ffi::Rectangle>,
-    text: &[&CStr],
+    text: &[impl AsRef<str>],
     focus: &mut i32,
     scroll_index: &mut i32,
     active: &mut i32,
 ) -> i32 {
     // Actual order of the ffi call is scroll_index, active, focus
-    d.gui_list_view_ex(bounds, text, scroll_index, active, focus)
+    d.gui_list_view_ex(bounds, text.iter(), scroll_index, active, focus)
 }
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
-    let args = Args::parse();
+    let args = k1::compiler::Args::try_parse().unwrap();
     info!("{:#?}", args);
 
     info!("k1 Compiler v0.1.0");
 
-    let out_dir = ".k1-out";
+    let out_dir = Path::new(".k1-out");
 
     // If gui mode:
     // - Create a new thread to compile the module
@@ -169,7 +169,7 @@ fn main() -> anyhow::Result<()> {
     // - On frame or channel push, get module snapshot and render it
     // - Put module inside a RwLock, just try to read it from the gui thread
 
-    let module_handle: Arc<RwLock<Option<TypedModule>>> = Arc::new(RwLock::new(None));
+    let module_handle: Arc<RwLock<Option<TypedProgram>>> = Arc::new(RwLock::new(None));
 
     // Some thoughts: instead of a RwLock, we could just use a channel to send the module to the gui thread
     // Or we could just spawn a thread whenever we need to compile a module, and then send the module back to the main thread
@@ -182,13 +182,13 @@ fn main() -> anyhow::Result<()> {
         .name("compile".to_string())
         .spawn(move || {
             while let Ok(()) = compile_receiver.recv() {
-                let Ok(module) = compiler::compile_module(&args_clone) else {
+                let Ok(module) = compiler::compile_program(&args_clone, out_dir) else {
                     return;
                 };
                 shared_module_clone.write().unwrap().replace(module);
 
-                let module_read = shared_module_clone.read().unwrap();
-                let module = module_read.as_ref().unwrap();
+                let mut module_lock = shared_module_clone.write().unwrap();
+                let module = module_lock.as_mut().unwrap();
                 let llvm_ctx = inkwell::context::Context::create();
                 let _codegen =
                     match compiler::codegen_module(&args_clone, &llvm_ctx, module, out_dir, true) {
@@ -213,12 +213,12 @@ fn main() -> anyhow::Result<()> {
                     println!("Cannot run; no module");
                     continue;
                 };
-                compiler::run_compiled_program(out_dir, module.name());
+                compiler::run_compiled_program(out_dir, module.program_name());
             }
         })
         .unwrap();
 
-    let mut gui = gui::Gui::init(module_handle.clone(), compile_sender, run_sender);
+    let mut gui = Gui::init(module_handle.clone(), compile_sender, run_sender);
     gui.run_loop();
     Ok(())
 }

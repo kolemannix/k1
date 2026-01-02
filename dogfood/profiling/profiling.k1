@@ -13,7 +13,7 @@
       mach_timebase_info(timebase);
     };
     eprintln("timebase is {timebase.numer} / {timebase.denom}");
-    (counter * (timebase.numer as u64)) / (timebase.denom as u64);
+    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64]);
   }
 
 }
@@ -48,7 +48,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let parent_index = global_profiler_parent.*;
     //eprintln("begin {label} with index {anchor_index}");
     //eprintln("  parent: {parent_index}");
-    let anchor = global_profiler_anchors.getRef(anchor_index as size);
+    let anchor = global_profiler_anchors.getRef(anchor_index.as[size]);
     
     // Initialize anchor on first use
     if anchor.label == "" {
@@ -78,8 +78,8 @@ fn end_profile_block(block: ProfileBlock): unit {
     let elapsed = read_cpu_timer() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
-    let parent = global_profiler_anchors.getRef(block.parent_index as size);
-    let anchor = global_profiler_anchors.getRef(block.anchor_index as size);
+    let parent = global_profiler_anchors.getRef(block.parent_index.as[size]);
+    let anchor = global_profiler_anchors.getRef(block.anchor_index.as[size]);
     
     parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive - elapsed;
     anchor <- {
@@ -92,10 +92,10 @@ fn end_profile_block(block: ProfileBlock): unit {
 
 // Print timing results for a single anchor
 fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
-    let percent = 100.0: f64 * (anchor.tsc_elapsed_exclusive as f64) / (total_tsc_elapsed as f64);
+    let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.as[f64] / total_tsc_elapsed.as[f64];
     print("  {anchor.label}[{anchor.hit_count}]: {percent}% ");
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
-      let percent_with_children = 100.0: f64 * (anchor.tsc_elapsed_inclusive as f64) / (total_tsc_elapsed as f64);
+      let percent_with_children = 100.0: f64 * anchor.tsc_elapsed_inclusive.as[f64] / total_tsc_elapsed.as[f64];
       print("({percent_with_children}% w/children) ");
     };
     println("({anchor.tsc_elapsed_exclusive} 'cycles')");

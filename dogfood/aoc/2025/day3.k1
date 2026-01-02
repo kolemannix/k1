@@ -28,7 +28,7 @@ fn part1(input: string): unit {
         if c > lo { lo := c }
       };
     };
-    let joltage = (hi.toDigitValue().! * 10 + lo.toDigitValue().!);
+    let joltage = (hi.AsciiDigit().! * 10 + lo.AsciiDigit().!);
     sum := sum + joltage;
     println("Result {itIndex} for bank `{bank}`: {joltage} {sum}")
   };

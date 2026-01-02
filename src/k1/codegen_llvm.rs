@@ -747,7 +747,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     const DW_ATE_ADDRESS: u32 = 0x01;
-    const DW_ATE_BOOLEAN: u32 = 0x02;
+    const _DW_ATE_BOOLEAN: u32 = 0x02;
     const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
     const DW_ATE_FLOAT: u32 = 0x04;
     const DW_ATE_SIGNED: u32 = 0x05;
@@ -2074,7 +2074,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
+            Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let signed = matches!(inst, bc::Inst::IntExtS { .. });

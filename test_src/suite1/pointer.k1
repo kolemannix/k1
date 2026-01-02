@@ -6,16 +6,16 @@ deftype Point3 = { x: int, y: int, z: int }
 
 fn test(): unit {
   let* point: *Point3 = { x: 10, y: 20, z: 30 };
-  let pointPtr = point as ptr;
+  let pointPtr = point.as[ptr];
 
-  let point2 = pointPtr as *Point3;
+  let point2 = pointPtr.r[Point3];
   assert(point2.x == 10);
   assert(point2.y == 20);
 
   // Move 8 bytes
   assert(sizeOf[int]() == 8);
-  let pointShifted = ((pointPtr as size) + sizeOf[int]()) as ptr;
-  let point3 = pointShifted as *Point3;
+  let pointShifted = (pointPtr.as[size] + sizeOf[int]()).as[ptr];
+  let point3 = pointShifted.r[Point3];
 
   // x is now y, y is now z, z is now random bits
   assert(point3.x == 20);

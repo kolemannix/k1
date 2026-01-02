@@ -339,6 +339,7 @@ pub enum Inst {
     },
     IntExtS {
         v: Value,
+        from: ScalarType,
         to: ScalarType,
     },
     FloatTrunc {
@@ -2235,7 +2236,7 @@ fn compile_cast(
                         b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed()
                     };
                     if signed {
-                        Inst::IntExtS { v: base, to }
+                        Inst::IntExtS { from: ScalarType::U8, v: base, to }
                     } else {
                         Inst::IntExtU { v: base, to }
                     }
@@ -2671,7 +2672,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
                         errors.push("i{inst_id}: int trunc to non-int type".to_string())
                     }
                 }
-                Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
+                Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: int_ext_u src is not an int"))
@@ -3014,9 +3015,8 @@ pub fn display_inst(
             display_scalar_type(w, to)?;
             write!(w, " {}", v)?;
         }
-        Inst::IntExtS { v, to } => {
-            write!(w, "int extend signed ")?;
-            display_scalar_type(w, to)?;
+        Inst::IntExtS { v, from, to } => {
+            write!(w, "int signed extend {}->{}", from, to)?;
             write!(w, " {}", v)?;
         }
         Inst::FloatTrunc { v, to } => {

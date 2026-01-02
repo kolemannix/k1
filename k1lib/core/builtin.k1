@@ -67,9 +67,9 @@ ns types {
   intern fn typeSchema(id: u64): TypeSchema
   intern fn typeName(id: u64): string
 
-  fn getTypeName[T](): string { typeName(typeId[T]()) }
-  fn getTypeNameOfVal[T](_t: T): string { typeName(typeId[T]()) }
-  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
+  fn getTypeName[T](): string { typeName(typeId[T]) }
+  fn getTypeNameOfVal[T](_t: T): string { typeName(typeId[T]) }
+  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]) }
 
   // DO NOT REORDER VARIANTS
   deftype IntKind = either U8, U16, U32, U64, I8, I16, I32, I64
@@ -147,7 +147,7 @@ ns types {
 
 
   fn makeAny[T](t: *T): Any {
-    { typeId: typeId[T](), value: t as ptr }
+    { typeId: typeId[T](), value: t.as[ptr] }
   }
 
   fn assertWrapperType[A, B](): unit {
@@ -156,7 +156,7 @@ ns types {
     require schemaA is .Struct({ fields }) else { crash("isWrapperType: A must be a struct") };
     require fields.first() is .Some(field) and fields.len() == 1 else crash("A must have one field, got {fields.len()}");
     let equal = field.typeId == bTypeId;
-    if not equal { crash("Expected {types/getTypeName[B]()} but got {types/typeName(field.typeId)}") };
+    if not equal { crash("Expected {types/getTypeName[B]} but got {types/typeName(field.typeId)}") };
   }
 
 }
@@ -188,7 +188,7 @@ ability Writer {
   fn writeByte(self: Self, value: u8): unit 
   fn writeBytes(self: Self, bytes: View[byte]): unit
 
-  fn writeChar(self: Self, value: char): unit { self.writeByte(value as u8) }
+  fn writeChar(self: Self, value: char): unit { self.writeByte(value.as[u8]) }
   fn writeString(self: Self, value: string): unit { self.writeBytes(value.viewBytes()) }
 
   fn repeat(self: Self, value: string, n: size): unit {
@@ -527,14 +527,14 @@ ns sys {
 }
 
 ns ptr {
-  let NULL: ptr = 0 as ptr;
+  let NULL: ptr = 0.as[ptr];
 
   fn isNull(self: ptr): bool {
-    self as int == 0
+    self == NULL
   }
 
-  fn r[T](self: ptr): *T { self as *T }
-  fn rw[T](self: ptr): *mut T { self as *mut T }
+  fn r[T](self: ptr): *T { self.as[*T] }
+  fn rw[T](self: ptr): *mut T { self.as[*mut T] }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
@@ -542,15 +542,15 @@ ns ptr {
   intern fn refAtIndex[T](self: ptr, index: int): *mut T
 
   fn addBytes(self: ptr, offset: int): ptr { 
-    (self as int + offset) as ptr
+    (self.as[int] + offset).as[ptr]
   }
 
   fn subBytes(self: ptr, offset: int): ptr { 
-    (self as int - offset) as ptr
+    (self.as[int] - offset).as[ptr]
   }
 
   fn diff(self: ptr, other: ptr): int {
-    (self as int) - (other as int)
+    self.as[int] - other.as[int]
   }
 
   fn alignAddr(baseAddress: size, alignBytes: size): int {
@@ -559,20 +559,20 @@ ns ptr {
   }
 
   fn aligned(self: ptr, alignBytes: int): ptr {
-    alignAddr(self as int, alignBytes) as ptr
+    alignAddr(self.as[size], alignBytes).as()
   }
 
 }
 
 impl Equals for ptr {
   fn equals(self: ptr, other: ptr): bool {
-    self as int == other as int
+    self.as[int] == other.as[int]
   }
 }
 
 ns bool {
   intern fn negated(self: bool): bool
-  fn as_u8(self: bool): u8 { self as u8 }
+  fn as_u8(self: bool): u8 { self.as[u8] }
   fn from_u8(value: u8): bool { value != 0u8 }
 }
 
@@ -602,7 +602,7 @@ ns Array {
     array.getRef(0)
   }
   fn basePtr[T, N: static int](array: *mut Array[T, N]): ptr {
-    array as ptr
+    array.as[ptr]
   }
   fn sizeBytes[T, N: static int](_array: Array[T, N]): int {
     types/sizeOf[Array[T, N]]()
@@ -727,7 +727,7 @@ fn crash(context locn: compiler/SourceLocation)(msg: string): never {
     posix/write(
       fileNo = 1,
       data = s.view().dataPtr(),
-      count = (s.view().len() - 1) as c_sizet,
+      count = (s.view().len() - 1).as[c_sizet],
     );
     sys/exit(1)
   } else if k1/IS_STATIC {

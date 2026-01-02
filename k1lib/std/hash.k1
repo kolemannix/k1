@@ -28,7 +28,7 @@ fn fnv1a_hash(key: string): u64 {
   let FNV_OFFSET: u64 = 14695981039346656037;
   let hash_value = FNV_OFFSET;
   for c in key {
-    hash_value := hash_value ^ c as u8 as u64;
+    hash_value := hash_value ^ c.as[u8].as[u64];
     hash_value := hash_value * FNV_PRIME;
   };
   hash_value
@@ -62,8 +62,8 @@ ns HashMap {
 
   fn _computeIndex[V](self: *HashMap[V], key: string): size {
     let hash = fnv1a_hash(key);
-    let index = hash % (self.entries.len as u64);
-    index as size
+    let index = hash % self.entries.len.as[u64];
+    index.as[size]
   }
 
   fn _probe[V](self: *mut HashMap[V], startIndex: size): *mut Entry[V] {
@@ -80,8 +80,8 @@ ns HashMap {
   }
 
   fn fillFactor[V](self: HashMap[V]): f32 {
-    let fillDivisor = if self.entries.len == 0 1 as f32 else self.entries.len as f32;
-    let fillNumerator = if self.size == 0 1.0 else self.size as f32;
+    let fillDivisor = if self.entries.len == 0 1.0 else self.entries.len.as[f32];
+    let fillNumerator = if self.size == 0 1.0 else self.size.as[f32];
     let fillFactor = fillNumerator / fillDivisor;
     fillFactor
   }

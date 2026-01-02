@@ -16,6 +16,7 @@ mod vm_test;
 use crate::bc::{
     self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
 };
+use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
     ScalarType, Type, TypeId, TypePool,
@@ -376,6 +377,45 @@ impl Value {
         self.0 as usize
     }
 
+    const fn truncated(&self, to: NumericWidth) -> Self {
+        match to {
+            NumericWidth::B8 => Value(self.0 as u8 as u64),
+            NumericWidth::B16 => Value(self.0 as u16 as u64),
+            NumericWidth::B32 => Value(self.0 as u32 as u64),
+            NumericWidth::B64 => *self,
+        }
+    }
+
+    const fn sign_extended(&self, from: NumericWidth, to: NumericWidth) -> Self {
+        match (from, to) {
+            (NumericWidth::B8, NumericWidth::B16) => {
+                let v = self.0 as i8 as i16 as u16 as u64;
+                Value(v)
+            }
+            (NumericWidth::B8, NumericWidth::B32) => {
+                let v = self.0 as i8 as i32 as u32 as u64;
+                Value(v)
+            }
+            (NumericWidth::B8, NumericWidth::B64) => {
+                let v = self.0 as i8 as i64 as u64;
+                Value(v)
+            }
+            (NumericWidth::B16, NumericWidth::B32) => {
+                let v = self.0 as i16 as i32 as u32 as u64;
+                Value(v)
+            }
+            (NumericWidth::B16, NumericWidth::B64) => {
+                let v = self.0 as i16 as i64 as u64;
+                Value(v)
+            }
+            (NumericWidth::B32, NumericWidth::B64) => {
+                let v = self.0 as i32 as i64 as u64;
+                Value(v)
+            }
+            _ => *self,
+        }
+    }
+
     const fn u8(u8: u8) -> Value {
         Value(u8 as u64)
     }
@@ -481,6 +521,12 @@ impl Value {
         }
     }
 
+    pub fn as_u8(&self) -> u8 {
+        self.0 as u8
+    }
+    pub fn as_u16(&self) -> u16 {
+        self.0 as u16
+    }
     pub fn as_u32(&self) -> u32 {
         self.0 as u32
     }
@@ -1083,11 +1129,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 vm.stack.set_cur_inst_value(inst_index, input);
                 ip += 1
             }
-            Inst::IntTrunc { v, to: _ } => {
+            Inst::IntTrunc { v, to } => {
                 let input = resolve_value!(v);
 
-                // For now, truncate is a no-op
-                let result = input;
+                let result = input.truncated(to.width());
 
                 vm.stack.set_cur_inst_value(inst_index, result);
                 ip += 1
@@ -1095,17 +1140,16 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             Inst::IntExtU { v, to: _ } => {
                 let input = resolve_value!(v);
 
-                // For now, extend is a no-op
+                // IntExtU is a no-op
                 let result = input;
 
                 vm.stack.set_cur_inst_value(inst_index, result);
                 ip += 1
             }
-            Inst::IntExtS { v, to: _ } => {
+            Inst::IntExtS { v, from, to } => {
                 let input = resolve_value!(v);
 
-                // For now, extend is a no-op
-                let result = input;
+                let result = input.sign_extended(from.width(), to.width());
 
                 vm.stack.set_cur_inst_value(inst_index, result);
                 ip += 1

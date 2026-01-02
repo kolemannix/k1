@@ -56,7 +56,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     let rawValue = u64/bitmaskLow(bits);
     let typeWidth = intWidthForBits(bits);
     let nameCap = member.name.capitalizeAscii();
-    let mask = rawValue.shiftLeft(bitIndex.* as u32);
+    let mask = rawValue.shiftLeft(bitIndex.*.as());
     let offset = bitIndex.*;
     let sizeMask = u64/bitmaskLow(typeWidth);
     let invMask = mask.bitNot().bitAnd(sizeMask);
@@ -95,7 +95,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     if isBool {
       code.line("    cleared == 1")
     } else {
-      code.line("    cleared as {fieldType}");
+      code.line("    cleared.as[{fieldType}]");
     };
 
     code.line("  }"); // End Getter

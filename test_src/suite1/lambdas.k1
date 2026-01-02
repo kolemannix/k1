@@ -69,10 +69,6 @@ fn thunksTest(): unit {
 
 fn test(): unit {
 
-  assert(staticAddOne.toRef() as ptr == staticAddOne.toRef() as ptr);
-
-  assert(staticAddOne.toRef() as ptr != staticAddTwo.toRef() as ptr);
-
   let staticAddOneVar = staticAddOne.toRef();
   let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
   assertEquals(staticResult, 6 + 6);

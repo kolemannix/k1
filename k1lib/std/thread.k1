@@ -10,7 +10,7 @@ ns pthread {
 }
 fn start[T](arena: *mut Arena, function: *\(*mut T) -> ptr, input: *T): *Thread {
   let thread: *Thread = arena.pushUninit[Thread]();
-  let ret = pthread/pthread_create(thread, ptr/NULL, function as ptr, input as ptr);
+  let ret = pthread/pthread_create(thread, ptr/NULL, function.as[ptr], input.as[ptr]);
   if ret < 0 {
     crash("pthread_create failed")
   };
@@ -18,7 +18,7 @@ fn start[T](arena: *mut Arena, function: *\(*mut T) -> ptr, input: *T): *Thread 
 }
 
 fn join[T](thread: Thread, retval: *mut T): unit {
-  let ret = pthread/pthread_join(thread, retval as ptr);
+  let ret = pthread/pthread_join(thread, retval.as[ptr]);
   if ret < 0 {
     crash("pthread_join failed")
   };

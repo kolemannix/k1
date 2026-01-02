@@ -15,8 +15,8 @@ fn day2(part: int, input: string): unit {
   let totalMem = 0;
   for ranges {
     let parts = it.splitByChar('-');
-    let start: i64 = string/parseBase10(parts.first().!).! as i64;
-    let end: i64 = string/parseBase10(parts.last().!).! as i64;
+    let start: i64 = string/parseBase10(parts.first().!).!.as();
+    let end: i64 = string/parseBase10(parts.last().!).!.as();
 
     let value = start;
     while value <= end {

@@ -92,14 +92,14 @@ ns io {
   impl Writer for OutStream {
     fn writeByte(self: Self, value: u8): unit {
       let* valueRef: *u8 = value;
-      posix/write(fileNo = self.fileNo, data = valueRef as ptr, count = 1);
+      posix/write(fileNo = self.fileNo, data = valueRef.as[ptr], count = 1);
       ()
     }
     fn writeBytes(self: Self, bytes: View[byte]): unit {
       posix/write(
         fileNo = self.fileNo,
         data = bytes.dataPtr(),
-        count = (bytes.len()) as c_sizet
+        count = (bytes.len()).as[c_sizet]
       );
       ()
     }
@@ -127,7 +127,7 @@ ns sys {
 
   fn parseMainArgs(argCount: u32, args: ptr): View[string] {
     let buf = Buffer/fromPtrAndCount[CString](
-      count = argCount as size,
+      count = argCount.as[size],
       pointer = args
     );
     let strings = List/fromMap(buf, \cstr. string/wrapCString(cstr));
@@ -136,7 +136,7 @@ ns sys {
 
   fn readLine(maxLengthBytes: size): Result[string, string] {
     let* buffer = Buffer/_allocate[byte](maxLengthBytes);
-    let bytesRead: i64 = posix/read(0, buffer.data as ptr, buffer.len as c_sizet);
+    let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c_sizet]);
 
     if bytesRead < 0 {
       return(.Err("Failed to read line"));
@@ -187,14 +187,7 @@ ns char {
     string/wrapList([self])
   }
 
-  fn toDigitValue(self: char): ?u8 {
-    let i_code = self as u8;
-    if i_code >= 48 and i_code <= 57 {
-      .Some(i_code - 48)
-    } else {
-      .None
-    }
-  }
+  fn as_u8(self: char): u8 { self.as[u8] }
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000;
@@ -202,60 +195,65 @@ ns char {
   //fn asDigit(self: char, radix: u32): ?u32 {
   //  assert(radix >= 2 and radix <= 36);
   //  let value = if self > '9' and radix > 10 {
-  //    self as u8
+  //    self.as[u8]
   //  }
 
   //}
 
   fn isAscii(self: char): bool {
-    self as u8 <= 0x7F
+    self.as[u8] <= 0x7F
   }
 
   fn isAsciiLetter(self: char): bool {
-    let s = self as u8;
-    (s >= 'a' as u8 and s <= 'z' as u8) or (s >= 'A' as u8 and s <= 'Z' as u8)
+    let s = self.as[u8];
+    (s >= 'a'.as[u8] and s <= 'z'.as[u8]) or (s >= 'A'.as[u8] and s <= 'Z'.as[u8])
   }
 
   fn isAsciiDigit(self: char): bool {
-    let s = self as u8;
-    s >= '0' as u8 and s <= '9' as u8
+    let s = self.as[u8];
+    s >= '0'.as[u8] and s <= '9'.as[u8]
+  }
+
+  fn toAsciiDigit(self: char): ?u8 {
+    if self.isAsciiDigit() { .Some(self.as[u8] - '0'.as[u8]) } 
+    else .None
   }
 
   fn isAsciiLower(self: char): bool {
-    let s = self as u8;
-    s >= 'a' as u8 and s <= 'z' as u8
+    let s = self.as[u8];
+    s >= 'a'.as[u8] and s <= 'z'.as[u8]
   }
 
   fn isAsciiUpper(self: char): bool {
-    let s = self as u8;
-    s >= 'A' as u8 and s <= 'Z' as u8
+    let s = self.as[u8];
+    s >= 'A'.as[u8] and s <= 'Z'.as[u8]
   }
 
   fn toAsciiUpper(self: char): char {
     // Toggle (clear) the 6th bit if we are ascii lower
-    let u8 = (self as u8).xor(ASCII_CASE_MASK * self.isAsciiLower().as_u8());
-    u8 as char
+    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.isAsciiLower().as_u8());
+    u8.as[char]
   }
 
   fn toAsciiLower(self: char): char {
     // Set the 6th bit if we are ascii upper
-    let u8 = (self as u8).bitOr(ASCII_CASE_MASK * self.isAsciiUpper().as_u8());
-    u8 as char
+    let u8 = (self.as[u8]).bitOr(ASCII_CASE_MASK * self.isAsciiUpper().as_u8());
+    u8.as[char]
   }
 
 }
 
 impl Comparable for char {
   fn compare(self: char, other: char): Ordering {
-    (self as u8).compare(other as u8)
+    (self.as[u8]).compare(other.as[u8])
   }
 }
 
 impl ScalarCmp for char {
-  fn lt(self: Self, other: Self): bool { (self as u8).lt(other as u8) }
-  fn le(self: Self, other: Self): bool { (self as u8).le(other as u8) }
-  fn gt(self: Self, other: Self): bool { (self as u8).gt(other as u8) }
-  fn ge(self: Self, other: Self): bool { (self as u8).ge(other as u8) }
+  fn lt(self: Self, other: Self): bool { (self.as[u8]).lt(other.as[u8]) }
+  fn le(self: Self, other: Self): bool { (self.as[u8]).le(other.as[u8]) }
+  fn gt(self: Self, other: Self): bool { (self.as[u8]).gt(other.as[u8]) }
+  fn ge(self: Self, other: Self): bool { (self.as[u8]).ge(other.as[u8]) }
 }
 
 impl[T: Print] Show for T {
@@ -283,13 +281,13 @@ impl Show for char { fn show(self: char): string { self.toString() } }
 fn formatUInt[W: Writer](context w: W)(value: u64, base: u64): unit {
   if value == 0 { w.writeChar('0'); return(()) }
   else if value < base {
-    let digit = u8/toAsciiDigitBase(value as u8, base);
+    let digit = u8/toAsciiDigitBase(value.as[u8], base);
     w.writeChar(digit);
   } else if value < (base * 2) {
     let first = (value / base);
-    let firstDigit = u8/toAsciiDigitBase(first as u8, base);
+    let firstDigit = u8/toAsciiDigitBase(first.as[u8], base);
     let second = value % base;
-    let secondDigit = u8/toAsciiDigitBase(second as u8, base);
+    let secondDigit = u8/toAsciiDigitBase(second.as[u8], base);
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
   } else {
@@ -298,7 +296,7 @@ fn formatUInt[W: Writer](context w: W)(value: u64, base: u64): unit {
     let* digits = List/withCapacity[char](8);
     while remaining.* > 0 {
       let d = remaining.* % base;
-      let c = u8/toAsciiDigitBase(d as u8, base);
+      let c = u8/toAsciiDigitBase(d.as[u8], base);
       digits.push(c);
       remaining <- remaining.* / base;
     };
@@ -313,19 +311,19 @@ fn formatUInt[W: Writer](context w: W)(value: u64, base: u64): unit {
 
 impl Print for u8 {
   fn printTo[W: Writer](self: u8, w: W): unit {
-    (self as u64).printTo(w)
+    (self.as[u64]).printTo(w)
   }
 }
 
 impl Print for u16 {
   fn printTo[W: Writer](self: u16, w: W): unit {
-    (self as u64).printTo(w)
+    (self.as[u64]).printTo(w)
   }
 }
 
 impl Print for u32 {
   fn printTo[W: Writer](self: u32, w: W): unit {
-    (self as u64).printTo(w)
+    (self.as[u64]).printTo(w)
   }
 }
 
@@ -337,19 +335,19 @@ impl Print for u64 {
 
 impl Print for i8 {
   fn printTo[W: Writer](self: i8, w: W): unit {
-    (self as int).printTo(w)
+    (self.as[int]).printTo(w)
   }
 }
 
 impl Print for i16 {
   fn printTo[W: Writer](self: i16, w: W): unit {
-    (self as int).printTo(w)
+    (self.as[int]).printTo(w)
   }
 }
 
 impl Print for i32 {
   fn printTo[W: Writer](self: i32, w: W): unit {
-    (self as int).printTo(w)
+    (self.as[int]).printTo(w)
   }
 }
 
@@ -361,7 +359,7 @@ impl Print for int {
     };
 
     let pos = if neg { (self * -1) } else self;
-    formatUInt(context w)(pos as uint, 10);
+    formatUInt(context w)(pos.as[uint], 10);
   }
 }
 
@@ -424,23 +422,23 @@ impl Comparable for u8 {
 ns u8 {
   fn toAsciiDigitBase(v: u8, base: u64): char {
     if v < 10 {
-      (v + 48) as char // '0' + v
+      (v + 48).as[char] // '0' + v
     } else if v < 36 {
-      (v + 87) as char // 'a' + (v - 10)
+      (v + 87).as[char] // 'a' + (v - 10)
     } else if v < 62 {
-      (v + 29) as char // 'A' + (v - 36)
+      (v + 29).as[char] // 'A' + (v - 36)
     } else {
       crash("u8/toAsciiDigitBase: value {v} is out of range for base {base}")
     }
   }
   fn toAsciiDigit(v: u8): char {
-    (v + 48) as char
+    (v + 48).as[char]
   }
 }
 
 ns u32 {
-  let maxValue: u32 = 0xFFFFFFFF;
   let minValue: u32 = 0x00000000;
+  let maxValue: u32 = 0xFFFFFFFF;
 }
 
 ns i32 {
@@ -450,17 +448,17 @@ ns i32 {
 
 ns i64 {
   let maxValue: i64 = 0x7FFFFFFFFFFFFFFF;
-  let minValue: i64 = 0x8000000000000000;
+  let minValue: i64 = -0x8000000000000000;
   fn nextPow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/nextPow2: value must be positive") else
     if self == 0 return(1);
 
-    let next = (self as u64).nextPow2();
-    if next > i64/maxValue as u64 {
+    let next = (self.as[u64]).nextPow2();
+    if next > i64/maxValue.as[u64] {
       crash("i64/nextPow2: value too large to fit in i64")
     };
-    next as i64
+    next.as[i64]
   }
 
   fn abs(self: i64): i64 {
@@ -483,7 +481,7 @@ ns u64 {
 
   fn bitmaskLow(n: size): u64 {
     assert(n <= 64);
-    1usize.shiftLeft((n) as u32) - 1
+    1usize.shiftLeft((n).as[u32]) - 1
   }
 
 }
@@ -503,9 +501,9 @@ ns k1rt {
 ns f64 {
   fn format[W: Writer](f: f64, w: W, places: u32): unit {
     let* stackBuf = Array/bytes[32]();
-    let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.getBase() as ptr, 32, f, places);
+    let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.getBase().as[ptr], 32, f, places);
     if writtenLen <= 0 crash("snprintf_f32 returned {writtenLen}");
-    w.writeBytes(stackBuf.asView().slice(0, writtenLen as size))
+    w.writeBytes(stackBuf.asView().slice(0, writtenLen.as[size]))
   }
 }
 
@@ -542,7 +540,7 @@ impl ScalarCmp for f64 {
 
 impl Print for f32 {
   fn printTo[W: Writer](self: f32, w: W): unit {
-    f64/format(self as f64, w, places = 6);
+    f64/format(self.as[f64], w, places = 6);
   }
 }
 
@@ -555,6 +553,6 @@ impl Print for f64 {
 impl Print for ptr {
   fn printTo[W: Writer](self: ptr, w: W): unit {
     w.writeString("0x");
-    formatUInt(context w)(self as usize, base = 16);
+    formatUInt(context w)(self.as[usize], base = 16);
   }
 }

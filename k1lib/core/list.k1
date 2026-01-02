@@ -72,7 +72,7 @@ ns List {
     let countVal = count.fromStatic();
     assertEquals(self.len, countVal);
     let base: ptr = self.asBuffer().cloned().dataPtr();
-    base as *mut Array[T, N]
+    base.as()
   }
 
   // The possibly-uninitialized backing buffer of this List
@@ -309,7 +309,7 @@ ns List {
 }
 
 impl Writer for *mut List[char] {
-  fn writeByte(self: Self, value: u8): unit { self.push(value as char) }
+  fn writeByte(self: Self, value: u8): unit { self.push(value.as[char]) }
   fn writeBytes(self: Self, bytes: View[byte]): unit { self.appendView(bytes.toCharView()) }
 }
 

@@ -4,7 +4,7 @@ fn staticAddOne(x: int): int { x + 1 }
 fn staticAddTwo(x: int): int { x + 2 }
 
 fn test(): unit {
-  assert(staticAddOne.toRef() as ptr != staticAddTwo.toRef() as ptr);
+  assert(staticAddOne.toRef().as[ptr] != staticAddTwo.toRef().as[ptr]);
   let someAddFn = staticAddOne.toRef();
   let x = someAddFn(10);
   assertEquals(x, 11);

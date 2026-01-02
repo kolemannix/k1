@@ -16,27 +16,27 @@ extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
 // Convert View[string] to null-terminated **char array for execve  
 fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): **char {
     let totalArgs = 1 + args.len() + 1; // program + args + null terminator
-    let argv = alloc.alloc(
+    let argv: **char = alloc.alloc(
       size = totalArgs * types/sizeOf[ptr](),
       align = types/alignOf[ptr]()
-    ) as **char;
+    ).as();
     
     // Set program name as argv[0] 
     let progCStr = program.toCString();
-    let argv_ptr = argv as *mut ptr;
+    let argv_ptr = argv.as[*mut ptr];
     argv_ptr <- progCStr.ptr;
     
     // Set arguments
     let i = 0;
     while i < args.len() {
         let argCStr = args.get(i).toCString();
-        let arg_slot = ptr/refAtIndex[ptr](argv as ptr, i + 1);
+        let arg_slot = ptr/refAtIndex[ptr](argv.as[ptr], i + 1);
         arg_slot <- argCStr.ptr;
         i := i + 1;
     };
     
     // Null terminate
-    let null_slot = ptr/refAtIndex[ptr](argv as ptr, totalArgs - 1);
+    let null_slot = ptr/refAtIndex[ptr](argv.as[ptr], totalArgs - 1);
     null_slot <- ptr/NULL;
     
     argv
@@ -45,7 +45,7 @@ fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): 
 fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string]): Result[i32, unit] {
     let progCStr = program.toCString();
     let argv = makeArgv(program, args);
-    let envp = ptr/NULL as **char; // Use current environment
+    let envp = ptr/NULL.as[**char]; // Use current environment
     
     let pid = fork();
     

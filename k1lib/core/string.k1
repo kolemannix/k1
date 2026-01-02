@@ -192,10 +192,8 @@ ns string {
     let i = if neg 1 else 0;
     let total = 0;
     while i < self.len() {
-      let c = self.get(i);
-      let digit = c.toDigitValue();
-      if digit is .Some(digit) {
-        total := (total * 10) + digit as int;
+      if self.get(i).toAsciiDigit() is .Some(digit) {
+        total := (total * 10) + digit.as[int];
       } else {
         return(.None);
       };
@@ -218,8 +216,12 @@ ns string {
   fn parseBase10(s: string): ?uint {
     let o: uint = 0;
     for c in s {
+      if c.toAsciiDigit() is .Some(digitValue) {
+
+      } else { return (.None) };
       if not c.isAsciiDigit() { return(.None) };
-      let digitValue: uint = (c as u8 - 48) as uint;
+      // no
+      let digitValue: uint = (c.as_u8() - 48).as[uint];
       o := o * 10;
       o := o + digitValue;
     };

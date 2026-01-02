@@ -5,7 +5,7 @@ ns ability_generic {
   }
 
   impl GAdd[Rhs = i64, Output = i64] for i32 {
-   fn gadd(self: i32, rhs: i64): i64 { (self as i64) + rhs }
+   fn gadd(self: i32, rhs: i64): i64 { self.as[i64] + rhs }
   }
 
   ns Foob {
@@ -52,7 +52,7 @@ ns ability_generic {
     fn to(self: Self): string { Show/show[i64](self) }
   }
   impl To[To = char] for byte {
-    fn to(self: byte): char { self as char }
+    fn to(self: byte): char { self.as() }
   }
 
   fn test(): unit {
@@ -71,8 +71,8 @@ ns ability_generic {
     let p: GenericPoint[i32] = { x: 1, y: 2 };
 
     let added: GenericPoint[i32] = p.gadd(p);
-    assertEquals(added.x, (1 + 1) as i32);
-    assertEquals(added.y, (2 + 2) as i32);
+    assertEquals(added.x, 1i32 + 1);
+    assertEquals(added.y, 2i32 + 2);
 
     assertEquals((3: i32).to(): string, "3");
     assertEquals(From/from(3: i32): string, "3");

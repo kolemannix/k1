@@ -9,7 +9,7 @@
 deftype FixList[T, N: static size] = { used: u32, data: Array[T, N] }
 ns FixList {
   fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
-  fn len[T, N: static size](self: FixList[T, N]): size { self.used as size }
+  fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
 
   fn clear[T, N: static size](self: *mut FixList[T, N]): unit {
     #if k1/DEBUG self.data*.memset(0xCD);
@@ -20,7 +20,7 @@ ns FixList {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
-      self.used* <- used as u32 + 1;
+      self.used* <- used.as[u32] + 1;
     } else {
       let typename = types/getTypeName[typeOf(self).value]();
       crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
@@ -31,7 +31,7 @@ ns FixList {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
-      self.used* <- used as u32 + 1;
+      self.used* <- used.as[u32] + 1;
       .Ok(())
     } else {
       .Err(())
@@ -43,7 +43,7 @@ ns FixList {
     if needed <= self.cap() {
       let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
       Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
-      self.used* <- needed as u32;
+      self.used* <- needed.as[u32];
       .Ok(())
     } else {
       .Err(())

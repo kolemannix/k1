@@ -52,12 +52,12 @@ use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, NamedTypeArg, NamedTypeArgId,
     NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind,
-    ParsedCall, ParsedCallArg, ParsedCast, ParsedExpr, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
-    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
-    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
+    ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
+    ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
+    ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
+    ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, QIdent,
+    Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
@@ -6327,96 +6327,121 @@ impl TypedProgram {
             }
         };
 
-        let (suffix_int_type, num_to_parse) = match suffix_result {
+        let (suffix_int_type, num_text) = match suffix_result {
             None => (None, parsed_text),
             Some((int_type, num_text)) => (Some(int_type), num_text),
         };
 
-        self.buffers.int_parse.push_str(num_to_parse);
-        if num_to_parse.contains('_') {
-            self.buffers.int_parse.retain(|c| c != '_');
+        let is_negative = num_text.starts_with('-');
+        if is_negative {
+            self.buffers.int_parse.push('-');
+        }
+        let num_text_pos = if is_negative { &num_text[1..] } else { num_text };
+        #[allow(clippy::manual_strip)]
+        let (base, num_text_no_prefix) = if num_text_pos.starts_with("0x") {
+            (16, &num_text_pos[2..])
+        } else if num_text_pos.starts_with("0b") {
+            (2, &num_text_pos[2..])
+        } else {
+            (10, num_text_pos)
         };
-        let num_to_parse = &self.buffers.int_parse;
+        self.buffers.int_parse.extend(num_text_no_prefix.chars().filter(|c| *c != '_'));
 
-        let expected_type_id = match ctx.expected_type_id {
-            None => None,
-            Some(t) => Some(match self.types.get_no_follow_static(t) {
-                Type::Static(stat) => stat.inner_type_id,
-                _ => t,
-            }),
+        let expected_int_type = match suffix_int_type {
+            Some(int_type) => int_type,
+            None => match ctx.expected_type_id.map(|t| self.types.get(t)) {
+                Some(Type::Integer(int_type)) => *int_type,
+                Some(_other) => {
+                    // Here we're expecting some non-integer type.
+                    // The best bet for a good compiler error is to parse as a large signed
+                    // value and let typechecking fail
+                    IntegerType::I64
+                }
+                None => IntegerType::I64,
+            },
         };
-        let default_int_type = IntegerType::I64;
-        let expected_int_type = suffix_int_type.unwrap_or(match expected_type_id {
-            None => default_int_type,
-            Some(U8_TYPE_ID) => IntegerType::U8,
-            Some(U16_TYPE_ID) => IntegerType::U16,
-            Some(U32_TYPE_ID) => IntegerType::U32,
-            Some(U64_TYPE_ID) => IntegerType::U64,
-            Some(I8_TYPE_ID) => IntegerType::I8,
-            Some(I16_TYPE_ID) => IntegerType::I16,
-            Some(I32_TYPE_ID) => IntegerType::I32,
-            Some(I64_TYPE_ID) => IntegerType::I64,
-            Some(_other) => {
-                // Parse as default and let typechecking fail
-                default_int_type
-            }
-        });
+        let num_to_parse = &self.buffers.int_parse[..];
+        debug!("num_to_parse: {num_to_parse}, base: {base}, type: {expected_int_type}");
         macro_rules! parse_int {
-            ($int_type:ident, $rust_int_type:ty, $base: expr, $offset: expr) => {{
-                let result = <$rust_int_type>::from_str_radix(&num_to_parse[$offset..], $base);
-                result.map(|int| TypedIntValue::$int_type(int))
+            ($int_type:ident, $rust_int_type:ty, $base: expr) => {{
+                let result = <$rust_int_type>::from_str_radix(num_to_parse, $base);
+                result.map(|int| TypedIntValue::$int_type(int)).map_err(|e| {
+                    make_error(
+                        format!(
+                            "Invalid {} {expected_int_type}: {num_to_parse}. {e}",
+                            if base == 16 {
+                                "hex"
+                            } else if base == 10 {
+                                "decimal"
+                            } else {
+                                "binary"
+                            }
+                        ),
+                        span,
+                    )
+                })
             }};
         }
-        eprintln!("parsing from '{parsed_text}': {}", num_to_parse);
-        let ret = if num_to_parse.starts_with("0x") {
-            let hex_base = 16;
-            let offset = 2;
-            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
-                IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
-                IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
-                IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
-                IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
-            };
-            value.map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))
-        } else if num_to_parse.starts_with("0b") {
-            let bin_base = 2;
-            let offset = 2;
-            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
-                IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
-                IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
-                IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
-                IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
-            };
-            value.map_err(|e| make_error(format!("Invalid binary {expected_int_type}: {e}"), span))
-        } else {
-            let dec_base = 10;
-            let offset = 0;
-            let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
-                IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
-                IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
-                IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
-                IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
-                IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
-                IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
-                IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
-                IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
-            };
-            value.map_err(|e| {
-                errf!(
-                    span,
-                    "Invalid {} integer {expected_int_type}: `{num_to_parse}` {e}",
-                    if expected_int_type.is_signed() { "signed" } else { "unsigned" }
-                )
-            })
+        let ret: Result<TypedIntValue, TyperError> = match expected_int_type {
+            IntegerType::U8 => parse_int!(U8, u8, base),
+            IntegerType::U16 => parse_int!(U16, u16, base),
+            IntegerType::U32 => parse_int!(U32, u32, base),
+            IntegerType::U64 => parse_int!(U64, u64, base),
+            IntegerType::I8 => parse_int!(I8, i8, base),
+            IntegerType::I16 => parse_int!(I16, i16, base),
+            IntegerType::I32 => parse_int!(I32, i32, base),
+            IntegerType::I64 => parse_int!(I64, i64, base),
         };
+        // let ret = if num_to_parse.starts_with("0x") {
+        //     let hex_base = 16;
+        //     let offset = if is_negative { 3 } else { 2 };
+        //     eprintln!("parsing from '{parsed_text}': {}", &num_to_parse[offset..]);
+        //     let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
+        //         IntegerType::U8 => parse_int!(U8, u8, hex_base, offset),
+        //         IntegerType::U16 => parse_int!(U16, u16, hex_base, offset),
+        //         IntegerType::U32 => parse_int!(U32, u32, hex_base, offset),
+        //         IntegerType::U64 => parse_int!(U64, u64, hex_base, offset),
+        //         IntegerType::I8 => parse_int!(I8, i8, hex_base, offset),
+        //         IntegerType::I16 => parse_int!(I16, i16, hex_base, offset),
+        //         IntegerType::I32 => parse_int!(I32, i32, hex_base, offset),
+        //         IntegerType::I64 => parse_int!(I64, i64, hex_base, offset),
+        //     };
+        //     value.map_err(|e| make_error(format!("Invalid hex {expected_int_type}: {e}"), span))
+        // } else if num_to_parse.starts_with("0b") {
+        //     let bin_base = 2;
+        //     let offset = if is_negative { 3 } else { 2 };
+        //     let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
+        //         IntegerType::U8 => parse_int!(U8, u8, bin_base, offset),
+        //         IntegerType::U16 => parse_int!(U16, u16, bin_base, offset),
+        //         IntegerType::U32 => parse_int!(U32, u32, bin_base, offset),
+        //         IntegerType::U64 => parse_int!(U64, u64, bin_base, offset),
+        //         IntegerType::I8 => parse_int!(I8, i8, bin_base, offset),
+        //         IntegerType::I16 => parse_int!(I16, i16, bin_base, offset),
+        //         IntegerType::I32 => parse_int!(I32, i32, bin_base, offset),
+        //         IntegerType::I64 => parse_int!(I64, i64, bin_base, offset),
+        //     };
+        //     value.map_err(|e| make_error(format!("Invalid binary {expected_int_type}: {e}"), span))
+        // } else {
+        //     let dec_base = 10;
+        //     let offset = 0;
+        //     let value: Result<TypedIntValue, std::num::ParseIntError> = match expected_int_type {
+        //         IntegerType::U8 => parse_int!(U8, u8, dec_base, offset),
+        //         IntegerType::U16 => parse_int!(U16, u16, dec_base, offset),
+        //         IntegerType::U32 => parse_int!(U32, u32, dec_base, offset),
+        //         IntegerType::U64 => parse_int!(U64, u64, dec_base, offset),
+        //         IntegerType::I8 => parse_int!(I8, i8, dec_base, offset),
+        //         IntegerType::I16 => parse_int!(I16, i16, dec_base, offset),
+        //         IntegerType::I32 => parse_int!(I32, i32, dec_base, offset),
+        //         IntegerType::I64 => parse_int!(I64, i64, dec_base, offset),
+        //     };
+        //     value.map_err(|e| {
+        //         errf!(
+        //             span,
+        //             "Invalid {} integer {expected_int_type}: `{num_to_parse}` {e}",
+        //             if expected_int_type.is_signed() { "signed" } else { "unsigned" }
+        //         )
+        //     })
+        // };
         self.buffers.int_parse.clear();
         ret
     }
@@ -6508,6 +6533,7 @@ impl TypedProgram {
 
     fn eval_field_access(
         &mut self,
+        expr_id: ParsedExprId,
         field_access: &parse::FieldAccess,
         ctx: EvalExprContext,
         is_assignment_lhs: bool,
@@ -6524,6 +6550,28 @@ impl TypedProgram {
             span,
         )? {
             return Ok(enum_result);
+        }
+
+        if !field_access.type_args.is_empty() {
+            // Treat it like a call; foo.<field_name>[u32]
+            let args = self.ast.p_call_args.add_slice_copy(&[ParsedCallArg {
+                name: None,
+                value: field_access.base,
+                is_explicit_context: false,
+            }]);
+            return self.eval_function_call(
+                &ParsedCall {
+                    name: QIdent::naked(field_access.field_name, span),
+                    type_args: field_access.type_args,
+                    args,
+                    span,
+                    is_method: true,
+                    id: expr_id,
+                },
+                None,
+                ctx,
+                None,
+            );
         }
 
         // Special case: .* dereference operation
@@ -7136,7 +7184,7 @@ impl TypedProgram {
             }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
-                self.eval_field_access(&field_access, ctx, false)
+                self.eval_field_access(expr_id, &field_access, ctx, false)
             }
             ParsedExpr::Block(block) => {
                 let block = block.clone();
@@ -7233,7 +7281,12 @@ impl TypedProgram {
                 let allow_bindings = true;
                 self.eval_match_expr(expr_id, ctx, partial_match, allow_bindings)
             }
-            ParsedExpr::Cast(cast) => self.eval_cast(expr_id, *cast, ctx),
+            ParsedExpr::Cast(cast) => {
+                let cast = *cast;
+                let dest_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
+                eprintln!("actual cast node");
+                self.eval_cast(cast.base_expr, dest_type, cast.span, ctx)
+            }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(_is) => {
                 let res = self.eval_interpolated_string(expr_id, ctx)?;
@@ -8997,15 +9050,16 @@ impl TypedProgram {
 
     fn eval_cast(
         &mut self,
-        _expr_id: ParsedExprId,
-        cast: ParsedCast,
+        base_expr: ParsedExprId,
+        target_type: TypeId,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let base_expr = self.eval_expr(cast.base_expr, ctx.with_no_expected_type())?;
+        let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get_type(base_expr);
-        let target_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
         if base_expr_type == target_type {
-            return failf!(cast.span, "Useless cast");
+            self.report(warnf!(span, "Useless cast"));
+            return Ok(base_expr);
         }
         let cast_type = match self.types.get_no_follow_static(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
@@ -9015,14 +9069,14 @@ impl TypedProgram {
                             // Extend
                             if from_integer_type.is_signed() && !to_integer_type.is_signed() {
                                 return failf!(
-                                    cast.span,
-                                    "Cannot widen from {} to {}; its too confusing",
+                                    span,
+                                    "Cannot widen from {} to {}; its unclear whether sign or zero extension should occur",
                                     from_integer_type,
                                     to_integer_type
                                 );
                             }
                             CastType::IntegerCast(IntegerCastDirection::Extend)
-                        },
+                        }
                         Ordering::Greater => CastType::IntegerCast(IntegerCastDirection::Truncate),
                         // Likely a sign change
                         Ordering::Equal => CastType::IntegerCast(IntegerCastDirection::NoOp),
@@ -9034,7 +9088,7 @@ impl TypedProgram {
                         Ok(CastType::Integer8ToChar)
                     } else {
                         failf!(
-                            cast.span,
+                            span,
                             "Cannot cast integer '{}' to char, must be 8 bits",
                             from_integer_type
                         )
@@ -9043,7 +9097,7 @@ impl TypedProgram {
                 Type::Pointer => match from_integer_type {
                     IntegerType::U64 | IntegerType::I64 => Ok(CastType::WordToPointer),
                     _ => failf!(
-                        cast.span,
+                        span,
                         "Cannot cast integer '{}' to Pointer (must be word-sized (64-bit))",
                         from_integer_type
                     ),
@@ -9063,7 +9117,7 @@ impl TypedProgram {
                     }
                 }
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast integer '{}' to '{}'",
                     from_integer_type,
                     self.type_id_to_string(target_type).blue()
@@ -9074,7 +9128,7 @@ impl TypedProgram {
                     match from_float_type.size().cmp(&to_float_type.size()) {
                         Ordering::Less => Ok(CastType::FloatExtend),
                         Ordering::Greater => Ok(CastType::FloatTruncate),
-                        Ordering::Equal => failf!(cast.span, "Useless float cast"),
+                        Ordering::Equal => failf!(span, "Useless float cast"),
                     }
                 }
                 Type::Integer(to_int_type) => match to_int_type {
@@ -9083,13 +9137,13 @@ impl TypedProgram {
                     IntegerType::I32 => Ok(CastType::FloatToSignedInteger),
                     IntegerType::I64 => Ok(CastType::FloatToSignedInteger),
                     _ => failf!(
-                        cast.span,
+                        span,
                         "Cannot cast float to integer '{}'",
                         self.type_id_to_string(target_type).blue()
                     ),
                 },
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast float to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
@@ -9097,7 +9151,7 @@ impl TypedProgram {
             Type::Char => match self.types.get(target_type) {
                 Type::Integer(_to_integer_type) => Ok(CastType::IntegerExtendFromChar),
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast char to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
@@ -9111,7 +9165,7 @@ impl TypedProgram {
                     Ok(CastType::BoolToInt)
                 }
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast bool to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
@@ -9120,7 +9174,7 @@ impl TypedProgram {
                 Type::Pointer => Ok(CastType::ReferenceToPointer),
                 Type::Reference(_) => Ok(CastType::ReferenceToReference),
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast reference to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
@@ -9128,7 +9182,7 @@ impl TypedProgram {
             Type::FunctionPointer(_fp) => match self.types.get(target_type) {
                 Type::Pointer => Ok(CastType::ReferenceToPointer),
                 _ => failf!(
-                    cast.span,
+                    span,
                     "Cannot cast Function Pointer to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
@@ -9138,8 +9192,8 @@ impl TypedProgram {
                 Type::Integer(IntegerType::U64) => Ok(CastType::PointerToWord),
                 Type::Integer(IntegerType::I64) => Ok(CastType::PointerToWord),
                 _ => failf!(
-                    cast.span,
-                    "Cannot cast Pointer to '{}'",
+                    span,
+                    "Cannot cast ptr to '{}'",
                     self.type_id_to_string(target_type).blue()
                 ),
             },
@@ -9148,7 +9202,7 @@ impl TypedProgram {
                     Ok(CastType::StaticErase)
                 } else {
                     failf!(
-                        cast.span,
+                        span,
                         "Cannot cast static '{}' to '{}'",
                         self.type_id_to_string(base_expr_type).blue(),
                         self.type_id_to_string(target_type).blue()
@@ -9156,13 +9210,13 @@ impl TypedProgram {
                 }
             }
             _ => failf!(
-                cast.span,
+                span,
                 "Cannot cast '{}' to '{}'",
                 self.type_id_to_string(base_expr_type).blue(),
                 self.type_id_to_string(target_type).blue()
             ),
         }?;
-        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(cast.span)))
+        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
     }
 
     fn eval_for_expr(
@@ -10536,6 +10590,19 @@ impl TypedProgram {
                         };
                     }
                 }
+            } else if fn_name == self.ast.idents.b.as_ {
+                let dest_type = match self.ast.p_type_args.get_first(call.type_args) {
+                    None => match ctx.expected_type_id {
+                        None => return failf!(call_span, "Cannot use as() with no expected type"),
+                        Some(et) => et,
+                    },
+                    Some(type_arg) => match type_arg.type_expr {
+                        None => return failf!(call_span, "Cannot use as() with no expected type"),
+                        Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
+                    },
+                };
+                let result = self.eval_cast(base_arg.value, dest_type, call_span, ctx)?;
+                return Ok(Either::Left(result));
             } else if fn_name == self.ast.idents.b.toStatic {
                 if call.args.len() != 1 {
                     return failf!(call_span, ".toStatic() takes no additional arguments");

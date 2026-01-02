@@ -27,7 +27,7 @@ ns Arena {
     let sizeBytes = 1 * gb;
     let basePtr: ptr = mem/virtualAlloc(sizeBytes);
     #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
-    posix/madvise(basePtr, (usageHintMb * mb) as c_sizet, advice = posix/MADV_SEQUENTIAL);
+    posix/madvise(basePtr, (usageHintMb * mb).as[c_sizet], advice = posix/MADV_SEQUENTIAL);
     {
       basePtr: basePtr,
       curAddr: basePtr,
@@ -37,7 +37,7 @@ ns Arena {
 
   fn default(): Arena {
     _virtual(usageHintMb = 10)
-    //let header: *mut Arena = basePtr as *mut Arena;
+    //let header: *mut Arena = basePtr.as[*mut Arena];
     //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
   }
 
@@ -59,7 +59,7 @@ ns Arena {
   fn pushLayout(self: *mut Arena, size: size, align: size): ptr {
     let dataStart = self.curAddr.aligned(align);
     let newEnd = dataStart.addBytes(size);
-    if newEnd as usize > self.maxAddr as usize {
+    if newEnd.as[usize] > self.maxAddr.as[usize] {
       mem/pushMode(.SystemHeap);
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
     };
@@ -70,7 +70,7 @@ ns Arena {
 
   fn pushUninit[T](self: *mut Arena): *mut T {
     let dataStart = self.pushLayout(sizeOf[T](), alignOf[T]());
-    dataStart as *mut T
+    dataStart.as[*mut T]
   }
 
   fn push[T](self: *mut Arena, t: T): *mut T {

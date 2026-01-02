@@ -45,12 +45,13 @@ Syntax/elegance
 - [x] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
-- [ ] Replace the builtin for ... yield with a userspace function taking a lambda
+- [x] Replace the builtin for ... yield with a userspace function taking a lambda
 - [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
   - [x] Ok now I'm really thinking about `size` and it being signed.
   - [x] Also: do safe integer coercions automatically
+- [ ] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
 
 Simple but missing
 - [ ] Decide if overflow traps or not (in debug and release, if those are even different)
@@ -95,7 +96,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
-- [ ] bitcast function (for struct ABI workarounds right now)
+- [x] bitcast function (for struct ABI workarounds right now)
 
 ## Project: Ability objects; dyn[<ability expr>]
 
@@ -318,7 +319,6 @@ It currently runs directly off the typed tree
 - [ ] Might be very cool to have builtin syntax for anything implementing a 'Monad' ability
   - (Monad ability would require closures and generic abilities, which we now have. Just need higher order type params `F[_]`
 - [ ] Require named fncall args by default; and allow anonymous w/ declaration like Jakt?
-- [ ] as! for fallible casting and as? for optional casting
 - [ ] Test handling of NaN and Infinity, other float edge cases
 - [ ] Try to encode prefix strings, aka German/Umbra strings
 

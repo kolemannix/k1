@@ -18,7 +18,7 @@ fn solve(): int {
     let i = itIndex;
     let sub = input.substring(i, i + 4);
     if unique(sub.innerBuffer()) {
-      return((i + 4) as int);
+      return(i + 4);
     };
   };
   0

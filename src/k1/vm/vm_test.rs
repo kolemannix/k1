@@ -12,12 +12,16 @@ mod stack_tests {
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
-            fn_type: bc::PhysicalFunctionType { return_type: InstKind::Void, params: MSlice::empty(), abi_mode: AbiMode::Internal },
+            fn_type: bc::PhysicalFunctionType {
+                return_type: InstKind::Void,
+                params: MSlice::empty(),
+                abi_mode: AbiMode::Internal,
+            },
             inst_offset: 0,
             inst_count: 0,
             blocks: MSlice::empty(),
             is_debug: false,
-            function_builtin_kind: None
+            function_builtin_kind: None,
         }
     }
 
@@ -34,7 +38,8 @@ mod stack_tests {
         unit.inst_count = 42;
         unit.fn_type.params = MSlice::forged(1, 10);
         stack.push_new_frame(None, &unit, None);
-        let frame_space_for_registers = stack.cursor().addr() - stack.current_frame().base_ptr.addr();
+        let frame_space_for_registers =
+            stack.cursor().addr() - stack.current_frame().base_ptr.addr();
         assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
         let x_addr = stack.push_t(b'X');
         stack.set_param_value(1, 0, Value(23));
@@ -167,5 +172,21 @@ mod value_roundtrip_tests {
         let other_data = 42u64;
         let other_ptr = &other_data as *const u64 as *const u8;
         assert_eq!(Value::ptr(other_ptr).as_ptr(), other_ptr);
+    }
+
+    #[test]
+    fn test_sign_extend() {
+        assert_eq!(
+            Value::i16(-3).sign_extended(NumericWidth::B16, NumericWidth::B32).as_typed_int(IntegerType::I32),
+            TypedIntValue::I32(-3)
+        );
+        assert_eq!(
+            Value::i16(-3).sign_extended(NumericWidth::B16, NumericWidth::B64).as_typed_int(IntegerType::I64),
+            TypedIntValue::I64(-3)
+        );
+        assert_eq!(
+            Value::i8(-3).sign_extended(NumericWidth::B8, NumericWidth::B32).as_typed_int(IntegerType::I32),
+            TypedIntValue::I32(-3)
+        )
     }
 }

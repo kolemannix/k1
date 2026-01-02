@@ -13,7 +13,7 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
-    let parts = (fmtString as string).splitByChar('?');
+    let parts = fmtString.splitByChar('?');
 
     code.var("parts", parts.asView());
     switch schema {
@@ -40,7 +40,7 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
         };
 
       },
-      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]()}")
+      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]}")
     };
     code.line("string/wrapList(result)");
     code.build()

@@ -17,7 +17,7 @@ ns Buffer {
 
   fn sizeBytes[T](self: Buffer[T]): size { bufferSizeBytes[T](self.len) }
 
-  fn dataPtr[T](self: Buffer[T]): ptr { self.data as ptr }
+  fn dataPtr[T](self: Buffer[T]): ptr { self.data.as[ptr] }
 
   fn len[T](self: Buffer[T]): size { self.len }
 
@@ -25,11 +25,11 @@ ns Buffer {
   // Constructor functions
 
   fn empty[T](): Buffer[T] {
-    { len: 0, data: ptr/NULL as *mut T }
+    { len: 0, data: ptr/NULL.as[*mut T] }
   }
 
   fn fromPtrAndCount[T](pointer: ptr, count: size): Buffer[T] {
-    { len: count, data: pointer as *mut T }
+    { len: count, data: pointer.as[*mut T] }
   }
 
   fn fromRefAndCount[T](len: size, data: *mut T): Buffer[T] {
@@ -86,7 +86,7 @@ ns Buffer {
       let sizeBytes = bufferSizeBytes[T](count);
       alloc.alloc(sizeBytes, core/types/alignOf[T]())
     };
-    let data = ptr as *mut T;
+    let data = ptr.rw[T];
     { len: count, data }
   }
 
@@ -107,7 +107,7 @@ ns Buffer {
         align = core/types/alignOf[T](),
         newSize = newSize,
       );
-      self <- { len: newCount, data: newPtr as *mut T }
+      self <- { len: newCount, data: newPtr.rw[T] }
     } else {
       let newBuffer = self._enlargedCloneIn(newCount);
       self <- newBuffer
@@ -142,7 +142,7 @@ ns Buffer {
   // Accessor functions
 
   fn getRefRead[T](self: Buffer[T], index: size): *T {
-    self.getRef[T](index) as *T
+    self.getRef[T](index)
   }
 
   fn getRefUnchecked[T](self: Buffer[T], index: size): *mut T {
@@ -198,7 +198,7 @@ ns Buffer {
     if size == 0 return(View/empty());
     let rem = self.len() % size != 0;
     let div = self.len() / size;
-    let* results = List/withCapacity[Buffer[T]](div + (rem as size));
+    let* results = List/withCapacity[Buffer[T]](div + (rem.as[size]));
 
     let i = 0;
     let j = 0;

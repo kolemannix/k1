@@ -30,7 +30,6 @@ ns pre {
 
     // Let Masks (I can also store inverse mask strings here: 0b111...)
     let* bitIndex = 0;
-    bitIndex;
     let memberInfo: List[
     { mask: usize, invMask: usize, typeWidth: size, rawValue: usize, offset: size, nameCap: string }] = List/fromMap(members, \member. {
       let bits = member.bits;
@@ -38,7 +37,7 @@ ns pre {
       let rawValue = u64/bitmaskLow(bits);
       let typeWidth = intWidthForBits(bits);
       let nameCap = member.name.capitalizeAscii();
-      let mask = rawValue.shiftLeft(bitIndex.* as u32);
+      let mask = rawValue << bitIndex.*.as();
       let offset = bitIndex.*;
       let sizeMask = u64/bitmaskLow(typeWidth);
       let invMask = mask.bitNot().bitAnd(sizeMask);
@@ -78,7 +77,7 @@ ns pre {
       if isBool {
         code.line("    cleared == 1")
       } else {
-        code.line("    cleared as {fieldType}");
+        code.line("    cleared.as[{fieldType}]");
       };
 
       code.line("  }"); // End Getter

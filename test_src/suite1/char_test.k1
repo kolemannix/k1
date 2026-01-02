@@ -22,25 +22,25 @@ fn escape(): unit {
   // EscapedChar { sentinel: '\\', output: b'\\' },
 
   let c = '\n';
-  assert(c as u8 == 10);
+  assert(c.as[u8] == 10);
 
   let c = '\0';
-  assert(c as u8 == 0);
+  assert(c.as[u8] == 0);
 
   let c = '\t';
-  assert(c as u8 == 9);
+  assert(c.as[u8] == 9);
 
   let c = '\r';
-  assert(c as u8 == 13);
+  assert(c.as[u8] == 13);
 
   let c = '\'';
-  assert(c as u8 == 39);
+  assert(c.as[u8] == 39);
 
   let c = '"';
-  assert(c as u8 == 34);
+  assert(c.as[u8] == 34);
 
   let c = '\\';
-  assert(c as u8 == 92);
+  assert(c.as[u8] == 92);
 
   ()
 }

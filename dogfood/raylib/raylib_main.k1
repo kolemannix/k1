@@ -10,10 +10,10 @@ ns raylib {
   }
   ns Color {
     fn rgba(r: u8, g: u8, b: u8, a: u8): u32 {
-      let v: u32 = r as u32;
-      v := v.bitOr((g as u32).shiftLeft(8));
-      v := v.bitOr((b as u32).shiftLeft(16));
-      v := v.bitOr((a as u32).shiftLeft(24));
+      let v: u32 = r.as();
+      v := v | (g.as[u32]() << 8);
+      v := v | (b.as[u32]() << 16);
+      v := v | (a.as[u32]() << 24);
       v
     }
     fn u32(self: Color): u32 {

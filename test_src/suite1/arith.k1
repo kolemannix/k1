@@ -72,23 +72,25 @@ fn test(): unit {
 
   // Coercions
   // Unsigned widen
-  let x: u8 = 3;
-  let x2: u64 = x;
-  assertEquals(x2, 3);
+  assertEquals(3u8.as[u16], 3);
+  assertEquals(3u8.as[u32], 3);
+  assertEquals(3u8.as[u64], 3);
 
   // Signed widen
-  let x: i16 = 3;
-  let x2: i64 = x;
-  assertEquals(x2, 3);
+  assertEquals(3i8.as[i16], 3);
+  assertEquals(3i8.as[i32], 3);
+  assertEquals(3i8.as[i64], 3);
+  assertEquals(-3i8.as[i16], -3);
+  assertEquals(-3i8.as[i32], -3);
+  assertEquals(-3i8.as[i64], -3);
 
   // Unsigned widen to signed
-  let x: u32 = 3;
-  let x2: i64 = x;
-  assertEquals(x2, 3);
+  assertEquals(3u32.as[u64], 3u64);
 
   // Signed widen to unsigned
-  assertEquals(-1i16 as i32 as u32, 0xFFFF_FFFF); 
-  assertEquals(-1i16 as u32, 0xFFFF_FFFF); 
+  assertEquals(-1i16.as[i32].as[u32], 0xFFFF_FFFF); 
+  // Not directly allowed
+  assert(testCompile(-1i16.as[u32]).isSome());
 
   ()
 

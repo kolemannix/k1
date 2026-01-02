@@ -22,7 +22,7 @@ ns mem {
       fd = -1i32,
       offset = 0
     );
-    if addr == (posix/MAP_FAILED as ptr) {
+    if addr == posix/MAP_FAILED.as[ptr] {
       libc/perror(ptr/NULL);
       crash("mmap failed");
     };
@@ -137,7 +137,7 @@ ns mem {
 
 
     fn allocT[T](self: AllocMode): *mut T {
-      self.alloc(size = types/sizeOf[T](), align = types/alignOf[T]()) as *mut T
+      self.alloc(size = types/sizeOf[T](), align = types/alignOf[T]()).as()
     }
 
     fn new[T](self: AllocMode, t: T): *mut T {

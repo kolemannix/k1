@@ -45,7 +45,7 @@ deftype GameState = {
 }
 
 fn valueAtSquare(b: Bitboard, index: u64): u64 {
-  let shifted = b >> (index as u32);
+  let shifted = b >> index.as();
   let masked = shifted & 1u64;
   masked
 }
@@ -56,13 +56,13 @@ fn isSet(b: Bitboard, index: u64): bool {
 
 fn valueAtRank(b: Bitboard, rank: u64): u64 {
   let rankStart = rank * 8;
-  let shifted = Bitwise/shiftRight(b, rankStart as u32);
-  let masked = Bitwise/bitAnd(shifted, RANK_1);
+  let shifted = b >> rankStart.as[u32]();
+  let masked = shifted & RANK_1;
   masked
 }
 
 fn indexToBit(index: u64): Bitboard {
-  (1u64).shiftLeft(index as u32)
+  1u64 << index.as[u32]()
 }
 
 fn printBitboard(b: Bitboard): unit {
@@ -77,11 +77,11 @@ fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
   while rank >= 0 {
     let rankStart = rank * 8;
     // TODO(dogfood): formatUInt(base = 2) (also need padding specifier)
-    //formatUInt(context writer)(valueAtRank(b, rank as u64), base = 2);
+    //formatUInt(context writer)(valueAtRank(b, rank.as[u64]), base = 2);
 
     for square in IntRange/make(rankStart, rankStart + 8) {
-      let bit = valueAtSquare(b, square as u64);
-      writer.writeChar(u8/toAsciiDigit(bit as u8));
+      let bit = valueAtSquare(b, square.as[u64]);
+      writer.writeChar(u8/toAsciiDigit(bit.as[u8]));
     };
     writer.writeChar('\n');
     rank := rank - 1;
@@ -113,7 +113,7 @@ ns GameState {
     while rank >= 0 {
       let rankStart = rank * 8;
       for i in IntRange/make(rankStart, rankStart + 8) {
-        let i = i as u64;
+        let i = i.as[u64];
         if isSet(self.wPawns, i) { writer.writeChar('P') }
         else if isSet(self.wKnights, i) { writer.writeChar('N') }
         else if isSet(self.wBishops, i) { writer.writeChar('B') }
@@ -173,7 +173,7 @@ ns GameState {
      printBitboard(doublePush);
      if self.enPassantFile != -1 {
         let enPassantTargetSquareIndex = self.enPassantFile + 5*8;
-        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex as u64);
+        let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex.as[u64]);
         let enPassantTargetSquareOccupied = enPassantTargetSquareBit.bitAnd(self.bOccupied());
         let enPassantAttackers = enPassantTargetSquareOccupied.bitAnd(enPassantTargetSquareBit.shiftLeft(1)).bitAnd(enPassantTargetSquareBit.shiftRight(1));
         printBitboard(enPassantTargetSquareOccupied);

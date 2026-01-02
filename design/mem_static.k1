@@ -85,7 +85,7 @@ fn myAllocateIn[A: Allocator, T](context a: A)(size: size): Buffer[T] {
     let sizeBytes = bufferSizeBytes[T](count);
     mem/allocate(sizeBytes, core/types/alignOf[T]())
   };
-  let data = ptr as T*;
+  let data = ptr.as[*T];
   { len: count, data }
 }
 

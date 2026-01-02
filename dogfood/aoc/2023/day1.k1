@@ -5,7 +5,7 @@ fn day2(): int {
     let* digits: List[i64]* = [];
     for c in line {
       let thisDigit: ?i64 = if c.toAsciiDigit() is .Some(d) {
-        .Some(d as i64)
+        .Some(d.as[i64])
       } else {
         let rest = line.substring(itIndex, line.len);
         if rest.startsWith("one")   1    else 
@@ -54,10 +54,10 @@ fn main(): i32 {
     };
     if c.toAsciiDigit() is .Some(i) {
       if first {
-        digits.push([i as int]);
+        digits.push([i.as[int]]);
         first := false;
       } else {
-        digits.getRef(line).push(i as int);
+        digits.getRef(line).push(i.as[int]);
       };
     };
   };

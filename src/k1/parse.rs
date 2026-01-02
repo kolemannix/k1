@@ -2992,7 +2992,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // Looping for postfix ops inspired by Jakt's parser
         let with_postfix: ParsedExprId = loop {
             let (next, second) = self.peek_two();
-            let new_result = if next.kind == K::KeywordAs {
+            let new_result = if next.kind == K::Ident && self.token_chars(next) == "as" {
                 self.advance();
                 let type_expr_id = self.expect_type_expression()?;
                 let span = self.extend_span(
@@ -3539,9 +3539,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                     },
                                 ))))
                             }
-                            _ => Err(self.error_here(
+                            _ => {
+                                if first_type_args.is_empty() {
+                                    Err(self.error_here(
                                 "Expected '(' for function call; or '@' for qualified ability impl",
-                            )),
+                            ))
+                                } else {
+                                    let span = self.extend_to_here(first.span);
+                                    let call = ParsedCall {
+                                        name: namespaced_ident,
+                                        type_args: first_type_args,
+                                        args: SliceHandle::empty(),
+                                        span,
+                                        is_method: false,
+                                        id: ParsedExprId::PENDING,
+                                    };
+                                    let call_id = self.add_expression(ParsedExpr::Call(call));
+                                    Ok(Some(call_id))
+                                }
+                            }
                         }
                     } else {
                         // The last thing it can be is a simple variable reference expression
@@ -4425,9 +4441,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let namespaced_ident = self.expect_namespaced_ident()?;
-        let alias = if let Some(_as_token) = self.maybe_consume_next(K::KeywordAs) {
-            let alias_token = self.expect_eat_token(K::Ident)?;
-            let alias_ident = self.intern_ident_token(alias_token);
+        let next = self.peek();
+        let next_chars = self.token_chars(next);
+        let alias = if next_chars == "as" {
+            self.advance();
+            let (_, alias_ident) = self.expect_ident()?;
             Some(alias_ident)
         } else {
             None

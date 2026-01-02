@@ -9,18 +9,18 @@ fn test(): unit {
   assert(10.0 / 2.0 == 5.0);
   assert(10.0 * 2.1 == 21.0);
 
-  assert(42 as f32 == 42.0);
-  assert(42 as f64 == 42.0);
+  assert(42.as[f32] == 42.0);
+  assert(42.as[f64] == 42.0);
 
 
-  assert((10.0: f32) as f64 == 10.0);
-  assert((10.0: f64) as f32 == 10.0);
-  assert(11.1 as u32 == 11);
-  assert(10.1 as i32 == 10);
-  assertEquals(-10.1 as i32, -10);
-  assert((58686845.22: f64) as i64 == 58686845);
-  assert(447 as f32 == 447.0);
-  assert(-447 as f32 == -447.0);
+  assert(10.0.as[f64] == 10.0);
+  assert((10.0: f64).as[f32] == 10.0);
+  assert(11.1.as[u32] == 11);
+  assert(10.1.as[i32] == 10);
+  assertEquals(-10.1.as[i32], -10);
+  assert((58686845.22: f64).as[i64] == 58686845);
+  assert(447.as[f32] == 447.0);
+  assert(-447.as[f32] == -447.0);
   assert(-446.0 > -447.0);
   assert(-446.0 >= -447.0);
   assert(-448.0 < -447.0);
