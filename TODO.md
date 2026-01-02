@@ -42,16 +42,16 @@ Non-major Ideas
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
 Syntax/elegance
-- [x] Get rid of the name 'Unwrap'; twitter is right about that one. Good opportunity
-      to produce a very strong name for this concept
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [x] Replace the builtin for ... yield with a userspace function taking a lambda
-- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
- - [ ] Also need positional format args as well (probably just our userland printf finished out)
+- [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
+      to produce a very strong name for this concept
 - [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
   - [x] Ok now I'm really thinking about `size` and it being signed.
   - [x] Also: do safe integer coercions automatically
-- [ ] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
+- [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
+- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+ - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing
 - [ ] Decide if overflow traps or not (in debug and release, if those are even different)
