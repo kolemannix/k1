@@ -34,18 +34,16 @@ fn complexReferences(): unit {
 
   let* eitherRef: *mut (either Yes(int), No) = .Yes(3);
 
-  let yesValue: int = eitherRef.asYes().!.value;
   let yesRef: *(typeOf(eitherRef).value.Yes) = eitherRef.asYes().!;
 
-  assert(yesRef.value == 3);
-  assert(yesRef.value*.* == 3);
+  assert(yesRef.* == 3);
+  let yesValue: int = eitherRef.asYes().!;
   assert(yesValue == 3);
 
-  eitherRef.asYes().!.value* <- -3;
+  eitherRef.asYes().! <- -3;
 
-  assert(yesRef.value == -3);
-  assert(yesRef.value*.* == -3);
-  assert(eitherRef.asYes().!.value == -3);
+  assert(yesRef.* == -3);
+  assert(eitherRef.asYes().!.* == -3);
 
   // no restrictions on lhs except that it has to be a pointer,
   // this in conjunction with let* will mean we have pointers for

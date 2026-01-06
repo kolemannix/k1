@@ -97,45 +97,26 @@ impl TypedProgram {
         let span = self.exprs.get_span(expr_id);
         let inner_type = self.exprs.get_type(expr_id);
         let optional_type = self.synth_optional_type(inner_type);
-        let some_variant = self
-            .types
-            .get(optional_type)
-            .expect_enum()
-            .variant_by_name(self.ast.idents.b.Some)
-            .unwrap();
 
         let some_expr = self.exprs.add(
             TypedExpr::EnumConstructor(TypedEnumConstructor {
-                variant_index: some_variant.index,
+                variant_index: 1,
                 payload: Some(expr_id),
             }),
-            some_variant.my_type_id,
+            optional_type,
             span,
         );
-        let casted =
-            self.synth_cast(some_expr, some_variant.enum_type_id, CastType::VariantToEnum, None);
-        (casted, optional_type)
+        (some_expr, optional_type)
     }
 
     pub(super) fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
         let optional_type = self.synth_optional_type(type_id);
-        let none_variant = self
-            .types
-            .get(optional_type)
-            .expect_enum()
-            .variant_by_name(self.ast.idents.b.None)
-            .unwrap();
         let none_expr = self.exprs.add(
-            TypedExpr::EnumConstructor(TypedEnumConstructor {
-                variant_index: none_variant.index,
-                payload: None,
-            }),
-            none_variant.my_type_id,
+            TypedExpr::EnumConstructor(TypedEnumConstructor { variant_index: 0, payload: None }),
+            optional_type,
             span,
         );
-        let casted =
-            self.synth_cast(none_expr, none_variant.enum_type_id, CastType::VariantToEnum, None);
-        casted
+        none_expr
     }
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
@@ -426,6 +407,7 @@ impl TypedProgram {
         &mut self,
         enum_expr_or_reference: TypedExprId,
         variant_index: u32,
+        is_reference: bool,
         ctx: EvalExprContext,
         span: Option<SpanId>,
     ) -> TyperResult<TypedExprId> {
@@ -434,10 +416,11 @@ impl TypedProgram {
             .get_type_dereferenced(self.exprs.get_type(enum_expr_or_reference))
             .expect_enum();
         let tag_type = enum_type.tag_type;
-        let variant_tag = enum_type.variant_by_index(variant_index).tag_value;
+        let variant_tag =
+            self.types.enum_variant_by_index(enum_type.variants, variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
         let get_tag = self.exprs.add(
-            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference }),
+            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference, is_reference }),
             tag_type,
             span,
         );
@@ -448,25 +431,15 @@ impl TypedProgram {
 }
 
 pub(super) fn synth_static_option(
-    types: &TypePool,
     static_values: &mut StaticValuePool,
     option_type_id: TypeId,
     value_id: Option<StaticValueId>,
 ) -> StaticValueId {
-    let opt_enum_type = types.get(option_type_id).expect_enum();
     let static_enum = match value_id {
-        None => StaticEnum {
-            variant_type_id: opt_enum_type.variant_by_index(0).my_type_id,
-            variant_index: 0,
-            typed_as_enum: true,
-            payload: None,
-        },
-        Some(value_id) => StaticEnum {
-            variant_type_id: opt_enum_type.variant_by_index(1).my_type_id,
-            variant_index: 1,
-            typed_as_enum: true,
-            payload: Some(value_id),
-        },
+        None => StaticEnum { enum_type_id: option_type_id, variant_index: 0, payload: None },
+        Some(value_id) => {
+            StaticEnum { enum_type_id: option_type_id, variant_index: 1, payload: Some(value_id) }
+        }
     };
 
     static_values.add(StaticValue::Enum(static_enum))

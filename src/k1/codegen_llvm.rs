@@ -40,7 +40,7 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, PhysicalType, PhysicalTypeId, STRING_TYPE_ID, ScalarType, TypeDefnInfo,
+    AbiMode, AggType, AggregateTypeId, PhysicalType, STRING_TYPE_ID, ScalarType, TypeDefnInfo,
     TypeId,
 };
 use crate::typer::{
@@ -78,8 +78,8 @@ enum AbiParamMapping {
     },
     /// How clang does X86 9-16 byte structs
     StructByEightbytePair {
-        class1: EightbyteClass,
-        class2: EightbyteClass,
+        class1: RegisterClass,
+        class2: RegisterClass,
         active_bits2: u32,
     },
     /// How clang does ARM64 9-16 byte structs
@@ -91,22 +91,22 @@ enum AbiParamMapping {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum EightbyteClass {
+enum RegisterClass {
     Initial,
     Int,
     Float,
 }
 
-impl EightbyteClass {
-    fn combine(&self, other: EightbyteClass) -> EightbyteClass {
+impl RegisterClass {
+    fn combine(&self, other: RegisterClass) -> RegisterClass {
         match (self, other) {
-            (EightbyteClass::Initial, _) => other,
-            (EightbyteClass::Int, EightbyteClass::Int) => EightbyteClass::Int,
-            (EightbyteClass::Float, EightbyteClass::Float) => EightbyteClass::Float,
+            (RegisterClass::Initial, _) => other,
+            (RegisterClass::Int, RegisterClass::Int) => RegisterClass::Int,
+            (RegisterClass::Float, RegisterClass::Float) => RegisterClass::Float,
             // Anything can go in a general purpose register like an int, but
             // only more specific things (floats, vectors later) can go in
             // those special registers, so mixtures result in int
-            _mix => EightbyteClass::Int,
+            _mix => RegisterClass::Int,
         }
     }
 }
@@ -147,30 +147,22 @@ struct CgArrayType<'ctx> {
 }
 
 #[derive(Copy, Clone)]
-struct CgOpaqueType<'ctx> {
+struct CgUnionType<'ctx> {
     pt: PhysicalType,
-    aligned_struct_repr: StructType<'ctx>,
+    aligned_opaque_repr: StructType<'ctx>,
+    #[allow(unused)]
+    members: MSlice<CgType<'ctx>, CgPerm>,
     layout: Layout,
     di_type: DIType<'ctx>,
 }
 
-#[derive(Copy, Clone)]
-struct CgEnumVariant<'ctx> {
-    pt: PhysicalType,
-    /// Used for GEPs only, not for value transfer or representation!
-    variant_struct_type: StructType<'ctx>,
-    aligned_envelope_repr: StructType<'ctx>,
-    layout: Layout,
-    di_type: DIType<'ctx>,
-}
 #[derive(Copy, Clone)]
 enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
     Void(LlvmVoidType<'ctx>),
-    Opaque(CgOpaqueType<'ctx>),
-    EnumVariant(CgEnumVariant<'ctx>),
+    Union(CgUnionType<'ctx>),
 }
 
 impl<'ctx> From<LlvmVoidType<'ctx>> for CgType<'ctx> {
@@ -198,8 +190,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(s) => s.pt,
             CgType::ArrayType(a) => a.pt,
             CgType::Void(_) => panic!("no pt on void"),
-            CgType::Opaque(o) => o.pt,
-            CgType::EnumVariant(ev) => ev.pt,
+            CgType::Union(u) => u.pt,
         }
     }
 
@@ -209,8 +200,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Void(_) => "Void",
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
-            CgType::Opaque(_) => "Opaque",
-            CgType::EnumVariant(_) => "EnumVariant",
+            CgType::Union(_) => "Union",
         }
     }
 
@@ -220,38 +210,9 @@ impl<'ctx> CgType<'ctx> {
             CgType::Void(_) => false,
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
-            CgType::Opaque(_) => true,
-            CgType::EnumVariant(_) => true,
+            CgType::Union(_) => true,
         }
     }
-
-    // Unions are impossible to encode directly in LLVM's type system.
-    // We represent them, usually, as byte arrays, but these byte arrays have the wrong alignment.
-    // We can correct for this in direct loads, stores, and copies, but when the union appears
-    // inside another data structure, like a Struct or Array, we cannot tell LLVM its true
-    // alignment, this causes GEPs to essentially ignore padding, because byte arrays have align
-    // = 1.
-    //
-    // To fix this, any time a struct or array or even another Enum contains an Enum (union),
-    // we calculate the GEP offsets ourselves in bytes, using gep i8, 0, n. As far as I can tell,
-    // this is what rustc does.
-    //
-    // Note: I ended up doing something more sneaky where I synthesize a type with the proper
-    // size and align, and no unused bits
-    // #[allow(unused)]
-    // pub fn requires_custom_alignment(&self) -> bool {
-    //     match self {
-    //         CgType::Scalar(_) => false,
-    //         CgType::Void(_) => false,
-    //         CgType::StructType(_) => false,
-    //         CgType::ArrayType(a) => {
-    //             // If the array's elements don't have the 'right' alignment in LLVM,
-    //             // then neither will the array!
-    //             a.element_type.requires_custom_alignment()
-    //         }
-    //         CgType::LambdaObject(_) => false,
-    //     }
-    // }
 
     #[track_caller]
     fn expect_struct(self) -> CgStructType<'ctx> {
@@ -276,8 +237,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(s) => s.layout,
             CgType::ArrayType(a) => a.layout,
             CgType::Void(_) => panic!("No rich value type on Void / never"),
-            CgType::Opaque(o) => o.layout,
-            CgType::EnumVariant(ev) => ev.layout,
+            CgType::Union(u) => u.layout,
         }
     }
 
@@ -286,9 +246,8 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.basic_type,
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
-            CgType::Opaque(o) => o.aligned_struct_repr.as_basic_type_enum(),
             CgType::Void(_) => panic!("No rich value type on Void / never"),
-            CgType::EnumVariant(ev) => ev.aligned_envelope_repr.as_basic_type_enum(),
+            CgType::Union(u) => u.aligned_opaque_repr.as_basic_type_enum(),
         }
     }
 
@@ -297,9 +256,8 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.di_type,
             CgType::StructType(s) => s.di_type,
             CgType::ArrayType(a) => a.di_type,
-            CgType::Opaque(o) => o.di_type,
             CgType::Void(v) => v.di_type,
-            CgType::EnumVariant(ev) => ev.di_type,
+            CgType::Union(u) => u.di_type,
         }
     }
 
@@ -361,7 +319,7 @@ pub struct Cg<'ctx, 'k1> {
     pub llvm_functions: FxHashMap<FunctionId, CgFunction<'ctx>>,
     pub llvm_function_to_k1: FxHashMap<FunctionValue<'ctx>, FunctionId>,
     functions_pending_body_compilation: Vec<FunctionId>,
-    llvm_types: FxHashMap<PhysicalTypeId, CgType<'ctx>>,
+    llvm_types: FxHashMap<AggregateTypeId, CgType<'ctx>>,
     globals: FxHashMap<TypedGlobalId, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     strings: FxHashMap<StringId, GlobalValue<'ctx>>,
@@ -686,7 +644,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     #[allow(unused)]
-    fn llvm_size_info(&self, typ: &dyn AnyType) -> Layout {
+    fn layout_per_llvm(&self, typ: &dyn AnyType) -> Layout {
         let td = self.llvm_machine.get_target_data();
         llvm_size_info(&td, typ)
     }
@@ -800,37 +758,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if let Some(k1) = self.llvm_types.get(&agg_id) {
                     return *k1;
                 }
-                let agg = self.k1.types.phys_types.get(agg_id);
+                let agg = self.k1.types.agg_types.get(agg_id);
                 let agg_layout = agg.layout;
                 let type_name = self.codegen_type_name(agg.origin_type_id);
                 let cg_type = match agg.agg_type {
-                    AggType::EnumVariant(e) => {
-                        let tag_scalar = e.tag.get_scalar_type();
-                        let tag_int_type = self.scalar_basic_type(tag_scalar);
-                        let variant_struct_type = match e.payload {
-                            None => self.ctx.struct_type(&[tag_int_type], false),
-                            Some(payload_pt) => {
-                                let payload_cg_type = self.codegen_type(payload_pt);
-                                self.ctx.struct_type(
-                                    &[tag_int_type, payload_cg_type.rich_type()],
-                                    false,
-                                )
-                            }
-                        };
-
-                        let opaque = self.codegen_opaque_type(pt, e.envelope);
-                        let aligned_envelope_repr = opaque.aligned_struct_repr;
-                        // FIXME: All of this will go away once we move to representing this as
-                        // a union
-                        let cg_variant = CgEnumVariant {
-                            pt,
-                            variant_struct_type,
-                            aligned_envelope_repr,
-                            layout: opaque.layout,
-                            di_type: opaque.di_type,
-                        };
-                        CgType::EnumVariant(cg_variant)
-                    }
                     AggType::Struct { fields } => {
                         let mut cg_field_types = self.mem.new_list(fields.len());
                         let mut field_rich_types = self.tmp.new_list(fields.len());
@@ -838,12 +769,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                         let span = self.debug.current_span();
                         let line_number = self.get_line_number(span);
-                        for phys_field in self
-                            .k1
-                            .types
-                            .mem
-                            .getn(fields)
-                        {
+                        for phys_field in self.k1.types.mem.getn(fields) {
                             let cg_type = self.codegen_type(phys_field.field_t);
                             let field_name = self.k1.ident_str(phys_field.name);
                             cg_field_types.push(cg_type);
@@ -915,9 +841,48 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             layout,
                         })
                     }
-                    AggType::Opaque { layout } => {
-                        let opaque = self.codegen_opaque_type(pt, layout);
-                        CgType::Opaque(opaque)
+                    AggType::Union { members } => {
+                        let mut cg_members = self.mem.new_list(members.len());
+                        let mut di_members = self.tmp.new_list(members.len());
+                        let mut basic_type_members = self.tmp.new_list(members.len());
+                        for m in self.k1.types.mem.getn(members) {
+                            let cg_member = self.codegen_type(m.ty);
+                            basic_type_members.push(cg_member.rich_type());
+                            cg_members.push(cg_member);
+                            di_members.push(cg_member.debug_type());
+                        }
+                        let span = self.debug.current_span();
+                        let line_number = self.get_line_number(span);
+                        let di_type = self
+                            .debug
+                            .debug_builder
+                            .create_union_type(
+                                self.debug.current_scope(),
+                                &type_name,
+                                self.debug.current_file(),
+                                line_number,
+                                agg_layout.size_bits() as u64,
+                                agg_layout.align_bits(),
+                                0,
+                                &di_members,
+                                0,
+                                &type_name,
+                            )
+                            .as_type();
+                        let aligned_opaque_repr = self.codegen_union_repr(agg_layout);
+                        CgType::Union(CgUnionType {
+                            pt,
+                            aligned_opaque_repr,
+                            members: self.mem.list_to_handle(cg_members),
+                            layout: agg_layout,
+                            di_type,
+                        })
+                    }
+                    AggType::Enum(e) => {
+                        let struct_repr_cg_type =
+                            self.codegen_type(PhysicalType::Agg(e.struct_repr));
+
+                        struct_repr_cg_type
                     }
                 };
                 self.llvm_types.insert(agg_id, cg_type);
@@ -926,31 +891,34 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn codegen_opaque_type(&self, pt: PhysicalType, layout: Layout) -> CgOpaqueType<'ctx> {
-        // For opaque types, which we currently only use to represent our tagged
-        // unions (`either` in the source), we generate a 2-field struct to trick
-        // LLVM.
+    fn codegen_union_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
+        // For union types, we generate a 2-field struct to trick LLVM.
+
         // Field 1 is a synthetic integer wide enough to force the alignment of the
         // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
-        // large enough to get the whole thing to be exactly `size`. This is
-        // mostly what clang does for unions, and probably what I'll also do for
-        // unions once I have them
-        let aligner_type = self.ctx.custom_width_int_type(layout.align_bits());
-        let padding_bytes = layout.size - (aligner_type.get_bit_width() / 8);
+        // large enough to get the whole thing to be exactly `size`, with no end padding.
+        // This is mostly what clang does for unions, modulo maybe some cleverness for simple cases
+        // and maybe Class detection (for possible float reg passing?)
+
+        if expected_layout.align > expected_layout.size {
+            panic!(
+                "Cannot create overaligned union with align {} > size {}",
+                expected_layout.align, expected_layout.size
+            );
+        }
+        let aligner_type = self.ctx.custom_width_int_type(expected_layout.align_bits());
+        let padding_bytes = expected_layout.size - (aligner_type.get_bit_width() / 8);
+
         let padding = self.padding_type(padding_bytes);
         let aligned_struct_repr = self
             .ctx
             .struct_type(&[aligner_type.as_basic_type_enum(), padding.as_basic_type_enum()], false);
-        // Note(union/enum): Once we introduce 'Union' as a physical aggregate instead of
-        // using Opaque here, we'll be able to generate a good debug type for our
-        // tagged unions. But for now, we'll generate a garbage one
-        let di_type = self
-            .debug
-            .debug_builder
-            .create_basic_type("opaque", layout.size_bits() as u64, 0, 0)
-            .unwrap()
-            .as_type();
-        CgOpaqueType { pt, aligned_struct_repr, layout, di_type }
+
+        let llvm_layout = self.layout_per_llvm(&aligned_struct_repr);
+        if expected_layout.strided() != llvm_layout {
+            eprintln!("UNION LAYOUT MISMATCH: us {} vs llvm {}", expected_layout, llvm_layout);
+        }
+        aligned_struct_repr
     }
 
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
@@ -1079,13 +1047,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
                 // We know field 1 is a full 8 bits
                 let f1 = match class1 {
-                    EightbyteClass::Initial => panic!("Got Initial EightbyteClass"),
-                    EightbyteClass::Int => self.ctx.i64_type().as_basic_type_enum(),
-                    EightbyteClass::Float => self.ctx.f64_type().as_basic_type_enum(),
+                    RegisterClass::Initial => panic!("Got Initial EightbyteClass"),
+                    RegisterClass::Int => self.ctx.i64_type().as_basic_type_enum(),
+                    RegisterClass::Float => self.ctx.f64_type().as_basic_type_enum(),
                 };
                 let f2 = match (class2, active_bits2) {
-                    (EightbyteClass::Initial, _) => panic!("Got Initial EightbyteClass"),
-                    (EightbyteClass::Int, bits) => {
+                    (RegisterClass::Initial, _) => panic!("Got Initial EightbyteClass"),
+                    (RegisterClass::Int, bits) => {
                         if bits <= 8 {
                             self.ctx.i8_type().as_basic_type_enum()
                         } else if bits <= 16 {
@@ -1096,7 +1064,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             self.ctx.i64_type().as_basic_type_enum()
                         }
                     }
-                    (EightbyteClass::Float, bits) => {
+                    (RegisterClass::Float, bits) => {
                         if bits <= 32 {
                             self.ctx.f32_type().as_basic_type_enum()
                         } else {
@@ -1898,15 +1866,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Alloca { t, .. } => {
+                // task(di): Eventually we could supplement with the type_id from the
+                // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
-                // Our helper here hoists the alloca to the top of the function, and sets an explicit align
+
+                // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
                 let instr = self.build_k1_alloca(&cg_type, "");
                 inst_mappings.insert(inst_id, instr.as_basic_value_enum());
 
                 let bc_debug_info = self.k1.bytecode.debug_info.get(inst_id);
                 if let Some(var_info) = bc_debug_info.variable_info {
-                    let var_name = var_info;
-                    let name_str = self.k1.ident_str(var_name);
+                    let name_str = self.k1.ident_str(var_info.name);
                     let _local_variable = self.debug.debug_builder.create_auto_variable(
                         self.debug.current_scope(),
                         name_str,
@@ -1918,7 +1888,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         cg_type.rich_repr_layout().align,
                     );
                 }
-
 
                 Ok(())
             }
@@ -1949,17 +1918,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::StructOffset { struct_t, base, field_index, .. } => {
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
 
-                let struct_type_llvm = match self.codegen_type(PhysicalType::Agg(struct_t)) {
-                    CgType::StructType(cg_struct_type) => cg_struct_type.struct_type,
-                    CgType::EnumVariant(cg_enum_variant) => cg_enum_variant.variant_struct_type,
-                    _ => {
-                        return failf!(
-                            self.debug.current_span(),
-                            "Expected struct or enum variant type for StructOffset"
-                        );
-                    }
-                };
-                let gep = self.build_struct_gep(base_ptr, struct_type_llvm, field_index, "");
+                let cg_struct_type = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
+                let gep =
+                    self.build_struct_gep(base_ptr, cg_struct_type.struct_type, field_index, "");
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
@@ -2538,9 +2499,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match pt {
             PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
             PhysicalType::Agg(agg_id) => {
-                let agg_record = self.k1.types.phys_types.get(agg_id);
+                let agg_record = self.k1.types.agg_types.get(agg_id);
                 match agg_record.agg_type {
-                    AggType::EnumVariant(_) | AggType::Struct { .. } | AggType::Array { .. } => {
+                    AggType::Enum(_) | AggType::Union { .. } | AggType::Struct { .. } | AggType::Array { .. } => {
                         let size_bytes = agg_record.layout.size;
                         match callconv {
                             CallConv::InternalK1 => {
@@ -2585,16 +2546,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             }
                         }
                     }
-                    AggType::Opaque { .. } => {
-                        // enum abi mapping eventually; for
-                        // now we just say they are always passed by pointer
-                        match callconv {
-                            CallConv::InternalK1 => AbiParamMapping::StructByPtrNoCopy,
-                            CallConv::AMD64 | CallConv::ARM64 => {
-                                AbiParamMapping::BigStructByPtrToCopy { byval_attr: !is_return }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -2604,14 +2555,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn collect_aggregate_eightbytes(
         &self,
         pt: PhysicalType,
-    ) -> (EightbyteClass, EightbyteClass, u32) {
+    ) -> (RegisterClass, RegisterClass, u32) {
         // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
         // for the HFA detection
         fn append_type(
-            class1: &mut Option<EightbyteClass>,
-            class2: &mut Option<EightbyteClass>,
+            class1: &mut Option<RegisterClass>,
+            class2: &mut Option<RegisterClass>,
             cur_bits: &mut u32,
-            class: EightbyteClass,
+            class: RegisterClass,
             size_bits: u32,
         ) {
             match (class1, class2) {
@@ -2633,7 +2584,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     } else if bleed_bits == 0 {
                         // We completed the first eightbyte exactly; initialize the 2nd and reset
                         // cur_bits
-                        *c2 = Some(EightbyteClass::Initial);
+                        *c2 = Some(RegisterClass::Initial);
                         *cur_bits = 0;
                     } else {
                         *cur_bits = new_bits as u32;
@@ -2645,43 +2596,31 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         fn handle_type_rec<'ctx, 'k1>(
             c: &Cg<'ctx, 'k1>,
-            class1: &mut Option<EightbyteClass>,
-            class2: &mut Option<EightbyteClass>,
+            class1: &mut Option<RegisterClass>,
+            class2: &mut Option<RegisterClass>,
             cur_bits: &mut u32,
             t: PhysicalType,
         ) {
             match t {
                 PhysicalType::Scalar(st) => {
                     let class = match st {
-                        ScalarType::U8 => EightbyteClass::Int,
-                        ScalarType::U16 => EightbyteClass::Int,
-                        ScalarType::U32 => EightbyteClass::Int,
-                        ScalarType::U64 => EightbyteClass::Int,
-                        ScalarType::I8 => EightbyteClass::Int,
-                        ScalarType::I16 => EightbyteClass::Int,
-                        ScalarType::I32 => EightbyteClass::Int,
-                        ScalarType::I64 => EightbyteClass::Int,
-                        ScalarType::F32 => EightbyteClass::Float,
-                        ScalarType::F64 => EightbyteClass::Float,
-                        ScalarType::Pointer => EightbyteClass::Int,
+                        ScalarType::U8 => RegisterClass::Int,
+                        ScalarType::U16 => RegisterClass::Int,
+                        ScalarType::U32 => RegisterClass::Int,
+                        ScalarType::U64 => RegisterClass::Int,
+                        ScalarType::I8 => RegisterClass::Int,
+                        ScalarType::I16 => RegisterClass::Int,
+                        ScalarType::I32 => RegisterClass::Int,
+                        ScalarType::I64 => RegisterClass::Int,
+                        ScalarType::F32 => RegisterClass::Float,
+                        ScalarType::F64 => RegisterClass::Float,
+                        ScalarType::Pointer => RegisterClass::Int,
                     };
                     append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
                 }
                 PhysicalType::Agg(agg_id) => {
-                    let agg_record = c.k1.types.phys_types.get(agg_id);
+                    let agg_record = c.k1.types.agg_types.get(agg_id);
                     match agg_record.agg_type {
-                        AggType::EnumVariant(evl) => {
-                            handle_type_rec(
-                                c,
-                                class1,
-                                class2,
-                                cur_bits,
-                                PhysicalType::Scalar(evl.tag.get_scalar_type()),
-                            );
-                            if let Some(payload) = evl.payload {
-                                handle_type_rec(c, class1, class2, cur_bits, payload)
-                            }
-                        }
                         AggType::Struct { fields } => {
                             for f in c.k1.types.mem.getn(fields) {
                                 handle_type_rec(c, class1, class2, cur_bits, f.field_t)
@@ -2692,18 +2631,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 handle_type_rec(c, class1, class2, cur_bits, element_t)
                             }
                         }
-                        AggType::Opaque { layout } => append_type(
+                        AggType::Union { .. } => append_type(
                             class1,
                             class2,
                             cur_bits,
-                            EightbyteClass::Int,
-                            layout.size_bits(),
+                            RegisterClass::Int,
+                            agg_record.layout.size_bits(),
                         ),
+                        AggType::Enum(e) => {
+                            // Just handle the enum's struct
+                            handle_type_rec(
+                                c,
+                                class1,
+                                class2,
+                                cur_bits,
+                                PhysicalType::Agg(e.struct_repr),
+                            )
+                        }
                     }
                 }
             }
         }
-        let mut class1 = Some(EightbyteClass::Initial);
+        let mut class1 = Some(RegisterClass::Initial);
         let mut class2 = None;
         let mut cur_bits = 0;
 
@@ -2949,13 +2898,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     let value = self.codegen_static_value_as_const(*field, depth + 1)?;
                     packed_values.push_grow(&mut self.tmp, value);
                     let field_size = self.k1.types.get_pt_layout(field_layout.field_t);
-                    debug_assert_eq!(self.llvm_size_info(&value.get_type()).size, field_size.size);
+                    debug_assert_eq!(self.layout_per_llvm(&value.get_type()).size, field_size.size);
                     last_offset = field_layout.offset + field_size.size;
                 }
                 let struct_value = self.ctx.const_struct(&packed_values, true);
 
                 debug_assert_eq!(
-                    self.llvm_size_info(&struct_value.get_type()).size,
+                    self.layout_per_llvm(&struct_value.get_type()).size,
                     self.k1.types.get_layout(s_type_id).size,
                     "Checking Size of: {}",
                     struct_value
@@ -2966,14 +2915,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let e = *e;
                 let mut packed_values = self.tmp.new_list(4);
 
-                let variant_pt_id =
-                    self.k1.types.get_physical_type(e.variant_type_id).unwrap().expect_agg();
-                let variant_agg =
-                    self.k1.types.phys_types.get(variant_pt_id).agg_type.expect_enum_variant();
-                let variant_tag = variant_agg.tag;
-                let envelope_layout = variant_agg.envelope;
-                let variant_payload = variant_agg.payload;
-                let variant_offset = variant_agg.payload_offset;
+                let enum_agg_id =
+                    self.k1.types.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+                let enum_agg_record =
+                    self.k1.types.agg_types.get(enum_agg_id);
+                let enum_pt = enum_agg_record.agg_type.expect_enum();
+                let variant = self.k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
+                let variant_tag = variant.tag;
+                let envelope_layout = enum_agg_record.layout;
+                let variant_payload_pt = variant.payload;
+                let payload_offset = enum_pt.payload_offset;
 
                 let tag_llvm_value = self.codegen_int_value(variant_tag);
                 let tag_layout = variant_tag.get_scalar_type().get_layout();
@@ -2989,7 +2940,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     Some(payload) => {
                         let tag_end = tag_layout.size;
-                        let payload_offset = variant_offset.unwrap();
+                        let payload_offset = payload_offset.unwrap();
                         let payload_padding = payload_offset - tag_end;
                         if payload_padding > 0 {
                             packed_values.push(
@@ -3003,7 +2954,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             self.codegen_static_value_as_const(payload, depth + 1)?;
                         packed_values.push(payload_value);
 
-                        let payload_pt = variant_payload.unwrap();
+                        let payload_pt = variant_payload_pt.unwrap();
                         let payload_size = self.k1.types.get_pt_layout(payload_pt).size;
                         let written_so_far = payload_offset + payload_size;
                         let padding_to_end = envelope_layout.size - written_so_far;
@@ -3017,7 +2968,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 let struct_value = self.ctx.const_struct(&packed_values, true);
                 debug_assert_eq!(
-                    self.llvm_size_info(&struct_value.get_type()).size,
+                    self.layout_per_llvm(&struct_value.get_type()).size,
                     envelope_layout.size
                 );
                 struct_value.as_basic_value_enum()

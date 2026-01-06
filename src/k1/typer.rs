@@ -41,7 +41,7 @@ use anyhow::bail;
 use colored::Colorize;
 use either::Either;
 use fxhash::{FxHashMap, FxHashSet};
-use log::{debug, error, trace};
+use log::{debug, error};
 use smallvec::{SmallVec, smallvec};
 
 use scopes::*;
@@ -60,7 +60,7 @@ use crate::parse::{
     Sources, StringId, StructValueField,
 };
 use crate::pool::{SliceHandle, VPool};
-use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size, strings};
+use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
 
 #[cfg(test)]
 mod layout_test;
@@ -313,6 +313,10 @@ impl Layout {
         Layout { size, align }
     }
 
+    pub fn strided(&self) -> Layout {
+        Layout { size: self.stride(), align: self.align }
+    }
+
     pub fn from_scalar_bytes(bytes: u32) -> Layout {
         Layout { size: bytes, align: bytes }
     }
@@ -360,6 +364,12 @@ impl Layout {
         let element_size_padded = self.stride();
         let array_size = element_size_padded * (len as u32);
         Layout { size: array_size, align: if array_size == 0 { 1 } else { self.align } }
+    }
+}
+
+impl Display for Layout {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Layout {{ size {}, align {} }}", self.size, self.align)
     }
 }
 
@@ -1151,12 +1161,12 @@ pub struct TypedEnumConstructor {
 impl_copy_if_small!(16, TypedEnumConstructor);
 
 #[derive(Clone)]
-pub struct GetEnumVariantPayload {
-    pub enum_variant_expr: TypedExprId,
+pub struct GetEnumPayload {
+    pub enum_expr: TypedExprId,
     pub variant_index: u32,
     pub access_kind: FieldAccessKind,
 }
-impl_copy_if_small!(12, GetEnumVariantPayload);
+impl_copy_if_small!(12, GetEnumPayload);
 
 /// enum_expr can be an enum value, or a Type::Reference to an enum
 /// This saves us having to generate a dereference of the entire value
@@ -1164,8 +1174,9 @@ impl_copy_if_small!(12, GetEnumVariantPayload);
 #[derive(Debug, Clone)]
 pub struct GetEnumTag {
     pub enum_expr_or_reference: TypedExprId,
+    pub is_reference: bool,
 }
-impl_copy_if_small!(4, GetEnumTag);
+impl_copy_if_small!(8, GetEnumTag);
 
 #[derive(Debug, Clone)]
 pub struct TypedEnumIsVariantExpr {
@@ -1264,8 +1275,6 @@ pub enum CastType {
     Integer8ToChar,
     IntegerExtendFromChar,
     BoolToInt,
-    EnumToVariant,
-    VariantToEnum,
     ReferenceToMut,
     ReferenceUnMut,
     ReferenceToReference,
@@ -1292,8 +1301,6 @@ impl Display for CastType {
             CastType::Integer8ToChar => write!(f, "i8tochar"),
             CastType::IntegerExtendFromChar => write!(f, "iextfromchar"),
             CastType::BoolToInt => write!(f, "bool2int"),
-            CastType::EnumToVariant => write!(f, "enum2variant"),
-            CastType::VariantToEnum => write!(f, "variant2enum"),
             CastType::ReferenceToMut => write!(f, "reference2mut"),
             CastType::ReferenceUnMut => write!(f, "referenceUnmut"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
@@ -1413,7 +1420,7 @@ pub enum TypedExpr {
     LoopExpr(LoopExpr),
     EnumConstructor(TypedEnumConstructor),
     EnumGetTag(GetEnumTag),
-    EnumGetPayload(GetEnumVariantPayload),
+    EnumGetPayload(GetEnumPayload),
     Cast(TypedCast),
     /// Explicit returns are syntactically like function calls, but are their own instruction type
     /// return(<expr>)
@@ -3323,7 +3330,7 @@ impl TypedProgram {
                     }
                 };
 
-                let mut variants = EcoVec::with_capacity(variant_count);
+                let mut variants = self.types.mem.new_list(variant_count as u32);
                 for (index, v) in e.variants.iter().enumerate() {
                     let payload_type_id = match &v.payload_expression {
                         None => None,
@@ -3356,8 +3363,6 @@ impl TypedProgram {
                         _ => unreachable!(),
                     };
                     let variant = TypedEnumVariant {
-                        enum_type_id: TypeId::PENDING,
-                        my_type_id: TypeId::PENDING,
                         name: v.tag_name,
                         index: index as u32,
                         payload: payload_type_id,
@@ -3367,8 +3372,11 @@ impl TypedProgram {
                 }
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
-                let enum_type =
-                    Type::Enum(TypedEnum { variants, ast_node: type_expr_id.into(), tag_type });
+                let enum_type = Type::Enum(EnumType {
+                    variants: variants.into_handle(&mut self.types.mem),
+                    ast_node: type_expr_id.into(),
+                    tag_type,
+                });
                 let enum_type_id = self.add_or_resolve_type(
                     context.direct_unresolved_target_type,
                     enum_type,
@@ -3395,10 +3403,10 @@ impl TypedProgram {
                     }
                 }
                 match self.types.get(base_type) {
-                    // You can do dot access on enums to get their variants
+                    // You can do dot access on enums to get their variant payloads
                     Type::Enum(e) => {
                         let Some(matching_variant) =
-                            e.variants.iter().find(|v| v.name == dot_acc.member_name)
+                            self.types.enum_variant_by_name(e.variants, dot_acc.member_name)
                         else {
                             return failf!(
                                 dot_acc.span,
@@ -3407,20 +3415,14 @@ impl TypedProgram {
                                 self.type_id_to_string(base_type)
                             );
                         };
-                        let variant_type = matching_variant.my_type_id;
-                        Ok(variant_type)
-                    }
-                    Type::EnumVariant(ev) => {
-                        if self.ast.idents.get_name(dot_acc.member_name) != "value" {
-                            failf!(
+                        let Some(payload) = matching_variant.payload else {
+                            return failf!(
                                 dot_acc.span,
-                                "Invalid member access on EnumVariant type; try '.value'",
-                            )
-                        } else if let Some(payload) = ev.payload {
-                            Ok(payload)
-                        } else {
-                            failf!(dot_acc.span, "Variant has no payload value")
-                        }
+                                "Variant '{}' has no payload type",
+                                self.ident_str(dot_acc.member_name)
+                            );
+                        };
+                        Ok(payload)
                     }
                     // You can do dot access on structs to get their members!
                     Type::Struct(s) => {
@@ -4134,20 +4136,23 @@ impl TypedProgram {
                 }
             }
             Type::Enum(e) => {
-                let mut new_variants = e.variants.clone();
-                let mut any_changed = false;
                 let original_ast_node = e.ast_node;
+                let original_tag_type = e.tag_type;
+                let new_variants = self.types.mem.dupn(e.variants);
+                let mut any_changed = false;
                 let original_defn_info = self.types.get_defn_info(type_id);
                 let defn_info_to_use = defn_info_to_attach.or(original_defn_info);
-                let original_explicit_tag_type = e.tag_type;
-                for variant in new_variants.make_mut().iter_mut() {
-                    let new_payload_id = variant.payload.map(|payload_type_id| {
-                        self.substitute_in_type(payload_type_id, substitution_pairs)
-                    });
-                    if new_payload_id != variant.payload {
-                        any_changed = true;
-                        variant.payload = new_payload_id;
-                    }
+                for variant in self.types.mem.getn_mut(new_variants) {
+                    match variant.payload {
+                        None => {}
+                        Some(p) => {
+                            let new_payload_id = self.substitute_in_type(p, substitution_pairs);
+                            if new_payload_id != p {
+                                any_changed = true;
+                                variant.payload = Some(new_payload_id)
+                            };
+                        }
+                    };
                 }
                 if any_changed {
                     let generic_instance_info = generic_parent_to_attach
@@ -4159,10 +4164,10 @@ impl TypedProgram {
                                 .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
-                    let new_enum = TypedEnum {
+                    let new_enum = EnumType {
                         variants: new_variants,
                         ast_node: original_ast_node,
-                        tag_type: original_explicit_tag_type,
+                        tag_type: original_tag_type,
                     };
                     let new_enum_id = self.types.add(
                         Type::Enum(new_enum),
@@ -4200,9 +4205,6 @@ impl TypedProgram {
                 } else {
                     type_id
                 }
-            }
-            Type::EnumVariant(_) => {
-                unreachable!("substitute_in_type is not expected to be called on an EnumVariant")
             }
             Type::Generic(_) => {
                 unreachable!("substitute_in_type is not expected to be called on a Generic")
@@ -4336,30 +4338,6 @@ impl TypedProgram {
             }
             _ => None,
         }
-    }
-
-    pub fn synth_static_option(
-        &mut self,
-        option_type_id: TypeId,
-        value_id: Option<StaticValueId>,
-    ) -> StaticValueId {
-        let opt_enum_type = self.types.get(option_type_id).expect_enum();
-        let static_enum = match value_id {
-            None => StaticEnum {
-                variant_type_id: opt_enum_type.variant_by_index(0).my_type_id,
-                variant_index: 0,
-                typed_as_enum: true,
-                payload: None,
-            },
-            Some(value_id) => StaticEnum {
-                variant_type_id: opt_enum_type.variant_by_index(1).my_type_id,
-                variant_index: 1,
-                typed_as_enum: true,
-                payload: Some(value_id),
-            },
-        };
-
-        self.static_values.add(StaticValue::Enum(static_enum))
     }
 
     fn get_module_manifest(
@@ -4537,7 +4515,7 @@ impl TypedProgram {
             }
             ParsedPattern::Enum(enum_pattern) => {
                 let enum_pattern_span = enum_pattern.span;
-                let Some((enum_type, _variant)) = self.types.get_as_enum(target_type_id) else {
+                let Some(enum_type) = self.types.get(target_type_id).as_enum() else {
                     return failf!(
                         enum_pattern.span,
                         "Enum pattern will never match {}",
@@ -4572,7 +4550,7 @@ impl TypedProgram {
                     }
                 }
                 let Some(matching_variant) =
-                    enum_type.variants.iter().find(|v| v.name == enum_pattern.variant_name)
+                    self.types.enum_variant_by_name(enum_type.variants, enum_pattern.variant_name)
                 else {
                     return failf!(
                         enum_pattern.span,
@@ -4707,7 +4685,6 @@ impl TypedProgram {
             .iter()
             .zip(self.types.mem.getn(actual.fields).iter())
         {
-            trace!("typechecking struct field {:?}", expected_field);
             if actual_field.name != expected_field.name {
                 return Err(k1_format_user!(
                     self,
@@ -5100,22 +5077,6 @@ impl TypedProgram {
             }
             (Type::Enum(_exp_enum), Type::Enum(_act_enum)) => {
                 Err(k1_format_user!(self, "expected enum {} but got enum {}", expected, actual))
-            }
-            (Type::Enum(_expected_enum), Type::EnumVariant(actual_variant)) => {
-                // This requires some more consideration, we need to actually insert a cast
-                // instruction to make the physical types exactly the same?
-                // We avoid this by representing the variant as the envelope type in codegen.
-                // This is actually probably the move?
-                if actual_variant.enum_type_id == expected {
-                    Ok(())
-                } else {
-                    Err(k1_format_user!(
-                        self,
-                        "expected enum {} but got variant {} of a different enum",
-                        expected,
-                        actual_variant.name
-                    ))
-                }
             }
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.logical_params().len() != f2.logical_params().len() {
@@ -6716,6 +6677,9 @@ impl TypedProgram {
         } else {
             FieldAccessKind::ValueToValue
         };
+        if field_access.is_coalescing {
+            return failf!(span, "?. not implemented currently");
+        }
         match self.types.get(struct_type_id) {
             Type::Struct(struct_type) => {
                 if is_assignment_lhs && !base_is_reference {
@@ -6747,132 +6711,6 @@ impl TypedProgram {
                     result_type,
                     span,
                 ))
-            }
-            Type::EnumVariant(ev) => {
-                if self.ast.idents.get_name(field_access.field_name) != "value" {
-                    return failf!(
-                        span,
-                        "Field {} does not exist; try .value",
-                        self.ast.idents.get_name(field_access.field_name)
-                    );
-                }
-                let Some(payload_type_id) = ev.payload else {
-                    return failf!(
-                        span,
-                        "Variant {} has no payload value",
-                        self.ast.idents.get_name(ev.name)
-                    );
-                };
-                if is_assignment_lhs && !base_is_reference {
-                    return failf!(span, "Enum must be a reference to be assignable");
-                }
-                let variant_index = ev.index;
-                let result_type_id = if field_access.is_referencing {
-                    let reference_type = base_reference_type.unwrap();
-                    self.types.add_reference_type(payload_type_id, reference_type.mutable)
-                } else {
-                    payload_type_id
-                };
-
-                Ok(self.exprs.add(
-                    TypedExpr::EnumGetPayload(GetEnumVariantPayload {
-                        enum_variant_expr: base_expr,
-                        variant_index,
-                        access_kind,
-                    }),
-                    result_type_id,
-                    span,
-                ))
-            }
-            Type::Enum(_opt_type) => {
-                if let Some(opt_inner_type) = self.types.get_as_opt_instance(struct_type_id) {
-                    if !field_access.is_coalescing {
-                        return failf!(
-                            span,
-                            "Optionals have no direct fields; did you mean to use the '?.' operator?"
-                        );
-                    }
-                    if field_access.is_referencing {
-                        return failf!(
-                            span,
-                            "Cannot use referencing access with optional chaining"
-                        );
-                    }
-                    // TODO: This can be re-written in terms of 'Try' if we supply a
-                    //           'wrap' function that wraps (optional Some equivalent)
-                    // It doesn't really support chaining yet, kinda useless so I also won't make it ability-based yet
-                    // See coalescing_v2.wip for plan
-                    let mut block =
-                        self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
-                    let block_scope = block.scope_id;
-                    let base_expr_var = self.synth_variable_defn_simple(
-                        field_access.field_name,
-                        base_expr,
-                        block_scope,
-                    );
-                    let has_value = self.synth_typed_call_typed_args(
-                        self.ast.idents.f.Opt_isSome.with_span(span),
-                        &[opt_inner_type],
-                        &[base_expr_var.variable_expr],
-                        ctx.with_scope(block_scope).with_no_expected_type(),
-                        false,
-                    )?;
-
-                    let Type::Struct(struct_type) = self.types.get(opt_inner_type) else {
-                        return failf!(
-                            span,
-                            "?. must be used on optional structs, got {}",
-                            self.type_id_to_string(base_expr_type)
-                        );
-                    };
-                    let (field_index, target_field) = struct_type
-                        .find_field(&self.types.mem, field_access.field_name)
-                        .ok_or_else(|| {
-                            errf!(
-                                span,
-                                "Field {} not found on struct {}",
-                                self.ast.idents.get_name(field_access.field_name),
-                                self.type_id_to_string(opt_inner_type)
-                            )
-                        })?;
-                    let field_type = target_field.type_id;
-                    let opt_unwrap = self.synth_typed_call_typed_args(
-                        self.ast.idents.f.Opt_get.with_span(span),
-                        &[opt_inner_type],
-                        &[base_expr_var.variable_expr],
-                        ctx.with_scope(block_scope).with_no_expected_type(),
-                        false,
-                    )?;
-                    let field_access = self.exprs.add(
-                        TypedExpr::StructFieldAccess(FieldAccess {
-                            base: opt_unwrap,
-                            field_index: field_index as u32,
-                            access_kind: FieldAccessKind::ValueToValue,
-                            struct_type: opt_inner_type,
-                        }),
-                        field_type,
-                        span,
-                    );
-                    let (consequent, consequent_type_id) = self.synth_optional_some(field_access);
-                    let alternate = self.synth_optional_none(field_type, span);
-                    let if_expr = self.synth_if_else(
-                        consequent_type_id,
-                        has_value,
-                        consequent,
-                        alternate,
-                        span,
-                    );
-                    self.push_stmt_id_to_block(&mut block, base_expr_var.defn_stmt);
-                    self.push_expr_id_to_block(&mut block, if_expr);
-                    let ty = self.exprs.get_type(if_expr);
-                    Ok(self.exprs.add_block(&mut self.mem, block, ty))
-                } else {
-                    failf!(
-                        span,
-                        "Field {} does not exist",
-                        self.ast.idents.get_name(field_access.field_name)
-                    )
-                }
             }
             _ => failf!(
                 span,
@@ -7211,10 +7049,9 @@ impl TypedProgram {
                 })?;
                 match self.types.get(expected_type) {
                     Type::Enum(_e) => Ok(expected_type),
-                    Type::EnumVariant(ev) => Ok(ev.enum_type_id),
                     _ => failf!(
                         anon_enum.span,
-                        "Could not infer expected enum type for '.' shorthand; expected type was a {} type: {}",
+                        "Could not infer the enum type for '.' shorthand; expected type was a {} type: {}",
                         self.type_kind_to_string(expected_type),
                         self.type_id_to_string(expected_type)
                     ),
@@ -8784,7 +8621,7 @@ impl TypedProgram {
         ))
     }
 
-    /// Accumulates a list of 'BindingOrCond' while 'compiling' a pattern match.
+    /// Accumulates a list of 'MatchingConditionInstr' while 'compiling' a pattern match.
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
     /// - A new variable binding
@@ -8858,6 +8695,7 @@ impl TypedProgram {
                 let is_variant_condition = self.synth_enum_is_variant(
                     target_expr,
                     enum_pattern.variant_index,
+                    is_referencing,
                     ctx,
                     Some(enum_pattern.span),
                 )?;
@@ -8867,56 +8705,46 @@ impl TypedProgram {
                 );
 
                 if let Some(payload_pattern) = enum_pattern.payload {
-                    let enum_type = self.types.get(enum_pattern.enum_type_id).expect_enum();
-                    let variant = enum_type.variant_by_index(enum_pattern.variant_index);
-                    let variant_type_id = variant.my_type_id;
+                    let enum_type_id = enum_pattern.enum_type_id;
+                    let enum_type = self.types.get(enum_type_id).expect_enum();
+                    let variant = self
+                        .types
+                        .enum_variant_by_index(enum_type.variants, enum_pattern.variant_index);
                     let variant_name = variant.name;
                     let variant_index = variant.index;
                     let Some(payload_type_id) = variant.payload else {
                         return failf!(
                             enum_pattern.span,
-                            "Impossible pattern: variant does not have payload",
+                            "Impossible pattern: Variant '{}' does not have data",
+                            self.ident_str(variant_name)
                         );
                     };
-                    let (result_type_id, is_mutable) = if is_referencing {
+                    let result_type_id = if is_referencing {
                         let mutable = self.types.get(target_expr_type).expect_reference().mutable;
                         let r = self.types.add_reference_type(payload_type_id, mutable);
-                        (r, mutable)
+                        r
                     } else {
-                        (payload_type_id, false)
+                        payload_type_id
                     };
-                    let variant_target_type = if is_referencing {
-                        self.types.add_reference_type(variant_type_id, is_mutable)
+                    let access_kind = if is_referencing {
+                        FieldAccessKind::ReferenceThrough
                     } else {
-                        variant_type_id
+                        FieldAccessKind::ValueToValue
                     };
-                    let enum_as_variant = self.synth_cast(
-                        target_expr,
-                        variant_target_type,
-                        if is_referencing {
-                            CastType::ReferenceToReference
-                        } else {
-                            CastType::EnumToVariant
-                        },
-                        Some(enum_pattern.span),
-                    );
                     let get_payload_expr = self.exprs.add(
-                        TypedExpr::EnumGetPayload(GetEnumVariantPayload {
-                            enum_variant_expr: enum_as_variant,
+                        TypedExpr::EnumGetPayload(GetEnumPayload {
+                            enum_expr: target_expr,
                             variant_index,
-                            access_kind: if is_referencing {
-                                FieldAccessKind::ReferenceThrough
-                            } else {
-                                FieldAccessKind::ValueToValue
-                            },
+                            access_kind,
                         }),
                         result_type_id,
                         enum_pattern.span,
                     );
-                    let var_name =
-                        self.ast.idents.intern(format!("payload_{}", self.ident_str(variant_name)));
-                    let payload_variable =
-                        self.synth_variable_defn_simple(var_name, get_payload_expr, ctx.scope_id);
+                    let payload_variable = self.synth_variable_defn_simple(
+                        variant_name,
+                        get_payload_expr,
+                        ctx.scope_id,
+                    );
                     instrs.push_grow(
                         &mut self.mem,
                         MatchingConditionInstr::Binding { let_stmt: payload_variable.defn_stmt },
@@ -10642,7 +10470,7 @@ impl TypedProgram {
 
         // Handle the special case of the synthesized enum 'as{Variant}' methods
         if let Some(enum_as_result) =
-            self.handle_enum_as(base_expr, call, ctx.with_no_expected_type())?
+            self.handle_enum_as_variant_call(base_expr, call, ctx.with_no_expected_type())?
         {
             return Ok(Either::Left(enum_as_result));
         }
@@ -10981,10 +10809,8 @@ impl TypedProgram {
         let original_type = self.exprs.get_type(base_expr_id);
         let (enum_type, is_reference) = match self.types.get(original_type) {
             Type::Enum(e) => (e, false),
-            Type::EnumVariant(ev) => (self.types.get(ev.enum_type_id).expect_enum(), false),
             Type::Reference(refer) => match self.types.get(refer.inner_type) {
                 Type::Enum(e) => (e, true),
-                Type::EnumVariant(ev) => (self.types.get(ev.enum_type_id).expect_enum(), true),
                 _ => return Ok(None),
             },
             _ => return Ok(None),
@@ -10992,16 +10818,17 @@ impl TypedProgram {
 
         let tag_type = enum_type.tag_type;
 
-        let base_expr =
-            if is_reference { self.synth_dereference(base_expr_id) } else { base_expr_id };
         Ok(Some(self.exprs.add(
-            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference: base_expr }),
+            TypedExpr::EnumGetTag(GetEnumTag {
+                enum_expr_or_reference: base_expr_id,
+                is_reference,
+            }),
             tag_type,
             span,
         )))
     }
 
-    fn handle_enum_as(
+    fn handle_enum_as_variant_call(
         &mut self,
         base_expr: TypedExprId,
         fn_call: &ParsedCall,
@@ -11026,15 +10853,17 @@ impl TypedProgram {
         };
         let base_expr_type = self.exprs.get_type(base_expr);
         let span = fn_call.span;
-        let variants = e.variants.clone();
+        let variants = e.variants;
         let mut s = std::mem::take(&mut self.buffers.name_builder);
-        let Some(variant) = variants.iter().find(|v| {
+        let fn_name = self.ident_str(fn_call.name.name);
+        let Some(variant) = self.types.mem.getn(variants).iter().find(|v| {
             s.push_str("as");
             let name = self.ident_str(v.name);
-            let name_capitalized = strings::capitalize_first(name);
-            s.push_str(&name_capitalized);
+            let first_letter = name.chars().next().unwrap();
+            let rest = name.chars().skip(1);
+            s.push(first_letter.to_ascii_uppercase());
+            s.extend(rest);
 
-            let fn_name = self.ident_str(fn_call.name.name);
             let is_match = fn_name == s;
             s.clear();
             is_match
@@ -11043,24 +10872,36 @@ impl TypedProgram {
             return Ok(None);
         };
         self.buffers.name_builder = s;
-        let variant_type_id = variant.my_type_id;
+        let Some(payload_type_id) = variant.payload else {
+            // Note, we could return a Some(unit) here, but for now I'll just fail
+            return failf!(span, "Variant '{}' has no data", self.ident_str(variant.name));
+        };
         let variant_index = variant.index;
         let resulting_type_id = if is_reference {
             let ref_type = self.types.get(base_expr_type).expect_reference();
-            self.types.add_reference_type(variant_type_id, ref_type.mutable)
+            self.types.add_reference_type(payload_type_id, ref_type.mutable)
         } else {
-            variant_type_id
+            payload_type_id
         };
-        let condition = self.synth_enum_is_variant(base_expr, variant_index, ctx, Some(span))?;
-        let cast_type =
-            if is_reference { CastType::ReferenceToReference } else { CastType::EnumToVariant };
-        let cast_expr = self.synth_cast(base_expr, resulting_type_id, cast_type, Some(span));
-        let (consequent, consequent_type_id) =
-                // base_expr is the enum type, or a reference to it
-                // resulting_type_id is the variant, or a reference to it
-                self.synth_optional_some(cast_expr);
+        let condition =
+            self.synth_enum_is_variant(base_expr, variant_index, is_reference, ctx, Some(span))?;
+        let access_kind = if is_reference {
+            FieldAccessKind::ReferenceThrough
+        } else {
+            FieldAccessKind::ValueToValue
+        };
+        let payload_expr = self.exprs.add(
+            TypedExpr::EnumGetPayload(GetEnumPayload {
+                enum_expr: base_expr,
+                variant_index,
+                access_kind,
+            }),
+            resulting_type_id,
+            span,
+        );
+        let (consequent, consequent_type_id) = self.synth_optional_some(payload_expr);
         let alternate = self.synth_optional_none(resulting_type_id, span);
-
+        debug_assert_eq!(consequent_type_id, self.exprs.get_type(alternate));
         Ok(Some(self.synth_if_else(consequent_type_id, condition, consequent, alternate, span)))
     }
 
@@ -11109,7 +10950,6 @@ impl TypedProgram {
                 let enum_type_id = {
                     match self.types.get(expected_type) {
                         Type::Enum(_e) => Ok(expected_type),
-                        Type::EnumVariant(ev) => Ok(ev.enum_type_id),
                         _ => failf!(
                             span,
                             "Could not infer expected enum type for '.' shorthand; expected type was a {} type: {}",
@@ -11127,20 +10967,23 @@ impl TypedProgram {
         };
         let base_enum_or_generic_enum = self.types.get(base_type_id);
         if let Type::Enum(e) = base_enum_or_generic_enum {
-            if let Some(_variant) = e.variant_by_name(variant_name) {
-                Ok(Some(self.eval_enum_constructor(
+            if let Some(_variant) = self.types.enum_variant_by_name(e.variants, variant_name) {
+                let enum_constructor = self.eval_enum_constructor(
                     base_type_id,
                     variant_name,
                     payload_parsed_expr,
                     ctx,
                     span,
-                )?))
+                )?;
+                Ok(Some(enum_constructor))
             } else {
                 failf!(span, "No such variant: {}", self.ident_str(variant_name))
             }
         } else if let Type::Generic(g) = base_enum_or_generic_enum {
             let Some(inner_enum) = self.types.get(g.inner).as_enum() else { return Ok(None) };
-            let Some(generic_variant) = inner_enum.variant_by_name(variant_name) else {
+            let Some(generic_variant) =
+                self.types.enum_variant_by_name(inner_enum.variants, variant_name)
+            else {
                 return Ok(None);
             };
             let g_params = g.params;
@@ -12345,52 +12188,58 @@ impl TypedProgram {
                     Some(value_expr) => Some(self.exprs.get_type(value_expr)),
                 };
 
-                let variable_type = match actual_type {
-                    None => match provided_type {
-                        None => return failf!(parsed_let.span, "Uninit let requires a type"),
-                        Some(t) => t,
-                    },
-                    Some(actual_type) => {
-                        if parsed_let.is_referencing() {
-                            let mutable = provided_reference_mutability.unwrap_or(true);
-                            self.types.add_reference_type(actual_type, mutable)
-                        } else {
-                            actual_type
-                        }
-                    }
-                };
-
-                let mut flags = VariableFlags::empty();
-
-                flags.set(VariableFlags::Context, parsed_let.is_context());
-                let stmt_id = self.stmts.next_id();
-                let variable_id = self.variables.add(Variable {
-                    name: parsed_let.name,
-                    type_id: variable_type,
-                    owner_scope: ctx.scope_id,
-                    kind: VariableKind::Let(stmt_id),
-                    flags,
-                    usage_count: 0,
-                });
-                let val_def_stmt = TypedStmt::Let(LetStmt {
-                    variable_type,
-                    variable_id,
-                    initializer: value_expr,
-                    is_referencing: parsed_let.is_referencing(),
-                    span: parsed_let.span,
-                });
-                if parsed_let.is_context() {
-                    self.scopes.add_context_variable(
-                        ctx.scope_id,
-                        parsed_let.name,
-                        variable_id,
-                        variable_type,
-                    );
+                if actual_type == Some(NEVER_TYPE_ID) {
+                    let never_expr = value_expr.unwrap();
+                    let never_stmt = self.stmts.add(TypedStmt::Expr(never_expr, NEVER_TYPE_ID));
+                    Ok(Some(never_stmt))
                 } else {
-                    self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
+                    let variable_type = match actual_type {
+                        None => match provided_type {
+                            None => return failf!(parsed_let.span, "Uninit let requires a type"),
+                            Some(t) => t,
+                        },
+                        Some(actual_type) => {
+                            if parsed_let.is_referencing() {
+                                let mutable = provided_reference_mutability.unwrap_or(true);
+                                self.types.add_reference_type(actual_type, mutable)
+                            } else {
+                                actual_type
+                            }
+                        }
+                    };
+
+                    let mut flags = VariableFlags::empty();
+
+                    flags.set(VariableFlags::Context, parsed_let.is_context());
+                    let stmt_id = self.stmts.next_id();
+                    let variable_id = self.variables.add(Variable {
+                        name: parsed_let.name,
+                        type_id: variable_type,
+                        owner_scope: ctx.scope_id,
+                        kind: VariableKind::Let(stmt_id),
+                        flags,
+                        usage_count: 0,
+                    });
+                    let val_def_stmt = TypedStmt::Let(LetStmt {
+                        variable_type,
+                        variable_id,
+                        initializer: value_expr,
+                        is_referencing: parsed_let.is_referencing(),
+                        span: parsed_let.span,
+                    });
+                    if parsed_let.is_context() {
+                        self.scopes.add_context_variable(
+                            ctx.scope_id,
+                            parsed_let.name,
+                            variable_id,
+                            variable_type,
+                        );
+                    } else {
+                        self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
+                    }
+                    self.stmts.add_expected_id(val_def_stmt, stmt_id);
+                    Ok(Some(stmt_id))
                 }
-                self.stmts.add_expected_id(val_def_stmt, stmt_id);
-                Ok(Some(stmt_id))
             }
             ParsedStmt::Require(require) => {
                 static_assert_size!(parse::ParsedRequire, 12);
@@ -12893,7 +12742,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         let e = self.types.get(concrete_enum_type).expect_enum();
-        let Some(variant) = e.variant_by_name(variant_name) else {
+        let Some(variant) = self.types.enum_variant_by_name(e.variants, variant_name) else {
             return failf!(
                 span,
                 "No variant '{}' exists in enum '{}'",
@@ -12901,14 +12750,13 @@ impl TypedProgram {
                 self.type_id_to_string(concrete_enum_type)
             );
         };
-        let variant_type_id = variant.my_type_id;
         let variant_index = variant.index;
         let payload = match variant.payload {
             None => {
                 if let Some(_payload_arg) = payload {
                     failf!(
                         span,
-                        "Variant '{}' does not have a payload",
+                        "Variant '{}' does not have data",
                         self.ident_str(variant_name).blue()
                     )
                 } else {
@@ -12926,48 +12774,27 @@ impl TypedProgram {
                 } else {
                     failf!(
                         span,
-                        "Variant '{}' requires a payload",
-                        self.ident_str(variant_name).blue()
+                        "Variant '{}' requires data: {}",
+                        self.ident_str(variant_name).blue(),
+                        self.type_id_to_string(payload_type)
                     )
                 }
             }
         }?;
         let never_payload = payload.is_some_and(|p| self.exprs.get_type(p) == NEVER_TYPE_ID);
         if never_payload {
-            // Might as well just codegen the payload expr that wants to exit; we can't put it in
-            // a variant and now all downstream code doesn't have to worry about the 'crash
-            // payload' scenario
+            // Might as well just codegen the payload expr that wants to exit;
+            // now all downstream code doesn't have to worry about the 'crash payload' scenario
             let never_payload_expr = payload.unwrap();
-            Ok(never_payload_expr)
-        } else {
-            let enum_constructor = self.exprs.add(
-                TypedExpr::EnumConstructor(TypedEnumConstructor { variant_index, payload }),
-                variant_type_id,
-                span,
-            );
-            let casted_expr = match ctx.expected_type_id.map(|t| self.types.get(t)) {
-                Some(Type::EnumVariant(ev)) if ev.my_type_id == variant_type_id => {
-                    debug!(
-                        "enum constructor output type is the variant type: {}",
-                        self.type_id_to_string(variant_type_id)
-                    );
-                    enum_constructor
-                }
-                _ => {
-                    debug!(
-                        "casted enum constructor to its enum type: {}",
-                        self.type_id_to_string(concrete_enum_type)
-                    );
-                    self.synth_cast(
-                        enum_constructor,
-                        concrete_enum_type,
-                        CastType::VariantToEnum,
-                        None,
-                    )
-                }
-            };
-            Ok(casted_expr)
+            return Ok(never_payload_expr);
         }
+
+        let enum_constructor = self.exprs.add(
+            TypedExpr::EnumConstructor(TypedEnumConstructor { variant_index, payload }),
+            concrete_enum_type,
+            span,
+        );
+        Ok(enum_constructor)
     }
 
     fn check_type_constraint(
@@ -13514,7 +13341,8 @@ impl TypedProgram {
 
             // First arg Self shenanigans
             if idx == 0 {
-                let name_is_self = self_.ast.idents.get_name(fn_param.name) == "self";
+                let name_is_self = fn_param.name == self_.ast.idents.b.self_
+                    || fn_param.name == self_.ast.idents.b._self;
 
                 // If the first argument is named self, check if it's a method of the companion type
                 let is_ability_fn = ability_id.is_some();
@@ -13539,11 +13367,9 @@ impl TypedProgram {
                                 _other => {
                                     return failf!(
                                         fn_param.span,
-                                        "First parameter named 'self' must be of the companion type, expected {} got {}, {} vs {}",
+                                        "First parameter named 'self' must be of the companion type, expected {} got {}",
                                         self_.type_id_to_string(companion_type_id),
                                         self_.type_id_to_string(type_id),
-                                        companion_type_id,
-                                        type_id
                                     );
                                 }
                             }
@@ -15331,11 +15157,8 @@ impl TypedProgram {
                 }
             }
             Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
-            Type::EnumVariant(v) => {
-                handle_enum_variant(self, dst, field_ctors_buf, span_id, &v.clone())
-            }
             Type::Enum(enum_type) => {
-                for v in enum_type.variants.clone().iter() {
+                for v in self.types.mem.getn(enum_type.variants) {
                     handle_enum_variant(self, dst, field_ctors_buf, span_id, v)
                 }
             }
@@ -15623,44 +15446,46 @@ impl TypedProgram {
             return *static_value_id;
         }
 
-        let type_schema =
-            self.types.get(self.types.builtins.types_type_schema.unwrap()).expect_enum().clone();
-        let int_kind_enum =
-            self.types.get(self.types.builtins.types_int_kind.unwrap()).expect_enum();
-        let get_schema_variant = |ident| type_schema.variant_by_name(ident).unwrap();
-        let make_variant = |name: Ident, payload: Option<StaticValueId>| {
-            let v = get_schema_variant(name);
-            StaticEnum {
-                variant_type_id: v.my_type_id,
-                variant_index: v.index,
-                typed_as_enum: true,
-                payload,
-            }
+        let type_schema_type_id = self.types.builtins.types_type_schema.unwrap();
+        let type_schema = self.types.get(type_schema_type_id).expect_enum().clone();
+        let int_kind_type_id = self.types.builtins.types_int_kind.unwrap();
+        let int_kind_enum = self.types.get(int_kind_type_id).expect_enum();
+        let get_schema_variant = |self_: &TypedProgram, ident| {
+            self_.types.enum_variant_by_name(type_schema.variants, ident).unwrap()
+        };
+        let make_variant = |self_: &TypedProgram, name: Ident, payload: Option<StaticValueId>| {
+            let v = get_schema_variant(self_, name);
+            StaticEnum { enum_type_id: type_schema_type_id, variant_index: v.index, payload }
         };
 
         // .get will follow statics and recursives
         let chased_type_id = self.types.get_chased_id(type_id);
         let typ = self.types.get_no_follow(chased_type_id);
         let static_enum = match typ {
-            Type::Unit => make_variant(get_ident!(self, "Unit"), None),
-            Type::Char => make_variant(get_ident!(self, "Char"), None),
-            Type::Bool => make_variant(get_ident!(self, "Bool"), None),
-            Type::Pointer => make_variant(get_ident!(self, "Ptr"), None),
+            Type::Unit => make_variant(self, get_ident!(self, "Unit"), None),
+            Type::Char => make_variant(self, get_ident!(self, "Char"), None),
+            Type::Bool => make_variant(self, get_ident!(self, "Bool"), None),
+            Type::Pointer => make_variant(self, get_ident!(self, "Ptr"), None),
             Type::Integer(integer_type) => {
-                let int_kind_enum_value = TypedProgram::make_int_kind(int_kind_enum, *integer_type);
+                let int_kind_enum_value = TypedProgram::make_int_kind(
+                    self.types.mem.getn(int_kind_enum.variants),
+                    int_kind_type_id,
+                    *integer_type,
+                );
 
                 let payload_value_id =
                     self.static_values.add(StaticValue::Enum(int_kind_enum_value));
-                let enum_value = make_variant(get_ident!(self, "Int"), Some(payload_value_id));
+                let enum_value =
+                    make_variant(self, get_ident!(self, "Int"), Some(payload_value_id));
                 enum_value
             }
             Type::Float(_float_type) => todo!("float schema"),
             Type::Struct(_struct_type) if chased_type_id == STRING_TYPE_ID => {
-                make_variant(get_ident!(self, "String"), None)
+                make_variant(self, get_ident!(self, "String"), None)
             }
             Type::Struct(struct_type) => {
                 let struct_schema_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Struct")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "Struct")).payload.unwrap();
                 // { fields: View[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
@@ -15705,12 +15530,12 @@ impl TypedProgram {
                 let payload = self
                     .static_values
                     .add_struct_from_slice(struct_schema_payload_type_id, &[view]);
-                make_variant(get_ident!(self, "Struct"), Some(payload))
+                make_variant(self, get_ident!(self, "Struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_type = *reference_type;
                 let reference_schema_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Reference")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "Reference")).payload.unwrap();
                 // { innerTypeId: u64, mutable: bool }
                 let inner_type_id_value_id =
                     self.static_values.add_type_id_int_value(reference_type.inner_type);
@@ -15726,12 +15551,12 @@ impl TypedProgram {
                     reference_schema_payload_type_id,
                     &[inner_type_id_value_id, mutable_value_id],
                 );
-                make_variant(get_ident!(self, "Reference"), Some(payload_struct_id))
+                make_variant(self, get_ident!(self, "Reference"), Some(payload_struct_id))
             }
             Type::Array(array_type) => {
                 let array_type = *array_type;
                 let array_schema_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Array")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "Array")).payload.unwrap();
                 // { elementTypeId: u64, size: size }
                 let element_type_id_value_id =
                     self.static_values.add_type_id_int_value(array_type.element_type);
@@ -15742,38 +15567,48 @@ impl TypedProgram {
                     Some(size) => Some(self.static_values.add_size(to_k1_size_u64(size))),
                 };
                 let option_size = self.synth_optional_type(SIZE_TYPE_ID);
-                let size_value_id =
-                    self.synth_static_option(option_size, maybe_concrete_size_value_id);
+                let size_value_id = synth::synth_static_option(
+                    &mut self.static_values,
+                    option_size,
+                    maybe_concrete_size_value_id,
+                );
 
                 let payload_struct_id = self.static_values.add_struct_from_slice(
                     array_schema_payload_type_id,
                     &[element_type_id_value_id, size_value_id],
                 );
-                make_variant(get_ident!(self, "Array"), Some(payload_struct_id))
+                make_variant(self, get_ident!(self, "Array"), Some(payload_struct_id))
             }
             Type::Enum(typed_enum) => {
+                let target_enum_variants = typed_enum.variants;
                 let either_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Either")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "Either")).payload.unwrap();
                 let variants_view_type_id =
                     self.types.get_struct_field(either_payload_type_id, 1).type_id;
                 let variant_struct_type_id =
                     self.types.get_as_view_instance(variants_view_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
-                let tag_type_value_id = self
-                    .static_values
-                    .add(StaticValue::Enum(TypedProgram::make_int_kind(int_kind_enum, tag_type)));
-                let mut variant_values =
-                    self.static_values.mem.new_list(typed_enum.variants.len() as u32);
-                for variant in typed_enum.variants.clone().iter() {
+                let tag_type_value_id =
+                    self.static_values.add(StaticValue::Enum(TypedProgram::make_int_kind(
+                        self.types.mem.getn(int_kind_enum.variants),
+                        int_kind_type_id,
+                        tag_type,
+                    )));
+                let enum_agg_id = self.types.get_physical_type(type_id).unwrap().expect_agg();
+                let enum_pt = self.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
+                let maybe_payload_offset = enum_pt.payload_offset;
+                let mut variant_values = self.static_values.mem.new_list(typed_enum.variants.len());
+                for variant in self.types.mem.getn(target_enum_variants) {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
                     let name_value_id = self.static_values.add_string(name_string_id);
 
-                    let int_value_enum =
-                        self.types.get(self.types.builtins.types_int_value.unwrap()).expect_enum();
+                    let int_value_type_id = self.types.builtins.types_int_value.unwrap();
+                    let int_value_enum = self.types.get(int_value_type_id).expect_enum();
                     let tag_value_enum_value = TypedProgram::make_int_value(
                         &mut self.static_values,
-                        int_value_enum,
+                        int_value_type_id,
+                        self.types.mem.getn(int_value_enum.variants),
                         variant.tag_value,
                     );
                     let tag_value_id =
@@ -15786,7 +15621,6 @@ impl TypedProgram {
 
                     let payload_info_value_id = match variant.payload {
                         None => synth_static_option(
-                            &self.types,
                             &mut self.static_values,
                             payload_info_opt_type_id,
                             None,
@@ -15798,15 +15632,14 @@ impl TypedProgram {
                             // are available at runtime, by calling these functions at least once.
                             self.register_type_metainfo(payload_type_id, span);
 
-                            let offset = self.types.enum_variant_payload_offset_bytes(variant);
+                            let offset = maybe_payload_offset.unwrap();
                             let payload_offset_value_id =
-                                self.static_values.add_size(to_k1_size_usize(offset));
+                                self.static_values.add_size(to_k1_size_usize(offset as usize));
                             let payload_info_struct_id = self.static_values.add_struct_from_slice(
                                 payload_info_struct_id,
                                 &[type_id_value_id, payload_offset_value_id],
                             );
                             synth_static_option(
-                                &self.types,
                                 &mut self.static_values,
                                 payload_info_opt_type_id,
                                 Some(payload_info_struct_id),
@@ -15833,37 +15666,13 @@ impl TypedProgram {
                     either_payload_type_id,
                     &[tag_type_value_id, variants_view_value_id],
                 );
-                make_variant(get_ident!(self, "Either"), Some(payload_value_id))
+                make_variant(self, get_ident!(self, "Either"), Some(payload_value_id))
             }
-            Type::EnumVariant(variant) => {
-                // {
-                //   enumTypeId: u64,
-                //   name: string,
-                // }
-                let variant_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Variant")).payload.unwrap();
-                let variant_name = variant.name;
-                let enum_type_id_value_id =
-                    self.static_values.add_type_id_int_value(variant.enum_type_id);
-
-                // We need to ensure that any and all typeIds that we share with the user
-                // are available at runtime, by calling these functions at least once.
-                self.register_type_metainfo(variant.enum_type_id, span);
-
-                let name_string_id =
-                    self.ast.strings.intern(self.ast.idents.get_name(variant_name));
-                let name_value_id = self.static_values.add_string(name_string_id);
-                let payload_value_id = self.static_values.add_struct_from_slice(
-                    variant_payload_type_id,
-                    &[enum_type_id_value_id, name_value_id],
-                );
-                make_variant(get_ident!(self, "Variant"), Some(payload_value_id))
-            }
-            Type::Never => make_variant(get_ident!(self, "Never"), None),
+            Type::Never => make_variant(self, get_ident!(self, "Never"), None),
             Type::Function(fn_type) => {
                 let fn_type = fn_type.clone();
                 let function_schema_payload_type_id =
-                    get_schema_variant(get_ident!(self, "Function")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "Function")).payload.unwrap();
                 //Function({
                 //  params: View[{ name: string, typeId: u64 }],
                 //  returnTypeId: u64,
@@ -15922,11 +15731,11 @@ impl TypedProgram {
                         return_type_id_value_id,
                     ],
                 );
-                make_variant(get_ident!(self, "Function"), Some(payload))
+                make_variant(self, get_ident!(self, "Function"), Some(payload))
             }
             Type::FunctionPointer(fp) => {
                 let function_pointer_schema_payload_type_id =
-                    get_schema_variant(get_ident!(self, "FunctionPointer")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "FunctionPointer")).payload.unwrap();
 
                 let function_type_id_value_id =
                     self.static_values.add_type_id_int_value(fp.function_type_id);
@@ -15936,15 +15745,14 @@ impl TypedProgram {
                     function_pointer_schema_payload_type_id,
                     &[function_type_id_value_id],
                 );
-                make_variant(get_ident!(self, "FunctionPointer"), Some(payload))
+                make_variant(self, get_ident!(self, "FunctionPointer"), Some(payload))
             }
-            Type::Lambda(_) | Type::LambdaObject(_) | Type::TypeParameter(_) => make_variant(
-                get_ident!(self, "Other"),
-                Some(
-                    self.static_values
-                        .add(StaticValue::String(self.ast.strings.intern(typ.kind_name()))),
-                ),
-            ),
+            Type::Lambda(_) | Type::LambdaObject(_) | Type::TypeParameter(_) => {
+                let s = self
+                    .static_values
+                    .add(StaticValue::String(self.ast.strings.intern(typ.kind_name())));
+                make_variant(self, get_ident!(self, "Other"), Some(s))
+            }
             Type::Generic(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
@@ -15983,44 +15791,47 @@ impl TypedProgram {
         let _ = self.get_type_name(type_id);
     }
 
-    fn make_int_kind(int_kind_enum: &TypedEnum, integer_type: IntegerType) -> StaticEnum {
+    fn make_int_kind(
+        variants: &[TypedEnumVariant],
+        int_kind_type_id: TypeId,
+        integer_type: IntegerType,
+    ) -> StaticEnum {
         let int_kind_variant = match integer_type {
-            IntegerType::U8 => int_kind_enum.variant_by_index(0),
-            IntegerType::U16 => int_kind_enum.variant_by_index(1),
-            IntegerType::U32 => int_kind_enum.variant_by_index(2),
-            IntegerType::U64 => int_kind_enum.variant_by_index(3),
-            IntegerType::I8 => int_kind_enum.variant_by_index(4),
-            IntegerType::I16 => int_kind_enum.variant_by_index(5),
-            IntegerType::I32 => int_kind_enum.variant_by_index(6),
-            IntegerType::I64 => int_kind_enum.variant_by_index(7),
+            IntegerType::U8 => variants[0],
+            IntegerType::U16 => variants[1],
+            IntegerType::U32 => variants[2],
+            IntegerType::U64 => variants[3],
+            IntegerType::I8 => variants[4],
+            IntegerType::I16 => variants[5],
+            IntegerType::I32 => variants[6],
+            IntegerType::I64 => variants[7],
         };
         StaticEnum {
-            variant_type_id: int_kind_variant.my_type_id,
+            enum_type_id: int_kind_type_id,
             variant_index: int_kind_variant.index,
-            typed_as_enum: true,
             payload: None,
         }
     }
 
     fn make_int_value(
         static_values: &mut StaticValuePool,
-        int_value_enum: &TypedEnum,
+        int_value_type_id: TypeId,
+        int_value_variants: &[TypedEnumVariant],
         integer_value: TypedIntValue,
     ) -> StaticEnum {
         let variant = match integer_value {
-            TypedIntValue::U8(_) => int_value_enum.variant_by_index(0),
-            TypedIntValue::U16(_) => int_value_enum.variant_by_index(1),
-            TypedIntValue::U32(_) => int_value_enum.variant_by_index(2),
-            TypedIntValue::U64(_) => int_value_enum.variant_by_index(3),
-            TypedIntValue::I8(_) => int_value_enum.variant_by_index(4),
-            TypedIntValue::I16(_) => int_value_enum.variant_by_index(5),
-            TypedIntValue::I32(_) => int_value_enum.variant_by_index(6),
-            TypedIntValue::I64(_) => int_value_enum.variant_by_index(7),
+            TypedIntValue::U8(_) => int_value_variants[0],
+            TypedIntValue::U16(_) => int_value_variants[1],
+            TypedIntValue::U32(_) => int_value_variants[2],
+            TypedIntValue::U64(_) => int_value_variants[3],
+            TypedIntValue::I8(_) => int_value_variants[4],
+            TypedIntValue::I16(_) => int_value_variants[5],
+            TypedIntValue::I32(_) => int_value_variants[6],
+            TypedIntValue::I64(_) => int_value_variants[7],
         };
         StaticEnum {
-            variant_type_id: variant.my_type_id,
+            enum_type_id: int_value_type_id,
             variant_index: variant.index,
-            typed_as_enum: false,
             payload: Some(static_values.add(StaticValue::Int(integer_value))),
         }
     }

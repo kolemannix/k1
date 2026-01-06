@@ -15,9 +15,9 @@ let s2: "asdf" = #static {
 };
 
 fn staticsAndCoercion(): i32 {
-   let i: "a" = #static "a";
-   let i2: string = #static "a";
-   let i3: "a" = "a";
+   let _i: "a" = #static "a";
+   let _i2: string = #static "a";
+   let _i3: "a" = "a";
    0
 }
 

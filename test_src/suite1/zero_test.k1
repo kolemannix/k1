@@ -16,6 +16,9 @@ fn testBitcast(): unit {
   // From agg to scalar
   let p2: { x: f32, y: f32 } = { x: 1.0, y: -1.0 };
   let scalar = mem/bitcast[_, i64](p2);
+  let p3: { x: f32, y: f32 } = mem/bitcast(scalar);
+  assertEquals(p2.x, p3.x);
+  assertEquals(p2.y, p3.y);
 
   // From scalar to scalar
   let f: f32 = -3.14159;

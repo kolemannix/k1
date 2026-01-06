@@ -16,15 +16,10 @@ fn testBasics(): int {
   let c: ?int = .None;
   assertMsg("b", not c.isSome());
 
-  assertMsg("c", core/types/typeId[PointMaybeY.y.Some.value]() == core/types/typeId[int]());
+  use types/typeId;
+  assertMsg("c", typeId[PointMaybeY.y.Some] == typeId[int]);
 
   0
-}
-
-fn testCoalesceAccessor(): unit {
-  let maybeUser = Opt.Some({ name: "Koleman", age: 31 });
-  assert(maybeUser?.age.! == 31);
-  assert(maybeUser?.name.! == "Koleman");
 }
 
 deftype WeirdPoint = { x: ?int, y: int }
@@ -66,7 +61,6 @@ fn test(): unit {
 
   testBasics();
   testComplex();
-  testCoalesceAccessor();
   optElseOperator();
   blanketImpls();
 

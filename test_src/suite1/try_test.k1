@@ -14,8 +14,8 @@ impl Try[T = int, E = Error] for Foo {
   fn value(_t: T): Self { { a: true  } }
 
   fn isOk(self: Self): bool { self.a }
-  fn getValue(self: Self): T  { 3 }
-  fn getError(self: Self): E { "FooError" }
+  fn getValue(_self: Self): T  { 3 }
+  fn getError(_self: Self): E { "FooError" }
 }
 
 fn fails(b: bool): Result[bool, Error] {
@@ -30,7 +30,7 @@ fn run(): Result[i32, Error] {
   let result: int = ({ a: true }: Foo).try;
   assert(result == 3);
 
-  let c = \(b: bool -> Result[bool, Error]) {
+  let c = \(_b: bool -> Result[bool, Error]) {
     let i = fails(true).try;
     .Ok(not i)
   };

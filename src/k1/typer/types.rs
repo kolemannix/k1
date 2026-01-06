@@ -15,7 +15,7 @@ use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
 nz_u32_id!(TypeId);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StructTypeField {
     pub name: Ident,
     pub type_id: TypeId,
@@ -36,7 +36,7 @@ pub enum LoopType {
 
 nz_u32_id!(TypeDefnId);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct TypeDefnInfo {
     pub name: Ident,
     pub scope: ScopeId,
@@ -97,12 +97,12 @@ pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwra
 pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ListType {
     pub element_type: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypeParameter {
     pub name: Ident,
     pub static_constraint: Option<TypeId>,
@@ -111,7 +111,7 @@ pub struct TypeParameter {
 }
 impl_copy_if_small!(16, TypeParameter);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FunctionTypeParameter {
     pub name: Ident,
     pub scope_id: ScopeId,
@@ -119,12 +119,12 @@ pub struct FunctionTypeParameter {
     pub function_type: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InferenceHoleType {
     pub index: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ReferenceType {
     pub inner_type: TypeId,
     pub mutable: bool,
@@ -139,7 +139,7 @@ impl ReferenceType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ArrayType {
     pub element_type: TypeId,
     pub size_type: TypeId,
@@ -147,39 +147,24 @@ pub struct ArrayType {
 }
 impl_copy_if_small!(24, ArrayType);
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct TypedEnumVariant {
-    pub enum_type_id: TypeId,
-    pub my_type_id: TypeId,
     pub name: Ident,
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
 }
 
-#[derive(Debug, Clone)]
-pub struct TypedEnum {
-    pub variants: EcoVec<TypedEnumVariant>,
+#[derive(Clone)]
+pub struct EnumType {
+    pub variants: MSlice<TypedEnumVariant, TypePool>,
     pub ast_node: ParsedId,
     pub tag_type: TypeId,
 }
 
-impl TypedEnum {
-    pub fn is_no_payload(&self) -> bool {
-        !self.has_payloads()
-    }
-    pub fn has_payloads(&self) -> bool {
-        self.variants.iter().any(|v| v.payload.is_some())
-    }
-    pub fn variant_by_name(&self, name: Ident) -> Option<&TypedEnumVariant> {
-        self.variants.iter().find(|v| v.name == name)
-    }
-    pub fn variant_by_index(&self, index: u32) -> &TypedEnumVariant {
-        self.variants.iter().find(|v| v.index == index).unwrap()
-    }
-}
+impl EnumType {}
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GenericType {
     pub params: SliceHandle<NameAndTypeId>,
     pub inner: TypeId,
@@ -187,7 +172,7 @@ pub struct GenericType {
 
 impl GenericType {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IntegerType {
     U8,
     U16,
@@ -275,7 +260,7 @@ impl IntegerType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum FloatType {
     F32,
     F64,
@@ -331,13 +316,13 @@ impl FunctionType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RecursiveReference {
     pub root_type_id: TypeId,
     pub type_args: SV4<TypeId>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
@@ -350,20 +335,20 @@ pub struct LambdaType {
     pub environment_struct: TypedExprId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LambdaObjectType {
     pub function_type: TypeId,
     pub parsed_id: ParsedId,
     pub struct_representation: TypeId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct StaticType {
     pub inner_type_id: TypeId,
     pub value_id: Option<StaticValueId>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct FunctionPointerType {
     pub function_type_id: TypeId,
 }
@@ -371,7 +356,7 @@ pub struct FunctionPointerType {
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
-static_assert_size!(Type, 48);
+static_assert_size!(Type, 40);
 #[derive(Clone)]
 pub enum Type {
     Unit,
@@ -386,13 +371,9 @@ pub enum Type {
     Reference(ReferenceType),
     Array(ArrayType),
     Struct(StructType),
-    Enum(TypedEnum),
+    Enum(EnumType),
 
-    /// Enum variants are proper types of their own, for lots
-    /// of reasons that make programming nice. Unlike in Rust :()
-    EnumVariant(TypedEnumVariant),
-
-    /// The 'bottom', uninhabited type; used to indicate exits of the program
+    /// An uninhabited type; used to indicate divergent control flow
     Never,
     Function(FunctionType),
     /// Function pointers deserve to be represented differently than just a Reference to a function type
@@ -470,8 +451,7 @@ impl TypePool {
                 if e1.variants.len() != e2.variants.len() {
                     return false;
                 }
-                for (index, v1) in e1.variants.iter().enumerate() {
-                    let v2 = &e2.variants[index];
+                for (v1, v2) in self.mem.getn(e1.variants).iter().zip(self.mem.getn(e2.variants)) {
                     let mismatch = v1.name != v2.name || v1.payload != v2.payload;
                     if mismatch {
                         return false;
@@ -479,8 +459,6 @@ impl TypePool {
                 }
                 true
             }
-            // We never really want to de-dupe this type as its inherently unique
-            (Type::EnumVariant(_ev1), Type::EnumVariant(_ev2)) => false,
             (Type::Never, Type::Never) => true,
             // We never really want to de-dupe this type as its inherently unique
             (Type::Generic(_g1), Type::Generic(_g2)) => false,
@@ -563,16 +541,10 @@ impl TypePool {
             Type::Enum(e) => {
                 defn.hash(state);
                 e.variants.len().hash(state);
-                for v in e.variants.iter() {
+                for v in self.mem.getn(e.variants) {
                     v.name.hash(state);
                     v.payload.hash(state);
                 }
-            }
-            // We never really want to de-dupe this type as its inherently unique
-            Type::EnumVariant(variant) => {
-                variant.enum_type_id.hash(state);
-                variant.name.hash(state);
-                variant.payload.hash(state);
             }
             // Inherently unique as well
             Type::Generic(generic) => {
@@ -639,7 +611,6 @@ impl Type {
             Type::FunctionTypeParameter(_) => "ftp",
             Type::InferenceHole(_) => "hole",
             Type::Enum(_) => "enum",
-            Type::EnumVariant(_) => "variant",
             Type::Never => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
@@ -691,30 +662,14 @@ impl Type {
     }
 
     #[track_caller]
-    pub fn expect_enum_mut(&mut self) -> &mut TypedEnum {
+    pub fn expect_enum_mut(&mut self) -> &mut EnumType {
         match self {
             Type::Enum(e) => e,
             _ => panic!("expected enum type"),
         }
     }
 
-    #[track_caller]
-    pub fn expect_enum_variant(&self) -> &TypedEnumVariant {
-        match self {
-            Type::EnumVariant(v) => v,
-            _ => panic!("expected enum variant on {}", self.kind_name()),
-        }
-    }
-
-    #[track_caller]
-    pub fn expect_enum_variant_mut(&mut self) -> &mut TypedEnumVariant {
-        match self {
-            Type::EnumVariant(v) => v,
-            _ => panic!("expected enum variant type"),
-        }
-    }
-
-    pub fn as_enum(&self) -> Option<&TypedEnum> {
+    pub fn as_enum(&self) -> Option<&EnumType> {
         match self {
             Type::Enum(e) => Some(e),
             _ => None,
@@ -722,7 +677,7 @@ impl Type {
     }
 
     #[track_caller]
-    pub fn expect_enum(&self) -> &TypedEnum {
+    pub fn expect_enum(&self) -> &EnumType {
         match self {
             Type::Enum(e) => e,
             _ => panic!("expected enum on {}", self.kind_name()),
@@ -779,13 +734,6 @@ impl Type {
         match self {
             Type::RecursiveReference(r) => r,
             _ => panic!("expected recursive reference"),
-        }
-    }
-
-    pub fn as_enum_variant(&self) -> Option<&TypedEnumVariant> {
-        match self {
-            Type::EnumVariant(ev) => Some(ev),
-            _ => None,
         }
     }
 
@@ -846,7 +794,7 @@ impl Type {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub struct TypeVariableInfo {
     pub inference_variable_count: u32,
     pub type_parameter_count: u32,
@@ -945,7 +893,7 @@ impl ScalarType {
 #[derive(Clone, Copy)]
 pub enum PhysicalType {
     Scalar(ScalarType),
-    Agg(PhysicalTypeId),
+    Agg(AggregateTypeId),
 }
 
 impl PhysicalType {
@@ -954,7 +902,7 @@ impl PhysicalType {
     }
 
     #[track_caller]
-    pub fn expect_agg(&self) -> PhysicalTypeId {
+    pub fn expect_agg(&self) -> AggregateTypeId {
         match self {
             PhysicalType::Agg(id) => *id,
             _ => panic!("Expected agg"),
@@ -988,19 +936,31 @@ pub struct StructField {
 }
 
 #[derive(Clone, Copy)]
-pub struct EnumVariantLayout {
+pub struct EnumPt {
+    pub tag_type: ScalarType,
+    pub struct_repr: AggregateTypeId,
+    pub variants: MSlice<EnumVariantPt, TypePool>,
+    pub payload_offset: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+pub struct EnumVariantPt {
     pub tag: TypedIntValue,
     pub payload: Option<PhysicalType>,
-    pub payload_offset: Option<u32>,
-    pub envelope: Layout,
+}
+
+#[derive(Clone, Copy)]
+pub struct UnionMember {
+    pub name: Ident,
+    pub ty: PhysicalType,
 }
 
 #[derive(Clone, Copy)]
 pub enum AggType {
-    EnumVariant(EnumVariantLayout),
     Struct { fields: MSlice<StructField, TypePool> },
     Array { element_pt: PhysicalType, len: u32 },
-    Opaque { layout: Layout },
+    Union { members: MSlice<UnionMember, TypePool> },
+    Enum(EnumPt),
 }
 
 impl AggType {
@@ -1013,16 +973,24 @@ impl AggType {
     }
 
     #[track_caller]
-    pub fn expect_enum_variant(&self) -> &EnumVariantLayout {
+    pub fn expect_enum(&self) -> &EnumPt {
         match self {
-            AggType::EnumVariant(ev) => ev,
-            _ => panic!("Expected enum variant agg type"),
+            AggType::Enum(e) => e,
+            _ => panic!("Expected enum agg type"),
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_struct(&self) -> MSlice<StructField, TypePool> {
+        match self {
+            AggType::Struct { fields } => *fields,
+            _ => panic!("Expected struct agg type"),
         }
     }
 }
 
-nz_u32_id!(PhysicalTypeId);
-pub struct PhysicalTypeRecord {
+nz_u32_id!(AggregateTypeId);
+pub struct AggregateTypeRecord {
     pub agg_type: AggType,
     pub origin_type_id: TypeId,
     pub layout: Layout,
@@ -1054,7 +1022,7 @@ pub struct TypePool {
 
     pub builtins: BuiltinTypes,
 
-    pub phys_types: VPool<PhysicalTypeRecord, PhysicalTypeId>,
+    pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
 
     pub mem: kmem::Mem<TypePool>,
 
@@ -1086,7 +1054,7 @@ impl TypePool {
 
             builtins: BuiltinTypes::default(),
 
-            phys_types: VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2),
+            agg_types: VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2),
 
             mem: kmem::Mem::make(),
 
@@ -1133,207 +1101,31 @@ impl TypePool {
             }
         }
 
-        // if type_id is a static, we fail to invoke the enum path
-        // Maybe we check that explicitly here; not sure what else to do
-        let t = match typ {
-            Type::Enum(e) => {
-                // Enums and variants are self-referential
-                // so we do extra work to ensure all the self-references are correct
-                let enum_type_id = self.add_or_resolve_enum(e, None, defn_info, instance_info);
-                enum_type_id
-            }
-            Type::EnumVariant(_ev) => {
-                panic!("EnumVariant cannot be directly interned; intern the Enum instead")
-            }
-            _ => {
-                let type_id = self.types.add(typ);
-                self.hashes.insert(hash, type_id);
+        let type_id = self.types.add(typ);
+        self.hashes.insert(hash, type_id);
 
-                // 3 AoS fields to handle
-                // pub type_phys_type_lookup
-                // pub type_variable_counts
-                // pub instance_info
+        // 3 AoS fields to handle
+        // pub type_phys_type_lookup
+        // pub type_variable_counts
+        // pub instance_info
 
-                let pt_id = self.compile_physical_type(type_id);
-                self.type_phys_type_lookup.add(pt_id);
+        let pt_id = self.compile_physical_type(type_id);
+        self.type_phys_type_lookup.add(pt_id);
 
-                let variable_counts = self.count_type_variables(type_id);
-                self.type_variable_counts.add(variable_counts);
+        let variable_counts = self.count_type_variables(type_id);
+        self.type_variable_counts.add(variable_counts);
 
-                self.instance_info.add(instance_info);
+        self.instance_info.add(instance_info);
 
-                if let Some(defn_info) = defn_info {
-                    self.defn_info.insert(type_id, defn_info);
-                }
+        if let Some(defn_info) = defn_info {
+            self.defn_info.insert(type_id, defn_info);
+        }
 
-                type_id
-            }
-        };
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
         debug_assert_eq!(self.instance_info.len(), self.types.len());
         debug_assert_eq!(self.instance_info.len(), self.type_phys_type_lookup.len());
 
-        t
-    }
-
-    fn add_or_resolve_enum(
-        &mut self,
-        mut e: TypedEnum,
-        type_id_to_use: Option<TypeId>,
-        defn_info: Option<TypeDefnInfo>,
-        instance_info: Option<GenericInstanceInfo>,
-    ) -> TypeId {
-        // Enums and variants are self-referential
-        // so we handle them specially
-        let next_type_id = self.next_type_id();
-        let first_variant_id = next_type_id.0;
-        let variant_count = e.variants.len();
-        let enum_type_id = match type_id_to_use {
-            None => TypeId(first_variant_id.saturating_add(variant_count as u32)),
-            Some(type_id) => type_id,
-        };
-
-        let mut physical_types = self.mem.new_list(e.variants.len() as u32);
-        let mut is_physical = true;
-
-        // Enum sizing and layout rules:
-        // - Alignment of the enum is the max(alignment) of the variants
-        // - Size of the enum is the size of the largest variant, not necessarily the same
-        //   variant, plus alignment end padding
-        //
-        //  ... Basically, this is just union layout rules, I now understand 2 years later
-        let tag_scalar = self.get_physical_type(e.tag_type).unwrap().expect_scalar();
-        let tag_layout = tag_scalar.get_layout();
-        let mut max_variant_align = tag_layout.align;
-        let mut max_variant_size = tag_layout.size;
-        for v in e.variants.make_mut().iter_mut() {
-            let variant_id = TypeId(first_variant_id.saturating_add(v.index));
-            v.my_type_id = variant_id;
-            v.enum_type_id = enum_type_id;
-            let variant = Type::EnumVariant(v.clone());
-            let actual_id = self.types.add(variant);
-            debug_assert_eq!(variant_id, actual_id);
-
-            let variant_variable_counts = self.count_type_variables(variant_id);
-            self.type_variable_counts.add(variant_variable_counts);
-
-            self.instance_info.add(instance_info.clone());
-
-            if let Some(defn_info) = defn_info {
-                self.defn_info.insert(v.my_type_id, defn_info);
-            }
-
-            // PhysicalLayout
-            if let Some(payload) = &v.payload {
-                match self.get_physical_type(*payload) {
-                    None => {
-                        is_physical = false;
-                    }
-                    Some(payload_pt) => {
-                        let mut struct_layout = tag_layout;
-                        let payload_layout = self.get_pt_layout(payload_pt);
-                        let payload_offset = struct_layout.append_to_aggregate(payload_layout);
-
-                        if struct_layout.align > max_variant_align {
-                            max_variant_align = struct_layout.align
-                        };
-                        if struct_layout.size > max_variant_size {
-                            max_variant_size = struct_layout.size
-                        };
-
-                        physical_types.push(EnumVariantLayout {
-                            tag: v.tag_value,
-                            payload: Some(payload_pt),
-                            payload_offset: Some(payload_offset),
-                            // To be filled in once all variants are known
-                            envelope: Layout::ZERO,
-                        });
-                    }
-                }
-            } else {
-                physical_types.push(EnumVariantLayout {
-                    tag: v.tag_value,
-                    payload: None,
-                    payload_offset: None,
-                    // To be filled in once all variants are known
-                    envelope: Layout::ZERO,
-                });
-            }
-        }
-
-        let envelope = Layout { size: max_variant_size, align: max_variant_align };
-        if is_physical {
-            debug_assert_eq!(physical_types.len(), variant_count);
-            for (variant_idx, pt) in physical_types.iter_mut().enumerate() {
-                pt.envelope = envelope;
-                let variant_id_for_idx =
-                    TypeId(first_variant_id.saturating_add(variant_idx as u32));
-                let pt_id = self.phys_types.add(PhysicalTypeRecord {
-                    agg_type: AggType::EnumVariant(*pt),
-                    origin_type_id: variant_id_for_idx,
-                    layout: envelope,
-                });
-                self.type_phys_type_lookup.add(Some(PhysicalType::Agg(pt_id)));
-            }
-        } else {
-            for _ in 0..variant_count {
-                self.type_phys_type_lookup.add(None);
-            }
-        }
-
-        let enum_pt = if is_physical {
-            let agg_id = self.phys_types.add(PhysicalTypeRecord {
-                agg_type: AggType::Opaque { layout: envelope },
-                origin_type_id: enum_type_id,
-                layout: envelope,
-            });
-            Some(PhysicalType::Agg(agg_id))
-        } else {
-            None
-        };
-
-        let enum_type = Type::Enum(e);
-        let enum_hash = self.hash_type(&enum_type, defn_info);
-        self.hashes.insert(enum_hash, enum_type_id);
-        match type_id_to_use {
-            None => {
-                // Inserting a new type
-                let type_id = self.types.add(enum_type);
-
-                let variable_counts = self.count_type_variables(enum_type_id);
-                self.type_variable_counts.add(variable_counts);
-
-                self.instance_info.add(instance_info);
-                self.type_phys_type_lookup.add(enum_pt);
-
-                if let Some(defn_info) = defn_info {
-                    self.defn_info.insert(type_id, defn_info);
-                }
-            }
-            Some(_unresolved_type_id) => {
-                // We're updating unresolved_type_id to point to the enum.
-
-                // Remove stale hash
-                // No real need to do this since no one will ever collide with the old 'Unresolved'
-                // type as they are hashed by their unique AST ID, basically making them unique
-                // let old = self.get(enum_type_id);
-                // let old_hash = self.hash(old);
-                // self.hashes.remove(&old_hash);
-
-                *self.get_mut(enum_type_id) = enum_type;
-
-                let variable_counts = self.count_type_variables(enum_type_id);
-                *self.type_variable_counts.get_mut(enum_type_id) = variable_counts;
-                *self.instance_info.get_mut(enum_type_id) = instance_info;
-                *self.type_phys_type_lookup.get_mut(enum_type_id) = enum_pt;
-            }
-        };
-
-        debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
-        debug_assert_eq!(self.types.len(), self.instance_info.len());
-        debug_assert_eq!(self.types.len(), self.type_phys_type_lookup.len());
-
-        enum_type_id
+        type_id
     }
 
     pub fn add_unresolved_type_defn(
@@ -1353,40 +1145,36 @@ impl TypePool {
         instance_info: Option<GenericInstanceInfo>,
     ) {
         let defn_info = self.defn_info.get(&unresolved_type_id).copied();
-        match type_value {
-            Type::Enum(e) => {
-                self.add_or_resolve_enum(e, Some(unresolved_type_id), defn_info, instance_info);
-            }
-            _ => {
-                let hash = self.hash_type(&type_value, defn_info);
-                let typ = self.get_mut(unresolved_type_id);
-                if typ.as_unresolved().is_none() {
-                    panic!("Tried to resolve a type that was not unresolved: {}", typ.kind_name());
-                }
-                *typ = type_value;
-                self.hashes.insert(hash, unresolved_type_id);
-                // FIXME: Adding a type is a mess, since we have all these places to update
-                // and we have to do it differently if we're resolving vs adding new.
-                // ...
-                // HARD AGREE 4 months later!
-                // Checklist is:
-                // - manage the hash
-                // - Update the 3 SoA fields: variable counts, phys_type_mapping, and instance_info
-                // - Manage both the resolve vs insert paths
-                // - Handle enums since they are self-referential
+        let hash = self.hash_type(&type_value, defn_info);
+        let typ = self.get_mut(unresolved_type_id);
+        if typ.as_unresolved().is_none() {
+            panic!("Tried to resolve a type that was not unresolved: {}", typ.kind_name());
+        }
+        *typ = type_value;
+        self.hashes.insert(hash, unresolved_type_id);
+        // Adding a type is a mess, since we have all these places to update
+        // and we have to do it differently if we're resolving vs adding new.
+        // ...
+        // Update: HARD AGREE 4 months later!
+        // Checklist is:
+        // - manage the hash
+        // - Update the 3 SoA fields: variable counts, phys_type_mapping, and instance_info
+        // - Manage both the resolve vs insert paths
+        // - Handle enums since they are self-referential
+        //
+        // Update: Mostly fixed this by making enum variants not their own types
 
-                let variable_counts = self.count_type_variables(unresolved_type_id);
-                *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
-                *self.instance_info.get_mut(unresolved_type_id) = instance_info;
+        let variable_counts = self.count_type_variables(unresolved_type_id);
+        *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
+        *self.instance_info.get_mut(unresolved_type_id) = instance_info;
 
-                let pt_id = self.compile_physical_type(unresolved_type_id);
-                *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
-            }
-        };
+        let pt_id = self.compile_physical_type(unresolved_type_id);
+        *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
     }
 
     pub fn next_type_id(&self) -> TypeId {
-        // Safety: If you add one to a u32 it'll never be zero
+        // Safety: If you add one to a u32 it'll never be zero.
+        // Community Notes: Not true, it can wrap!
         unsafe { TypeId(NonZeroU32::new_unchecked(self.types.len() as u32 + 1)) }
     }
 
@@ -1396,6 +1184,30 @@ impl TypePool {
 
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
         self.add_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
+    }
+
+    fn make_union_type(
+        &mut self,
+        origin_type_id: TypeId,
+        members: MSlice<UnionMember, TypePool>,
+    ) -> AggregateTypeId {
+        let mut size = 0;
+        let mut align = 1;
+        for m in self.mem.getn(members) {
+            let layout = self.get_pt_layout(m.ty);
+            if layout.size > size {
+                size = layout.size
+            }
+            if layout.align > align {
+                align = layout.align
+            }
+        }
+        let union_layout = Layout { size, align };
+        self.agg_types.add(AggregateTypeRecord {
+            agg_type: AggType::Union { members },
+            origin_type_id,
+            layout: union_layout,
+        })
     }
 
     pub fn add_static_type(
@@ -1514,10 +1326,9 @@ impl TypePool {
         }
     }
 
-    pub fn get_as_enum(&self, type_id: TypeId) -> Option<(&TypedEnum, Option<&TypedEnumVariant>)> {
+    pub fn get_as_enum(&self, type_id: TypeId) -> Option<&EnumType> {
         match self.get(type_id) {
-            Type::Enum(e) => Some((e, None)),
-            Type::EnumVariant(ev) => Some((self.get(ev.enum_type_id).expect_enum(), Some(ev))),
+            Type::Enum(e) => Some(e),
             _ => None,
         }
     }
@@ -1676,19 +1487,12 @@ impl TypePool {
             Type::Reference(refer) => self.count_type_variables(refer.inner_type),
             Type::Enum(e) => {
                 let mut result = EMPTY;
-                for v in e.variants.iter() {
+                for v in self.mem.getn(e.variants) {
                     if let Some(payload) = v.payload {
                         result = result.add(self.count_type_variables(payload));
                     }
                 }
                 result
-            }
-            Type::EnumVariant(ev) => {
-                if let Some(payload) = ev.payload {
-                    self.count_type_variables(payload)
-                } else {
-                    EMPTY
-                }
             }
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
@@ -1747,7 +1551,7 @@ impl TypePool {
     pub fn get_pt_layout(&self, pt: PhysicalType) -> Layout {
         match pt {
             PhysicalType::Scalar(s) => s.get_layout(),
-            PhysicalType::Agg(agg_id) => self.phys_types.get(agg_id).layout,
+            PhysicalType::Agg(agg_id) => self.agg_types.get(agg_id).layout,
         }
     }
 
@@ -1774,12 +1578,12 @@ impl TypePool {
                     None => None,
                     Some(len) => {
                         let elem_layout = self.get_pt_layout(element_t);
-                        let record = PhysicalTypeRecord {
+                        let record = AggregateTypeRecord {
                             agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
                             origin_type_id: type_id,
                             layout: elem_layout.array_me(len as usize),
                         };
-                        let id = self.phys_types.add(record);
+                        let id = self.agg_types.add(record);
                         Some(PhysicalType::Agg(id))
                     }
                 },
@@ -1812,7 +1616,7 @@ impl TypePool {
                     None
                 } else {
                     let fields_handle = self.mem.list_to_handle(fields);
-                    let agg_id = self.phys_types.add(PhysicalTypeRecord {
+                    let agg_id = self.agg_types.add(AggregateTypeRecord {
                         agg_type: AggType::Struct { fields: fields_handle },
                         origin_type_id: type_id,
                         layout,
@@ -1820,11 +1624,81 @@ impl TypePool {
                     Some(PhysicalType::Agg(agg_id))
                 }
             }
-            Type::Enum(_typed_enum) => {
-                unreachable!("enum physical types sold separately")
-            }
-            Type::EnumVariant(_ev) => {
-                unreachable!("enum physical types sold separately")
+            Type::Enum(e) => {
+                let variant_count = e.variants.len();
+
+                let tag_scalar = self.get_physical_type(e.tag_type).unwrap().expect_scalar();
+                let tag_layout = tag_scalar.get_layout();
+
+                let mut physical_variants = self.mem.new_list(variant_count);
+                let mut union_members = self.mem.new_list(variant_count);
+                let mut is_physical = true;
+
+                let e = self.get(type_id).expect_enum();
+
+                for v in self.mem.getn(e.variants) {
+                    if let Some(payload) = &v.payload {
+                        match self.get_physical_type(*payload) {
+                            None => {
+                                is_physical = false;
+                            }
+                            Some(payload_pt) => {
+                                union_members.push(UnionMember { name: v.name, ty: payload_pt });
+
+                                physical_variants.push(EnumVariantPt {
+                                    tag: v.tag_value,
+                                    payload: Some(payload_pt),
+                                });
+                            }
+                        }
+                    } else {
+                        physical_variants.push(EnumVariantPt { tag: v.tag_value, payload: None });
+                    }
+                }
+
+                if is_physical {
+                    let members_handle = self.mem.list_to_handle(union_members);
+                    let union_id = self.make_union_type(type_id, members_handle);
+                    let union_layout = self.get_pt_layout(PhysicalType::Agg(union_id));
+
+                    let mut struct_layout = tag_layout;
+                    let tag_field = StructField {
+                        offset: 0,
+                        field_t: PhysicalType::Scalar(tag_scalar),
+                        name: self.idents.tag,
+                    };
+                    let (struct_fields, union_offset) = if members_handle.is_empty() {
+                        (self.mem.pushn(&[tag_field]), None)
+                    } else {
+                        let union_offset = struct_layout.append_to_aggregate(union_layout);
+                        let payload_field = StructField {
+                            offset: union_offset,
+                            field_t: PhysicalType::Agg(union_id),
+                            name: self.idents.payload,
+                        };
+                        let fields = self.mem.pushn(&[tag_field, payload_field]);
+                        (fields, Some(union_offset))
+                    };
+                    let struct_repr = self.agg_types.add(AggregateTypeRecord {
+                        agg_type: AggType::Struct { fields: struct_fields },
+                        origin_type_id: type_id,
+                        layout: struct_layout,
+                    });
+                    let agg_enum = AggType::Enum(EnumPt {
+                        tag_type: tag_scalar,
+                        struct_repr,
+                        variants: self.mem.list_to_handle(physical_variants),
+                        payload_offset: union_offset,
+                    });
+                    let enum_agg_id = self.agg_types.add(AggregateTypeRecord {
+                        agg_type: agg_enum,
+                        origin_type_id: type_id,
+                        layout: struct_layout,
+                    });
+                    Some(PhysicalType::Agg(enum_agg_id))
+                } else {
+                    None
+                }
             }
             Type::Lambda(lam) => self.add_physical_duplicate(type_id, lam.env_type),
             Type::LambdaObject(lam_obj) => {
@@ -1855,13 +1729,13 @@ impl TypePool {
             Some(other_pt) => match other_pt {
                 pt @ PhysicalType::Scalar(_) => Some(pt),
                 PhysicalType::Agg(agg_id) => {
-                    let r = self.phys_types.get(agg_id);
-                    let r_new = PhysicalTypeRecord {
+                    let r = self.agg_types.get(agg_id);
+                    let r_new = AggregateTypeRecord {
                         agg_type: r.agg_type,
                         origin_type_id,
                         layout: r.layout,
                     };
-                    let new_id = self.phys_types.add(r_new);
+                    let new_id = self.agg_types.add(r_new);
                     Some(PhysicalType::Agg(new_id))
                 }
             },
@@ -1869,8 +1743,13 @@ impl TypePool {
     }
 
     // Works for enum variants too
-    pub fn get_struct_field_offset(&self, agg_id: PhysicalTypeId, field_index: u32) -> Option<u32> {
-        match self.phys_types.get(agg_id).agg_type {
+    pub fn get_struct_field_offset(
+        &self,
+        agg_id: AggregateTypeId,
+        field_index: u32,
+    ) -> Option<u32> {
+        match self.agg_types.get(agg_id).agg_type {
+            AggType::Enum(e) => self.get_struct_field_offset(e.struct_repr, field_index),
             AggType::Struct { fields } => {
                 if field_index < fields.len() {
                     let field_type = self.mem.get_nth(fields, field_index as usize);
@@ -1879,13 +1758,8 @@ impl TypePool {
                     None
                 }
             }
-            AggType::EnumVariant(ev) => match field_index {
-                0 => Some(0),
-                1 => ev.payload_offset,
-                _ => None,
-            },
             AggType::Array { .. } => None,
-            AggType::Opaque { .. } => None,
+            AggType::Union { .. } => None,
         }
     }
 
@@ -1905,53 +1779,44 @@ impl TypePool {
         self.get_agg_struct_layout(struct_agg_id)
     }
 
-    pub fn get_agg_struct_layout(&self, struct_agg_id: PhysicalTypeId) -> SV4<StructField> {
-        match self.phys_types.get(struct_agg_id).agg_type {
+    pub fn get_agg_struct_layout(&self, struct_agg_id: AggregateTypeId) -> SV4<StructField> {
+        match self.agg_types.get(struct_agg_id).agg_type {
+            AggType::Enum(e) => self.get_agg_struct_layout(e.struct_repr),
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
-            AggType::EnumVariant(evl) => {
-                let tag_field = StructField {
-                    offset: 0,
-                    field_t: PhysicalType::Scalar(evl.tag.get_scalar_type()),
-                    name: self.idents.tag,
-                };
-                match evl.payload {
-                    None => {
-                        smallvec![tag_field]
-                    }
-                    Some(pt) => smallvec![
-                        tag_field,
-                        StructField {
-                            offset: evl.payload_offset.unwrap(),
-                            field_t: pt,
-                            name: self.idents.payload
-                        },
-                    ],
-                }
-            }
-            _ => panic!("not a struct"),
+            AggType::Array { .. } => panic!("Array is not a struct"),
+            AggType::Union { .. } => panic!("not a struct"),
         }
     }
 
-    pub fn enum_variant_payload_fields(
+    pub fn get_agg_for_type(&self, type_id: TypeId) -> &AggregateTypeRecord {
+        let agg_id = self.get_physical_type(type_id).unwrap().expect_agg();
+        self.agg_types.get(agg_id)
+    }
+
+    pub fn get_enum_struct_layout(
         &self,
-        idents: &IdentPool,
-        ev: &TypedEnumVariant,
-    ) -> (StructTypeField, Option<StructTypeField>) {
-        let tag_field = StructTypeField { name: idents.b.tag, type_id: ev.tag_value.get_type() };
-
-        if let Some(payload) = ev.payload {
-            let payload_field = StructTypeField { name: idents.b.payload, type_id: payload };
-            (tag_field, Some(payload_field))
-        } else {
-            (tag_field, None)
-        }
+        enum_agg_id: AggregateTypeId,
+    ) -> (StructField, Option<StructField>) {
+        let struct_id = self.agg_types.get(enum_agg_id).agg_type.expect_enum().struct_repr;
+        let fields = self.agg_types.get(struct_id).agg_type.expect_struct();
+        let tag = *self.mem.get_nth(fields, 0);
+        let payload = self.mem.get_nth_opt(fields, 1).copied();
+        (tag, payload)
     }
 
-    pub fn enum_variant_payload_offset_bytes(&self, ev: &TypedEnumVariant) -> usize {
-        let mut layout = Layout::ZERO;
-        layout.append_to_aggregate(self.get_layout(ev.tag_value.get_type()));
-        let payload_start = layout.append_to_aggregate(self.get_layout(ev.payload.unwrap()));
-        payload_start as usize
+    pub fn enum_variant_by_name(
+        &self,
+        variants: MSlice<TypedEnumVariant, TypePool>,
+        name: Ident,
+    ) -> Option<&'static TypedEnumVariant> {
+        self.mem.getn(variants).iter().find(|v| v.name == name)
+    }
+    pub fn enum_variant_by_index(
+        &self,
+        variants: MSlice<TypedEnumVariant, TypePool>,
+        index: u32,
+    ) -> &TypedEnumVariant {
+        self.mem.getn(variants).iter().find(|v| v.index == index).unwrap()
     }
 
     pub fn get_layout(&self, type_id: TypeId) -> Layout {
@@ -1975,7 +1840,6 @@ impl TypePool {
         match self.get(type_id) {
             Type::Struct(_) => true,
             Type::Enum(_) => true,
-            Type::EnumVariant(_) => true,
             Type::Lambda(_) => true,
             Type::LambdaObject(_) => true,
             Type::Static(stat) => self.is_aggregate(stat.inner_type_id),
@@ -2086,14 +1950,10 @@ impl TypePool {
     pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {
         match t {
             PhysicalType::Scalar(st) => write!(w, "{}", st),
-            PhysicalType::Agg(agg) => match self.phys_types.get(agg).agg_type {
-                AggType::EnumVariant(evl) => {
-                    write!(w, "{{ tag({})", evl.tag)?;
-                    if let Some(payload) = &evl.payload {
-                        write!(w, ", ")?;
-                        self.display_pt(w, *payload)?;
-                    };
-                    w.write_str(" }")?;
+            PhysicalType::Agg(agg) => match self.agg_types.get(agg).agg_type {
+                AggType::Enum(e) => {
+                    w.write_str("enum ")?;
+                    self.display_pt(w, PhysicalType::Agg(e.struct_repr))?;
                     Ok(())
                 }
                 AggType::Struct { fields } => {
@@ -2114,8 +1974,17 @@ impl TypePool {
                     write!(w, " x {}]", len)?;
                     Ok(())
                 }
-                AggType::Opaque { layout } => {
-                    write!(w, "opaque {}, align {}", layout.size, layout.align)
+                AggType::Union { members } => {
+                    write!(w, "union {{ ")?;
+                    for (index, m) in self.mem.getn(members).iter().enumerate() {
+                        self.display_pt(w, m.ty)?;
+                        let is_last = index == members.len() as usize - 1;
+                        if !is_last {
+                            write!(w, ", ")?;
+                        }
+                    }
+                    write!(w, " }}")?;
+                    Ok(())
                 }
             },
         }

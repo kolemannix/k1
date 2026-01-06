@@ -35,9 +35,15 @@ macro_rules! b_ice {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct BcDebugVariableInfo {
+    pub name: Ident,
+    pub original_type_id: TypeId,
+}
+
 #[derive(Default, Clone, Copy)]
 pub struct BcDebugInfo {
-    pub variable_info: Option<Ident>,
+    pub variable_info: Option<BcDebugVariableInfo>,
 }
 
 nz_u32_id!(BcCallId);
@@ -281,7 +287,7 @@ pub enum Inst {
         vm_size: u32,
     },
     StructOffset {
-        struct_t: PhysicalTypeId,
+        struct_t: AggregateTypeId,
         base: Value,
         field_index: u32,
         vm_offset: u32,
@@ -875,10 +881,6 @@ impl<'k1> Builder<'k1> {
         b_blocks[0..block_count as usize].iter()
     }
 
-    fn make_str(&mut self, s: impl AsRef<str>) -> BcStr {
-        self.k1.bytecode.mem.push_str(s.as_ref())
-    }
-
     fn make_inst(&mut self, inst: Inst, comment: BcStr, debug_info: BcDebugInfo) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
         self.k1.bytecode.sources.add_expected_id(self.cur_span, id);
@@ -894,15 +896,14 @@ impl<'k1> Builder<'k1> {
         id
     }
 
-    fn push_alloca(&mut self, pt: PhysicalType, comment: &str) -> InstId {
-        let comment = self.make_str(comment);
-        self.push_alloca_mstr(pt, comment, BcDebugInfo::default())
+    fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<BcStr>) -> InstId {
+        self.push_alloca_ext(pt, comment, BcDebugInfo::default())
     }
 
-    fn push_alloca_mstr(
+    fn push_alloca_ext(
         &mut self,
         pt: PhysicalType,
-        comment: MStr<ProgramBytecode>,
+        comment: impl Into<BcStr>,
         debug_info: BcDebugInfo,
     ) -> InstId {
         let layout = self.k1.types.get_pt_layout(pt);
@@ -911,7 +912,7 @@ impl<'k1> Builder<'k1> {
             Some(i) => i as usize + 1,
         };
         let inst_id =
-            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment, debug_info);
+            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment.into(), debug_info);
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
         inst_id
     }
@@ -924,9 +925,8 @@ impl<'k1> Builder<'k1> {
         get_value_kind(&self.k1.bytecode, &self.k1.types, value)
     }
 
-    fn push_inst(&mut self, inst: Inst, comment: &str) -> InstId {
-        let comment = self.make_str(comment);
-        self.push_inst_to(self.cur_block, inst, comment)
+    fn push_inst(&mut self, inst: Inst, comment: impl Into<BcStr>) -> InstId {
+        self.push_inst_to(self.cur_block, inst, comment.into())
     }
 
     fn push_inst_anon(&mut self, inst: Inst) -> InstId {
@@ -935,29 +935,35 @@ impl<'k1> Builder<'k1> {
 
     fn push_struct_offset(
         &mut self,
-        agg_id: PhysicalTypeId,
+        struct_agg_id: AggregateTypeId,
         base: Value,
         field_index: u32,
-        comment: &str,
+        comment: impl Into<BcStr>,
     ) -> Value {
         if field_index == 0 {
             return base;
         }
-        let Some(offset) = self.k1.types.get_struct_field_offset(agg_id, field_index) else {
+        let Some(offset) = self.k1.types.get_struct_field_offset(struct_agg_id, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
         self.push_inst(
-            Inst::StructOffset { struct_t: agg_id, base, field_index, vm_offset: offset },
-            comment,
+            Inst::StructOffset { struct_t: struct_agg_id, base, field_index, vm_offset: offset },
+            comment.into(),
         )
         .as_value()
     }
 
-    fn push_jump(&mut self, block_id: BlockId, comment: &str) -> InstId {
+    fn push_jump(&mut self, block_id: BlockId, comment: impl Into<BcStr>) -> InstId {
         self.push_inst(Inst::Jump(block_id), comment)
     }
 
-    fn push_jump_if(&mut self, cond: Value, cons: BlockId, alt: BlockId, comment: &str) -> InstId {
+    fn push_jump_if(
+        &mut self,
+        cond: Value,
+        cons: BlockId,
+        alt: BlockId,
+        comment: impl Into<BcStr>,
+    ) -> InstId {
         if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond {
             if b32 == 1 {
                 // JMPIF true ...
@@ -973,21 +979,27 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_copy(&mut self, dst: Value, src: Value, pt: PhysicalType, comment: &str) -> InstId {
+    fn push_copy(
+        &mut self,
+        dst: Value,
+        src: Value,
+        pt: PhysicalType,
+        comment: impl Into<BcStr>,
+    ) -> InstId {
         let layout = self.k1.types.get_pt_layout(pt);
         self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment)
     }
 
-    fn push_load(&mut self, st: ScalarType, src: Value, comment: &str) -> InstId {
+    fn push_load(&mut self, st: ScalarType, src: Value, comment: impl Into<BcStr>) -> InstId {
         self.push_inst(Inst::Load { t: st, src }, comment)
     }
 
-    fn push_store(&mut self, dst: Value, value: Value, comment: &str) -> InstId {
+    fn push_store(&mut self, dst: Value, value: Value, comment: impl Into<BcStr>) -> InstId {
         let t = self.get_value_kind(&value).expect_value().unwrap().expect_scalar();
         self.push_inst(Inst::Store { dst, value, t }, comment)
     }
 
-    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: &str) -> Value {
+    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: impl Into<BcStr>) -> Value {
         match int_value {
             TypedIntValue::U8(i) => Value::Data32 { t: ScalarType::U8, data: *i as u32 },
             TypedIntValue::U16(i) => Value::Data32 { t: ScalarType::U16, data: *i as u32 },
@@ -1090,7 +1102,7 @@ fn store_rich_if_dst(
     dst: Option<Value>,
     pt: PhysicalType,
     value: Value,
-    comment: &str,
+    comment: impl Into<BcStr>,
 ) -> Value {
     match dst {
         None => value,
@@ -1134,13 +1146,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
         }
         TypedStmt::Let(let_stmt) => {
             let let_stmt = *let_stmt;
-            // Handle the case where the rhs crashes first, ugh
-            if let_stmt.variable_type == NEVER_TYPE_ID {
-                // If there's an initializer, run it so we crash
-                let init = let_stmt.initializer.unwrap();
-                let v = compile_expr(b, None, init)?;
-                return Ok(v);
-            }
 
             let var_pt = b.get_physical_type(let_stmt.variable_type);
 
@@ -1149,8 +1154,13 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //          if this is a good idea
             let var_name = b.k1.variables.get(let_stmt.variable_id).name;
             let comment = b.k1.bytecode.mem.push_str("let");
-            let variable_alloca =
-                b.push_alloca_mstr(var_pt, comment, BcDebugInfo { variable_info: Some(var_name) });
+            let debug_info = BcDebugInfo {
+                variable_info: Some(BcDebugVariableInfo {
+                    name: var_name,
+                    original_type_id: let_stmt.variable_type,
+                }),
+            };
+            let variable_alloca = b.push_alloca_ext(var_pt, comment, debug_info);
 
             // value_ptr means a pointer matching the type of the rhs
             // For a referencing let, the original alloca a ptr
@@ -1336,8 +1346,7 @@ fn compile_expr(
         TypedExpr::ArrayGetElement(array_get) => {
             let array_base = compile_expr(b, None, array_get.base)?;
             let array_agg_id = b.get_physical_type(array_get.array_type).expect_agg();
-            let (element_pt, _len) =
-                b.k1.types.phys_types.get(array_agg_id).agg_type.expect_array();
+            let (element_pt, _len) = b.k1.types.agg_types.get(array_agg_id).agg_type.expect_array();
             let index = compile_expr(b, None, array_get.index)?;
 
             let element_ptr = b.push_inst(
@@ -1498,7 +1507,7 @@ fn compile_expr(
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 match b.get_physical_type(type_id) {
                                     pt @ PhysicalType::Agg(agg_id) => {
-                                        let pt_layout = b.k1.types.phys_types.get(agg_id).layout;
+                                        let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
                                         let dst = match dst {
                                             None => b.push_alloca(pt, "zeroed no dst").as_value(),
                                             Some(dst) => dst,
@@ -1982,22 +1991,25 @@ fn compile_expr(
             }
         }
         TypedExpr::EnumConstructor(enumc) => {
-            let variant_type_id = expr_type;
-            let variant_pt = b.get_physical_type(variant_type_id);
+            let enum_pt = b.get_physical_type(expr_type);
+            let enum_agg_id = enum_pt.expect_agg();
+            let enum_pt_agg = b.k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
+            let variants = enum_pt_agg.variants;
+            let enum_struct_repr = enum_pt_agg.struct_repr;
             let enum_base = match dst {
                 Some(dst) => dst,
-                None => b.push_alloca(variant_pt, "enum literal storage").as_value(),
+                None => b.push_alloca(enum_pt, "enum literal storage").as_value(),
             };
 
             let tag_base = enum_base;
-            let enum_variant = b.k1.types.get(variant_type_id).expect_enum_variant();
-            let tag_int_value = enum_variant.tag_value;
+            let enum_variant = b.k1.types.mem.get_nth(variants, enumc.variant_index as usize);
+            let tag_int_value = enum_variant.tag;
             let int_imm = b.make_int_value(&tag_int_value, "enum tag");
             b.push_store(tag_base, int_imm, "store enum lit tag");
 
             if let Some(payload_expr) = &enumc.payload {
                 let payload_offset =
-                    b.push_struct_offset(variant_pt.expect_agg(), enum_base, 1, "enum payload ptr");
+                    b.push_struct_offset(enum_struct_repr, enum_base, 1, "enum payload ptr");
                 let _payload_value = compile_expr(b, Some(payload_offset), *payload_expr)?;
             }
 
@@ -2023,24 +2035,24 @@ fn compile_expr(
             ))
         }
         TypedExpr::EnumGetPayload(e_get_payload) => {
-            let enum_variant_base = compile_expr(b, None, e_get_payload.enum_variant_expr)?;
-            if b.get_value_kind(&enum_variant_base).is_terminator() {
-                return Ok(enum_variant_base);
-            }
+            let variant_index = e_get_payload.variant_index;
+            let enum_base_value = compile_expr(b, None, e_get_payload.enum_expr)?;
 
-            let variant_type =
-                b.k1.types
-                    .get_type_dereferenced(b.k1.exprs.get_type(e_get_payload.enum_variant_expr))
-                    .expect_enum_variant();
-            let variant_pt = b.get_physical_type(variant_type.my_type_id).expect_agg();
-            let variant_payload = variant_type.payload;
+            let base_expr_type_id = b.k1.exprs.get_type(e_get_payload.enum_expr);
+            let base_t = b.k1.types.get(base_expr_type_id);
+            let enum_type_id = match e_get_payload.access_kind {
+                FieldAccessKind::ValueToValue => base_expr_type_id,
+                FieldAccessKind::Dereference | FieldAccessKind::ReferenceThrough => {
+                    base_t.expect_reference().inner_type
+                }
+            };
+            let enum_agg = b.k1.types.get_agg_for_type(enum_type_id);
+            let enum_pt = enum_agg.agg_type.expect_enum();
+            let variants = enum_pt.variants;
+            let enum_struct_repr = enum_pt.struct_repr;
             let payload_offset =
-                b.push_struct_offset(variant_pt, enum_variant_base, 1, "enum payload offset");
+                b.push_struct_offset(enum_struct_repr, enum_base_value, 1, "enum payload offset");
             if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
-                let base_is_reference =
-                    b.k1.get_expr_type(e_get_payload.enum_variant_expr).as_reference().is_some();
-
-                debug_assert!(base_is_reference);
                 // We're generating a pointer to the payload. The variant itself is a reference
                 // and the value we produce here is just a pointer to the payload
                 let stored = store_simple_if_dst(b, dst, payload_offset);
@@ -2055,11 +2067,11 @@ fn compile_expr(
                     FieldAccessKind::Dereference => true,
                     FieldAccessKind::ReferenceThrough => unreachable!(),
                 };
-                let payload_type_id = variant_payload.unwrap();
-                let payload_pt_id = b.get_physical_type(payload_type_id);
+                let enum_variant = b.k1.types.mem.get_nth(variants, variant_index as usize);
+                let payload_pt = enum_variant.payload.unwrap();
                 let copied = load_or_copy(
                     b,
-                    payload_pt_id,
+                    payload_pt,
                     dst,
                     payload_offset,
                     make_copy,
@@ -2146,7 +2158,6 @@ fn compile_expr(
                     let store = store_simple_if_dst(b, dst, imm.as_value());
                     Ok(store)
                 }
-                //task(bc) non-trival static lowerings! Zero can probably be our zero impl?
                 StaticValue::String(_)
                 | StaticValue::Zero(_)
                 | StaticValue::Struct(_)
@@ -2200,9 +2211,7 @@ fn compile_cast(
 ) -> TyperResult<Value> {
     let target_type_id = b.k1.exprs.get_type(expr_id);
     match c.cast_type {
-        CastType::EnumToVariant
-        | CastType::VariantToEnum
-        | CastType::ReferenceToReference
+        CastType::ReferenceToReference
         | CastType::ReferenceToMut
         | CastType::ReferenceUnMut
         | CastType::IntegerCast(IntegerCastDirection::NoOp)
@@ -2447,11 +2456,12 @@ fn load_value(
     pt: PhysicalType,
     src: Value,
     make_copy: bool,
-    comment: &str,
+    comment: impl Into<BcStr>,
 ) -> Value {
     match pt {
         PhysicalType::Agg(_) => {
             if make_copy {
+                let comment = comment.into();
                 let dst = b.push_alloca(pt, comment);
                 b.push_copy(dst.as_value(), src, pt, comment);
                 dst.as_value()
@@ -2468,7 +2478,7 @@ fn store_value(
     pt: PhysicalType,
     dst: Value,
     value: Value,
-    comment: &str,
+    comment: impl Into<BcStr>,
 ) -> InstId {
     match pt {
         PhysicalType::Agg(_) => {
@@ -2486,7 +2496,7 @@ fn load_or_copy(
     dst: Option<Value>,
     src: Value,
     copy_aggregates: bool,
-    comment: &str,
+    comment: impl Into<BcStr>,
 ) -> Value {
     match dst {
         Some(dst) => {

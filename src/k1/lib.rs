@@ -4,7 +4,6 @@
 use smallvec::SmallVec;
 
 pub mod bc;
-pub mod codegen_llvm_old;
 pub mod codegen_llvm;
 pub mod compiler;
 mod fixmap;
@@ -12,10 +11,10 @@ mod kmem;
 pub mod lex;
 pub mod parse;
 mod pool;
-mod strings;
 pub mod typer;
 pub mod vm;
 pub mod lsp_support;
+//pub mod codegen_llvm_old;
 //pub mod vmtw;
 
 pub const KILOBYTE: usize = 1024;

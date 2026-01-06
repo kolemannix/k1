@@ -2160,7 +2160,7 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let variant_pt_id =
                     self.k1.types.get_physical_type(e.variant_type_id).unwrap().expect_agg();
                 let variant_agg =
-                    self.k1.types.phys_types.get(variant_pt_id).agg_type.expect_enum_variant();
+                    self.k1.types.agg_types.get(variant_pt_id).agg_type.expect_enum_variant();
                 packed_values.push(variant.tag_value.as_basic_value_enum());
                 let tag_scalar = variant_agg.tag.get_scalar_type();
                 match e.payload {
@@ -2711,11 +2711,11 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
                 let target_expr_type_id =
-                    self.k1.exprs.get_type(enum_get_payload.enum_variant_expr);
+                    self.k1.exprs.get_type(enum_get_payload.enum_expr);
                 let enum_type = self.k1.types.get_type_id_dereferenced(target_expr_type_id);
                 let enum_type = self.codegen_type(enum_type)?.expect_enum();
                 let enum_value =
-                    self.codegen_expr_basic_value(enum_get_payload.enum_variant_expr)?;
+                    self.codegen_expr_basic_value(enum_get_payload.enum_expr)?;
                 let variant_type = self
                     .mem
                     .get_nth_lt(enum_type.variants, enum_get_payload.variant_index as usize);

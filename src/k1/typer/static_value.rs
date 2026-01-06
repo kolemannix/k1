@@ -16,11 +16,8 @@ pub struct StaticStruct {
 
 #[derive(Clone, Copy)]
 pub struct StaticEnum {
-    pub variant_type_id: TypeId,
+    pub enum_type_id: TypeId,
     pub variant_index: u32,
-    /// Whether or not this thing is typed as the variant itself
-    /// or as its enum
-    pub typed_as_enum: bool,
     pub payload: Option<StaticValueId>,
 }
 
@@ -97,7 +94,7 @@ impl StaticValue {
             StaticValue::String(_) => STRING_TYPE_ID,
             StaticValue::Zero(type_id) => *type_id,
             StaticValue::Struct(s) => s.type_id,
-            StaticValue::Enum(e) => e.variant_type_id,
+            StaticValue::Enum(e) => e.enum_type_id,
             StaticValue::LinearContainer(v) => v.type_id,
         }
     }
@@ -165,9 +162,8 @@ impl DepHash<StaticValuePool> for StaticValue {
                 }
             }
             StaticValue::Enum(e) => {
-                e.variant_type_id.hash(state);
+                e.enum_type_id.hash(state);
                 e.variant_index.hash(state);
-                e.typed_as_enum.hash(state);
                 if let Some(payload_id) = e.payload {
                     d.get(payload_id).dep_hash(d, state);
                 }
@@ -199,9 +195,8 @@ impl DepEq<StaticValuePool> for StaticValue {
                     && pool.mem.getn(a.fields) == pool.mem.getn(b.fields)
             }
             (StaticValue::Enum(a), StaticValue::Enum(b)) => {
-                a.variant_type_id == b.variant_type_id
+                a.enum_type_id == b.enum_type_id
                     && a.variant_index == b.variant_index
-                    && a.typed_as_enum == b.typed_as_enum
                     && match (a.payload, b.payload) {
                         (None, None) => true,
                         (Some(a_payload), Some(b_payload)) => a_payload == b_payload,

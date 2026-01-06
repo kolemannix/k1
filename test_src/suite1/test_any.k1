@@ -16,7 +16,7 @@ fn typeVariantName(typeId: u64): ?string {
   let variant = core/iter/find(e.variants, \(v)
     if v.tag is .U8(t) and t == schema.tag true else false
   );
-  variant?.name
+  variant.map(\v. v.name)
 }
 
 fn test(): unit {

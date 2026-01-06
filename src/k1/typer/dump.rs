@@ -253,14 +253,14 @@ impl TypedProgram {
                 let is_named = defn_info.is_some();
                 if !is_named || expand {
                     w.write_str("enum ")?;
-                    for (idx, v) in e.variants.iter().enumerate() {
+                    for (idx, v) in self.types.mem.getn(e.variants).iter().enumerate() {
                         w.write_str(self.ast.idents.get_name(v.name))?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
                             self.display_type_id(w, *payload, expand)?;
                             w.write_str(")")?;
                         }
-                        let last = idx == e.variants.len() - 1;
+                        let last = idx == e.variants.len() as usize - 1;
                         if !last {
                             w.write_str(" | ")?;
                         }
@@ -268,22 +268,6 @@ impl TypedProgram {
                     if is_named {
                         w.write_str(")")?;
                     }
-                }
-                Ok(())
-            }
-            Type::EnumVariant(ev) => {
-                if let Some(defn_info) = defn_info {
-                    self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.types.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand)?;
-                    }
-                }
-                w.write_str(".")?;
-                self.write_ident(w, ev.name)?;
-                if let Some(payload) = &ev.payload {
-                    w.write_str("(")?;
-                    self.display_type_id(w, *payload, expand)?;
-                    w.write_str(")")?;
                 }
                 Ok(())
             }
@@ -651,7 +635,9 @@ impl TypedProgram {
             }
             TypedExpr::EnumConstructor(enum_constr) => {
                 w.write_str(".")?;
-                let variant = self.types.get(expr_type).expect_enum_variant();
+                let enum_type = self.types.get(expr_type).expect_enum();
+                let variant =
+                    self.types.enum_variant_by_index(enum_type.variants, enum_constr.variant_index);
                 w.write_str(self.ident_str(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     w.write_str("(")?;
@@ -662,7 +648,7 @@ impl TypedProgram {
             }
             TypedExpr::Cast(cast) => {
                 self.display_expr_id(cast.base_expr, w, indentation)?;
-                write!(w, " as({}) ", cast.cast_type)?;
+                write!(w, ".as({}) ", cast.cast_type)?;
                 self.display_type_id(w, expr_type, false)
             }
             TypedExpr::EnumGetTag(get_tag) => {
@@ -671,16 +657,19 @@ impl TypedProgram {
                 Ok(())
             }
             TypedExpr::EnumGetPayload(get_payload_expr) => {
-                self.display_expr_id(get_payload_expr.enum_variant_expr, w, indentation)?;
+                self.display_expr_id(get_payload_expr.enum_expr, w, indentation)?;
                 w.write_str(".payload")?;
                 if get_payload_expr.access_kind == FieldAccessKind::ReferenceThrough {
                     w.write_char('*')?;
                 }
                 w.write_char('[')?;
+                let enum_type = self
+                    .types
+                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.enum_expr))
+                    .expect_enum();
                 let variant = self
                     .types
-                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.enum_variant_expr))
-                    .expect_enum_variant();
+                    .enum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
                 self.write_ident(w, variant.name)?;
                 w.write_char(']')?;
                 Ok(())
@@ -793,9 +782,8 @@ impl TypedProgram {
                 w.write_str(" }")
             }
             StaticValue::Enum(static_enum) => {
-                let variant_type =
-                    self.types.get(static_enum.variant_type_id).expect_enum_variant();
-                let enum_defn = self.types.get_defn_info(variant_type.enum_type_id);
+                let enum_type = self.types.get(static_enum.enum_type_id).expect_enum();
+                let enum_defn = self.types.get_defn_info(static_enum.enum_type_id);
                 match enum_defn {
                     Some(defn) => {
                         self.write_ident(w, defn.name)?;
@@ -803,7 +791,9 @@ impl TypedProgram {
                     None => {}
                 };
                 write!(w, ".")?;
-                self.write_ident(w, variant_type.name)?;
+                let variant =
+                    self.types.enum_variant_by_index(enum_type.variants, static_enum.variant_index);
+                self.write_ident(w, variant.name)?;
                 match static_enum.payload {
                     None => {}
                     Some(payload_id) => {
@@ -1368,7 +1358,12 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for StaticValueId {
 }
 
 impl DepDisplay<TypedProgram, K1DisplayArgs> for u32 {
-    fn fmt(&self, f: &mut dyn Write, _k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut dyn Write,
+        _k1: &TypedProgram,
+        _args: &K1DisplayArgs,
+    ) -> std::fmt::Result {
         write!(f, "{self}")
     }
 }

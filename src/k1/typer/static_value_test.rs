@@ -93,23 +93,20 @@ fn test_enum() {
     let payload2 = system.add(StaticValue::Int(TypedIntValue::I32(42)));
 
     let enum1 = system.add(StaticValue::Enum(StaticEnum {
-        variant_type_id: TYPE1,
+        enum_type_id: TYPE1,
         variant_index: 0,
-        typed_as_enum: true,
         payload: Some(payload1),
     }));
 
     let enum2 = system.add(StaticValue::Enum(StaticEnum {
-        variant_type_id: TYPE1,
+        enum_type_id: TYPE1,
         variant_index: 0,
-        typed_as_enum: true,
         payload: Some(payload2),
     }));
 
     let enum3 = system.add(StaticValue::Enum(StaticEnum {
-        variant_type_id: TYPE1,
+        enum_type_id: TYPE1,
         variant_index: 1,
-        typed_as_enum: true,
         payload: Some(payload1),
     }));
 
@@ -148,9 +145,8 @@ fn test_recurse() {
     let int_val = system.add(StaticValue::Int(TypedIntValue::I32(99)));
 
     let enum_val = system.add(StaticValue::Enum(StaticEnum {
-        variant_type_id: TYPE1,
+        enum_type_id: TYPE1,
         variant_index: 0,
-        typed_as_enum: true,
         payload: Some(int_val),
     }));
 
@@ -163,9 +159,8 @@ fn test_recurse() {
     let int_val2 = system.add(StaticValue::Int(TypedIntValue::I32(99)));
 
     let enum_val2 = system.add(StaticValue::Enum(StaticEnum {
-        variant_type_id: TYPE1,
+        enum_type_id: TYPE1,
         variant_index: 0,
-        typed_as_enum: true,
         payload: Some(int_val2),
     }));
 

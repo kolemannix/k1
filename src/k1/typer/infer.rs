@@ -986,13 +986,14 @@ impl TypedProgram {
                 // passed_expr: Result<int, string>, argument_type: Result<T, E>
                 // passed_expr: enum Ok(int), Err(string), argument_type: enum Ok(T), Err(E)
                 // Enum must have same variants with same tags, walk each variant and recurse on its payload
-                let passed_variants = passed_enum.variants.clone();
-                let variants = param_enum_type.variants.clone();
+                let passed_variants = passed_enum.variants;
+                let variants = param_enum_type.variants;
                 if passed_variants.len() != variants.len() {
                     return TypeUnificationResult::NonMatching("variant count");
                 }
-                for (idx, variant) in variants.iter().enumerate() {
-                    let passed_variant = &passed_variants[idx];
+                for (variant, passed_variant) in
+                    self.types.mem.getn(variants).iter().zip(self.types.mem.getn(passed_variants))
+                {
                     if variant.name != passed_variant.name {
                         return TypeUnificationResult::NonMatching("variant names");
                     }
@@ -1006,9 +1007,6 @@ impl TypedProgram {
                 }
 
                 TypeUnificationResult::Matching
-            }
-            (Type::EnumVariant(passed_enum_variant), Type::Enum(_param_enum_type_variant)) => {
-                self.unify_and_find_substitutions_rec(passed_enum_variant.enum_type_id, slot_type)
             }
             (Type::Array(passed_array), Type::Array(slot_array)) => {
                 let passed_array_element_type = passed_array.element_type;

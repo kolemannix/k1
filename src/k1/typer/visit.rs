@@ -156,7 +156,7 @@ impl TypedProgram {
                 recurse!(get_enum_tag.enum_expr_or_reference);
             }
             TypedExpr::EnumGetPayload(enum_get_payload) => {
-                recurse!(enum_get_payload.enum_variant_expr);
+                recurse!(enum_get_payload.enum_expr);
             }
             TypedExpr::Cast(cast) => recurse!(cast.base_expr),
             TypedExpr::Return(ret) => recurse!(ret.value),

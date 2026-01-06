@@ -7,12 +7,11 @@ ns type_schema {
   use core/types/typeSchema
   use core/types/typeId
   use core/types/typeName
-
-  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]()) }
+  use core/types/getTypeSchema
 
   fn printStructShape[T](): string {
-    let id = typeId[T]();
-    require getTypeSchema[T]() is .Struct({ fields }) else { return("") };
+    let id = typeId[T];
+    require getTypeSchema[T] is .Struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
     let name = typeName(id);
     sb.writeString("Struct {name} {{\n");
@@ -29,59 +28,57 @@ ns type_schema {
 
   fn test(): unit {
 
-    assert(getTypeSchema[unit]() is TypeSchema.Unit);
-    assert(getTypeSchema[unit]() is .Unit);
-    assert(getTypeSchema[u8]()   is .Int(.U8));
-    assert(getTypeSchema[u16]()  is .Int(.U16));
-    assert(getTypeSchema[u32]()  is .Int(.U32));
-    assert(getTypeSchema[u64]()  is .Int(.U64));
-    assert(getTypeSchema[i8]()   is .Int(.I8));
-    assert(getTypeSchema[i16]()  is .Int(.I16));
-    assert(getTypeSchema[i32]()  is .Int(.I32));
-    assert(getTypeSchema[i64]()  is .Int(.I64));
-    let pointByteSchema = getTypeSchema[Point3[u8]]();
+    assert(getTypeSchema[unit] is TypeSchema.Unit);
+    assert(getTypeSchema[unit] is .Unit);
+    assert(getTypeSchema[u8]   is .Int(.U8));
+    assert(getTypeSchema[u16]  is .Int(.U16));
+    assert(getTypeSchema[u32]  is .Int(.U32));
+    assert(getTypeSchema[u64]  is .Int(.U64));
+    assert(getTypeSchema[i8]   is .Int(.I8));
+    assert(getTypeSchema[i16]  is .Int(.I16));
+    assert(getTypeSchema[i32]  is .Int(.I32));
+    assert(getTypeSchema[i64]  is .Int(.I64));
+    let pointByteSchema = getTypeSchema[Point3[u8]];
     require pointByteSchema is .Struct({ fields }) else crash("");
     assertEquals(fields.len(), 3);
-    require getTypeSchema[*i32]()
+    require getTypeSchema[*i32]
       is .Reference({ mutable: false, innerTypeId })
-      and innerTypeId == typeId[i32]() else crash("");
-    assert(getTypeSchema[*mut i32]() is .Reference({ mutable: true }));
+      and innerTypeId == typeId[i32] else crash("");
+    assert(getTypeSchema[*mut i32] is .Reference({ mutable: true }));
     assertEquals(
-      getTypeSchema[**bool]().asReference().!.value.innerTypeId,
-      typeId[*bool]()
+      getTypeSchema[**bool].asReference().!.innerTypeId,
+      typeId[*bool]
     );
 
-    assert(getTypeSchema[either Yes]() is .Either(_));
+    assert(getTypeSchema[either Yes] is .Either(_));
 
-    require getTypeSchema[either Yes, No, MaybeSo(string)]()
+    require getTypeSchema[either Yes, No, MaybeSo(string)]
       is .Either({ variants })
       and variants.len() == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"
       and variants.get(2).payload is .Some({ typeId, offset })
-      and typeId == typeId[string]()
+      and typeId == typeId[string]
       and offset == 8
       else crash("");
 
-    require getTypeSchema[(either Yes).Yes]()
-      is .Variant(v)
-      and v.enumTypeId == typeId[either Yes]()
-      and v.name == "Yes"
+    require getTypeSchema[(either Yes(int).Yes)]
+      is .Int(.I64)
       else crash("");
 
-    assert(getTypeSchema[Array[i32, 10]]() is .Array(_));
-    require getTypeSchema[Array[string, 5]]()
+    assert(getTypeSchema[Array[i32, 10]] is .Array(_));
+    require getTypeSchema[Array[string, 5]]
       is .Array({ elementTypeId, size })
-      and elementTypeId == typeId[string]()
+      and elementTypeId == typeId[string]
       and size == .Some(5)
       else crash("");
 
-    assertEquals(printStructShape[Point3[u8]](), "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
+    assertEquals(printStructShape[Point3[u8]], "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *\(int) -> bool = isZero.toRef();
     let incr2: *\int -> int = ( \(x) x + 2 );
-    require getTypeSchema[typeOf(isZeroPtr)]()
+    require getTypeSchema[typeOf(isZeroPtr)]
       is .FunctionPointer({ functionTypeId }) else crash("");
 
     require typeSchema(functionTypeId)

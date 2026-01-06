@@ -65,6 +65,7 @@ impl QIdent {
 pub struct BuiltinIdents {
     pub main: Ident,
     pub next: Ident,
+    pub _self: Ident,
     pub self_: Ident,
     pub Self_: Ident,
     pub it: Ident,
@@ -259,6 +260,7 @@ impl IdentPool {
 
         let b = BuiltinIdents {
             main: intern!("main"),
+            _self: intern!("_self"),
             self_: intern!("self"),
             Self_: intern!("Self"),
             it: intern!("it"),

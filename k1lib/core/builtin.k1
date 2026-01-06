@@ -123,10 +123,6 @@ ns types {
         payload: ?{ typeId: u64, offset: size }
       }],
     }),
-    Variant({
-      enumTypeId: u64,
-      name: string,
-    }),
     Function({
       params: View[{ name: string, typeId: u64 }],
       returnTypeId: u64,

@@ -3,7 +3,7 @@ ns inference;
 fn combine[T](a: T, b: T): T { a }
 fn combine3[T](a: T, b: T, c: { one: T, two: T }): T { a }
 fn getOrElse[T](a: Opt[T], b: T): T { if a is .Some(a) a else b }
-fn some[U](value: U): Opt[U].Some { Opt.Some[U](value) }
+fn some[U](value: U): Opt[U] { Opt.Some[U](value) }
 
 fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else core/sys/exit(1) }
 fn identity[T](value: T): T { value }

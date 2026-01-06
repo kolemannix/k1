@@ -208,16 +208,15 @@ fn pt_to_ffi_type(
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
     match pt {
         PhysicalType::Scalar(st) => Ok(scalar_to_ffi_type(st)),
-        PhysicalType::Agg(agg_id) => match k1.types.phys_types.get(agg_id).agg_type {
-            AggType::EnumVariant(enum_variant_layout) => {
-                let count = if enum_variant_layout.payload.is_some() { 2 } else { 1 };
-                let mut element_storage = k1.mem.new_list(count);
+        PhysicalType::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
+            AggType::Enum(_e) => {
+                let (tag_field, payload_field) = k1.types.get_enum_struct_layout(agg_id);
+                let count = if payload_field.is_some() { 2 } else { 1 };
+                let mut element_storage = k1.mem.new_list(count as u32);
 
-                element_storage.push(scalar_to_ffi_type(
-                    enum_variant_layout.tag.get_scalar_type(),
-                ));
-                if let Some(payload) = enum_variant_layout.payload {
-                    let payload_ffi_type = pt_to_ffi_type(k1, payload)?;
+                element_storage.push(scalar_to_ffi_type(tag_field.field_t.expect_scalar()));
+                if let Some(payload) = payload_field {
+                    let payload_ffi_type = pt_to_ffi_type(k1, payload.field_t)?;
                     element_storage.push(payload_ffi_type);
                 }
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut());
@@ -235,7 +234,7 @@ fn pt_to_ffi_type(
             AggType::Array { .. } => {
                 Err("Arrays can't be passed directly by value in C / via system ffi")
             }
-            AggType::Opaque { .. } => {
+            AggType::Union { .. } => {
                 Err("Opaques can't be passed directly by value in C / via system ffi")
             }
         },

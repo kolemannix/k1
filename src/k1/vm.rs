@@ -1727,7 +1727,7 @@ pub fn static_value_to_vm_value(
             Value::ptr(struct_base.cast_const())
         }
         StaticValue::Enum(e) => {
-            let layout = k1.types.get_layout(e.variant_type_id);
+            let layout = k1.types.get_layout(e.enum_type_id);
             let enum_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, enum_base, static_value_id);
@@ -1788,17 +1788,17 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             }
         }
         StaticValue::Enum(e) => {
-            let variant_agg_id =
-                k1.types.get_physical_type(e.variant_type_id).unwrap().expect_agg();
-            let variant_layout =
-                k1.types.phys_types.get(variant_agg_id).agg_type.expect_enum_variant();
-            let variant_type = k1.types.get(e.variant_type_id).expect_enum_variant();
+            let enum_agg_id = k1.types.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+            let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
+            let variant_pt = k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
 
-            store_typed_int(dst, variant_type.tag_value);
+            store_typed_int(dst, variant_pt.tag);
 
             if let Some(payload_value_id) = e.payload {
-                let payload_ptr =
-                    unsafe { dst.byte_add(variant_layout.payload_offset.unwrap() as usize) };
+                let Some(payload_offset) = enum_pt.payload_offset else {
+                    panic!("enum variant has payload but enum has no payload offset")
+                };
+                let payload_ptr = unsafe { dst.byte_add(payload_offset as usize) };
                 store_static_value(k1, payload_ptr, payload_value_id);
             };
         }
@@ -1915,7 +1915,7 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
     match t {
         PhysicalType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
         PhysicalType::Agg(pt_id) => {
-            let record = types.phys_types.get(pt_id);
+            let record = types.agg_types.get(pt_id);
             let src = value.as_ptr();
             memmove(src, dst, record.layout.size as usize)
         }
@@ -2332,38 +2332,36 @@ pub fn vm_value_to_static_value(
         }
         Type::Enum(typed_enum) => {
             let enum_ptr = vm_value.as_ptr();
+
+            let enum_agg_id = k1.types.get_physical_type(type_id).unwrap().expect_agg();
+            let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
+
             let tag_int_type = k1.types.get(typed_enum.tag_type).expect_integer();
-            let tag_scalar_type =
-                k1.types.get_physical_type(typed_enum.tag_type).unwrap().expect_scalar();
+            let tag_scalar_type = enum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, enum_ptr).as_typed_int(tag_int_type);
-            let variant = typed_enum.variants.iter().find(|v| v.tag_value == tag).unwrap();
-            let variant_type_id = variant.my_type_id;
+            let Some(variant) = k1.types.mem.getn( typed_enum.variants).iter().find(|v| v.tag_value == tag) else {
+                return failf!(span, "No variant found with tag value {}", tag);
+            };
             let variant_index = variant.index;
 
-            let variant_agg_id = k1.types.get_physical_type(variant_type_id).unwrap().expect_agg();
-            let variant_agg =
-                k1.types.phys_types.get(variant_agg_id).agg_type.expect_enum_variant();
-            let payload = match variant_agg.payload {
+            let payload = match variant.payload {
                 None => None,
-                Some(payload_pt) => {
-                    let payload_offset = variant_agg.payload_offset.unwrap();
+                Some(payload_type_id) => {
+                    let payload_pt = k1.types.get_physical_type(payload_type_id).unwrap();
+                    let payload_offset = enum_pt.payload_offset.unwrap();
                     let payload_ptr = unsafe { enum_ptr.byte_add(payload_offset as usize) };
+
                     let payload_value = load_value(payload_pt, payload_ptr);
-                    let payload_type_id = variant.payload.unwrap();
                     let static_value_id =
                         vm_value_to_static_value(k1, payload_type_id, payload_value, span)?;
                     Some(static_value_id)
                 }
             };
             k1.static_values.add(StaticValue::Enum(StaticEnum {
-                variant_type_id,
+                enum_type_id: type_id,
                 variant_index,
-                typed_as_enum: true,
                 payload,
             }))
-        }
-        Type::EnumVariant(_) => {
-            return failf!(span, "Cast the variant to its either type to bake it");
         }
         Type::FunctionPointer(_) => {
             return failf!(span, "Cannot bake function pointers");
@@ -2476,7 +2474,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
         ),
         Some(PhysicalType::Scalar(_)) => Value(0),
         Some(PhysicalType::Agg(agg_id)) => {
-            let layout = k1.types.phys_types.get(agg_id).layout;
+            let layout = k1.types.agg_types.get(agg_id).layout;
             let data: *mut u8 = k1.vm_static_stack.push_layout_uninit(layout);
             unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
 
