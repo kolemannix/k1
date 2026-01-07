@@ -11,8 +11,8 @@ fn intWidthForBits(bits: size): size {
   else crash("Too many bits: {bits}")
 }
 fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
-fn b1(name: string): { name: string, bits: size } { bn(name, 1) }
-fn b8(name: string): { name: string, bits: size } { bn(name, 8) }
+fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
+fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
 fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
   use core/StringBuilder; use meta/CodeWriter;
 
@@ -56,10 +56,10 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     let rawValue = u64/bitmaskLow(bits);
     let typeWidth = intWidthForBits(bits);
     let nameCap = member.name.capitalizeAscii();
-    let mask = rawValue.shiftLeft(bitIndex.*.as());
+    let mask = rawValue << bitIndex.*.as();
     let offset = bitIndex.*;
     let sizeMask = u64/bitmaskLow(typeWidth);
-    let invMask = mask.bitNot().bitAnd(sizeMask);
+    let invMask = mask.bitNot() & sizeMask;
 
     bitIndex <- bitIndex.* + bits;
 

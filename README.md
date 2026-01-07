@@ -12,11 +12,12 @@ For the joy of programming
 
 ## Tenets
 ### Programming should be joyful
-### Tools should empower not restrict
-While I don't take safety and stability lightly, I'm more concerned with making awesome things possible than making bad things impossible.
+I believe programming is more like writing than manufacturing, and I believe the literature, research, and countless body of testimonials
+support this claim. As such, we can be relatively confident that we'll do our best work when we are willing, inspired, and 'feeling it'.
 ### Compile fast
 Shortening the feedback cycle preserves flow and greatly increases joy, as well as literally temporally enabling more iterations.
-This results in better software that is fun to work on.
+This results in better software that is fun to work on. There are a number of language design decisions in `k1` that were
+explicitly made to enable and preserve very fast compilation, like requiring function signatures to fully specify their types
 ### Your programs should be as fast as your computer is
 A career spent programming for the JVM has made me loathe inescapable costs. There are many fantastic features
 and idioms that can be free, such as newtypes, lambdas, even something as simple as the almighty `struct`, which
@@ -35,20 +36,35 @@ we also solve our programming, and build, problems this way?
 Pay for what you use, and use what you want. And what you use costs as little as possible. This is
 exactly Rust's philosophy and definition of 'zero-cost' functionality. I think it holds up and is a fantastic
 north star.
+### Tools should empower not restrict
+While I don't take safety and stability lightly, I'm more concerned with making awesome things possible than making bad things impossible.
+
+As a case study I like to pick on Rust a bit. Fantastic achievement that it is, Rust undeniably feels bad to write.
+
+By a stark contrast, C is widely regarded as super fun to write. You feel empowered, and in control.
+
+I'm most interested in adding safety, guardrails, and guarantees in a way that does **not** strip away this core feeling of being in control.
+Even C has some frustrating gotchas surrounding the "C virtual machine", TBAA, and certain "as if" semantics where we don't truly know the
+code will be exactly as we wrote it without writing assembly. However, I dub these 'gotchas' rather than limitations for a reason; they
+can certainly be navigated around. But the limitations Rust imposes on our programs cannot. You can't really escape the "I know better than
+you" vibe that Rust gives off, and it is offputting in a way that standard typechecking or other checks and controls really aren't.
 
 ## Status
-Still just learning, but I really like using this language these days. Long todo list still!
+Long todo list still!
 [Check it out](TODO.md) for a glimpse into the development flow, or the [test_src/](test_src/) dir to see what the language can currently do!
+
+Still exploring and heavily experimenting, but I really like using this language these days. 
 
 **Disclaimer**: `k1` is not ready for use; it needs to evolve much more and will require a lot of elbow grease if things ever
 get to that point. I'd like to push the language further, as well as correct a number of design mistakes, before allowing it to begin to crystallize
 
-Please reach out to me on X or here if you're interested in the project!
+Please reach out to me on X @kolemannix or here if you're interested in the project!
 
 ## Reflections
-I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you).
-Mainly I wanted to see if a compiler could be fast and do nice things for you. There are some core decisions (function must declare
-their return types) designed to protect the performance of the compiler. (nd I think they are good decisions for software engineering anyway)
+I simply started because I was curious what LLVM was, and had a lot of ideas about how programming could be better (20,000 hours will do that to you), and
+I specifically wanted to understand performance from the inside. Why were my tools and programs so slow?
+Mainly I wanted to see if a compiler could be fast and also do nice things for you. There are some core decisions (functions must declare
+their return types) designed to protect the performance of the compiler. (I think they are good decisions for software engineering anyway)
 I had no expectation that I could do better, having never designed a language or made a compiler, but I just wanted to explore. So I just started studying and
 practicing using this project.
 
@@ -67,11 +83,12 @@ Inspiration
 
 https://justforfunnoreally.dev/
 
-Some Heroes: Casey Muratori, Andreas Kling, Jonathan Blow, Ken Thompson, Chris Lattner, Bjarne Stroustrup, [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
+Some Heroes: Casey Muratori, Linus Torvalds, Andreas Kling, Jonathan Blow, Ken Thompson, Chris Lattner, Bjarne Stroustrup, [Rob Pike](https://docs.google.com/presentation/d/e/2PACX-1vSmIbSwh1_DXKEMU5YKgYpt5_b4yfOfpfEOKS5_cvtLdiHsX6zt-gNeisamRuCtDtCb2SbTafTI8V47/pub?start=false&loop=false&delayms=3000#slide=id.p)
 
 ## Case Study: implementing bitfields
 
 Let's add a feature to `k1` using metaprogramming to support bitfields.
+[Video Version](https://youtu.be/bSxzW6lGWlc)
 
 I'd like to be able to define a bitfield by providing a name, a 'base' integer type
 big enough to house all the fields I provide, and a series of fields as a collection of (name, bit width) pairs.
