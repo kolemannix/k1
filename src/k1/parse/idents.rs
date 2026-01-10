@@ -191,6 +191,7 @@ pub struct BuiltinFunctions {
     pub core_crash: QIdent,
     pub core_crashBounds: QIdent,
     pub core_discard: QIdent,
+    pub core_phony: QIdent,
     pub core_Print_printTo: QIdent,
     pub core_string_wrapList: QIdent,
     pub Buffer__allocate: QIdent,
@@ -391,6 +392,7 @@ impl IdentPool {
         let core_crash = make_fn!(&[b.core], intern!("crash"));
         let core_crashBounds = make_fn!(&[b.core], intern!("crashBounds"));
         let core_discard = make_fn!(&[b.core], intern!("discard"));
+        let core_phony = make_fn!(&[b.core], intern!("phony"));
 
         let core_Print_printTo = make_fn!(&[b.core, intern!("Print")], intern!("printTo"));
 
@@ -450,6 +452,7 @@ impl IdentPool {
             core_crash,
             core_crashBounds,
             core_discard,
+            core_phony,
             core_Print_printTo,
             core_string_wrapList,
             Buffer__allocate,

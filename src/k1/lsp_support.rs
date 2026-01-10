@@ -1,5 +1,5 @@
 use crate::parse::{FileId, ParsedId};
-use crate::{typer::*, SV8};
+use crate::{SV8, typer::*};
 use smallvec::smallvec;
 
 pub enum LangItem {
@@ -35,7 +35,7 @@ pub fn get_expr_at_point(
         let expr_string = k1.expr_to_string(*expr_id);
         let kind_name = k1.exprs.get(*expr_id).kind_str();
         let msg = format!(
-            "Kind: {kind_name}\n{expr_string}\n{type_string}\nSize: {}, Align: {}",
+            "Kind: {kind_name}\n`{expr_string}`\n`{type_string}`\nSize: {}, Align: {}",
             layout.size, layout.align
         );
         return Some(msg);

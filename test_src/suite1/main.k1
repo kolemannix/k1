@@ -43,6 +43,7 @@ fn moderate(): unit {
   try_test/test();
   match_exhaust/main();
   match_references/test();
+  type_pattern/test();
   generic_struct/test();
   context_params/test();
   context_generic/test();

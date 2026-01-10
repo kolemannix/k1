@@ -70,6 +70,10 @@ Simple but missing
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
+## Project: Optimize the bytecode a bit
+- [ ] Function inlining
+- [ ] Prune unreachable blocks
+
 ## Project: di. Debug Info tidyups
 - [ ] Fix random jumping to function header
 - [ ] Annotate U8s with boolean somehow where they are actually booleans

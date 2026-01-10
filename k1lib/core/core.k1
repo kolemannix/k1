@@ -273,7 +273,6 @@ impl Print for bool {
 }
 impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
 
-// Direct specialized 'show' impl to avoid going through a buffer
 impl Print for char { fn printTo[W: Writer](self: char, w: W): unit { w.writeChar(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
 impl Show for char { fn show(self: char): string { self.toString() } }
@@ -291,14 +290,14 @@ fn formatUInt[W: Writer](context w: W)(value: u64, base: u64): unit {
     w.writeChar(firstDigit);
     w.writeChar(secondDigit);
   } else {
-    let* remaining = value;
+    let remaining = value;
     // TODO(stdlib slow): Try to use stack space for small ones.
     let* digits = List/withCapacity[char](8);
-    while remaining.* > 0 {
-      let d = remaining.* % base;
+    while remaining > 0 {
+      let d = remaining % base;
       let c = u8/toAsciiDigitBase(d.as[u8], base);
       digits.push(c);
-      remaining <- remaining.* / base;
+      remaining := remaining / base;
     };
 
     digits.reverse();

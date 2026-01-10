@@ -1,0 +1,26 @@
+ns type_pattern;
+
+fn inspect[T](v: T): int {
+  switch v {
+    type[{ x: int, y: int }]({ x, y }) -> x + y,
+    type["hello"](vv) -> 2,
+    type[string](vv) -> vv.len(),
+    type[int](42) -> -42,
+    type[int](x) -> x,
+    _ -> 6
+  }
+}
+
+fn test(): unit {
+  assertEquals(13,inspect({ x: 3, y: 10 }));
+
+  assertEquals(2,inspect("hello"));
+  assertEquals(4,inspect("hell"));
+  assertEquals(5,inspect("hello": string));
+
+  assertEquals(1000,inspect(1000));
+
+  assertEquals(-42,inspect(42));
+
+  assertEquals(inspect(true), 6);
+}

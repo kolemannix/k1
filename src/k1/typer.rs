@@ -245,8 +245,8 @@ impl EvalExprContext {
         self.static_ctx.is_some()
     }
 
-    pub fn with_expected_type(&self, expected_element_type: Option<TypeId>) -> EvalExprContext {
-        EvalExprContext { expected_type_id: expected_element_type, ..*self }
+    pub fn with_expected_type(&self, expected_type_id: Option<TypeId>) -> EvalExprContext {
+        EvalExprContext { expected_type_id, ..*self }
     }
 
     pub fn with_no_expected_type(&self) -> EvalExprContext {
@@ -634,12 +634,25 @@ pub struct TypedReferencePattern {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy)]
+/// This pattern kind is only useful when run at compile-time
+/// It can inspect the type of a value of a generic type, like T or Opt[T],
+/// and provide a typed, bound value of that type if the match succeeds. This
+/// lets you do statically known specializations within the same function body
+/// based on types
+pub struct TypePattern {
+    pub inner_pattern: TypedPatternId,
+    pub type_id: TypeId,
+    pub span: SpanId,
+}
+
 // <pattern> ::= <literal> | <variable> | <enum> | <struc>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
 // <ident> ::= [a-z]*
 // <enum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+// <type> ::= "type["<ty expr>"]("<pattern>")"
 
 type TypedPatternId = MHandle<TypedPattern, TypedPatternPool>;
 type TypedPatternSlice = MSlice<TypedPatternId, TypedPatternPool>;
@@ -706,9 +719,10 @@ impl TypedPatternPool {
             TypedPattern::Reference(refer) => {
                 self.get_pattern_bindings_rec(refer.inner_pattern, bindings)
             }
+            TypedPattern::Type(t) => self.get_pattern_bindings_rec(t.inner_pattern, bindings),
         }
     }
-    pub fn pattern_has_innumerable_literal(&self, pattern_id: TypedPatternId) -> bool {
+    pub fn pattern_never_useless(&self, pattern_id: TypedPatternId) -> bool {
         match self.mem.get(pattern_id) {
             TypedPattern::LiteralChar(_, _span) => true,
             TypedPattern::LiteralInteger(_, _span) => true,
@@ -717,19 +731,17 @@ impl TypedPatternPool {
             TypedPattern::LiteralUnit(_span_id) => false,
             TypedPattern::LiteralBool(_, _span_id) => false,
             TypedPattern::Variable(_variable_pattern) => false,
-            TypedPattern::Enum(typed_enum_pattern) => typed_enum_pattern
-                .payload
-                .as_ref()
-                .is_some_and(|p| self.pattern_has_innumerable_literal(*p)),
-            TypedPattern::Struct(typed_struct_pattern) => {
-                self.mem.getn(typed_struct_pattern.fields).iter().any(|field_pattern| {
-                    self.pattern_has_innumerable_literal(field_pattern.pattern)
-                })
+            TypedPattern::Enum(typed_enum_pattern) => {
+                typed_enum_pattern.payload.as_ref().is_some_and(|p| self.pattern_never_useless(*p))
             }
+            TypedPattern::Struct(typed_struct_pattern) => self
+                .mem
+                .getn(typed_struct_pattern.fields)
+                .iter()
+                .any(|field_pattern| self.pattern_never_useless(field_pattern.pattern)),
             TypedPattern::Wildcard(_span_id) => false,
-            TypedPattern::Reference(refer) => {
-                self.pattern_has_innumerable_literal(refer.inner_pattern)
-            }
+            TypedPattern::Reference(refer) => self.pattern_never_useless(refer.inner_pattern),
+            TypedPattern::Type(_) => true,
         }
     }
 }
@@ -748,6 +760,7 @@ pub enum TypedPattern {
     Struct(TypedStructPattern),
     Wildcard(SpanId),
     Reference(TypedReferencePattern),
+    Type(TypePattern),
 }
 
 impl TypedPattern {
@@ -764,6 +777,7 @@ impl TypedPattern {
             TypedPattern::Struct(struct_pattern) => struct_pattern.span,
             TypedPattern::Wildcard(span) => *span,
             TypedPattern::Reference(refer) => refer.span,
+            TypedPattern::Type(t) => t.span,
         }
     }
 }
@@ -1290,7 +1304,6 @@ pub enum CastType {
     IntegerUnsignedToFloat,
     IntegerSignedToFloat,
     LambdaToLambdaObject,
-    Transmute,
     StaticErase,
 }
 
@@ -1315,7 +1328,6 @@ impl Display for CastType {
             CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
             CastType::IntegerSignedToFloat => write!(f, "sinttof"),
             CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
-            CastType::Transmute => write!(f, "never"),
             CastType::StaticErase => write!(f, "staticerase"),
         }
     }
@@ -1415,6 +1427,7 @@ pub enum TypedExpr {
     },
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
+    /// Now we lower if/else to a match!
     Match(TypedMatchExpr),
     WhileLoop(WhileLoop),
     LoopExpr(LoopExpr),
@@ -4661,6 +4674,22 @@ impl TypedProgram {
                     span: reference_pattern_span,
                 })))
             }
+            ParsedPattern::Type(parsed_type_pattern) => {
+                let parsed_type_pattern = *parsed_type_pattern;
+                let type_id = self.eval_type_expr(parsed_type_pattern.type_expr, scope_id)?;
+                let inner_pattern = self.eval_pattern(
+                    parsed_type_pattern.inner,
+                    type_id,
+                    scope_id,
+                    allow_bindings,
+                )?;
+                let typed_pattern_id = self.patterns.add(TypedPattern::Type(TypePattern {
+                    inner_pattern,
+                    type_id,
+                    span: parsed_type_pattern.span,
+                }));
+                Ok(typed_pattern_id)
+            }
         }
     }
 
@@ -7428,19 +7457,10 @@ impl TypedProgram {
         //    real code
         //
         // So we just return the expected type, or a unit
-        debug!(
-            "eval_static_expr ctx.is_generic_pass={}",
-            ctx.flags.contains(EvalExprFlags::GenericPass)
-        );
-        if ctx.flags.contains(EvalExprFlags::GenericPass) {
-            let typed_expr = match ctx.expected_type_id {
-                None => self.synth_unit(span),
-                Some(expected) => {
-                    let unit_expr = self.synth_unit(span);
-                    self.synth_cast(unit_expr, expected, CastType::Transmute, Some(span))
-                }
-            };
-            return Ok(StaticExecutionResult::TypedExpr(typed_expr));
+        debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass());
+        if ctx.is_generic_pass() {
+            let filler_expr = self.synth_phony_value_of_expected_type(ctx, span);
+            return Ok(StaticExecutionResult::TypedExpr(filler_expr));
         }
 
         let kind = stat.kind;
@@ -8582,7 +8602,7 @@ impl TypedProgram {
             if let Some((useless_pattern, _useless_index)) =
                 all_unguarded_patterns.iter().find(|(_, kill_count)| *kill_count == 0)
             {
-                if !self.patterns.pattern_has_innumerable_literal(*useless_pattern) {
+                if !self.patterns.pattern_never_useless(*useless_pattern) {
                     return failf!(
                         self.patterns.get(*useless_pattern).span_id(),
                         "This pattern handled no cases: {}",
@@ -8621,20 +8641,28 @@ impl TypedProgram {
         ))
     }
 
+    fn eval_static_match_expr(
+        &mut self,
+        match_expr_id: ParsedExprId,
+        ctx: EvalExprContext,
+    ) {
+        todo!("support static matches")
+    }
+
     /// Accumulates a list of 'MatchingConditionInstr' while 'compiling' a pattern match.
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
     /// - A new variable binding
     fn compile_pattern_into_values(
         &mut self,
-        pattern: TypedPatternId,
+        pattern_id: TypedPatternId,
         target_expr: TypedExprId,
         instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> TyperResult<()> {
         let target_expr_type = self.exprs.get_type(target_expr);
-        let pat = self.patterns.get(pattern);
+        let pat = self.patterns.get(pattern_id);
         match pat {
             TypedPattern::Struct(struct_pattern) => {
                 let is_referencing = is_immediately_inside_reference_pattern;
@@ -8780,6 +8808,50 @@ impl TypedProgram {
                 self.compile_pattern_into_values(inner_pattern, target_expr, instrs, true, ctx)?;
                 Ok(())
             }
+            TypedPattern::Type(pattern) => {
+                // We want to push a cond to instrs representing whether the type matches
+                let pattern = *pattern;
+                let pattern_type_as_static = self.types.get_static_type_of_type(pattern.type_id);
+                let target_type_chased = match pattern_type_as_static {
+                    None => {
+                        // Example: The user passed the pattern type 'string', and the value is a specific static string
+                        // This should pass
+                        self.types.get_chased_id(target_expr_type)
+                    },
+                    Some(_stat) => {
+                        // The user passed a static as the pattern type; we should not chase through
+                        // the static on the scrutinee
+                        target_expr_type
+                    },
+                };
+                let pattern_did_match = target_type_chased == pattern.type_id;
+                debug!(
+                    "type {} == {}? {pattern_did_match}",
+                    self.type_id_to_string(target_type_chased),
+                    self.type_id_to_string(pattern.type_id)
+                );
+                let cond = self.synth_bool(pattern_did_match, pattern.span);
+                instrs.push_grow(&mut self.mem, MatchingConditionInstr::Cond { value: cond });
+                let inner_target_expr = if pattern_did_match {
+                    // The variable is already of the correct type, so don't do anything at all
+                    target_expr
+                } else {
+                    // The type pattern failed, and the consequent code will never run, but we need
+                    // it to typecheck, so call `core/phony[T]`
+                    self.synth_phony_value_of_expected_type(
+                        ctx.with_expected_type(Some(pattern.type_id)),
+                        pattern.span,
+                    )
+                };
+                self.compile_pattern_into_values(
+                    pattern.inner_pattern,
+                    inner_target_expr,
+                    instrs,
+                    false,
+                    ctx,
+                )?;
+                Ok(())
+            }
             literal_pat => {
                 match literal_pat {
                     TypedPattern::LiteralUnit(_) => {}
@@ -8801,7 +8873,7 @@ impl TypedProgram {
                 };
                 // A good ole reborrow; typed pattern is only 24 bytes but it does have some RCs so
                 // this should be faster
-                match self.patterns.get(pattern) {
+                match self.patterns.get(pattern_id) {
                     TypedPattern::LiteralUnit(_span) => Ok(()),
                     TypedPattern::LiteralChar(byte, span) => {
                         let char_value = self.static_values.add(StaticValue::Char(*byte));
@@ -8868,7 +8940,7 @@ impl TypedProgram {
                     _ => {
                         unreachable!(
                             "should only be literal patterns from here: {}",
-                            self.pattern_to_string(pattern)
+                            self.pattern_to_string(pattern_id)
                         )
                     }
                 }
@@ -9340,6 +9412,10 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
+        if ctx.is_generic_pass() {
+            let filler_expr = self.synth_phony_value_of_expected_type(ctx, if_expr.span);
+            return Ok(filler_expr);
+        }
         let condition_bool = match ctx.is_generic_pass() {
             false => self.execute_static_bool(if_expr.cond, ctx)?,
             // We just proceed as if it yielded 'true' in the generic case
@@ -10235,10 +10311,8 @@ impl TypedProgram {
                         // parameter
                         // And someone called arr.len. The value does not matter as it will never
                         // be seen at runtime, or even compile-time since we don't execute during
-                        // the 'generic' pass. So we just provide a validly-typed value of type 'N'.
-                        // We do it with a transmute cast
-                        let unit = self.synth_unit(span);
-                        self.synth_cast(unit, array_type.size_type, CastType::Transmute, None)
+                        // the generic pass. So we just provide a validly-typed value of type 'N'.
+                        self.synth_phony_value_of_expected_type(ctx.with_expected_type(Some(array_type.size_type)), span)
                     }
                     Some(s) => self.synth_i64(s as i64, span),
                 };
@@ -11585,7 +11659,7 @@ impl TypedProgram {
         &mut self,
         call: Call,
         intrinsic: Builtin,
-        _ctx: EvalExprContext,
+        ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = call.span;
         match intrinsic {
@@ -11633,8 +11707,11 @@ impl TypedProgram {
                     // and we just need to generate a term that typechecks, so a
                     // unit casted to the generic static type. We should probably invent
                     // a way to do this that doesn't require 2 nodes
-                    let unit_expr = self.synth_unit(span);
-                    Ok(self.synth_cast(unit_expr, return_type, CastType::Transmute, None))
+                    let filler_expr = self.synth_phony_value_of_expected_type(
+                        ctx.with_expected_type(Some(return_type)),
+                        span,
+                    );
+                    Ok(filler_expr)
                 }
             }
             Builtin::CompilerSourceLocation => {

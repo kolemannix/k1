@@ -870,9 +870,16 @@ pub struct ParsedEnumPattern {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedReferencePattern {
     pub inner: ParsedPatternId,
+    pub span: SpanId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParsedTypePattern {
+    pub inner: ParsedPatternId,
+    pub type_expr: ParsedTypeExprId,
     pub span: SpanId,
 }
 
@@ -892,6 +899,7 @@ pub enum ParsedPattern {
     Enum(ParsedEnumPattern),
     Wildcard(SpanId),
     Reference(ParsedReferencePattern),
+    Type(ParsedTypePattern),
 }
 
 #[derive(Debug, Clone)]
@@ -1628,6 +1636,7 @@ impl ParsedProgram {
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
             ParsedPattern::Reference(r) => r.span,
+            ParsedPattern::Type(t) => t.span,
         }
     }
 
@@ -2349,16 +2358,37 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             Ok(pattern_id)
         } else if first.kind == K::Ident {
             // Variable
-            let ident_token = self.expect_eat_token(K::Ident)?;
-            let ident = self.intern_ident_token(ident_token);
-            if self.ast.idents.get_name(ident) == "_" {
-                let pattern_id =
-                    self.ast.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
-                Ok(pattern_id)
-            } else {
-                let pattern_id =
-                    self.ast.patterns.add_pattern(ParsedPattern::Variable(ident, ident_token.span));
-                Ok(pattern_id)
+            let (ident_token, ident) = self.expect_ident_lower()?;
+            let ident_str = self.ast.idents.get_name(ident);
+            match ident_str {
+                "_" => {
+                    let pattern_id =
+                        self.ast.patterns.add_pattern(ParsedPattern::Wildcard(ident_token.span));
+                    Ok(pattern_id)
+                }
+                "type" => {
+                    self.expect_eat_token(K::OpenBracket)?;
+                    let type_expr = self.expect_type_expression()?;
+                    self.expect_eat_token(K::CloseBracket)?;
+                    self.expect_eat_token(K::OpenParen)?;
+                    let inner_pattern = self.expect_parse_pattern()?;
+                    self.expect_eat_token(K::CloseParen)?;
+                    let span = self.extend_to_here(ident_token.span);
+                    let pattern = ParsedPattern::Type(ParsedTypePattern {
+                        inner: inner_pattern,
+                        type_expr,
+                        span,
+                    });
+                    let pattern_id = self.ast.patterns.add_pattern(pattern);
+                    Ok(pattern_id)
+                }
+                _ => {
+                    let pattern_id = self
+                        .ast
+                        .patterns
+                        .add_pattern(ParsedPattern::Variable(ident, ident_token.span));
+                    Ok(pattern_id)
+                }
             }
         } else {
             Err(error_expected("pattern expression", self.peek()))
@@ -4222,17 +4252,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let token = self.expect_eat_token(K::Ident)?;
         let tok_chars =
             Parser::tok_chars(&self.ast.spans, self.ast.sources.get_source(self.file_id), token);
-        if upper && !tok_chars.chars().next().unwrap().is_uppercase() {
-            return Err(error("This name must be capitalized", token));
+        if upper {
+            let c = tok_chars.chars().next().unwrap();
+            if c != '_' && !c.is_uppercase() {
+                return Err(error("This name must be capitalized", token));
+            }
         }
-        if lower && !tok_chars.chars().next().unwrap().is_lowercase() {
-            return Err(error("This name must not be capitalized", token));
+        if lower {
+            let c = tok_chars.chars().next().unwrap();
+            if c != '_' && !c.is_lowercase() {
+                return Err(error("This name must not be capitalized", token));
+            }
         }
         Ok((token, self.ast.idents.intern(tok_chars)))
     }
 
     fn expect_ident_upper(&mut self) -> ParseResult<(Token, Ident)> {
         self.expect_ident_ext(true, false)
+    }
+
+    fn expect_ident_lower(&mut self) -> ParseResult<(Token, Ident)> {
+        self.expect_ident_ext(false, true)
     }
 
     fn expect_ident(&mut self) -> ParseResult<(Token, Ident)> {

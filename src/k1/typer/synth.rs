@@ -1,6 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use crate::failf;
+
 /// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
 /// as some general lowering
 use super::*;
@@ -401,6 +403,35 @@ impl TypedProgram {
             ctx,
             false,
         )
+    }
+
+    pub(super) fn synth_phony_call(
+        &mut self,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let Some(expected_type) = ctx.expected_type_id else {
+            return failf!(span, "Cannot synth phony call without expected type")
+        };
+        self.synth_typed_call_typed_args(
+            self.ast.idents.f.core_phony.with_span(span),
+            &[expected_type],
+            &[],
+            ctx.with_no_expected_type(),
+            false,
+        )
+    }
+
+    /// Used when we skip static execution, but still need to typecheck the rest of the
+    /// body; this expression should never be executed; it should either be a call to
+    /// crash, but transmuted to the expected type, or a special Unreachable node
+    pub(super) fn synth_phony_value_of_expected_type(
+        &mut self,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> TypedExprId {
+        let ctx = ctx.with_expected_type(Some(ctx.expected_type_id.unwrap_or(UNIT_TYPE_ID)));
+        self.synth_phony_call(span, ctx).expect("failed to make phony call")
     }
 
     pub(super) fn synth_enum_is_variant(

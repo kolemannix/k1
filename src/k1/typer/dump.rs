@@ -919,50 +919,55 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_pattern(
-        &self,
-        pattern: TypedPatternId,
-        writ: &mut impl Write,
-    ) -> std::fmt::Result {
+    pub fn display_pattern(&self, pattern: TypedPatternId, w: &mut impl Write) -> std::fmt::Result {
         match self.patterns.get(pattern) {
-            TypedPattern::LiteralUnit(_) => writ.write_str("()"),
-            TypedPattern::LiteralChar(value, _) => write!(writ, "{value}"),
-            TypedPattern::LiteralInteger(value, _) => write!(writ, "{value}"),
-            TypedPattern::LiteralFloat(value, _) => write!(writ, "{value}"),
-            TypedPattern::LiteralBool(value, _) => write!(writ, "{value}"),
-            TypedPattern::LiteralString(s, _) => write!(writ, "\"{s}\""),
-            TypedPattern::Variable(var) => writ.write_str(self.ident_str(var.name)),
-            TypedPattern::Wildcard(_) => writ.write_str("_"),
+            TypedPattern::LiteralUnit(_) => w.write_str("()"),
+            TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
+            TypedPattern::LiteralInteger(value_id, _) => self.display_static_value(w, *value_id),
+            TypedPattern::LiteralFloat(value_id, _) => self.display_static_value(w, *value_id),
+            TypedPattern::LiteralBool(bool, _) => write!(w, "{bool}"),
+            TypedPattern::LiteralString(string_id, _) => {
+                write!(w, "\"{}\"", self.get_string(*string_id))
+            }
+            TypedPattern::Variable(var) => w.write_str(self.ident_str(var.name)),
+            TypedPattern::Wildcard(_) => w.write_str("_"),
             TypedPattern::Enum(enum_pat) => {
-                writ.write_str(self.ident_str(enum_pat.variant_tag_name))?;
+                w.write_str(self.ident_str(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload {
-                    writ.write_str("(")?;
-                    self.display_pattern(payload, writ)?;
-                    writ.write_str(")")?;
+                    w.write_str("(")?;
+                    self.display_pattern(payload, w)?;
+                    w.write_str(")")?;
                 };
                 Ok(())
             }
             TypedPattern::Struct(struct_pat) => {
-                writ.write_str("{ ")?;
+                w.write_str("{ ")?;
                 for (index, field_pat) in
                     self.patterns.get_slice(struct_pat.fields).iter().enumerate()
                 {
-                    writ.write_str(self.ident_str(field_pat.name))?;
-                    writ.write_str(": ")?;
-                    self.display_pattern(field_pat.pattern, writ)?;
+                    w.write_str(self.ident_str(field_pat.name))?;
+                    w.write_str(": ")?;
+                    self.display_pattern(field_pat.pattern, w)?;
                     let last = index == struct_pat.fields.len() as usize - 1;
                     if !last {
-                        writ.write_str(", ")?;
+                        w.write_str(", ")?;
                     } else {
-                        writ.write_str(" ")?;
+                        w.write_str(" ")?;
                     }
                 }
-                writ.write_str("}")?;
+                w.write_str("}")?;
                 Ok(())
             }
             TypedPattern::Reference(reference_pattern) => {
-                self.display_pattern(reference_pattern.inner_pattern, writ)?;
-                writ.write_str("*")?;
+                self.display_pattern(reference_pattern.inner_pattern, w)?;
+                w.write_str("*")?;
+                Ok(())
+            }
+            TypedPattern::Type(type_pattern) => {
+                w.write_str("type[")?;
+                self.display_type_id(w, type_pattern.type_id, false)?;
+                w.write_str("](")?;
+                self.display_pattern(type_pattern.inner_pattern, w)?;
                 Ok(())
             }
         }

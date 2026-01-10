@@ -62,6 +62,11 @@ deftype Result[T, E] = either Ok(T), Err(E)
 deftype alias byte = u8
 
 ns types {
+
+  intern fn sizeOf[T](): int
+  intern fn sizeOfStride[T](): int
+  intern fn alignOf[T](): int
+
   intern fn typeId[T](): u64
 
   intern fn typeSchema(id: u64): TypeSchema
@@ -508,12 +513,6 @@ ns k1 {
 /////////////////////////////////
 // Core sizing intrinsics
 
-ns types {
-  intern fn sizeOf[T](): int
-  intern fn sizeOfStride[T](): int
-  intern fn alignOf[T](): int
-}
-
 ns compiler {
   intern fn location(): SourceLocation
 }
@@ -589,6 +588,7 @@ impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
 impl Equals for char { intern fn equals(self: char, other: char): bool }
 
 fn discard[T](_t: T): unit { () }
+fn phony[T](): T { crash("phony") }
 
 ns Array {
   fn getBaseRead[T, N: static int](array: *Array[T, N]): *T {
