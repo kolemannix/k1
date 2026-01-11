@@ -151,14 +151,16 @@ ns types {
     { typeId: typeId[T](), value: t.as[ptr] }
   }
 
-  fn assertWrapperType[A, B](): unit {
-    let schemaA = types/getTypeSchema[A]();
-    let bTypeId = types/typeId[B]();
-    require schemaA is .Struct({ fields }) else { crash("isWrapperType: A must be a struct") };
-    require fields.first() is .Some(field) and fields.len() == 1 else crash("A must have one field, got {fields.len()}");
+  fn assertWrapperType[Wrapper, Inner](): unit {
+    let schemaA = types/getTypeSchema[Wrapper]();
+    let bTypeId = types/typeId[Inner]();
+    require schemaA is .Struct({ fields }) else { crash("isWrapperType: Wrapper must be a struct") };
+    require fields.first() is .Some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
     let equal = field.typeId == bTypeId;
-    if not equal { crash("Expected {types/getTypeName[B]} but got {types/typeName(field.typeId)}") };
+    if not equal { crash("Expected {types/getTypeName[Inner]} but got {types/typeName(field.typeId)}") };
   }
+
+  fn typeEq[A, B](): bool { types/typeId[A] == types/typeId[B] }
 
 }
 

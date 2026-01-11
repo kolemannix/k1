@@ -23,21 +23,20 @@ Support ".c" sources; compiles your c and adds it to the main compilation unit
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
-- [ ] Unit syntax of '()' makes no sense when we don't have tuples. What about `{}`
+- [ ] Unit syntax of '()', as well as the name `unit` by the way, makes no sense when we don't have tuples.
+      What about `{}`
 
 Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
 - [ ] userland: CCompatString which is a valid c string with prefixed length
-- [ ] Implicit conversions: based on a special ability that integrates with 
-      type inference? (like Mojo's ImplicitlyIntable, etc)
-- [ ] "Flags in Tags"
+- [ ] User-defined implicit conversions: based on a special ability that integrates with 
+      type inference? (like Mojo's ImplicitlyIntable, etc): ImplicitAs?
+- [ ] [design/flags_in_tags.md]
 - [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
       if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
       either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
   - [ ] First-class data-oriented design features for struct/enum setups?
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
-      
-      'shared' payload type, AoS or AoSoA by default...
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
@@ -83,10 +82,10 @@ Simple but missing
 ## K1 Profiler: Add `core` and/or compiler support to allow block profiling of k1 programs
 
 ## Project: Redesign the physical representation of enums
-- [ ] Implement `union` as a thing
-- [ ] Represent enums as `{ tag, union }`,
+- [x] Implement `union` as a thing
+- [x] Represent enums as `{ tag, union }`,
       not `union { tag, payload }, { tag, payload }`, ...
-- [ ] Classify like structs for ABI handling; test with mirrored C types
+- [x] Classify like structs for ABI handling; test with mirrored C types
 - [ ] Think about optimizing no-payload enums into non-aggregates
 
 ## Project: Instruction-level IR ('bytecode')
