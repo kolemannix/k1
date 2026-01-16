@@ -244,7 +244,7 @@ fn paren_expression() -> Result<(), ParseError> {
 
 #[test]
 fn while_loop_1() -> Result<(), ParseError> {
-    let input = "while true { (); (); 42 }";
+    let input = "while true { {}; {}; 42 }";
     let (module, result) = test_single_expr(input)?;
     if let ParsedExpr::While(while_expr) = result {
         let ParsedExpr::Block(block) = module.exprs.get(while_expr.body) else {

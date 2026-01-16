@@ -13,7 +13,8 @@ mod stack_tests {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
             fn_type: bc::PhysicalFunctionType {
-                return_type: InstKind::Void,
+                return_type: PhysicalType::Empty,
+                diverges: false,
                 params: MSlice::empty(),
                 abi_mode: AbiMode::Internal,
             },
@@ -25,9 +26,18 @@ mod stack_tests {
         }
     }
 
+    fn fake_ret_info() -> RetInfo {
+        RetInfo {
+            pt: PhysicalType::Scalar(ScalarType::U32),
+            place: RetPlace::ScalarCallInst { frame_index: 0, inst_index: 0 },
+            ip: 0,
+            block: 0,
+        }
+    }
+
     fn test_stack() -> Stack {
         let mut s = Stack::make();
-        s.push_new_frame(None, &fake_unit(), None);
+        s.push_new_frame(None, &fake_unit(), fake_ret_info());
         s
     }
 
@@ -37,7 +47,7 @@ mod stack_tests {
         let mut unit = fake_unit();
         unit.inst_count = 42;
         unit.fn_type.params = MSlice::forged(1, 10);
-        stack.push_new_frame(None, &unit, None);
+        stack.push_new_frame(None, &unit, fake_ret_info());
         let frame_space_for_registers =
             stack.cursor().addr() - stack.current_frame().base_ptr.addr();
         assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
@@ -177,15 +187,21 @@ mod value_roundtrip_tests {
     #[test]
     fn test_sign_extend() {
         assert_eq!(
-            Value::i16(-3).sign_extended(NumericWidth::B16, NumericWidth::B32).as_typed_int(IntegerType::I32),
+            Value::i16(-3)
+                .sign_extended(NumericWidth::B16, NumericWidth::B32)
+                .as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         );
         assert_eq!(
-            Value::i16(-3).sign_extended(NumericWidth::B16, NumericWidth::B64).as_typed_int(IntegerType::I64),
+            Value::i16(-3)
+                .sign_extended(NumericWidth::B16, NumericWidth::B64)
+                .as_typed_int(IntegerType::I64),
             TypedIntValue::I64(-3)
         );
         assert_eq!(
-            Value::i8(-3).sign_extended(NumericWidth::B8, NumericWidth::B32).as_typed_int(IntegerType::I32),
+            Value::i8(-3)
+                .sign_extended(NumericWidth::B8, NumericWidth::B32)
+                .as_typed_int(IntegerType::I32),
             TypedIntValue::I32(-3)
         )
     }

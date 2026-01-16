@@ -8,7 +8,7 @@ ns mem {
     malloc:  *(\(size, size) -> ptr),
     zalloc:  *(\(size, size) -> ptr),
     realloc: *(\(ptr, size, size, size) -> ptr),
-    free:    *(\(ptr, size, size) -> unit),
+    free:    *(\(ptr, size, size) -> empty),
   }
 
   fn virtualAlloc(size: size): ptr {
@@ -29,10 +29,10 @@ ns mem {
     addr
   }
 
-  fn virtualRelease(base: ptr, len: size): unit {
+  fn virtualRelease(base: ptr, len: size): empty {
     let result = posix/munmap(base, len);
     if result == -1 crash("munmap of ptr {base} x {len} failed");
-    ()
+    {}
   }
 
   deftype AllocMode = either
@@ -44,7 +44,7 @@ ns mem {
     Gc
 
   impl Print for AllocMode {
-    fn printTo[W: Writer](self: Self, w: W): unit {
+    fn printTo[W: Writer](self: Self, w: W) {
       w.writeString(self.kindName())
     }
   }
@@ -121,7 +121,7 @@ ns mem {
       }
     }
 
-    fn free(self: AllocMode, ptr: ptr, size: size, align: size): unit {
+    fn free(self: AllocMode, ptr: ptr, size: size, align: size) {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/free(ptr, size, align),
@@ -159,7 +159,7 @@ ns mem {
     s
   };
 
-  fn pushMode(mode: AllocMode): unit {
+  fn pushMode(mode: AllocMode) {
     allocStack.push(mode)
   }
   fn popMode(): AllocMode {
@@ -170,7 +170,7 @@ ns mem {
     s
   }
 
-  fn initTempArena(): unit {
+  fn initTempArena() {
     if not arena.basePtr.isNull() crash("Arena already initialized");
     arena <- Arena/default();
   }

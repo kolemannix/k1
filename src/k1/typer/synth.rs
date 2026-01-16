@@ -14,8 +14,10 @@ impl TypedProgram {
         expr_id
     }
 
-    pub(super) fn synth_unit(&mut self, span: SpanId) -> TypedExprId {
-        let value_id = self.static_values.add(StaticValue::Unit);
+    pub(super) fn synth_empty_struct(&mut self, span: SpanId) -> TypedExprId {
+        let value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
+            type_id: self.types.builtins.empty, fields: MSlice::empty()
+        }));
         self.add_static_constant_expr(value_id, span)
     }
 
@@ -430,7 +432,8 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> TypedExprId {
-        let ctx = ctx.with_expected_type(Some(ctx.expected_type_id.unwrap_or(UNIT_TYPE_ID)));
+        let t = ctx.expected_type_id.unwrap_or(self.types.builtins.empty);
+        let ctx = ctx.with_expected_type(Some(t));
         self.synth_phony_call(span, ctx).expect("failed to make phony call")
     }
 

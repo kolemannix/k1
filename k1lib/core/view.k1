@@ -134,7 +134,7 @@ impl[T] Iterable[Item = T, I = BufferIterator[T]] for View[T] {
 }
 
 impl[T: Print] Print for View[T] {
-  fn printTo[W: Writer](self: Self, w: W): unit {
+  fn printTo[W: Writer](self: Self, w: W): empty {
     w.writeChar('[');
     for self {
       it.printTo(w);

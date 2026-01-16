@@ -1,5 +1,27 @@
+let g: {} = {};
+let* g2: *{} = {};
+
+fn testGlobal(): empty {
+  assertEquals(0, types/sizeOf[typeOf(g)]);
+  g2;
+  assertEquals(g, g2.*);
+}
+
+fn testLocal(): empty {
+  let l = {}; 
+  assertEquals(types/sizeOf[typeOf(l)], 0);
+  l
+}
+
 fn main(): i32  {
-  let x: i32 = 5i16.as();
-  let y = 5i16.as[i64];
+
+  g;
+  // i1 = empty
+  g2;
+  // i2 = null ptr
+  g2.*;
+  // i3 = empty
+
+  testLocal();
   0
 }

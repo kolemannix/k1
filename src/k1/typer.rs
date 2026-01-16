@@ -124,8 +124,6 @@ pub const ITERABLE_ABILITY_ID: AbilityId = AbilityId(NonZeroU32::new(15).unwrap(
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
 pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
 
-pub const UNIT_BYTE_VALUE: u8 = 0;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
     from: TypeId,
@@ -300,106 +298,27 @@ enum TypeOrParsedExpr {
     Parsed(ParsedExprId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Layout {
-    pub size: u32,
-    pub align: u32,
-}
-
-impl Layout {
-    pub fn from_rust_type<T>() -> Layout {
-        let size = std::mem::size_of::<T>() as u32;
-        let align = std::mem::align_of::<T>() as u32;
-        Layout { size, align }
-    }
-
-    pub fn strided(&self) -> Layout {
-        Layout { size: self.stride(), align: self.align }
-    }
-
-    pub fn from_scalar_bytes(bytes: u32) -> Layout {
-        Layout { size: bytes, align: bytes }
-    }
-
-    pub fn from_scalar_bits(bits: u32) -> Layout {
-        Layout { size: bits / 8, align: bits / 8 }
-    }
-    pub const ZERO: Layout = Layout { size: 0, align: 1 };
-
-    pub fn stride(&self) -> u32 {
-        self.size.next_multiple_of(self.align)
-    }
-
-    pub fn offset_at_index(&self, index: usize) -> usize {
-        self.stride() as usize * index
-    }
-
-    // Returns: the start, or offset, of the new field
-    pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
-        debug_assert_ne!(layout.align, 0);
-        let offset = self.size;
-        let new_field_start = offset.next_multiple_of(layout.align);
-        if cfg!(debug_assertions) {
-            let padding = new_field_start - offset;
-            if padding != 0 {
-                debug!("Aggregate padding: {padding}");
-            }
-        };
-        let new_end_unaligned = new_field_start + layout.size;
-        let new_align = std::cmp::max(self.align, layout.align);
-        self.size = new_end_unaligned;
-        self.align = new_align;
-        new_field_start
-    }
-
-    pub fn size_bits(&self) -> u32 {
-        self.size * 8
-    }
-
-    pub fn align_bits(&self) -> u32 {
-        self.align * 8
-    }
-
-    pub fn array_me(&self, len: usize) -> Layout {
-        let element_size_padded = self.stride();
-        let array_size = element_size_padded * (len as u32);
-        Layout { size: array_size, align: if array_size == 0 { 1 } else { self.align } }
-    }
-}
-
-impl Display for Layout {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Layout {{ size {}, align {} }}", self.size, self.align)
-    }
-}
-
-pub struct AggregateLayout {
-    pub offsets: SmallVec<[u32; 8]>,
-}
-
 nz_u32_id!(PatternCtorId);
 
 impl PatternCtorId {
-    pub const UNIT: PatternCtorId = PatternCtorId::from_u32(1).unwrap();
-    pub const B_FALSE: PatternCtorId = PatternCtorId::from_u32(2).unwrap();
-    pub const B_TRUE: PatternCtorId = PatternCtorId::from_u32(3).unwrap();
-    pub const CHAR: PatternCtorId = PatternCtorId::from_u32(4).unwrap();
-    pub const STRING: PatternCtorId = PatternCtorId::from_u32(5).unwrap();
-    pub const INT: PatternCtorId = PatternCtorId::from_u32(6).unwrap();
-    pub const FLOAT: PatternCtorId = PatternCtorId::from_u32(7).unwrap();
-    pub const POINTER: PatternCtorId = PatternCtorId::from_u32(8).unwrap();
+    pub const B_FALSE: PatternCtorId = PatternCtorId::from_u32(1).unwrap();
+    pub const B_TRUE: PatternCtorId = PatternCtorId::from_u32(2).unwrap();
+    pub const CHAR: PatternCtorId = PatternCtorId::from_u32(3).unwrap();
+    pub const STRING: PatternCtorId = PatternCtorId::from_u32(4).unwrap();
+    pub const INT: PatternCtorId = PatternCtorId::from_u32(5).unwrap();
+    pub const FLOAT: PatternCtorId = PatternCtorId::from_u32(6).unwrap();
+    pub const POINTER: PatternCtorId = PatternCtorId::from_u32(7).unwrap();
 
-    pub const TYPE_VARIABLE: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
-    pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
-    pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
-    pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
-    pub const VIEW: PatternCtorId = PatternCtorId::from_u32(13).unwrap();
+    pub const TYPE_VARIABLE: PatternCtorId = PatternCtorId::from_u32(8).unwrap();
+    pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
+    pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
+    pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
+    pub const VIEW: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
 }
 
 /// Used for analyzing pattern matching
 #[derive(Debug, Clone)]
 pub enum PatternCtor {
-    Unit,
     BoolFalse,
     BoolTrue,
     /// Char, String, Int, Float will become more interesting if we implement exhaustive range-based matching like Rust's
@@ -698,7 +617,6 @@ impl TypedPatternPool {
         bindings: &mut SmallVec<[VariablePattern; 8]>,
     ) {
         match self.mem.get(pattern_id) {
-            TypedPattern::LiteralUnit(_) => (),
             TypedPattern::LiteralChar(_, _) => (),
             TypedPattern::LiteralInteger(_, _) => (),
             TypedPattern::LiteralFloat(_, _) => (),
@@ -728,7 +646,6 @@ impl TypedPatternPool {
             TypedPattern::LiteralInteger(_, _span) => true,
             TypedPattern::LiteralFloat(_, _span) => true,
             TypedPattern::LiteralString(_, _span) => true,
-            TypedPattern::LiteralUnit(_span_id) => false,
             TypedPattern::LiteralBool(_, _span_id) => false,
             TypedPattern::Variable(_variable_pattern) => false,
             TypedPattern::Enum(typed_enum_pattern) => {
@@ -749,7 +666,6 @@ impl TypedPatternPool {
 #[derive(Clone, Copy)]
 pub enum TypedPattern {
     // Consider replacing with a single Literal using StaticValue
-    LiteralUnit(SpanId),
     LiteralChar(u8, SpanId),
     LiteralInteger(StaticValueId, SpanId),
     LiteralFloat(StaticValueId, SpanId),
@@ -766,7 +682,6 @@ pub enum TypedPattern {
 impl TypedPattern {
     pub fn span_id(&self) -> SpanId {
         match self {
-            TypedPattern::LiteralUnit(span) => *span,
             TypedPattern::LiteralChar(_, span) => *span,
             TypedPattern::LiteralInteger(_, span) => *span,
             TypedPattern::LiteralFloat(_, span) => *span,
@@ -2524,7 +2439,6 @@ impl TypedProgram {
             panic!("Root namespace was taken, hmmmm");
         }
         let mut pattern_ctors = VPool::make_with_hint("pattern_ctors", 8192);
-        pattern_ctors.add(PatternCtor::Unit);
         pattern_ctors.add(PatternCtor::BoolFalse);
         pattern_ctors.add(PatternCtor::BoolTrue);
         pattern_ctors.add(PatternCtor::Char);
@@ -2939,21 +2853,19 @@ impl TypedProgram {
         match self.stmts.get(stmt) {
             TypedStmt::Expr(_, ty) => *ty,
             TypedStmt::Let(val_def) => {
-                if val_def.variable_type == NEVER_TYPE_ID {
-                    NEVER_TYPE_ID
-                } else {
-                    UNIT_TYPE_ID
-                }
+                // nocommit: Make this impossible; just don't emit the let
+                if val_def.variable_type == NEVER_TYPE_ID { NEVER_TYPE_ID } else { self.types.builtins.empty }
             }
             TypedStmt::Assignment(assgn) => {
+                // nocommit: Make this impossible; just don't emit the assignment
                 if self.exprs.get_type(assgn.value) == NEVER_TYPE_ID {
                     NEVER_TYPE_ID
                 } else {
-                    UNIT_TYPE_ID
+                    self.types.builtins.empty
                 }
             }
-            TypedStmt::Require(_req) => UNIT_TYPE_ID,
-            TypedStmt::Defer(_defer) => UNIT_TYPE_ID,
+            TypedStmt::Require(_req) => self.types.builtins.empty,
+            TypedStmt::Defer(_defer) => self.types.builtins.empty,
         }
     }
 
@@ -3099,8 +3011,7 @@ impl TypedProgram {
         // Not a generic and not an alias, so its a "New Type"
         // A named struct or enum or a builtin
         match self.types.get(rhs_type_id) {
-            Type::Unit
-            | Type::Char
+            Type::Char
             | Type::Bool
             | Type::Never
             | Type::Pointer
@@ -3166,7 +3077,6 @@ impl TypedProgram {
                 let defn_type_id =
                     context.direct_unresolved_target_type.expect("required defn info for builtin");
                 let type_value = match defn_type_id {
-                    UNIT_TYPE_ID => Type::Unit,
                     CHAR_TYPE_ID => Type::Char,
                     BOOL_TYPE_ID => Type::Bool,
                     NEVER_TYPE_ID => Type::Never,
@@ -3181,7 +3091,7 @@ impl TypedProgram {
                     I16_TYPE_ID => Type::Integer(IntegerType::I16),
                     I32_TYPE_ID => Type::Integer(IntegerType::I32),
                     I64_TYPE_ID => Type::Integer(IntegerType::I64),
-                    _ => return failf!(*span, "Unknown builtin type id '{}'", defn_type_id),
+                    _ => return failf!(*span, "Unknown builtin type id: {}", defn_type_id),
                 };
                 self.types.resolve_unresolved(defn_type_id, type_value, None);
                 Ok(defn_type_id)
@@ -3217,6 +3127,7 @@ impl TypedProgram {
 
                 let defn_info =
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
+                let no_fields = fields.is_empty();
                 let struct_defn =
                     Type::Struct(StructType { fields: self.types.mem.list_to_handle(fields) });
                 let type_id = self.add_or_resolve_type(
@@ -3225,6 +3136,9 @@ impl TypedProgram {
                     defn_info,
                     None,
                 );
+                if no_fields && defn_info.is_none() {
+                    self.types.builtins.empty = type_id;
+                }
                 Ok(type_id)
             }
             ParsedTypeExpr::TypeApplication(_ty_app) => {
@@ -3639,7 +3553,6 @@ impl TypedProgram {
         expected_type_hint: Option<TypeId>,
     ) -> TyperResult<(StaticValueId, TypeId)> {
         match parsed_literal {
-            ParsedLiteral::Unit(_) => Ok((self.static_values.add(StaticValue::Unit), UNIT_TYPE_ID)),
             ParsedLiteral::Char(byte, _) => {
                 Ok((self.static_values.add(StaticValue::Char(*byte)), CHAR_TYPE_ID))
             }
@@ -4106,8 +4019,7 @@ impl TypedProgram {
 
         let res = match self.types.get_no_follow(type_id) {
             Type::InferenceHole(_) => type_id,
-            Type::Unit
-            | Type::Char
+            Type::Char
             | Type::Integer(_)
             | Type::Float(_)
             | Type::Bool
@@ -4443,14 +4355,6 @@ impl TypedProgram {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    ParsedLiteral::Unit(span) => match self.types.get(target_type_id) {
-                        Type::Unit => Ok(self.patterns.add(TypedPattern::LiteralUnit(*span))),
-                        _ => failf!(
-                            self.ast.get_pattern_span(pat_expr),
-                            "unrelated pattern type unit will never match {}",
-                            self.type_id_to_string(target_type_id)
-                        ),
-                    },
                     ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
                         Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
                         _ => failf!(
@@ -5533,7 +5437,7 @@ impl TypedProgram {
             ParsedStaticExpr {
                 base_expr: value_expr_id,
                 kind: ParsedStaticBlockKind::Value,
-                is_definition: false,
+                is_definition_level: false,
                 condition_if_definition: None,
                 parameter_names: SliceHandle::empty(),
                 span: parsed_global.span,
@@ -7021,7 +6925,6 @@ impl TypedProgram {
                     }
                 }
             }
-            ParsedExpr::Literal(ParsedLiteral::Unit(span)) => Ok(self.synth_unit(*span)),
             ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
                 let value_id = self.static_values.add(StaticValue::Char(*byte));
                 let expr_id = self.add_static_constant_expr(value_id, *span);
@@ -7036,6 +6939,9 @@ impl TypedProgram {
             ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => Ok(self.synth_bool(*b, *span)),
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
                 let static_value_id = self.static_values.add_string(*string_id);
+                // nocommit: Remove this is_inference behavior for string literals
+                // nocommit: Try passing static bools into modules as compiler config / feature
+                // flags
                 let is_typed_as_static = ctx.is_inference();
                 let type_to_use = if is_typed_as_static {
                     self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id))
@@ -7346,7 +7252,7 @@ impl TypedProgram {
                 if ctx.is_inference() {
                     return failf!(span, "Not enough information to determine empty list type");
                 } else {
-                    UNIT_TYPE_ID
+                    self.types.builtins.empty
                 }
             }
         };
@@ -7554,11 +7460,12 @@ impl TypedProgram {
                     return failf!(span, "#meta block did not evaluate to a string");
                 };
                 let emitted_string = self.ast.strings.get_string(*string_id);
+
                 if emitted_string.is_empty() {
-                    if stat.is_definition {
+                    if stat.is_definition_level {
                         Ok(StaticExecutionResult::Definitions(eco_vec![]))
                     } else {
-                        Ok(StaticExecutionResult::TypedExpr(self.synth_unit(span)))
+                        Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
                     }
                 } else {
                     // First, we write the emitted code to a text buffer
@@ -7578,7 +7485,7 @@ impl TypedProgram {
                         line.line_number(),
                     )
                     .unwrap();
-                    if !stat.is_definition {
+                    if !stat.is_definition_level {
                         content.push_str("{\n");
                     }
                     // FIXME: generated_filename is not unique if we specialized on multiple types
@@ -7593,7 +7500,7 @@ impl TypedProgram {
                         format!("meta_{}_{}.k1", source.filename, line.line_number());
 
                     content.push_str(emitted_string);
-                    if !stat.is_definition {
+                    if !stat.is_definition_level {
                         content.push('}');
                     }
                     debug!("Emitted raw content:\n---\n{content}\n---");
@@ -7619,7 +7526,7 @@ impl TypedProgram {
                         )
                     }
 
-                    let parse_kind = if stat.is_definition {
+                    let parse_kind = if stat.is_definition_level {
                         ParseAdHocKind::Definitions
                     } else {
                         ParseAdHocKind::Expr
@@ -7910,16 +7817,16 @@ impl TypedProgram {
             None,
         );
         self.scopes
-            .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(UNIT_TYPE_ID) });
+            .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(self.types.builtins.empty) });
 
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        // TODO: detect divergent loops: if loop has no breaks or returns, can we type is as never?
+        // TODO: detect divergent loops: if loop has no breaks or returns, can we type it as never?
         //
         // Loop Info should be able to track this, if we report every
         // break and return
-        let loop_type = UNIT_TYPE_ID;
+        let loop_type = self.types.builtins.empty;
 
         Ok(self.exprs.add(
             TypedExpr::WhileLoop(WhileLoop { condition, body: body_block }),
@@ -7948,7 +7855,7 @@ impl TypedProgram {
 
         let loop_info = self.scopes.get_loop_info(body_scope).unwrap();
 
-        let break_type = loop_info.break_type.unwrap_or(UNIT_TYPE_ID);
+        let break_type = loop_info.break_type.unwrap_or(self.types.builtins.empty);
         Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), break_type, loop_expr.span))
     }
 
@@ -8091,7 +7998,7 @@ impl TypedProgram {
         let expected_function_type = ctx
             .expected_type_id
             .and_then(|et| self.extract_function_type_from_functionlike(self.types.get(et)))
-            .map(|ft| self.types.get(ft).as_function().unwrap().clone());
+            .map(|ft| *self.types.get(ft).as_function().unwrap());
         let declared_expected_return_type = match lambda.return_type {
             None => None,
             Some(return_type_expr) => Some(self.eval_type_expr(return_type_expr, ctx.scope_id)?),
@@ -8641,11 +8548,7 @@ impl TypedProgram {
         ))
     }
 
-    fn eval_static_match_expr(
-        &mut self,
-        match_expr_id: ParsedExprId,
-        ctx: EvalExprContext,
-    ) {
+    fn eval_static_match_expr(&mut self, _match_expr_id: ParsedExprId, _ctx: EvalExprContext) {
         todo!("support static matches")
     }
 
@@ -8817,12 +8720,12 @@ impl TypedProgram {
                         // Example: The user passed the pattern type 'string', and the value is a specific static string
                         // This should pass
                         self.types.get_chased_id(target_expr_type)
-                    },
+                    }
                     Some(_stat) => {
                         // The user passed a static as the pattern type; we should not chase through
                         // the static on the scrutinee
                         target_expr_type
-                    },
+                    }
                 };
                 let pattern_did_match = target_type_chased == pattern.type_id;
                 debug!(
@@ -8854,7 +8757,6 @@ impl TypedProgram {
             }
             literal_pat => {
                 match literal_pat {
-                    TypedPattern::LiteralUnit(_) => {}
                     TypedPattern::LiteralChar(_, _) => {}
                     TypedPattern::LiteralInteger(_, _) => {}
                     TypedPattern::LiteralFloat(_, _) => {}
@@ -8874,7 +8776,6 @@ impl TypedProgram {
                 // A good ole reborrow; typed pattern is only 24 bytes but it does have some RCs so
                 // this should be faster
                 match self.patterns.get(pattern_id) {
-                    TypedPattern::LiteralUnit(_span) => Ok(()),
                     TypedPattern::LiteralChar(byte, span) => {
                         let char_value = self.static_values.add(StaticValue::Char(*byte));
                         let span = *span;
@@ -9267,10 +9168,10 @@ impl TypedProgram {
             loop_scope_ctx,
             false,
         )?;
-        let unit_break = self.synth_unit(body_span);
+        let empty_break = self.synth_empty_struct(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak {
-                value: unit_break,
+                value: empty_break,
                 loop_scope: loop_scope_id,
                 loop_type: LoopType::Loop,
             }),
@@ -9278,9 +9179,9 @@ impl TypedProgram {
             body_span,
         );
         let consequent_block_id =
-            self.exprs.add_block(&mut self.mem, consequent_block, UNIT_TYPE_ID);
+            self.exprs.add_block(&mut self.mem, consequent_block, self.types.builtins.empty);
         let if_next_loop_else_break_expr = self.synth_if_else(
-            UNIT_TYPE_ID,
+            self.types.builtins.empty,
             next_is_some_call,
             consequent_block_id,
             break_expr,
@@ -9304,10 +9205,10 @@ impl TypedProgram {
         });
         self.push_block_stmt(&mut loop_block, index_increment_statement);
 
-        let body_block = self.exprs.add_block(&mut self.mem, loop_block, UNIT_TYPE_ID);
+        let body_block = self.exprs.add_block(&mut self.mem, loop_block, self.types.builtins.empty);
         let loop_expr = self.exprs.add(
             TypedExpr::LoopExpr(LoopExpr { body_block }),
-            UNIT_TYPE_ID,
+            self.types.builtins.empty,
             for_expr.span,
         );
 
@@ -9367,7 +9268,7 @@ impl TypedProgram {
             self.push_stmt_id_to_block(&mut block, v.defn_stmt);
             self.push_expr_id_to_block(&mut block, user_expr);
         }
-        let block_id = self.exprs.add_block(&mut self.mem, block, UNIT_TYPE_ID);
+        let block_id = self.exprs.add_block(&mut self.mem, block, self.types.builtins.empty);
 
         Ok(block_id)
     }
@@ -9428,7 +9329,7 @@ impl TypedProgram {
         } else {
             let alt_expr =
                 if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
-            if let Some(alt) = alt_expr { alt } else { self.synth_unit(if_expr.span) }
+            if let Some(alt) = alt_expr { alt } else { self.synth_empty_struct(if_expr.span) }
         };
         Ok(expr)
     }
@@ -9466,7 +9367,7 @@ impl TypedProgram {
         // branches have a matching type, making codegen simpler
         // However, if the consequent is a never type (does not return), we don't need to do this, in
         // fact we can't because then we'd have an expression following a never expression
-        let consequent = if if_expr.alt.is_none() && !cons_never && consequent_type != UNIT_TYPE_ID
+        let consequent = if if_expr.alt.is_none() && !cons_never && consequent_type != self.types.builtins.empty
         {
             self.synth_discard_call(consequent, ctx.with_no_expected_type())?
         } else {
@@ -9478,7 +9379,7 @@ impl TypedProgram {
             let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
         } else {
-            self.synth_unit(if_expr.span)
+            self.synth_empty_struct(if_expr.span)
         };
         let alternate_type = self.exprs.get_type(alternate);
         let alternate_span = self.exprs.get_span(alternate);
@@ -10113,7 +10014,7 @@ impl TypedProgram {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
         let return_value = match parsed_expr {
-            None => self.synth_unit(span),
+            None => self.synth_empty_struct(span),
             Some(parsed_expr) => self.eval_expr_with_coercion(
                 parsed_expr,
                 ctx.with_expected_type(expected_return_type),
@@ -10217,7 +10118,7 @@ impl TypedProgram {
 
                 let arg = self.ast.p_call_args.get_first(fn_call.args);
                 let break_value = match arg {
-                    None => self.synth_unit(call_span),
+                    None => self.synth_empty_struct(call_span),
                     Some(fn_call_arg) => {
                         // ALTERNATIVE: Allow break with value from `while` loops but require the type to implement the `Default` trait
                         match loop_type {
@@ -10312,7 +10213,10 @@ impl TypedProgram {
                         // And someone called arr.len. The value does not matter as it will never
                         // be seen at runtime, or even compile-time since we don't execute during
                         // the generic pass. So we just provide a validly-typed value of type 'N'.
-                        self.synth_phony_value_of_expected_type(ctx.with_expected_type(Some(array_type.size_type)), span)
+                        self.synth_phony_value_of_expected_type(
+                            ctx.with_expected_type(Some(array_type.size_type)),
+                            span,
+                        )
                     }
                     Some(s) => self.synth_i64(s as i64, span),
                 };
@@ -10736,7 +10640,7 @@ impl TypedProgram {
         let call_span = fn_call.span;
         let function_type_id = self.get_function(ability_function_ref.function_id).type_id;
         let base_ability_id = ability_function_ref.ability_id;
-        let ability_fn_type = self.types.get(function_type_id).as_function().unwrap().clone();
+        let ability_fn_type = *self.types.get(function_type_id).as_function().unwrap();
         let ability_fn_return_type = ability_fn_type.return_type;
         let ability_params = self.abilities.get(base_ability_id).parameters;
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
@@ -11759,6 +11663,22 @@ impl TypedProgram {
                 let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
                 let layout_from = self.types.get_layout(type_from);
                 let layout_to = self.types.get_layout(type_to);
+                if layout_from.size == 0 {
+                    kbail!(
+                        self,
+                        call.span,
+                        "Cannot bitcast from zero-sized type: {}",
+                        type_from
+                    )
+                }
+                if layout_to.size == 0 {
+                    kbail!(
+                        self,
+                        call.span,
+                        "Cannot bitcast to zero-sized type: {}",
+                        type_to
+                    )
+                }
                 if layout_from.size != layout_to.size {
                     kbail!(
                         self,
@@ -12469,7 +12389,7 @@ impl TypedProgram {
             return failf!(block.span, "Blocks must contain at least one statement or expression");
         }
         let mut stmts = self.mem.new_list(block.stmts.len() as u32 + 1);
-        let mut last_expr_type: TypeId = UNIT_TYPE_ID;
+        let mut last_expr_type: TypeId = self.types.builtins.empty;
         let mut last_stmt_is_divergent = false;
         for (index, stmt) in block.stmts.iter().enumerate() {
             if last_stmt_is_divergent {
@@ -12529,7 +12449,7 @@ impl TypedProgram {
                         | TypedStmt::Let(_)
                         | TypedStmt::Require(_)
                         | TypedStmt::Defer(_) => {
-                            let unit = self.synth_unit(stmt_span);
+                            let unit = self.synth_empty_struct(stmt_span);
                             let return_unit_expr = self.exprs.add_return(unit, stmt_span);
                             let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
                             let return_unit_id = self.stmts.add(return_unit);
@@ -12637,7 +12557,7 @@ impl TypedProgram {
                 // Leaving this example of how to do intrinsic ability fns
                 // Even though we have bitwise below
                 (EQUALS_ABILITY_ID, "equals") => match t {
-                    Type::Unit | Type::Char | Type::Bool | Type::Pointer => {
+                    Type::Char | Type::Bool | Type::Pointer => {
                         mk_arith!(OpKind::uint(Op::Equals))
                     }
                     Type::Integer(i) => {
@@ -13520,7 +13440,10 @@ impl TypedProgram {
         } else {
             None
         };
-        let return_type = self_.eval_type_expr(parsed_function.ret_type, fn_scope_id)?;
+        let return_type = match parsed_function.ret_type {
+            None => self_.types.builtins.empty,
+            Some(parsed_ret_type) => self_.eval_type_expr(parsed_ret_type, fn_scope_id)?,
+        };
 
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an i32
@@ -13664,7 +13587,6 @@ impl TypedProgram {
             self.push_debug_level();
         }
         let function = self.get_function(declaration_id);
-        let function_name = function.name;
         let fn_scope_id = function.scope;
         let return_type = self.get_function_type(declaration_id).return_type;
         let is_extern = matches!(function.linkage, Linkage::External { .. });
@@ -13707,11 +13629,13 @@ impl TypedProgram {
                 if let Err(msg) =
                     self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
                 {
-                    let return_type_span = self.ast.get_type_expr_span(parsed_function_ret_type);
+                    let return_type_span = match parsed_function_ret_type {
+                        None => function_signature_span,
+                        Some(rt) => self.ast.get_type_expr_span(rt)
+                    };
                     return failf!(
                         return_type_span,
-                        "Function {} return type mismatch: {}",
-                        self.ident_str(function_name),
+                        "Return type mismatch: {}",
                         msg
                     );
                 } else {
@@ -14328,7 +14252,7 @@ impl TypedProgram {
                 };
                 let s = *s;
                 let is_metaprogram = s.kind.is_metaprogram();
-                debug_assert!(s.is_definition);
+                debug_assert!(s.is_definition_level);
                 // For value programs, we want to run them in the body phase
                 // so that they have access to as much code as possible
                 if !is_metaprogram {
@@ -14811,7 +14735,7 @@ impl TypedProgram {
                     if !is_metaprogram {
                         continue;
                     }
-                    debug_assert!(s.is_definition);
+                    debug_assert!(s.is_definition_level);
 
                     let should_compile = self
                         .execute_static_condition(s.condition_if_definition, namespace_scope_id);
@@ -15207,7 +15131,6 @@ impl TypedProgram {
             return;
         }
         match self.types.get(type_id) {
-            Type::Unit => dst.push(alive(PatternCtorId::UNIT)),
             Type::Char => dst.push(alive(PatternCtorId::CHAR)),
             Type::TypeParameter(_) => dst.push(alive(PatternCtorId::TYPE_VARIABLE)),
             Type::Integer(_) => dst.push(alive(PatternCtorId::INT)),
@@ -15369,7 +15292,6 @@ impl TypedProgram {
         match (patterns.get(pattern), ctors.get(ctor)) {
             (TypedPattern::Wildcard(_), _) => true,
             (TypedPattern::Variable(_), _) => true,
-            (TypedPattern::LiteralUnit(_), PatternCtor::Unit) => true,
             (TypedPattern::LiteralBool(true, _), PatternCtor::BoolTrue) => true,
             (TypedPattern::LiteralBool(false, _), PatternCtor::BoolFalse) => true,
             (TypedPattern::Enum(enum_pat), PatternCtor::Enum { variant_name, inner }) => {
@@ -15452,10 +15374,10 @@ impl TypedProgram {
             core!("uint"),
             core!("size"),
             core!("usize"),
-            core!("unit"),
             core!("char"),
             core!("bool"),
             core!("never"),
+            core!("empty"),
             core!("ptr"),
             core!("f32"),
             core!("f64"),
@@ -15539,7 +15461,6 @@ impl TypedProgram {
         let chased_type_id = self.types.get_chased_id(type_id);
         let typ = self.types.get_no_follow(chased_type_id);
         let static_enum = match typ {
-            Type::Unit => make_variant(self, get_ident!(self, "Unit"), None),
             Type::Char => make_variant(self, get_ident!(self, "Char"), None),
             Type::Bool => make_variant(self, get_ident!(self, "Bool"), None),
             Type::Pointer => make_variant(self, get_ident!(self, "Ptr"), None),
@@ -15747,7 +15668,7 @@ impl TypedProgram {
             }
             Type::Never => make_variant(self, get_ident!(self, "Never"), None),
             Type::Function(fn_type) => {
-                let fn_type = fn_type.clone();
+                let fn_type = *fn_type;
                 let function_schema_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "Function")).payload.unwrap();
                 //Function({

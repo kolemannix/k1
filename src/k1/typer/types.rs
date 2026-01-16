@@ -15,6 +15,79 @@ use crate::{SV4, impl_copy_if_small, nz_u32_id, typer::*};
 
 nz_u32_id!(TypeId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub size: u32,
+    pub align: u32,
+}
+
+impl Layout {
+    pub fn from_rust_type<T>() -> Layout {
+        let size = std::mem::size_of::<T>() as u32;
+        let align = std::mem::align_of::<T>() as u32;
+        Layout { size, align }
+    }
+
+    pub fn strided(&self) -> Layout {
+        Layout { size: self.stride(), align: self.align }
+    }
+
+    pub fn from_scalar_bytes(bytes: u32) -> Layout {
+        Layout { size: bytes, align: bytes }
+    }
+
+    pub fn from_scalar_bits(bits: u32) -> Layout {
+        Layout { size: bits / 8, align: bits / 8 }
+    }
+    pub const ZERO_SIZED: Layout = Layout { size: 0, align: 1 };
+
+    pub fn stride(&self) -> u32 {
+        self.size.next_multiple_of(self.align)
+    }
+
+    pub fn offset_at_index(&self, index: usize) -> usize {
+        self.stride() as usize * index
+    }
+
+    // Returns: the start, or offset, of the new field
+    pub fn append_to_aggregate(&mut self, layout: Layout) -> u32 {
+        debug_assert_ne!(layout.align, 0);
+        let offset = self.size;
+        let new_field_start = offset.next_multiple_of(layout.align);
+        if cfg!(debug_assertions) {
+            let padding = new_field_start - offset;
+            if padding != 0 {
+                debug!("Aggregate padding: {padding}");
+            }
+        };
+        let new_end_unaligned = new_field_start + layout.size;
+        let new_align = std::cmp::max(self.align, layout.align);
+        self.size = new_end_unaligned;
+        self.align = new_align;
+        new_field_start
+    }
+
+    pub fn size_bits(&self) -> u32 {
+        self.size * 8
+    }
+
+    pub fn align_bits(&self) -> u32 {
+        self.align * 8
+    }
+
+    pub fn array_me(&self, len: usize) -> Layout {
+        let element_size_padded = self.stride();
+        let array_size = element_size_padded * (len as u32);
+        Layout { size: array_size, align: if array_size == 0 { 1 } else { self.align } }
+    }
+}
+
+impl Display for Layout {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Layout {{ size {}, align {} }}", self.size, self.align)
+    }
+}
+
 #[derive(Clone)]
 pub struct StructTypeField {
     pub name: Ident,
@@ -77,24 +150,25 @@ pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
 pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
 pub const SIZE_TYPE_ID: TypeId = I64_TYPE_ID;
 
-pub const UNIT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
-pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
-pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
-pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
-pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
-pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
-pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
+pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
+pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
+pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
+pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
+pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
+pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 
-pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
+pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+
+pub const _RESULT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Clone)]
@@ -309,6 +383,7 @@ pub struct FunctionType {
     pub is_lambda: bool,
     pub abi_mode: AbiMode,
 }
+impl_copy_if_small!(16, FunctionType);
 
 impl FunctionType {
     pub fn logical_params(&self) -> MSlice<FnParamType, TypePool> {
@@ -356,10 +431,10 @@ pub struct FunctionPointerType {
 // To shrink this, we'd
 // [x] move TypeDefnInfo off,
 // [ ] convert Vecs to EcoVecs, or slice handles when we can
+// nocommit let's reach 32, it'll be fun
 static_assert_size!(Type, 40);
 #[derive(Clone)]
 pub enum Type {
-    Unit,
     Char,
     Bool,
     /// Our Pointer is a raw untyped pointer; we mostly have this type for expressing intent
@@ -408,7 +483,6 @@ impl TypePool {
         defn2: Option<&TypeDefnInfo>,
     ) -> bool {
         match (t1, t2) {
-            (Type::Unit, Type::Unit) => true,
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
             (Type::Float(f1), Type::Float(f2)) => f1.size() == f2.size(),
@@ -510,7 +584,6 @@ impl TypePool {
 
         discriminant(typ).hash(state);
         match typ {
-            Type::Unit => {}
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
             Type::Bool => {}
@@ -599,7 +672,6 @@ impl TypePool {
 impl Type {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Type::Unit => "scalar",
             Type::Char => "char",
             Type::Integer(_) => "integer",
             Type::Float(_) => "float",
@@ -622,14 +694,6 @@ impl Type {
             Type::RecursiveReference(_) => "recurse",
             Type::Array(_) => "array",
         }
-    }
-
-    // Note: This is kind of a codegen concern that doesn't belong in this layer,
-    //       but it has some implications for typechecking, and I'm not super worried
-    //       about platform independence in the middle-end right now
-    // Should Pointer be here?
-    pub fn is_scalar_int_value(&self) -> bool {
-        matches!(self, Type::Unit | Type::Char | Type::Integer(_) | Type::Bool)
     }
 
     pub fn as_reference(&self) -> Option<ReferenceType> {
@@ -826,6 +890,7 @@ impl TypeVariableInfo {
 
 #[derive(Default)]
 pub struct BuiltinTypes {
+    pub empty: TypeId,
     pub string: Option<TypeId>,
     pub buffer: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
@@ -894,6 +959,9 @@ impl ScalarType {
 pub enum PhysicalType {
     Scalar(ScalarType),
     Agg(AggregateTypeId),
+    /// All zero-sized type ids should compile to the Empty variant, so zero-sized behavior is
+    /// handled consistently everywhere
+    Empty,
 }
 
 impl PhysicalType {
@@ -925,6 +993,10 @@ impl PhysicalType {
 
     pub fn is_scalar(&self) -> bool {
         matches!(self, PhysicalType::Scalar(_))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, PhysicalType::Empty)
     }
 }
 
@@ -1074,7 +1146,7 @@ impl TypePool {
         this.add_anon(Type::Integer(IntegerType::I32));
         this.add_anon(Type::Integer(IntegerType::I64));
 
-        this.add_anon(Type::Unit);
+        this.add_anon(Type::Struct(StructType { fields: MSlice::empty() }));
         this.add_anon(Type::Char);
         this.add_anon(Type::Bool);
         this.add_anon(Type::Never);
@@ -1471,7 +1543,6 @@ impl TypePool {
                 inference_variable_count: 1,
                 unresolved_static_count: 0,
             },
-            Type::Unit => EMPTY,
             Type::Char => EMPTY,
             Type::Integer(_) => EMPTY,
             Type::Float(_) => EMPTY,
@@ -1550,6 +1621,7 @@ impl TypePool {
 
     pub fn get_pt_layout(&self, pt: PhysicalType) -> Layout {
         match pt {
+            PhysicalType::Empty => Layout::ZERO_SIZED,
             PhysicalType::Scalar(s) => s.get_layout(),
             PhysicalType::Agg(agg_id) => self.agg_types.get(agg_id).layout,
         }
@@ -1557,10 +1629,7 @@ impl TypePool {
 
     pub fn compile_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {
         match self.get_no_follow_static(type_id) {
-            //task(bc): Eventually, Unit should correspond to Void, not a byte. But only once we can
-            //successfully lower it to a zero-sized type everywhere; for example a struct member of
-            //type unit
-            Type::Unit | Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::U8)),
+            Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::U8)),
 
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
@@ -1577,21 +1646,25 @@ impl TypePool {
                 Some(element_t) => match array.concrete_count {
                     None => None,
                     Some(len) => {
-                        let elem_layout = self.get_pt_layout(element_t);
-                        let record = AggregateTypeRecord {
-                            agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
-                            origin_type_id: type_id,
-                            layout: elem_layout.array_me(len as usize),
-                        };
-                        let id = self.agg_types.add(record);
-                        Some(PhysicalType::Agg(id))
+                        if len == 0 {
+                            Some(PhysicalType::Empty)
+                        } else {
+                            let elem_layout = self.get_pt_layout(element_t);
+                            let record = AggregateTypeRecord {
+                                agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
+                                origin_type_id: type_id,
+                                layout: elem_layout.array_me(len as usize),
+                            };
+                            let id = self.agg_types.add(record);
+                            Some(PhysicalType::Agg(id))
+                        }
                     }
                 },
             },
             Type::Struct(s) => {
                 let s_fields = s.fields;
                 let mut fields = self.mem.new_list(s.fields.len());
-                let mut layout = Layout::ZERO;
+                let mut layout = Layout::ZERO_SIZED;
                 let mut not_physical = false;
                 for field in self.mem.getn(s_fields) {
                     if not_physical {
@@ -1615,13 +1688,17 @@ impl TypePool {
                 if not_physical {
                     None
                 } else {
-                    let fields_handle = self.mem.list_to_handle(fields);
-                    let agg_id = self.agg_types.add(AggregateTypeRecord {
-                        agg_type: AggType::Struct { fields: fields_handle },
-                        origin_type_id: type_id,
-                        layout,
-                    });
-                    Some(PhysicalType::Agg(agg_id))
+                    if layout.size == 0 {
+                        Some(PhysicalType::Empty)
+                    } else {
+                        let fields_handle = self.mem.list_to_handle(fields);
+                        let agg_id = self.agg_types.add(AggregateTypeRecord {
+                            agg_type: AggType::Struct { fields: fields_handle },
+                            origin_type_id: type_id,
+                            layout,
+                        });
+                        Some(PhysicalType::Agg(agg_id))
+                    }
                 }
             }
             Type::Enum(e) => {
@@ -1629,6 +1706,7 @@ impl TypePool {
 
                 let tag_scalar = self.get_physical_type(e.tag_type).unwrap().expect_scalar();
                 let tag_layout = tag_scalar.get_layout();
+                // nocommit: Can Enums have zero variants?
 
                 let mut physical_variants = self.mem.new_list(variant_count);
                 let mut union_members = self.mem.new_list(variant_count);
@@ -1727,6 +1805,7 @@ impl TypePool {
         match self.get_physical_type(other) {
             None => None,
             Some(other_pt) => match other_pt {
+                pt @ PhysicalType::Empty => Some(pt),
                 pt @ PhysicalType::Scalar(_) => Some(pt),
                 PhysicalType::Agg(agg_id) => {
                     let r = self.agg_types.get(agg_id);
@@ -1775,8 +1854,12 @@ impl TypePool {
     // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
     // I wanna return a slice but with what backing memory?
     pub fn get_struct_layout(&self, struct_type_id: TypeId) -> SV4<StructField> {
-        let struct_agg_id = self.get_physical_type(struct_type_id).unwrap().expect_agg();
-        self.get_agg_struct_layout(struct_agg_id)
+        let struct_pt = self.get_physical_type(struct_type_id).unwrap();
+        if struct_pt.is_empty() {
+            smallvec![]
+        } else {
+            self.get_agg_struct_layout(struct_pt.expect_agg())
+        }
     }
 
     pub fn get_agg_struct_layout(&self, struct_agg_id: AggregateTypeId) -> SV4<StructField> {
@@ -1822,7 +1905,7 @@ impl TypePool {
     pub fn get_layout(&self, type_id: TypeId) -> Layout {
         let chased = self.get_chased_id(type_id);
         match self.type_phys_type_lookup.get(chased) {
-            None => Layout::ZERO,
+            None => Layout::ZERO_SIZED,
             Some(pt) => self.get_pt_layout(*pt),
         }
     }
@@ -1844,7 +1927,6 @@ impl TypePool {
             Type::LambdaObject(_) => true,
             Type::Static(stat) => self.is_aggregate(stat.inner_type_id),
             Type::Array(_) => true,
-            Type::Unit => false,
             Type::Char => false,
             Type::Integer(_) => false,
             Type::Float(_) => false,
@@ -1949,6 +2031,7 @@ impl TypePool {
 
     pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {
         match t {
+            PhysicalType::Empty => w.write_str("{}"),
             PhysicalType::Scalar(st) => write!(w, "{}", st),
             PhysicalType::Agg(agg) => match self.agg_types.get(agg).agg_type {
                 AggType::Enum(e) => {

@@ -5,7 +5,7 @@ use crate::typer::*;
 
 #[test]
 fn struct_layout_1() {
-    let mut l = Layout::ZERO;
+    let mut l = Layout::ZERO_SIZED;
     l.append_to_aggregate(Layout::from_scalar_bits(64));
     assert_eq!(l.size, 8);
     assert_eq!(l.align, 8);
@@ -30,7 +30,7 @@ fn struct_layout_1() {
 
 #[test]
 fn add_zero_no_change() {
-    let mut l = Layout::ZERO;
+    let mut l = Layout::ZERO_SIZED;
     let o1 = l.append_to_aggregate(Layout::from_scalar_bits(64));
     assert_eq!(o1, 0);
     assert_eq!(l.size, 8);
@@ -41,7 +41,7 @@ fn add_zero_no_change() {
     assert_eq!(l.size, 9);
     assert_eq!(l.align, 8);
     assert_eq!(l.stride(), 16);
-    let o3 = l.append_to_aggregate(Layout::ZERO);
+    let o3 = l.append_to_aggregate(Layout::ZERO_SIZED);
     assert_eq!(o3, 9);
     assert_eq!(l.size, 9);
     assert_eq!(l.align, 8);
@@ -50,7 +50,7 @@ fn add_zero_no_change() {
 
 #[test]
 fn array_me() {
-    let l = Layout::ZERO.array_me(10);
+    let l = Layout::ZERO_SIZED.array_me(10);
     assert_eq!(l.size, 0);
     assert_eq!(l.align, 1);
     assert_eq!(l.stride(), 0);

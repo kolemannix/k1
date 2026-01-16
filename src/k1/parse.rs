@@ -219,7 +219,6 @@ pub struct ParsedNumericLiteral {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParsedLiteral {
-    Unit(SpanId),
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
     Bool(bool, SpanId),
@@ -229,7 +228,6 @@ pub enum ParsedLiteral {
 impl ParsedLiteral {
     pub fn get_span(&self) -> SpanId {
         match self {
-            ParsedLiteral::Unit(span) => *span,
             ParsedLiteral::Char(_, span) => *span,
             ParsedLiteral::Numeric(i) => i.span,
             ParsedLiteral::Bool(_, span) => *span,
@@ -656,7 +654,7 @@ impl ParsedStaticBlockKind {
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
-    pub is_definition: bool,
+    pub is_definition_level: bool,
     pub condition_if_definition: Option<ParsedExprId>,
     pub parameter_names: SliceHandle<IdentSliceId>,
     pub span: SpanId,
@@ -1229,7 +1227,7 @@ pub struct ParsedFunction {
     // TODO(perf, efficient ast): Migrate params and context_params to a single SliceHandle
     pub params: EcoVec<FnArgDef>,
     pub context_params: EcoVec<FnArgDef>,
-    pub ret_type: ParsedTypeExprId,
+    pub ret_type: Option<ParsedTypeExprId>,
     pub body: Option<ParsedExprId>,
     pub signature_span: SpanId,
     pub span: SpanId,
@@ -2187,7 +2185,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         &mut self,
         hash_token: Token,
         maybe_directive: Token,
-        is_definition: bool,
+        is_definition_level: bool,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
         match maybe_directive.kind {
@@ -2224,7 +2222,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                         Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
                             base_expr,
                             kind,
-                            is_definition,
+                            is_definition_level,
                             condition_if_definition: condition,
                             parameter_names: parameter_names_handle,
                             span,
@@ -2521,13 +2519,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
         match (first.kind, second.kind) {
-            (K::OpenParen, K::CloseParen) => {
-                trace!("parse_literal unit");
-                self.advance();
-                self.advance();
-                let span = self.extend_token_span(first, second);
-                Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
-            }
             (K::Char, _) => {
                 trace!("parse_literal char");
                 self.advance();
@@ -3301,16 +3292,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let resulting_expression = match first.kind {
             K::OpenParen => {
                 self.advance();
-                if self.peek().kind == K::CloseParen {
-                    let end = self.tokens.next();
-                    let span = self.extend_token_span(first, end);
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Unit(span)))))
-                } else {
-                    // Note: Here would be where we would support tuples
-                    let expr = self.expect_expression()?;
-                    self.expect_eat_token(K::CloseParen)?;
-                    Ok(Some(expr))
-                }
+                // Note: Here would be where we would parse tuples
+                let expr = self.expect_expression()?;
+                self.expect_eat_token(K::CloseParen)?;
+                Ok(Some(expr))
             }
             K::BackSlash => Ok(Some(self.expect_lambda()?)),
             K::KeywordWhile => {
@@ -4158,8 +4143,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 eco_vec![]
             };
         let (params, params_span) = self.eat_fn_params()?;
-        self.expect_eat_token(K::Colon)?;
-        let ret_type = self.expect_type_expression()?;
+        let ret_type = if let Some(_colon) = self.maybe_consume_next(K::Colon) {
+            Some(self.expect_type_expression()?)
+        } else {
+            None
+        };
         let additional_type_constraints = if self.maybe_consume_next(K::KeywordWhere).is_some() {
             // FIXME(brittle parsing): Has to backtrack to un-consume the next token in the fn call;
             // the open brace
@@ -4667,7 +4655,6 @@ impl ParsedProgram {
 
     fn display_literal(&self, w: &mut impl Write, lit: &ParsedLiteral) -> std::fmt::Result {
         match lit {
-            ParsedLiteral::Unit(_) => w.write_str("()"),
             ParsedLiteral::Char(byte, _) => {
                 w.write_char('\'')?;
                 w.write_char(*byte as char)?;

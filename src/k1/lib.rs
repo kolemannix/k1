@@ -60,6 +60,11 @@ macro_rules! nz_u32_id {
                 self.0.fmt(f)
             }
         }
+        impl Default for $name {
+            fn default() -> Self {
+                $name::PENDING
+            }
+        }
 
         impl $name {
             pub const fn as_u32(self) -> u32 {

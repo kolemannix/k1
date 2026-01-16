@@ -10,24 +10,18 @@ deftype u8  = builtin
 deftype u16 = builtin
 deftype u32 = builtin
 deftype u64 = builtin
+deftype alias usize = u64
 deftype alias uint = u64
 deftype i8  = builtin
 deftype i16 = builtin
 deftype i32 = builtin
 deftype i64 = builtin
 deftype alias int = i64
-
 deftype alias size = i64
-deftype alias usize = u64
+
 // TODO: Incorporate this instead of a 64-bit align type
 deftype alias align = u16
 
-deftype alias c_sizet = u64
-deftype alias c_ssizet = i64
-deftype alias c_int = i32
-deftype alias c_long = i64
-
-deftype unit    = builtin
 deftype char    = builtin
 deftype bool    = builtin
 
@@ -40,6 +34,7 @@ deftype ptr = builtin
 deftype f32 = builtin
 deftype f64 = builtin
 
+
 deftype Buffer[T] = { len: size, data: *mut T }
 
 deftype View[T] = { buffer: Buffer[T] }
@@ -48,6 +43,12 @@ deftype List[T] = { len: size, buffer: Buffer[T] }
 deftype string = { view: View[char] }
 
 deftype Opt[T] = either None, Some(T)
+
+
+deftype alias c_sizet = u64
+deftype alias c_ssizet = i64
+deftype alias c_int = i32
+deftype alias c_long = i64
 
 ns compiler {
   deftype SourceLocation = { filename: string, line: u64 }
@@ -59,6 +60,8 @@ deftype Ordering = either Less, Equal, Greater
 
 deftype Result[T, E] = either Ok(T), Err(E)
 
+deftype alias empty = {}
+
 deftype alias byte = u8
 
 ns types {
@@ -68,6 +71,7 @@ ns types {
   intern fn alignOf[T](): int
 
   intern fn typeId[T](): u64
+  fn typeIdOfVal[T](_t: T): u64 { typeId[T] } 
 
   intern fn typeSchema(id: u64): TypeSchema
   intern fn typeName(id: u64): string
@@ -101,7 +105,6 @@ ns types {
   deftype Layout = { size: u32, align: u32 }
 
   deftype TypeSchema = (either
-    Unit,
     Char,
     Int(IntKind),
     Float(either F32, F64),
@@ -151,7 +154,7 @@ ns types {
     { typeId: typeId[T](), value: t.as[ptr] }
   }
 
-  fn assertWrapperType[Wrapper, Inner](): unit {
+  fn assertWrapperType[Wrapper, Inner]() {
     let schemaA = types/getTypeSchema[Wrapper]();
     let bTypeId = types/typeId[Inner]();
     require schemaA is .Struct({ fields }) else { crash("isWrapperType: Wrapper must be a struct") };
@@ -188,13 +191,13 @@ ability Equals {
 // TODO(dogfood): Enhance with an `impl Error` type parameter
 // TODO(dogfood): Allow Error = never for infallible writes
 ability Writer {
-  fn writeByte(self: Self, value: u8): unit 
-  fn writeBytes(self: Self, bytes: View[byte]): unit
+  fn writeByte(self: Self, value: u8) 
+  fn writeBytes(self: Self, bytes: View[byte])
 
-  fn writeChar(self: Self, value: char): unit { self.writeByte(value.as[u8]) }
-  fn writeString(self: Self, value: string): unit { self.writeBytes(value.viewBytes()) }
+  fn writeChar(self: Self, value: char) { self.writeByte(value.as[u8]) }
+  fn writeString(self: Self, value: string) { self.writeBytes(value.viewBytes()) }
 
-  fn repeat(self: Self, value: string, n: size): unit {
+  fn repeat(self: Self, value: string, n: size) {
     let i = 0;
     while i < n {
       self.writeString(value);
@@ -204,7 +207,7 @@ ability Writer {
 }
 
 ability Print {
-  fn printTo[W: Writer](self: Self, w: W): unit
+  fn printTo[W: Writer](self: Self, w: W)
 }
 
 // Show must have ability id 4
@@ -363,7 +366,7 @@ ability Iterator[impl Item] {
   }
   fn peek(self: *Self): ?Item
   fn sizeHint(self: *Self): { atLeast: size, atMost: ?size }
-  fn advanceBy(self: *mut Self, n: size): unit
+  fn advanceBy(self: *mut Self, n: size)
   fn nth(self: *mut Self, n: size): ?Item
 
   fn isDone(self: *Self): bool { self.peek().isNone() }
@@ -448,7 +451,16 @@ impl Equals for string {
 }
 
 impl Print for string {
-  fn printTo[W: Writer](self: string, w: W): unit { w.writeString(self) }
+  fn printTo[W: Writer](self: string, w: W) { w.writeString(self) }
+}
+
+impl Print for {} {
+  fn printTo[W: Writer](self: {}, w: W) { w.writeString("{{}") }
+}
+
+
+impl Equals for {} {
+  fn equals(_self: {}, _other: {}): bool { true }
 }
 
 ns mem {
@@ -457,18 +469,18 @@ ns mem {
   intern fn alloc(size: size, align: size): ptr
   intern fn allocZeroed(size: size, align: size): ptr
   intern fn realloc(ptr: ptr, oldSize: size, align: size, newSize: size): ptr
-  intern fn free(ptr: ptr, size: size, align: size): unit
+  intern fn free(ptr: ptr, size: size, align: size)
 
   intern fn copy(
     dst: ptr,
     src: ptr,
     count: size
-  ): unit
+  )
   intern fn set(
     dst: ptr,
     value: u8,
     count: size
-  ): unit
+  )
   intern fn equals(p1: ptr, p2: ptr, size: int): bool
 
   intern fn zeroed[T](): T
@@ -497,7 +509,7 @@ ns k1 {
     locn: compiler/SourceLocation,
     level: (either(u8) Info, Warn, Error),
     msg: string
-  ): unit
+  )
 
   deftype ModuleKind = either(u8) Library, Executable, Script
 
@@ -573,8 +585,6 @@ ns bool {
   fn from_u8(value: u8): bool { value != 0u8 }
 }
 
-impl Equals for unit { fn equals(_self: unit, _other: unit): bool { true } }
-
 impl Equals for bool { intern fn equals(self: bool, other: bool): bool }
 
 impl Equals for u8 { intern fn equals(self: u8, other: u8): bool }
@@ -589,7 +599,7 @@ impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
 
 impl Equals for char { intern fn equals(self: char, other: char): bool }
 
-fn discard[T](_t: T): unit { () }
+fn discard[T](_t: T): empty { {} }
 fn phony[T](): T { crash("phony") }
 
 ns Array {
@@ -618,11 +628,11 @@ ns Array {
     alloc.allocT[Array[T, N]]()
   }
 
-  fn memset[T, N: static int](array: *mut Array[T, N], value: u8): unit {
+  fn memset[T, N: static int](array: *mut Array[T, N], value: u8) {
     mem/set(dst = array.basePtr(), value = value, count = array.sizeBytes())
   }
 
-  fn set[T, N: static int](array: *mut Array[T, N], index: int, value: T): unit {
+  fn set[T, N: static int](array: *mut Array[T, N], index: int, value: T) {
     array.getRef(index) <- value
   }
 
@@ -680,7 +690,7 @@ ns Array {
   let MADV_SEQUENTIAL: i32 = 2;
   extern("posix_madvise") fn madvise(addr: ptr, len: c_sizet, advice: c_int): c_int
 
-  extern("backtrace") fn backtrace(buffer: ptr, size: c_int): unit
+  extern("backtrace") fn backtrace(buffer: ptr, size: c_int)
 
 }
 
@@ -693,10 +703,10 @@ ns libc {
 
   extern("malloc") fn malloc(size: size): ptr
   extern("calloc") fn calloc(count: int, size: size): ptr
-  extern("free") fn free(ptr: ptr): unit
+  extern("free") fn free(ptr: ptr)
   extern("realloc") fn realloc(ptr: ptr, size: size): ptr
 
-  extern("perror") fn perror(msg: ptr): unit
+  extern("perror") fn perror(msg: ptr)
 
   ns files {
     let SEEK_END: i32 = 2;
@@ -710,13 +720,13 @@ ns libc {
 
 }
 
-fn assert(context locn: compiler/SourceLocation)(value: bool): unit {
+fn assert(context locn: compiler/SourceLocation)(value: bool) {
   if not value { crash("ASSERT FAILED") };
 }
 
-fn assertdbg(context locn: compiler/SourceLocation)(value: bool): unit {
+fn assertdbg(context locn: compiler/SourceLocation)(value: bool) {
   #if k1/DEBUG { if not value { crash("ASSERT FAILED") } }
-  else         { locn; value; () }
+  else         { locn; value; {} }
 }
 
 fn crash(context locn: compiler/SourceLocation)(msg: string): never {

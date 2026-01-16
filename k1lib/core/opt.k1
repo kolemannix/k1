@@ -50,14 +50,14 @@ impl[T: Equals] Equals for Opt[T] {
   }
 }
 
-impl[A] Try[T = A, E = unit] for Opt[A] {
-  fn error(_e: unit): Opt[T] { .None }
+impl[A] Try[T = A, E = empty] for Opt[A] {
+  fn error(_e: empty): Opt[T] { .None }
   fn value(t: T): Opt[T] { Opt.Some(t) }
 
   fn isOk(self: Opt[T]): bool { self is .Some(_) }
-  fn getError(self: Opt[T]): unit {
+  fn getError(self: Opt[T]): empty {
     switch self {
-      .None -> (),
+      .None -> {},
       .Some(_) -> crash("getError on Opt.Some")
     }
   }
@@ -65,7 +65,7 @@ impl[A] Try[T = A, E = unit] for Opt[A] {
 }
 
 impl[T: Print] Print for Opt[T] {
-  fn printTo[W: Writer](self: Opt[T], w: W): unit {
+  fn printTo[W: Writer](self: Opt[T], w: W) {
     if self is .Some(v) w.writeString("Some({v})") else w.writeString("None")
   }
 }

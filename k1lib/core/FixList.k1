@@ -11,49 +11,49 @@ ns FixList {
   fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
 
-  fn clear[T, N: static size](self: *mut FixList[T, N]): unit {
+  fn clear[T, N: static size](self: *mut FixList[T, N]): empty {
     #if k1/DEBUG self.data*.memset(0xCD);
     self.used* <- 0
   }
 
-  fn push[T, N: static size](self: *mut FixList[T, N], value: T): unit {
+  fn push[T, N: static size](self: *mut FixList[T, N], value: T): empty {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used.as[u32] + 1;
     } else {
-      let typename = types/getTypeName[typeOf(self).value]();
+      let typename = types/getTypeName[typeOf(self).value];
       crash("{typename} cannot fulfill push. {used + 1} > {self.cap()}")
     }
   }
 
-  fn tryPush[T, N: static size](self: *mut FixList[T, N], value: T): Result[unit, unit] {
+  fn tryPush[T, N: static size](self: *mut FixList[T, N], value: T): Result[empty, empty] {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used.as[u32] + 1;
-      .Ok(())
+      .Ok({})
     } else {
-      .Err(())
+      .Err({})
     }
   }
 
-  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): Result[unit, unit] {
+  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): Result[empty, empty] {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.asBuffer().slice(start = self.len(), end = needed);
       Buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
       self.used* <- needed.as[u32];
-      .Ok(())
+      .Ok({})
     } else {
-      .Err(())
+      .Err({})
       //.Err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
     }
   }
 
-  fn pushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): unit {
+  fn pushN[T, N: static size](self: *mut FixList[T, N], values: View[T]): empty {
     let result = self.tryPushN[T, N](values);
-    if result is .Err(msg) crash("FixList out of space")
+    if result is .Err(_) crash("FixList out of space")
   }
 
   fn asBuffer[T, N: static size](self: *mut FixList[T, N]): Buffer[T] {
@@ -76,7 +76,7 @@ ns FixList {
     }
   }
 
-  fn set[T, N: static size](self: *mut FixList[T, N], index: size, value: T): unit {
+  fn set[T, N: static size](self: *mut FixList[T, N], index: size, value: T): empty {
     self.getRef(index) <- value
   }
 

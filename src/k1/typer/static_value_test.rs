@@ -9,10 +9,9 @@ const BUILTIN_VALUE_COUNT: usize = 3;
 fn test_basic() {
     let mut system = StaticValuePool::make_with_hint(512);
 
-    let id1 = system.add(StaticValue::Unit);
-    let id2 = system.add(StaticValue::Unit);
-
-    assert_eq!(id1, id2);
+    let s1 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
+    let s2 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
+    assert_eq!(s1, s2);
     assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT);
 
     let true1 = system.add(StaticValue::Bool(true));

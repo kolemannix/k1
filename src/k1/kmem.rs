@@ -331,12 +331,12 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn push_layout_uninit(&mut self, layout: crate::typer::Layout) -> *mut u8 {
+    pub fn push_layout_uninit(&mut self, size: u32, align: u32) -> *mut u8 {
         unsafe {
             let dst = self.cursor_mut();
-            let dst = dst.byte_add(dst.align_offset(layout.align as usize));
+            let dst = dst.byte_add(dst.align_offset(align as usize));
 
-            let new_cursor = dst.byte_add(layout.size as usize);
+            let new_cursor = dst.byte_add(size as usize);
             self.set_cursor_checked(new_cursor);
 
             dst

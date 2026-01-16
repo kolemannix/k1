@@ -179,7 +179,6 @@ impl TypedProgram {
     ) -> std::fmt::Result {
         let defn_info = self.types.get_defn_info(type_id);
         match self.types.get_no_follow(type_id) {
-            Type::Unit => w.write_str("unit"),
             Type::Char => w.write_str("char"),
             Type::Integer(int_type) => {
                 write!(w, "{}", int_type)?;
@@ -744,7 +743,6 @@ impl TypedProgram {
         id: StaticValueId,
     ) -> std::fmt::Result {
         match self.static_values.get(id) {
-            StaticValue::Unit => w.write_str("()"),
             StaticValue::Bool(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(typed_integer_value) => {
@@ -867,7 +865,6 @@ impl TypedProgram {
         writ: &mut impl Write,
     ) -> std::fmt::Result {
         match self.pattern_ctors.get(pattern_ctor_id) {
-            PatternCtor::Unit => writ.write_str("()"),
             PatternCtor::BoolTrue => writ.write_str("true"),
             PatternCtor::BoolFalse => writ.write_str("false"),
             PatternCtor::Char => writ.write_str("'<char>'"),
@@ -921,7 +918,6 @@ impl TypedProgram {
 
     pub fn display_pattern(&self, pattern: TypedPatternId, w: &mut impl Write) -> std::fmt::Result {
         match self.patterns.get(pattern) {
-            TypedPattern::LiteralUnit(_) => w.write_str("()"),
             TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
             TypedPattern::LiteralInteger(value_id, _) => self.display_static_value(w, *value_id),
             TypedPattern::LiteralFloat(value_id, _) => self.display_static_value(w, *value_id),

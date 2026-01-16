@@ -445,7 +445,7 @@ impl TypedProgram {
             self.named_types.add_slice_copy(&evaled_params)
         } else {
             let generic_function_type =
-                self.types.get(generic_function_sig.function_type).as_function().unwrap().clone();
+                *self.types.get(generic_function_sig.function_type).as_function().unwrap();
             let generic_function_return_type = generic_function_type.return_type;
 
             let mut inference_pairs: SV8<_> = smallvec![];
@@ -1020,8 +1020,8 @@ impl TypedProgram {
             }
             (Type::Function(passed_fn), Type::Function(slot_fn)) => {
                 if passed_fn.logical_params().len() == slot_fn.logical_params().len() {
-                    let passed_fn = passed_fn.clone();
-                    let slot_fn = slot_fn.clone();
+                    let passed_fn = *passed_fn;
+                    let slot_fn = *slot_fn;
                     for (passed_param, slot_param) in self
                         .types
                         .mem

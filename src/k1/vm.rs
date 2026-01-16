@@ -18,14 +18,13 @@ use crate::bc::{
 };
 use crate::parse::NumericWidth;
 use crate::typer::types::{
-    ContainerKind, FloatType, IntegerType, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
+    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
     ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, Layout, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum,
-    StaticStruct, StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue,
-    TypedGlobalId, TypedIntValue, TypedProgram, TyperError, TyperResult, UNIT_BYTE_VALUE,
-    VariableId,
+    FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
+    StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
+    TypedIntValue, TypedProgram, TyperError, TyperResult, VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -275,24 +274,23 @@ impl Vm {
         writeln!(w, "Frame [{frame_index}] ").unwrap();
         bc::display_unit_name(w, k1, frame.unit).unwrap();
         writeln!(w, "Base:  {:?}", frame.base_ptr).unwrap();
-        if let Some(ret_info) = frame.ret_info {
-            write!(w, "ret ").unwrap();
-            match ret_info.place {
-                RetPlace::ScalarCallInst { frame_index, inst_index } => {
-                    write!(w, " [{frame_index}] reg {inst_index}").unwrap()
-                }
-                RetPlace::Addr { addr } => {
-                    render_debug_value(w, self, k1, ret_info.t, Value::ptr(addr.cast_const()))
-                        .unwrap();
-                }
+        write!(w, "ret ").unwrap();
+        match frame.ret_info.place {
+            RetPlace::Empty => w.write_str("{}").unwrap(),
+            RetPlace::ScalarCallInst { frame_index, inst_index } => {
+                write!(w, " [{frame_index}] reg {inst_index}").unwrap()
             }
-            writeln!(w).unwrap();
+            RetPlace::Addr { addr } => {
+                render_debug_value(w, self, k1, frame.ret_info.pt, Value::ptr(addr.cast_const()))
+                    .unwrap();
+            }
         }
+        writeln!(w).unwrap();
         let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
-        for (i, pt) in k1.bytecode.mem.getn(unit.fn_type.params).iter().enumerate() {
+        for (i, param) in k1.bytecode.mem.getn(unit.fn_type.params).iter().enumerate() {
             writeln!(w, "Param {i}: ").unwrap();
             let value = self.stack.get_param_value(frame_index, i as u32);
-            render_debug_value(w, self, k1, *pt, value).unwrap();
+            render_debug_value(w, self, k1, param.pt, value).unwrap();
         }
         writeln!(w, "Locals").unwrap();
         for block in k1.bytecode.mem.getn(unit.blocks) {
@@ -344,7 +342,6 @@ fn write_bytes(w: &mut impl std::fmt::Write, bytes: &[u8]) -> std::fmt::Result {
 pub struct Value(u64);
 
 impl Value {
-    pub const UNIT: Value = Self::u8(UNIT_BYTE_VALUE);
     pub const TRUE: Value = Self::bool(true);
     pub const NULLPTR: Value = Self(0);
 
@@ -555,9 +552,9 @@ pub fn execute_compiled_unit(
     vm.eval_span = span;
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
-    if unit.is_debug {
-        eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
-    }
+    //if unit.is_debug {
+    eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    //}
 
     match unit.unit_id {
         CompilableUnitId::Function(_function_id) => {
@@ -568,9 +565,9 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_ret_info = match unit.fn_type.return_type {
-        InstKind::Void | InstKind::Terminator => None,
-        InstKind::Value(ret_pt) => {
+    let top_ret_place = match unit.fn_type.return_type {
+        PhysicalType::Empty => RetPlace::Empty,
+        ret_pt @ PhysicalType::Agg(_) | ret_pt @ PhysicalType::Scalar(_) => {
             let pt_layout = k1.types.get_pt_layout(ret_pt);
             let ret_addr = vm.stack.push_layout_uninit(pt_layout);
             debug!(
@@ -578,9 +575,11 @@ pub fn execute_compiled_unit(
                 k1.types.pt_to_string(ret_pt),
                 ret_addr
             );
-            Some(RetInfo { place: RetPlace::Addr { addr: ret_addr }, t: ret_pt, ip: 0, block: 0 })
+            RetPlace::Addr { addr: ret_addr }
         }
     };
+    let top_ret_info =
+        RetInfo { place: top_ret_place, pt: unit.fn_type.return_type, ip: 0, block: 0 };
     vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
     let top_frame_index = vm.stack.current_frame_index();
     debug_assert_eq!(top_frame_index, 0);
@@ -600,24 +599,27 @@ pub fn execute_compiled_unit(
     if exit_code != 0 {
         failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
-        match top_ret_info {
-            None => Ok(k1.static_values.unit_id()),
-            Some(info) => {
-                let expr_type = k1.exprs.get_type(expr_id);
-                let RetPlace::Addr { addr } = info.place else { panic!("We set this to Addr") };
-                let final_value = match info.t {
-                    PhysicalType::Scalar(scalar_type) => {
-                        // Since we stored the return value to this location, we need to load it
-                        // before invoking static conversion
-                        let loaded = load_scalar(scalar_type, addr.cast_const());
-                        loaded
-                    }
-                    PhysicalType::Agg(_) => Value::ptr(addr.cast_const()),
+        let expr_type = k1.exprs.get_type(expr_id);
+        let final_value = match top_ret_info.pt {
+            PhysicalType::Empty => Value(0),
+            PhysicalType::Scalar(scalar_type) => {
+                // Since we stored the return value to this location, we need to load it
+                // before invoking static conversion
+                let RetPlace::Addr { addr } = top_ret_info.place else {
+                    panic!("We set this to Addr")
                 };
-                let returned_value = vm_value_to_static_value(k1, expr_type, final_value, span)?;
-                Ok(returned_value)
+                let loaded = load_scalar(scalar_type, addr.cast_const());
+                loaded
             }
-        }
+            PhysicalType::Agg(_) => {
+                let RetPlace::Addr { addr } = top_ret_info.place else {
+                    panic!("We set this to Addr")
+                };
+                Value::ptr(addr.cast_const())
+            }
+        };
+        let returned_value = vm_value_to_static_value(k1, expr_type, final_value, span)?;
+        Ok(returned_value)
     }
 }
 
@@ -662,13 +664,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // if debugger {
-        //eprintln!(
-        //    "{}[{}] i{} {}",
-        //    "  ".repeat(vm.stack.current_frame_index() as usize),
-        //    vm.stack.current_frame_index(),
-        //    inst_id.as_u32(),
-        //    bc::inst_to_string(k1, inst_id)
-        //);
+        eprintln!(
+            "{}[{}] i{} {}",
+            "  ".repeat(vm.stack.current_frame_index() as usize),
+            vm.stack.current_frame_index(),
+            inst_id.as_u32(),
+            bc::inst_to_string(k1, inst_id)
+        );
         //std::io::stdin().read_line(&mut line).unwrap();
         //if &line == "v\n" {
         //    vm.dump_current_frame(k1);
@@ -710,6 +712,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let src_value = resolve_value!(src);
                 let src_ptr = src_value.as_ptr();
                 let loaded_value = load_scalar(t, src_ptr);
+                eprintln!("load");
 
                 vm.stack.set_cur_inst_value(inst_index, loaded_value);
                 ip += 1;
@@ -746,40 +749,30 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::Call { id } => {
                 let call = k1.bytecode.calls.get(id);
-                let ret_inst_kind = call.ret_inst_kind;
+                let ret_pt = call.ret_type;
                 // Figure out where we're returning to
                 let return_frame_index = vm.stack.current_frame_index();
-                let (return_type, return_place) = match ret_inst_kind {
-                    InstKind::Value(ret_type) => {
-                        let ret_place = match call.dst {
-                            Some(bc_dst) => {
-                                RetPlace::Addr { addr: resolve_value!(bc_dst).as_ptr().cast_mut() }
-                            }
-                            None => RetPlace::ScalarCallInst {
-                                inst_index,
-                                frame_index: return_frame_index,
-                            },
-                        };
-                        (Some(ret_type), ret_place)
-                    }
-                    InstKind::Void => (
-                        None,
-                        RetPlace::ScalarCallInst { inst_index, frame_index: return_frame_index },
-                    ),
-
-                    InstKind::Terminator => (
-                        None,
-                        RetPlace::ScalarCallInst { inst_index, frame_index: return_frame_index },
-                    ),
+                let ret_place = match call.ret_type {
+                    PhysicalType::Empty => RetPlace::Empty,
+                    PhysicalType::Scalar(_) | PhysicalType::Agg(_) => match call.dst {
+                        Some(bc_dst) => {
+                            RetPlace::Addr { addr: resolve_value!(bc_dst).as_ptr().cast_mut() }
+                        }
+                        None => {
+                            RetPlace::ScalarCallInst { inst_index, frame_index: return_frame_index }
+                        }
+                    },
                 };
-                let ret_info = match return_type {
-                    None => None,
-                    Some(t) => Some(RetInfo { t, place: return_place, ip: ip + 1, block: b }),
-                };
+                let ret_info = RetInfo { pt: ret_pt, place: ret_place, ip: ip + 1, block: b };
 
                 macro_rules! builtin_return {
                     ($value:expr) => {{
-                        fulfill_return(k1, vm, ret_info.unwrap(), $value);
+                        fulfill_return(k1, vm, ret_info, $value);
+                        ip += 1;
+                        continue 'exec;
+                    }};
+                    () => {{
+                        fulfill_return(k1, vm, ret_info, Value(0));
                         ip += 1;
                         continue 'exec;
                     }};
@@ -793,7 +786,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             vm,
                             vm.stack.current_frame_index(),
                             inst_offset,
-                            ret_inst_kind,
+                            ret_pt,
                             call_args,
                             lib_name,
                             name,
@@ -904,7 +897,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                             memcopy(src.as_ptr(), dst.as_ptr().cast_mut(), count.as_usize());
 
-                            builtin_return!(Value::UNIT)
+                            builtin_return!()
                         }
                         bc::BackendBuiltin::MemSet => {
                             //intern fn set(dst: Pointer, value: u8, count: uword): unit
@@ -921,7 +914,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 )
                             };
 
-                            builtin_return!(Value::UNIT)
+                            builtin_return!()
                         }
                         bc::BackendBuiltin::MemEquals => {
                             //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
@@ -1001,7 +994,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 line: location.line as u32,
                             });
 
-                            builtin_return!(Value::UNIT)
+                            builtin_return!()
                         }
                     },
                     BcCallee::Direct(function_id) => function_id,
@@ -1045,6 +1038,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
 
+                    let arg_pt =
+                        bc::get_value_kind(&k1.bytecode, &k1.types, arg).expect_value().unwrap();
+                    eprintln!("p{index} = {}", debug_value_to_string(vm, k1, arg_pt, vm_value));
+
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
 
@@ -1053,9 +1050,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::Ret(bc_value) => {
                 let cur_frame = vm.stack.current_frame();
-                let Some(ret_info) = cur_frame.ret_info else {
-                    return failf!(vm.eval_span, "Return with no ret_info");
-                };
+                let ret_info = cur_frame.ret_info;
 
                 let returned_value = resolve_value!(bc_value);
 
@@ -1619,8 +1614,8 @@ fn resolve_value(
             };
             Ok(value)
         }
-        BcValue::PtrZero => Ok(Value::NULLPTR),
         BcValue::Global { t, id } => resolve_global(k1, vm, id, t),
+        BcValue::Empty => Ok(Value(0)),
     }
 }
 
@@ -1678,11 +1673,12 @@ fn resolve_global(
 
 fn fulfill_return(k1: &TypedProgram, vm: &mut Vm, ret_info: RetInfo, returned_value: Value) {
     match ret_info.place {
+        RetPlace::Empty => {}
         RetPlace::ScalarCallInst { inst_index, frame_index } => {
             vm.stack.set_inst_value(frame_index, inst_index, returned_value);
         }
         RetPlace::Addr { addr } => {
-            store_value(&k1.types, ret_info.t, addr, returned_value);
+            store_value(&k1.types, ret_info.pt, addr, returned_value);
         }
     }
 }
@@ -1708,7 +1704,6 @@ pub fn static_value_to_vm_value(
     };
 
     let v = match k1.static_values.get(static_value_id) {
-        StaticValue::Unit => Value(0),
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
         StaticValue::Int(iv) => Value(iv.to_u64_bits()),
@@ -1764,7 +1759,6 @@ pub fn static_value_to_vm_value(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
     match k1.static_values.get(static_value_id) {
-        StaticValue::Unit => store_byte(dst, 0),
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
         StaticValue::Int(iv) => store_typed_int(dst, *iv),
@@ -1913,6 +1907,9 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
     match t {
+        PhysicalType::Empty => {
+            eprintln!("Storing Empty; should probably be illegal")
+        }
         PhysicalType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
         PhysicalType::Agg(pt_id) => {
             let record = types.agg_types.get(pt_id);
@@ -1955,6 +1952,10 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
 
 pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
     match t {
+        PhysicalType::Empty => {
+            eprintln!("load_value on Empty");
+            Value(0)
+        }
         PhysicalType::Scalar(st) => load_scalar(st, ptr),
         PhysicalType::Agg(_) => Value::ptr(ptr),
     }
@@ -1967,14 +1968,15 @@ pub struct Stack {
 
 #[derive(Clone, Copy)]
 enum RetPlace {
+    Empty,
     ScalarCallInst { frame_index: u32, inst_index: u32 },
     Addr { addr: *mut u8 },
 }
 
 #[derive(Clone, Copy)]
 pub struct RetInfo {
-    t: PhysicalType,
-    // Where the return value goes. Either a register or an address
+    pt: PhysicalType,
+    // Where the return value goes. Either a register or an address, or Empty for ZST case ("void")
     place: RetPlace,
     ip: u32,
     block: u32,
@@ -1990,7 +1992,7 @@ pub struct StackFrameRecord {
     blocks: MSlice<bc::CompiledBlock, bc::ProgramBytecode>,
     inst_offset: u32,
     unit: CompilableUnitId,
-    ret_info: Option<RetInfo>,
+    ret_info: RetInfo,
 }
 
 impl StackFrameRecord {
@@ -1999,7 +2001,7 @@ impl StackFrameRecord {
         base_ptr: *const u8,
         call_span: Option<SpanId>,
         owner: &CompiledUnit,
-        ret_info: Option<RetInfo>,
+        ret_info: RetInfo,
         inst_slice: *mut [Value],
     ) -> StackFrameRecord {
         // Frames must be 8-byte aligned
@@ -2044,14 +2046,14 @@ impl Stack {
 
     /// Frame Layout:
     /// base_ptr: 0
-    /// `param_count` x 64-bit function param Values
-    /// `inst_count`  x 64-bit Values
+    /// `param_count` Nx64-bit function param Values
+    /// `inst_count`  Nx64-bit Values
     /// Allocas
     fn push_new_frame(
         &mut self,
         call_span: Option<SpanId>,
         owner: &CompiledUnit,
-        ret_info: Option<RetInfo>,
+        ret_info: RetInfo,
     ) {
         let index = self.frames.len() as u32;
         self.mem.align_to_bytes(8);
@@ -2165,7 +2167,7 @@ impl Stack {
     }
 
     pub fn push_layout_uninit(&mut self, layout: Layout) -> *mut u8 {
-        self.mem.push_layout_uninit(layout)
+        self.mem.push_layout_uninit(layout.size, layout.align)
     }
 
     pub fn push_t<T>(&mut self, t: T) -> *const u8 {
@@ -2220,16 +2222,18 @@ pub fn vm_value_to_static_value(
     span: SpanId,
 ) -> TyperResult<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
-    let Some(_pt) = k1.types.get_physical_type(type_id) else {
+    let Some(pt) = k1.types.get_physical_type(type_id) else {
         return failf!(
             span,
             "Not a physical type, cannot bake to static: {}",
             k1.type_id_to_string(type_id)
         );
     };
+    if pt.is_empty() {
+        return Ok(k1.static_values.add_struct(k1.types.builtins.empty, MSlice::empty()));
+    }
     // We know it is a physical type so can be aggressive with matches
     let static_value_id = match k1.types.get(type_id) {
-        Type::Unit => k1.static_values.unit_id(),
         Type::Char => k1.static_values.add(StaticValue::Char(vm_value.bits() as u8)),
         Type::Bool => k1.static_values.add(StaticValue::Bool(vm_value.bits() == 1)),
         Type::Pointer => {
@@ -2339,7 +2343,9 @@ pub fn vm_value_to_static_value(
             let tag_int_type = k1.types.get(typed_enum.tag_type).expect_integer();
             let tag_scalar_type = enum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, enum_ptr).as_typed_int(tag_int_type);
-            let Some(variant) = k1.types.mem.getn( typed_enum.variants).iter().find(|v| v.tag_value == tag) else {
+            let Some(variant) =
+                k1.types.mem.getn(typed_enum.variants).iter().find(|v| v.tag_value == tag)
+            else {
                 return failf!(span, "No variant found with tag value {}", tag);
             };
             let variant_index = variant.index;
@@ -2414,6 +2420,7 @@ fn render_debug_value(
     value: Value,
 ) -> std::fmt::Result {
     match pt {
+        PhysicalType::Empty => w.write_str("empty")?,
         PhysicalType::Scalar(scalar_type) => match scalar_type {
             ScalarType::U8 => write!(w, "u8 {}", value.bits() as u8)?,
             ScalarType::U16 => write!(w, "u16 {}", value.bits() as u16)?,
@@ -2472,7 +2479,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
             "not a value type; zeroed() for type {} is undefined",
             k1.types.get(type_id).kind_name()
         ),
-        Some(PhysicalType::Scalar(_)) => Value(0),
+        Some(PhysicalType::Scalar(_) | PhysicalType::Empty) => Value(0),
         Some(PhysicalType::Agg(agg_id)) => {
             let layout = k1.types.agg_types.get(agg_id).layout;
             let data: *mut u8 = k1.vm_static_stack.push_layout_uninit(layout);

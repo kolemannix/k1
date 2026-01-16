@@ -41,11 +41,11 @@ ns Arena {
     //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
   }
 
-  fn release(self: *mut Arena): unit {
+  fn release(self: *mut Arena) {
     mem/virtualRelease(self.basePtr, self.regionSizeBytes())
   }
 
-  fn reset(self: *mut Arena, clear: bool): unit {
+  fn reset(self: *mut Arena, clear: bool) {
     let usedBytes = self.usedBytes();
     println("[arena] Resetting {usedBytes / kb}KiB");
     self.curAddr* <- self.basePtr;

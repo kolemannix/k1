@@ -53,7 +53,6 @@ nz_u32_id!(StaticValueId);
 static_assert_size!(StaticValue, 24);
 #[derive(Clone)]
 pub enum StaticValue {
-    Unit,
     Bool(bool),
     Char(u8),
     Int(TypedIntValue),
@@ -68,7 +67,6 @@ pub enum StaticValue {
 impl StaticValue {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            StaticValue::Unit => "unit",
             StaticValue::Bool(_) => "bool",
             StaticValue::Char(_) => "char",
             StaticValue::Int(i) => i.kind_name(),
@@ -86,7 +84,6 @@ impl StaticValue {
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            StaticValue::Unit => UNIT_TYPE_ID,
             StaticValue::Bool(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
@@ -141,7 +138,6 @@ impl DepHash<StaticValuePool> for StaticValue {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
-            StaticValue::Unit => {}
             StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
@@ -182,7 +178,6 @@ impl DepHash<StaticValuePool> for StaticValue {
 impl DepEq<StaticValuePool> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
-            (StaticValue::Unit, StaticValue::Unit) => true,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
             (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
             (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
@@ -218,7 +213,7 @@ pub struct StaticValuePool {
     pub pool: VPool<StaticValue, StaticValueId>,
     pub hashes: FxHashMap<u64, StaticValueId>,
 
-    unit_id: StaticValueId,
+    empty_struct_id: Option<StaticValueId>,
     false_id: StaticValueId,
     true_id: StaticValueId,
 }
@@ -226,21 +221,20 @@ pub struct StaticValuePool {
 impl StaticValuePool {
     pub fn make_with_hint(size_hint: usize) -> StaticValuePool {
         let mut pool = VPool::make_with_hint("static_values", size_hint);
-        let unit_id = pool.add(StaticValue::Unit);
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
         StaticValuePool {
             mem: kmem::Mem::make(),
             pool,
             hashes: FxHashMap::with_capacity(size_hint),
-            unit_id,
+            empty_struct_id: None,
             false_id,
             true_id,
         }
     }
 
-    pub fn unit_id(&self) -> StaticValueId {
-        self.unit_id
+    pub fn empty_struct(&mut self, type_id: TypeId) -> StaticValueId {
+        self.add_struct(type_id, MSlice::empty())
     }
 
     pub fn false_id(&self) -> StaticValueId {
@@ -314,11 +308,14 @@ impl StaticValuePool {
     }
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
-        match value {
-            StaticValue::Unit => return self.unit_id(),
+        let is_empty_struct = match value {
+            StaticValue::Struct(s) if s.fields.is_empty() => match self.empty_struct_id {
+                None => true,
+                Some(id) => return id,
+            },
             StaticValue::Bool(false) => return self.false_id(),
             StaticValue::Bool(true) => return self.true_id(),
-            _ => {}
+            _ => false,
         };
         let hash = self.hash(&value);
         if let Entry::Occupied(entry) = self.hashes.entry(hash) {
@@ -330,6 +327,9 @@ impl StaticValuePool {
         }
         let new_id = self.pool.add(value);
         self.hashes.insert(hash, new_id);
+        if is_empty_struct {
+            self.empty_struct_id = Some(new_id)
+        }
         new_id
     }
 

@@ -97,7 +97,7 @@ ns Buffer {
   ////////////////////////
   // Modification
 
-  fn _growTo[T](context alloc: mem/AllocMode)(self: *mut Buffer[T], newCount: size): unit {
+  fn _growTo[T](context alloc: mem/AllocMode)(self: *mut Buffer[T], newCount: size): empty {
     if alloc.resolve().supportsRealloc() {
       let newSize = bufferSizeBytes[T](newCount);
       let oldSize = bufferSizeBytes[T](self.len);
@@ -124,13 +124,12 @@ ns Buffer {
     _enlargedCloneIn[T](context .Current)(self, newCount)
   }
 
-  fn copyFrom[T](src: Buffer[T], dst: Buffer[T]): unit {
+  fn copyFrom[T](src: Buffer[T], dst: Buffer[T]) {
     if src.len > dst.len {
       crash("Buffer copy dst index out of bounds: {src.len} > {dst.len}")
     };
     let numBytes = bufferSizeBytes[T](src.len);
     mem/copy(dst = dst.dataPtr(), src = src.dataPtr(), count = numBytes);
-    ()
   }
 
   fn clonedIn[T](context mode: mem/AllocMode)(self: Buffer[T]): Buffer[T] {
@@ -160,12 +159,12 @@ ns Buffer {
     self.getRefUnchecked[T](index)
   }
 
-  fn set[T](self: Buffer[T], index: size, elem: T): unit {
+  fn set[T](self: Buffer[T], index: size, elem: T): empty {
     let tRef = self.getRef(index);
     tRef <- elem;
   }
 
-  fn memset[T](self: Buffer[T], value: u8): unit {
+  fn memset[T](self: Buffer[T], value: u8): empty {
     mem/set(
       dst = self.dataPtr(),
       value = value,
@@ -258,7 +257,7 @@ ns Buffer {
     new
   }
 
-  fn swap[T](self: *mut Buffer[T], indexA: size, indexB: size): unit {
+  fn swap[T](self: *mut Buffer[T], indexA: size, indexB: size): empty {
     if indexA == indexB { return() };
     let aRef = self.*.getRef(indexA);
     let bRef = self.*.getRef(indexB);
@@ -314,7 +313,7 @@ impl[T] Iterator[Item = T] for BufferIterator[T] {
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
-  fn advanceBy(self: *mut Self, n: size): unit {
+  fn advanceBy(self: *mut Self, n: size): empty {
     self.pos* <- self.pos + n
   }
   fn nth(self: *mut Self, n: size): ?Item {
@@ -330,7 +329,7 @@ impl[T] Iterable[Item = T, I = BufferIterator[T]] for Buffer[T] {
 }
 
 impl[T: Print] Print for Buffer[T] {
-  fn printTo[W: Writer](self: Self, w: W): unit {
+  fn printTo[W: Writer](self: Self, w: W): empty {
     w.writeChar('[');
     for self {
       it.printTo(w);
@@ -364,7 +363,7 @@ impl[T] Iterator[Item = *mut T] for BufferRefIterator[T] {
     let rem = self.buf.len - self.pos;
     { atLeast: rem, atMost: some(rem) }
   }
-  fn advanceBy(self: *mut Self, n: size): unit {
+  fn advanceBy(self: *mut Self, n: size): empty {
     self.pos* <- self.pos + n
   }
   fn nth(self: *mut Self, n: size): ?Item {

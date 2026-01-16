@@ -4,21 +4,21 @@
 ns meta {
 
   ability CodeWriter {
-    fn line(self: Self, line: string): unit 
-    fn lines[Iter: Iterator[Item = string]](self: Self, lines: Iter): unit {
+    fn line(self: Self, line: string) 
+    fn lines[Iter: Iterator[Item = string]](self: Self, lines: Iter) {
       for l in lines { self.line(l) }
     }
-    fn var[T](self: Self, name: string, value: T): unit 
+    fn var[T](self: Self, name: string, value: T) 
 
-    fn indent(self: Self, n: size): unit {
+    fn indent(self: Self, n: size) {
       self.repeat("  ", n);
     }
-    fn implPrint(self: Self, typeName: string, body: string, indent: size): unit {
+    fn implPrint(self: Self, typeName: string, body: string, indent: size) {
       self.indent(indent);
       self.line("impl Print for {typeName} {{");
 
       self.indent(indent + 1);
-      self.line("fn printTo[W: Writer](self: Self, w: W): unit {{");
+      self.line("fn printTo[W: Writer](self: Self, w: W) {{");
       self.writeString(body);
       self.indent(indent + 1);
       self.line("}");
@@ -29,12 +29,12 @@ ns meta {
   }
   
   impl[W: Writer] CodeWriter for W {
-    fn line(self: Self, line: string): unit {
+    fn line(self: Self, line: string) {
       self.writeString(line);
       self.writeString("\n");
     }
     
-    fn var[T](self: Self, name: string, value: T): unit {
+    fn var[T](self: Self, name: string, value: T) {
       let bakedVar = meta/bakedVariable[T](name, value);
       self.writeString(bakedVar)
     }
@@ -87,7 +87,7 @@ ns meta {
     code.line(`  } }`); // end fn empty
 
     // begin fn push
-    code.line(`  fn push(self: *mut {name}, value: {tt}): unit {{`);
+    code.line(`  fn push(self: *mut {name}, value: {tt}) {{`);
     for f in fields {
       code.line(`    self.ARR_{f.name}*.push(value.{f.name});`)
     };

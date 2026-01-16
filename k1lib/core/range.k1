@@ -36,9 +36,9 @@ impl Iterator[Item = int] for IntRangeIterator {
     let remaining = self.range.end - self.position();
     { atLeast: remaining, atMost: .Some(remaining) }
   }
-  fn advanceBy(self: *mut Self, n: size): unit {
+  fn advanceBy(self: *mut Self, n: size) {
     self.stepBy(n);
-    ()
+    {}
   }
   fn nth(self: *mut Self, n: size): ?size {
     self.stepBy(n); 

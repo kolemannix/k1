@@ -6,7 +6,7 @@ ns StringBuilder {
     { list: SpillList/new() }
   }
 
-  fn reset(self: *mut StringBuilder): unit {
+  fn reset(self: *mut StringBuilder) {
     self.list*.clear()
   }
 
@@ -32,10 +32,10 @@ ns StringBuilder {
 }
 
 impl Writer for *mut StringBuilder {
-  fn writeByte(self: Self, b: u8): unit {
+  fn writeByte(self: Self, b: u8): empty {
     self.list*.push(b)
   }
-  fn writeBytes(self: Self, b: View[u8]): unit {
+  fn writeBytes(self: Self, b: View[u8]): empty {
     self.list*.pushN(b)
   }
 }

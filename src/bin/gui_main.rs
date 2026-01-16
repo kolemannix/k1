@@ -25,6 +25,9 @@ pub struct Gui {
     state: GuiState,
 }
 
+unsafe impl Sync for Gui {}
+unsafe impl Send for Gui {}
+
 #[derive(Default, Debug)]
 pub struct GuiState {
     selected_function: i32,

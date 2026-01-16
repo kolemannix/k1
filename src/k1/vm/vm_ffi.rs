@@ -4,11 +4,11 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 use log::debug;
 
-use crate::bc::{self, InstKind, ProgramBytecode};
+use crate::bc::{self, ProgramBytecode};
 use crate::errf;
 use crate::lex::SpanId;
-use crate::typer::types::{AggType, PhysicalType, ScalarType};
-use crate::typer::{FunctionId, Layout, TypedProgram, TyperResult};
+use crate::typer::types::{AggType, Layout, PhysicalType, ScalarType};
+use crate::typer::{FunctionId, TypedProgram, TyperResult};
 use crate::vm;
 use crate::vm::{Value, Vm};
 use crate::{failf, kmem::MSlice, parse::Ident};
@@ -18,7 +18,7 @@ pub(super) fn handle_ffi_call(
     vm: &mut Vm,
     frame_index: u32,
     inst_offset: u32,
-    ret_inst_kind: InstKind,
+    return_pt: PhysicalType,
     args: MSlice<bc::Value, ProgramBytecode>,
     lib_name: Option<Ident>,
     fn_name: Ident,
@@ -30,13 +30,13 @@ pub(super) fn handle_ffi_call(
 
     let function_params = k1.bytecode.functions.get(function_id).unwrap().fn_type.params;
 
-    for (arg_value, arg_pt) in
+    for (arg_value, param) in
         k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
     {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
         // If aggregate, you already have the pointer that libffi wants
-        if arg_pt.is_agg() {
+        if param.pt.is_agg() {
             ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut u8 as *mut c_void);
         } else {
             // If scalar, _get_ a pointer to it
@@ -64,7 +64,7 @@ pub(super) fn handle_ffi_call(
                     k1.ident_str(fn_name)
                 );
             }
-            let cif = prep_ffi_cif(k1, function_id, ret_inst_kind, vm.eval_span)?;
+            let cif = prep_ffi_cif(k1, function_id, return_pt, vm.eval_span)?;
             let handle = vm::VmFfiHandle {
                 library_handle: handle_for_search,
                 function_pointer: fn_ptr,
@@ -101,19 +101,7 @@ pub(super) fn handle_ffi_call(
         );
         result_space
     };
-    let result = match ret_inst_kind {
-        InstKind::Value(physical_type) => {
-            let result = vm::load_value(physical_type, result_storage.cast_const());
-            result
-        }
-        InstKind::Void => Value::UNIT,
-        InstKind::Terminator => {
-            eprintln!(
-                "WARNING: Allegedly divergent FFI call actually returned; its likely mis-typed!!"
-            );
-            Value::UNIT
-        }
-    };
+    let result = vm::load_value(return_pt, result_storage.cast_const());
     debug!("ffi result is: {}", result);
     Ok(result)
 }
@@ -121,7 +109,7 @@ pub(super) fn handle_ffi_call(
 fn prep_ffi_cif(
     k1: &mut TypedProgram,
     function_id: FunctionId,
-    return_type: InstKind,
+    return_type: PhysicalType,
     span: SpanId,
 ) -> TyperResult<ffi_cif> {
     let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
@@ -136,8 +124,8 @@ fn prep_ffi_cif(
     let fn_params = compiled_function.fn_type.params;
     let mut ffi_args_types_storage = k1.mem.new_list(nargs as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(nargs as u32);
-    for arg_pt in k1.bytecode.mem.getn(fn_params) {
-        let ffi_type: ffi_type = inst_kind_to_ffi_type(k1, InstKind::Value(*arg_pt))
+    for fn_param in k1.bytecode.mem.getn(fn_params) {
+        let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
             .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
 
         // We need a stable-ish address to each Value here; so we push them to
@@ -148,7 +136,7 @@ fn prep_ffi_cif(
     }
     let atypes: *mut *mut ffi_type = ffi_args_types_ptrs.as_mut_ptr().cast();
 
-    let ffi_ret_type: ffi_type = inst_kind_to_ffi_type(k1, return_type)
+    let ffi_ret_type: ffi_type = pt_to_ffi_type(k1, return_type)
         .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
     let ffi_ret_type_alloced: &mut ffi_type = k1.mem.push(ffi_ret_type);
 
@@ -184,29 +172,12 @@ fn scalar_to_ffi_type(st: ScalarType) -> libffi::low::ffi_type {
     }
 }
 
-fn inst_kind_to_ffi_type(
-    k1: &mut TypedProgram,
-    inst_kind: InstKind,
-) -> std::result::Result<libffi::low::ffi_type, &'static str> {
-    use libffi::low;
-    unsafe {
-        match inst_kind {
-            InstKind::Value(PhysicalType::Scalar(st)) => Ok(scalar_to_ffi_type(st)),
-            InstKind::Void => Ok(low::types::void),
-            InstKind::Terminator => Ok(low::types::void),
-            InstKind::Value(pt) => {
-                let t = pt_to_ffi_type(k1, pt)?;
-                Ok(t)
-            }
-        }
-    }
-}
-
 fn pt_to_ffi_type(
     k1: &mut TypedProgram,
     pt: PhysicalType,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
     match pt {
+        PhysicalType::Empty => Ok(unsafe { types::void }),
         PhysicalType::Scalar(st) => Ok(scalar_to_ffi_type(st)),
         PhysicalType::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
             AggType::Enum(_e) => {

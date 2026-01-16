@@ -44,7 +44,7 @@ ns HashMap {
     _make(0)
   }
 
-  fn grow[V](self: *mut HashMap[V]): unit {
+  fn grow[V](self: *mut HashMap[V]) {
     let origSize = self.size;
     let oldEntries = self.entries;
     let newCap = if oldEntries.cap() == 0 1 else oldEntries.cap() * 2;
@@ -86,7 +86,7 @@ ns HashMap {
     fillFactor
   }
 
-  fn insert[V](self: *mut HashMap[V], key: string, value: V): unit {
+  fn insert[V](self: *mut HashMap[V], key: string, value: V) {
     if self.*.fillFactor() > 0.7 {
       self.grow();
     };
@@ -177,7 +177,7 @@ ns HashMap {
     }
   }
 
-  fn dump[V](self: HashMap[V]): unit where V: Print {
+  fn dump[V](self: HashMap[V]) where V: Print {
     let capacity = self.entries.len;
     let size = self.size;
     println("Size: {size}, Capacity: {capacity}");

@@ -2,7 +2,7 @@ ns thread;
 
 use core/Arena
 
-deftype alias Thread = *unit
+deftype alias Thread = *empty
 
 ns pthread {
   extern("pthread_create") fn pthread_create(thread: *Thread, attrs: ptr, start_routine: ptr, input: ptr): i32
@@ -17,10 +17,9 @@ fn start[T](arena: *mut Arena, function: *\(*mut T) -> ptr, input: *T): *Thread 
   thread
 }
 
-fn join[T](thread: Thread, retval: *mut T): unit {
+fn join[T](thread: Thread, retval: *mut T) {
   let ret = pthread/pthread_join(thread, retval.as[ptr]);
   if ret < 0 {
     crash("pthread_join failed")
   };
-  ()
 }

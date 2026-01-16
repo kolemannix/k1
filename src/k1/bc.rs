@@ -166,9 +166,16 @@ pub enum BackendBuiltin {
 }
 
 #[derive(Copy, Clone)]
+pub struct PhysicalFunctionParam {
+    pub original_index: u32,
+    pub pt: PhysicalType,
+}
+
+#[derive(Copy, Clone)]
 pub struct PhysicalFunctionType {
-    pub return_type: InstKind,
-    pub params: MSlice<PhysicalType, ProgramBytecode>,
+    pub return_type: PhysicalType,
+    pub diverges: bool,
+    pub params: MSlice<PhysicalFunctionParam, ProgramBytecode>,
     pub abi_mode: AbiMode,
 }
 
@@ -223,15 +230,12 @@ pub enum Value {
         t: ScalarType,
         data: u32,
     },
-    PtrZero,
+    Empty,
 }
 
 impl Value {
-    const UNIT: Value = Value::byte(0);
-    #[allow(unused)]
-    const FALSE: Value = Value::byte(0);
-    #[allow(unused)]
-    const TRUE: Value = Value::byte(1);
+    const PTR_ZERO: Value = Value::Data32 { t: ScalarType::Pointer, data: 0 };
+
     const fn byte(u8: u8) -> Value {
         Value::Data32 { t: ScalarType::U8, data: u8 as u32 }
     }
@@ -243,7 +247,7 @@ impl Value {
 #[derive(Clone, Copy)]
 pub struct BcCall {
     pub dst: Option<Value>,
-    pub ret_inst_kind: InstKind,
+    pub ret_type: PhysicalType,
     pub callee: BcCallee,
     pub args: MSlice<Value, ProgramBytecode>,
 }
@@ -251,14 +255,12 @@ pub struct BcCall {
 /// Many of these instructions contain both a high-level description of a type
 /// via a `PhysicalType` or `PhysicalTypeId` as well as a low-level size in bytes
 /// that presumes a certain offset. This is because this representation serves dual purposes
-/// 1. Efficient interpretation at compile-time, where we get to decide offsets
+/// 1. Efficient-ish interpretation at compile-time, where we get to decide offsets
 /// 2. Efficient translation into LLVM-ir, which wants to know about aggregate types in order
 ///    to optimize them away.
 ///
-/// So we simply offer a mixed-level IR. I may strengthen the assertion in the future by saying
-/// that K1 only supports targets whose alignment and sizing rules conform with what the VM does.
-/// This would allow for a universal wire-format for k1 data and we could say that "nothing is
-/// platform-specific"* in terms of data layout which would be great
+/// So we simply offer a mixed-level IR. It helps that K1 only supports targets whose alignment and sizing rules conform with what the VM does.
+/// This would allow for a universal wire-format for k1 data and we could say that "nothing is platform-specific"* in terms of data layout which would be great
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
 //task(bc): Get inst to 32 bytes at the most
@@ -560,7 +562,7 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
         Value::Data32 { t: scalar_type, data: _ } => {
             InstKind::Value(PhysicalType::Scalar(*scalar_type))
         }
-        Value::PtrZero => InstKind::PTR,
+        Value::Empty => InstKind::Value(PhysicalType::Empty),
     }
 }
 
@@ -578,7 +580,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
-        Inst::Call { id } => bc.calls.get(*id).ret_inst_kind,
+        Inst::Call { id } => InstKind::Value(bc.calls.get(*id).ret_type),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
@@ -632,7 +634,7 @@ pub enum InstKind {
 }
 
 impl InstKind {
-    pub const UNIT: InstKind = Self::scalar(ScalarType::U8);
+    pub const EMPTY: InstKind = Self::Value(PhysicalType::Empty);
     pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
@@ -681,18 +683,9 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            InstKind::Value(PhysicalType::Scalar(ScalarType::U8)) => "u8",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::U16)) => "u16",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::U32)) => "u32",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::U64)) => "u64",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::I8)) => "i8",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::I16)) => "i16",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::I32)) => "i32",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::I64)) => "i64",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::F32)) => "f32",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::F64)) => "f64",
-            InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)) => "ptr",
+            InstKind::Value(PhysicalType::Scalar(_)) => "scalar",
             InstKind::Value(PhysicalType::Agg(_)) => "agg",
+            InstKind::Value(PhysicalType::Empty) => "empty",
             InstKind::Void => "void",
             InstKind::Terminator => "terminator",
         }
@@ -722,12 +715,15 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     for (index, param) in b.k1.mem.getn(fn_params).iter().enumerate() {
         let v = b.k1.variables.get(param.variable_id);
         let t = b.get_physical_type(v.type_id);
-        b.k1.bytecode.b_variables.push(BuilderVariable {
-            id: param.variable_id,
-            value: Value::FnParam { t, index: index as u32 },
-            indirect: false,
-        });
+        if !t.is_empty() {
+            b.k1.bytecode.b_variables.push(BuilderVariable {
+                id: param.variable_id,
+                value: Value::FnParam { t, index: index as u32 },
+                indirect: false,
+            });
+        }
     }
+    debug_assert_eq!(b.k1.bytecode.b_variables.len() as u32, fn_phys_type.params.len());
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
@@ -783,9 +779,10 @@ pub fn compile_top_level_expr(
     b.push_block(name);
 
     let _result = compile_expr(&mut b, None, expr)?;
-    let return_kind = b.type_to_inst_kind(b.k1.exprs.get_type(expr));
+    let (return_type, diverges) = b.get_function_return_type(b.k1.exprs.get_type(expr));
     let phys_fn_type = PhysicalFunctionType {
-        return_type: return_kind,
+        return_type,
+        diverges,
         params: MSlice::empty(),
         abi_mode: AbiMode::Internal,
     };
@@ -985,9 +982,15 @@ impl<'k1> Builder<'k1> {
         src: Value,
         pt: PhysicalType,
         comment: impl Into<BcStr>,
-    ) -> InstId {
+    ) -> Option<InstId> {
         let layout = self.k1.types.get_pt_layout(pt);
-        self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment)
+        if pt.is_empty() {
+            None
+        } else {
+            let copy_inst =
+                self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment);
+            Some(copy_inst)
+        }
     }
 
     fn push_load(&mut self, st: ScalarType, src: Value, comment: impl Into<BcStr>) -> InstId {
@@ -1074,23 +1077,40 @@ impl<'k1> Builder<'k1> {
         }
     }
 
+    /// Returns the function type, and a list of skipped ZSTs by index
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
-        let function_type = self.k1.types.get(type_id).expect_function();
-        let mut param_types = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
-        for param in self.k1.types.mem.getn(function_type.physical_params) {
+        let function_type = *self.k1.types.get(type_id).expect_function();
+        let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
+        for (index, param) in
+            self.k1.types.mem.getn(function_type.physical_params).iter().enumerate()
+        {
             let pt = self.get_physical_type(param.type_id);
-            param_types.push(pt);
+            if pt.is_empty() {
+                continue;
+            }
+            phys_params.push(PhysicalFunctionParam { original_index: index as u32, pt })
         }
-        let return_type = self.type_to_inst_kind(function_type.return_type);
-        PhysicalFunctionType {
-            params: param_types.into_handle(&mut self.k1.bytecode.mem),
+        let (return_type, diverges) = self.get_function_return_type(function_type.return_type);
+        let fn_ty = PhysicalFunctionType {
+            params: phys_params.into_handle(&mut self.k1.bytecode.mem),
+            diverges,
             return_type,
             abi_mode: function_type.abi_mode,
+        };
+        fn_ty
+    }
+
+    fn get_function_return_type(&mut self, type_id: TypeId) -> (PhysicalType, bool) {
+        if type_id == NEVER_TYPE_ID {
+            (PhysicalType::Empty, true)
+        } else {
+            let t = self.get_physical_type(type_id);
+            (t, false)
         }
     }
 }
 
-fn store_simple_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Value {
+fn store_scalar_if_dst(b: &mut Builder, dst: Option<Value>, value: Value) -> Value {
     match dst {
         None => value,
         Some(dst) => b.push_store(dst, value, "store to dst").as_value(),
@@ -1106,7 +1126,11 @@ fn store_rich_if_dst(
 ) -> Value {
     match dst {
         None => value,
-        Some(dst) => store_value(b, pt, dst, value, comment).as_value(),
+        Some(dst) => {
+            // smoking gun
+            store_value(b, pt, dst, value, comment);
+            dst
+        }
     }
 }
 
@@ -1191,7 +1215,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 value: variable_alloca.as_value(),
                 indirect: true,
             });
-            Ok(Value::UNIT)
+            Ok(Value::Empty)
         }
         TypedStmt::Assignment(ass) => {
             let ass = *ass;
@@ -1209,12 +1233,12 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     };
                     let variable_value = builder_variable.value;
                     let _rhs_stored = compile_expr(b, Some(variable_value), ass.value)?;
-                    Ok(Value::UNIT)
+                    Ok(Value::Empty)
                 }
                 AssignmentKind::Store => {
                     let lhs = compile_expr(b, None, ass.destination)?;
                     let _rhs_stored = compile_expr(b, Some(lhs), ass.value)?;
-                    Ok(Value::UNIT)
+                    Ok(Value::Empty)
                 }
             }
         }
@@ -1238,11 +1262,11 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
 
             b.goto_block(require_continue_block);
 
-            Ok(Value::UNIT)
+            Ok(Value::Empty)
         }
         TypedStmt::Defer(_) => {
             // These defers are just vestiges of the source; nothing to emit
-            Ok(Value::UNIT)
+            Ok(Value::Empty)
         }
     }
 }
@@ -1312,6 +1336,9 @@ fn compile_expr(
         TypedExpr::Struct(struct_literal) => {
             let struct_type_id = expr_type;
             let struct_pt = b.get_physical_type(struct_type_id);
+            if struct_pt.is_empty() {
+                return Ok(Value::Empty);
+            }
             let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
@@ -1380,8 +1407,8 @@ fn compile_expr(
                     // is indistinguishable from a global of type Pointer)
                     let is_reference = b.k1.types.get(variable.type_id).as_reference().is_some();
 
-                    // By 'value_type' I mean the shape of the actual memory, so
-                    // the inner type if its a reference, and just the type if its not
+                    // By 'value_type' I mean the shape of the allocated memory of the global, not the value,
+                    // so the inner type if its a reference, and just the type if its not
                     let value_type = match b.k1.types.get(variable.type_id).as_reference() {
                         None => variable.type_id,
                         Some(r) => r.inner_type,
@@ -1389,12 +1416,19 @@ fn compile_expr(
                     let value_pt = b.get_physical_type(value_type);
                     let address = Value::Global { t: value_pt, id: global_id };
                     match value_pt {
+                        PhysicalType::Empty => {
+                            if is_reference {
+                                Ok(Value::PTR_ZERO)
+                            } else {
+                                Ok(Value::Empty)
+                            }
+                        }
                         PhysicalType::Scalar(_) => {
                             // We have a scalar type, but do we have a pointer to it or just
                             // a value?
                             if is_reference {
                                 // If reference, the address of the global is what we're after
-                                let stored = store_simple_if_dst(b, dst, address);
+                                let stored = store_scalar_if_dst(b, dst, address);
                                 Ok(stored)
                             } else {
                                 // The value of the global is what we're after
@@ -1411,7 +1445,7 @@ fn compile_expr(
                         }
                         PhysicalType::Agg(_) => {
                             if is_reference {
-                                let stored = store_simple_if_dst(b, dst, address);
+                                let stored = store_scalar_if_dst(b, dst, address);
                                 Ok(stored)
                             } else {
                                 // The source code is talking about an aggregate _value_
@@ -1474,9 +1508,12 @@ fn compile_expr(
             Ok(last)
         }
         TypedExpr::Call { call_id } => {
-            // task(bc): deal with clone() of Call and TypedExpr
-            let return_type = expr_type;
+            // nocommit(2): deal with 96 byte clone() of Call in bc
             let call = b.k1.calls.get(call_id).clone();
+
+            let function_type_id = b.k1.get_callee_function_type(&call.callee);
+            let phys_fn_type = b.get_physical_fn_type(function_type_id);
+
             let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
             let maybe_function_id = call.callee.maybe_function_id();
             let (intrinsic_op, linkage) = match maybe_function_id {
@@ -1498,7 +1535,7 @@ fn compile_expr(
                                 let value = compile_expr(b, None, call.args[0])?;
                                 let bake =
                                     b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
-                                let stored = store_simple_if_dst(b, dst, bake.as_value());
+                                let stored = store_scalar_if_dst(b, dst, bake.as_value());
                                 Ok(stored)
                             };
                         }
@@ -1506,6 +1543,7 @@ fn compile_expr(
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 match b.get_physical_type(type_id) {
+                                    PhysicalType::Empty => Ok(Value::Empty),
                                     pt @ PhysicalType::Agg(agg_id) => {
                                         let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
                                         let dst = match dst {
@@ -1528,7 +1566,7 @@ fn compile_expr(
                                         };
                                         let memset_call = BcCall {
                                             dst: None,
-                                            ret_inst_kind: InstKind::UNIT,
+                                            ret_type: PhysicalType::Empty,
                                             callee: BcCallee::Builtin(
                                                 memset_function_id,
                                                 BackendBuiltin::MemSet,
@@ -1541,7 +1579,7 @@ fn compile_expr(
                                     }
                                     PhysicalType::Scalar(st) => {
                                         let zero_value = zero(st);
-                                        let stored = store_simple_if_dst(b, dst, zero_value);
+                                        let stored = store_scalar_if_dst(b, dst, zero_value);
                                         Ok(stored)
                                     }
                                 }
@@ -1551,7 +1589,7 @@ fn compile_expr(
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
-                                let stored = store_simple_if_dst(b, dst, neg.as_value());
+                                let stored = store_scalar_if_dst(b, dst, neg.as_value());
                                 Ok(stored)
                             };
                         }
@@ -1559,7 +1597,7 @@ fn compile_expr(
                             return {
                                 let base = compile_expr(b, None, call.args[0])?;
                                 let neg = b.push_inst_anon(Inst::BitNot { v: base });
-                                let stored = store_simple_if_dst(b, dst, neg.as_value());
+                                let stored = store_scalar_if_dst(b, dst, neg.as_value());
                                 Ok(stored)
                             };
                         }
@@ -1575,6 +1613,12 @@ fn compile_expr(
 
                                 let from_value = compile_expr(b, None, call.args[0])?;
                                 match (from_pt, to_pt) {
+                                    (PhysicalType::Empty, _) | (_, PhysicalType::Empty) => {
+                                        return failf!(
+                                            b.cur_span,
+                                            "Cannot bitcast to or from empty type"
+                                        );
+                                    }
                                     (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
                                         // Note that this also covers Pointer to Pointer
                                         let bitcast = b.push_inst_anon(Inst::BitCast {
@@ -1663,7 +1707,7 @@ fn compile_expr(
                                     }
                                 };
                                 let res = b.push_inst_anon(inst);
-                                let stored = store_simple_if_dst(b, dst, res.as_value());
+                                let stored = store_scalar_if_dst(b, dst, res.as_value());
                                 Ok(stored)
                             };
                         }
@@ -1679,7 +1723,7 @@ fn compile_expr(
                                     Inst::ArrayOffset { element_t: elem_pt, base, element_index },
                                     "refAtIndex offest",
                                 );
-                                let stored = store_simple_if_dst(b, dst, offset.as_value());
+                                let stored = store_scalar_if_dst(b, dst, offset.as_value());
                                 Ok(stored)
                             };
                         }
@@ -1715,9 +1759,6 @@ fn compile_expr(
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
                     Callee::DynamicLambda(dl) => {
-                        let lambda_object_type =
-                            b.k1.types.get(b.k1.exprs.get_type(*dl)).as_lambda_object().unwrap();
-                        let fn_type_id = lambda_object_type.function_type;
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
                         let lam_obj_pt = b.get_physical_type(lam_obj_type_id).expect_agg();
@@ -1738,21 +1779,9 @@ fn compile_expr(
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
                         args.push(env);
-                        let phys_fn_type = b.get_physical_fn_type(fn_type_id);
                         BcCallee::Indirect(phys_fn_type, fn_ptr)
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
-                        let function_ptr_type_id = b.k1.exprs.get_type(*function_pointer_expr);
-                        let function_type_id = match b.k1.types.get(function_ptr_type_id) {
-                            Type::FunctionPointer(fp) => fp.function_type_id,
-                            _ => {
-                                return failf!(
-                                    b.cur_span,
-                                    "Expected function pointer type for dynamic function callee"
-                                );
-                            }
-                        };
-                        let phys_fn_type = b.get_physical_fn_type(function_type_id);
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
                         BcCallee::Indirect(phys_fn_type, callee_inst)
                     }
@@ -1783,25 +1812,41 @@ fn compile_expr(
                 }
             }
 
-            for arg in &call.args {
-                args.push(compile_expr(b, None, *arg)?);
+            for (index, arg) in call.args.iter().enumerate() {
+                // In case this has a side-effect and produces an Empty value, we still need to
+                // compile this expression!
+                let value = compile_expr(b, None, *arg)?;
+
+                let phys_param =
+                    b.k1.bytecode
+                        .mem
+                        .getn(phys_fn_type.params)
+                        .iter()
+                        .find(|p| p.original_index as usize == index);
+
+                // But only if its not a ZST do we put it in the call's arguments
+                if let Some(_phys_param) = phys_param {
+                    args.push(value);
+                }
             }
-            let return_inst_kind = b.type_to_inst_kind(return_type);
+            debug_assert_eq!(phys_fn_type.params.len(), args.len() as u32);
             let call_dst = match dst {
-                None => match return_inst_kind {
-                    InstKind::Value(PhysicalType::Scalar(_)) => None,
-                    InstKind::Value(pt @ PhysicalType::Agg(_)) => {
-                        Some(b.push_alloca(pt, "call return agg storage").as_value())
-                    }
-                    InstKind::Void => None,
-                    InstKind::Terminator => None,
-                },
                 Some(dst) => Some(dst),
+                None => match phys_fn_type.return_type {
+                    PhysicalType::Agg(_) => {
+                        let return_agg_dst = b
+                            .push_alloca(phys_fn_type.return_type, "call return agg storage")
+                            .as_value();
+                        Some(return_agg_dst)
+                    }
+                    PhysicalType::Scalar(_) => None,
+                    PhysicalType::Empty => None,
+                },
             };
             let args_handle = b.k1.bytecode.mem.list_to_handle(args);
             let call_id = b.k1.bytecode.calls.add(BcCall {
                 dst: call_dst,
-                ret_inst_kind: return_inst_kind,
+                ret_type: phys_fn_type.return_type,
                 callee,
                 args: args_handle,
             });
@@ -1809,7 +1854,14 @@ fn compile_expr(
             let call_inst_id = b.push_inst_anon(call_inst);
             match call_dst {
                 Some(dst) => Ok(dst),
-                None => Ok(call_inst_id.as_value()),
+                None => {
+                    if phys_fn_type.diverges {
+                        let unreachable = b.push_inst_anon(Inst::Unreachable);
+                        Ok(unreachable.as_value())
+                    } else {
+                        Ok(call_inst_id.as_value())
+                    }
+                }
             }
         }
         TypedExpr::Match(match_expr) => {
@@ -1874,7 +1926,11 @@ fn compile_expr(
 
                 b.goto_block(*arm_cons_block);
                 let result = compile_expr(b, None, arm.consequent_expr)?;
-                if !b.get_value_kind(&result).is_terminator() {
+                let cons_type_id = b.k1.exprs.get_type(arm.consequent_expr);
+                let cons_diverges = cons_type_id == NEVER_TYPE_ID;
+                debug_assert_eq!(cons_diverges, b.get_value_kind(&result).is_terminator());
+
+                if !cons_diverges {
                     let current_block = b.cur_block;
                     incomings.push(CameFromCase { from: current_block, value: result });
                     b.push_jump(match_end_block, "");
@@ -1929,7 +1985,7 @@ fn compile_expr(
             }
 
             b.goto_block(end_block);
-            Ok(Value::UNIT)
+            Ok(Value::Empty)
         }
         TypedExpr::LoopExpr(loop_expr) => {
             // let start_block = self.builder.get_insert_block().unwrap();
@@ -1941,7 +1997,7 @@ fn compile_expr(
 
             let break_pt_id = b.get_physical_type(expr_type);
 
-            let break_value = if expr_type != UNIT_TYPE_ID {
+            let break_value = if expr_type != b.k1.types.builtins.empty {
                 Some(b.push_alloca(break_pt_id, "loop break value"))
             } else {
                 None
@@ -1974,7 +2030,7 @@ fn compile_expr(
                 );
                 Ok(stored)
             } else {
-                Ok(Value::UNIT)
+                Ok(Value::Empty)
             }
         }
         TypedExpr::Break(brk) => {
@@ -2055,7 +2111,7 @@ fn compile_expr(
             if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                 // We're generating a pointer to the payload. The variant itself is a reference
                 // and the value we produce here is just a pointer to the payload
-                let stored = store_simple_if_dst(b, dst, payload_offset);
+                let stored = store_scalar_if_dst(b, dst, payload_offset);
                 Ok(stored)
             } else {
                 // We're loading the payload. The variant itself may or may not be a reference.
@@ -2101,6 +2157,7 @@ fn compile_expr(
             Ok(stored)
         }
         TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
+            // nocommit: FunctionToLambdaObject should happen in typer phase
             let lambda_object_type_id = expr_type;
             let obj_struct_type = b.get_physical_type(lambda_object_type_id);
             let lam_obj_ptr = match dst {
@@ -2121,7 +2178,7 @@ fn compile_expr(
                 TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
                 "",
             );
-            b.push_store(lam_obj_env_ptr_addr, Value::PtrZero, "");
+            b.push_store(lam_obj_env_ptr_addr, Value::PTR_ZERO, "");
             b.k1.bytecode.b_units_pending_compile.push(fn_to_lam_obj.function_id);
             Ok(lam_obj_ptr)
         }
@@ -2131,31 +2188,27 @@ fn compile_expr(
             // We lower the simple scalar static values
             // but leave the aggregates as globals
             match b.k1.static_values.get(stat.value_id) {
-                StaticValue::Unit => {
-                    let store = store_simple_if_dst(b, dst, Value::byte(UNIT_BYTE_VALUE));
-                    Ok(store)
-                }
                 StaticValue::Bool(bv) => {
                     let imm = Value::byte(*bv as u8);
-                    let store = store_simple_if_dst(b, dst, imm);
+                    let store = store_scalar_if_dst(b, dst, imm);
                     Ok(store)
                 }
                 StaticValue::Char(byte) => {
                     let imm = Value::byte(*byte);
-                    let store = store_simple_if_dst(b, dst, imm);
+                    let store = store_scalar_if_dst(b, dst, imm);
                     Ok(store)
                 }
                 StaticValue::Int(int) => {
                     let int = *int;
                     let imm = b.make_int_value(&int, "static int");
-                    let store = store_simple_if_dst(b, dst, imm);
+                    let store = store_scalar_if_dst(b, dst, imm);
                     Ok(store)
                 }
                 StaticValue::Float(float) => {
                     let float = *float;
                     //task(bc): Pack small floats
                     let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
-                    let store = store_simple_if_dst(b, dst, imm.as_value());
+                    let store = store_scalar_if_dst(b, dst, imm.as_value());
                     Ok(store)
                 }
                 StaticValue::String(_)
@@ -2180,7 +2233,7 @@ fn build_field_access(
     result_pt: PhysicalType,
 ) -> Value {
     if access_kind == FieldAccessKind::ReferenceThrough {
-        let stored = store_simple_if_dst(b, dst, field_ptr);
+        let stored = store_scalar_if_dst(b, dst, field_ptr);
         stored
     } else {
         // We're loading a field. The variant itself may or may not be a reference.
@@ -2254,7 +2307,7 @@ fn compile_cast(
                 _ => unreachable!(),
             };
             let inst = b.push_inst_anon(inst);
-            let stored = store_simple_if_dst(b, dst, inst.as_value());
+            let stored = store_scalar_if_dst(b, dst, inst.as_value());
             Ok(stored)
         }
         CastType::BoolToInt => {
@@ -2266,7 +2319,7 @@ fn compile_cast(
                 to: PhysicalType::Scalar(ScalarType::U8),
             });
             let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
-            let stored = store_simple_if_dst(b, dst, extend.as_value());
+            let stored = store_scalar_if_dst(b, dst, extend.as_value());
             Ok(stored)
         }
         CastType::PointerToWord | CastType::WordToPointer => {
@@ -2277,7 +2330,7 @@ fn compile_cast(
                 _ => unreachable!(),
             };
             let inst = b.push_inst_anon(inst);
-            let stored = store_simple_if_dst(b, dst, inst.as_value());
+            let stored = store_scalar_if_dst(b, dst, inst.as_value());
             Ok(stored)
         }
         CastType::FloatExtend
@@ -2307,7 +2360,7 @@ fn compile_cast(
                 _ => unreachable!(),
             };
             let inst = b.push_inst_anon(inst);
-            let stored = store_simple_if_dst(b, dst, inst.as_value());
+            let stored = store_scalar_if_dst(b, dst, inst.as_value());
             Ok(stored)
         }
         CastType::LambdaToLambdaObject => {
@@ -2439,7 +2492,7 @@ fn compile_arith_binop(
         }
     };
     let res = b.push_inst(inst, "");
-    let stored = store_simple_if_dst(b, dst, res.as_value());
+    let stored = store_scalar_if_dst(b, dst, res.as_value());
     Ok(stored)
 }
 
@@ -2468,6 +2521,7 @@ fn load_value(
             }
         }
         PhysicalType::Scalar(st) => b.push_load(st, src, comment).as_value(),
+        PhysicalType::Empty => Value::Empty,
     }
 }
 
@@ -2477,14 +2531,20 @@ fn store_value(
     dst: Value,
     value: Value,
     comment: impl Into<BcStr>,
-) -> InstId {
+) -> Option<InstId> {
     match pt {
         PhysicalType::Agg(_) => {
             // Rename to `src` shows that, since we have an aggregate, `value` is a location.
             let src = value;
-            b.push_copy(dst, src, pt, comment)
+            let copy_inst = b.push_copy(dst, src, pt, comment);
+            debug_assert!(copy_inst.is_some(), "We know its not the Empty type");
+            copy_inst
         }
-        PhysicalType::Scalar(_) => b.push_store(dst, value, comment),
+        PhysicalType::Scalar(_) => {
+            let store_inst = b.push_store(dst, value, comment);
+            Some(store_inst)
+        }
+        PhysicalType::Empty => None,
     }
 }
 
@@ -2498,7 +2558,7 @@ fn load_or_copy(
 ) -> Value {
     match dst {
         Some(dst) => {
-            let _copy = b.push_copy(dst, src, pt, comment).as_value();
+            let _copy = b.push_copy(dst, src, pt, comment);
             dst
         }
         None => load_value(b, pt, src, copy_aggregates, comment),
@@ -2523,6 +2583,7 @@ fn compile_matching_condition(
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
+                // nocommit: Ensure a MatchingConditionInstr::Cond can't be Never; just desugar to the block
                 if b.k1.exprs.get_type(*value) == NEVER_TYPE_ID {
                     return Ok(());
                 }
@@ -2554,10 +2615,11 @@ pub fn zero(t: ScalarType) -> Value {
         ScalarType::I64 => Value::Data32 { t: ScalarType::I64, data: 0 },
         ScalarType::F32 => Value::Data32 { t: ScalarType::F32, data: (0.0f32).to_bits() },
         ScalarType::F64 => {
-            // Bit pattern is all zeroes anyway
+            // Bit pattern is all zeroes anyway, but we still construct it via Rust's float
+            // machinery
             Value::Data32 { t: ScalarType::F64, data: (0.0f64).to_bits() as u32 }
         }
-        ScalarType::Pointer => Value::PtrZero,
+        ScalarType::Pointer => Value::PTR_ZERO,
     }
 }
 
@@ -2815,6 +2877,28 @@ pub fn display_unit_name(
     Ok(())
 }
 
+// nocommit ZST checklist:
+// - De-reference operation
+// - function ABI
+// - Make static types ZSTs
+pub fn display_phys_fn_type(
+    w: &mut impl Write,
+    k1: &TypedProgram,
+    p_fn_ty: &PhysicalFunctionType,
+) -> std::fmt::Result {
+    w.write_str("\\(")?;
+    for (index, param) in k1.bytecode.mem.getn(p_fn_ty.params).iter().enumerate() {
+        k1.types.display_pt(w, param.pt)?;
+        let last = index == p_fn_ty.params.len() as usize;
+        if !last {
+            w.write_str(", ")?;
+        }
+    }
+    w.write_str("): ")?;
+    k1.types.display_pt(w, p_fn_ty.return_type)?;
+    Ok(())
+}
+
 pub fn display_unit(
     w: &mut impl Write,
     k1: &TypedProgram,
@@ -2824,6 +2908,8 @@ pub fn display_unit(
     match unit.unit_id {
         CompilableUnitId::Function(function_id) => {
             k1.write_ident(w, k1.functions.get(function_id).name)?;
+            w.write_str(" ")?;
+            display_phys_fn_type(w, k1, &unit.fn_type)?;
         }
         CompilableUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
@@ -2880,7 +2966,7 @@ pub fn display_block(
             let span_id = bc.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(*span_id);
             let first_line = lines.lines().next().unwrap_or("");
-            write!(w, "|  {first_line:50}|")?;
+            write!(w, "|  {first_line:80}|")?;
         }
 
         write!(w, " i{:3} = ", *inst_id)?;
@@ -2907,45 +2993,45 @@ pub fn display_inst(
     bc: &ProgramBytecode,
     inst_id: InstId,
 ) -> std::fmt::Result {
-    match bc.instrs.get(inst_id) {
+    match *bc.instrs.get(inst_id) {
         Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
         }
         Inst::Alloca { t, vm_layout } => {
             write!(w, "alloca ")?;
-            k1.types.display_pt(w, *t)?;
+            k1.types.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value, t } => {
-            write!(w, "store to {}, ", *dst,)?;
+            write!(w, "store to {}, ", dst,)?;
             display_scalar_type(w, t)?;
-            write!(w, " {}", *value)?;
+            write!(w, " {}", value)?;
         }
         Inst::Load { t, src } => {
             write!(w, "load ")?;
             display_scalar_type(w, t)?;
-            write!(w, " from {}", *src)?;
+            write!(w, " from {}", src)?;
         }
         Inst::Copy { dst, src, t: _, vm_size } => {
-            write!(w, "copy {} {}, src {}", *vm_size, *dst, *src)?;
+            write!(w, "copy {} {}, src {}", vm_size, dst, src)?;
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            k1.types.display_pt(w, PhysicalType::Agg(*struct_t))?;
-            write!(w, ".{}, {} ({})", *field_index, *base, *vm_offset)?;
+            k1.types.display_pt(w, PhysicalType::Agg(struct_t))?;
+            write!(w, ".{}, {} ({})", field_index, base, vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            k1.types.display_pt(w, *element_t)?;
-            write!(w, " {}[{}]", *base, *element_index)?;
+            k1.types.display_pt(w, element_t)?;
+            write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { id } => {
-            let call = bc.calls.get(*id);
+            let call = bc.calls.get(id);
             write!(w, "call ")?;
-            display_inst_kind(w, &k1.types, &call.ret_inst_kind)?;
+            k1.types.display_pt(w, call.ret_type)?;
             if let Some(dst) = &call.dst {
-                write!(w, " into {}", *dst)?;
+                write!(w, " into {}", dst)?;
             }
             match &call.callee {
                 BcCallee::Builtin(_, intrinsic_operation) => {
@@ -2979,19 +3065,19 @@ pub fn display_inst(
             w.write_str(")")?;
         }
         Inst::Jump(block_id) => {
-            write!(w, "jmp b{}", *block_id)?;
+            write!(w, "jmp b{}", block_id)?;
         }
         Inst::JumpIf { cond, cons, alt } => {
-            write!(w, "jmpif {}, b{}, b{}", *cond, *cons, *alt)?;
+            write!(w, "jmpif {}, b{}, b{}", cond, cons, alt)?;
         }
         Inst::Unreachable => {
             write!(w, "unreachable")?;
         }
         Inst::CameFrom { t, incomings } => {
             write!(w, "comefrom ")?;
-            k1.types.display_pt(w, *t)?;
+            k1.types.display_pt(w, t)?;
             write!(w, " [")?;
-            for (i, incoming) in bc.mem.getn(*incomings).iter().enumerate() {
+            for (i, incoming) in bc.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
@@ -3000,7 +3086,7 @@ pub fn display_inst(
             write!(w, "]")?;
         }
         Inst::Ret(value) => {
-            write!(w, "ret {}", *value)?;
+            write!(w, "ret {}", value)?;
         }
         Inst::BoolNegate { v } => {
             write!(w, "bool not {}", v)?;
@@ -3010,7 +3096,7 @@ pub fn display_inst(
         }
         Inst::BitCast { v, to } => {
             write!(w, "bitcast ")?;
-            k1.types.display_pt(w, *to)?;
+            k1.types.display_pt(w, to)?;
             write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
@@ -3074,69 +3160,69 @@ pub fn display_inst(
             write!(w, "inttoptr {}", v)?;
         }
         Inst::IntAdd { lhs, rhs, width } => {
-            write!(w, "add i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "add i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntSub { lhs, rhs, width } => {
-            write!(w, "sub i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "sub i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntMul { lhs, rhs, width } => {
-            write!(w, "mul i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "mul i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntDivUnsigned { lhs, rhs, width } => {
-            write!(w, "udiv i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "udiv i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntDivSigned { lhs, rhs, width } => {
-            write!(w, "sdiv i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "sdiv i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntRemUnsigned { lhs, rhs, width } => {
-            write!(w, "urem i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "urem i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntRemSigned { lhs, rhs, width } => {
-            write!(w, "srem i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "srem i{width} {} {}", lhs, rhs)?;
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {
-            write!(w, "icmp i{width} {} {} {}", pred, *lhs, *rhs)?;
+            write!(w, "icmp i{width} {} {} {}", pred, lhs, rhs)?;
         }
         Inst::FloatAdd { lhs, rhs, width } => {
-            write!(w, "fadd f{width} {} {}", *lhs, *rhs)?;
+            write!(w, "fadd f{width} {} {}", lhs, rhs)?;
         }
         Inst::FloatSub { lhs, rhs, width } => {
-            write!(w, "fsub f{width} {} {}", *lhs, *rhs)?;
+            write!(w, "fsub f{width} {} {}", lhs, rhs)?;
         }
         Inst::FloatMul { lhs, rhs, width } => {
-            write!(w, "fmul f{width} {} {}", *lhs, *rhs)?;
+            write!(w, "fmul f{width} {} {}", lhs, rhs)?;
         }
         Inst::FloatDiv { lhs, rhs, width } => {
-            write!(w, "fdiv f{width} {} {}", *lhs, *rhs)?;
+            write!(w, "fdiv f{width} {} {}", lhs, rhs)?;
         }
         Inst::FloatRem { lhs, rhs, width } => {
-            write!(w, "frem f{width} {} {}", *lhs, *rhs)?;
+            write!(w, "frem f{width} {} {}", lhs, rhs)?;
         }
         Inst::FloatCmp { lhs, rhs, pred, width } => {
-            write!(w, "fcmp f{width} {} {} {}", pred, *lhs, *rhs)?;
+            write!(w, "fcmp f{width} {} {} {}", pred, lhs, rhs)?;
         }
         Inst::BitAnd { lhs, rhs, width } => {
-            write!(w, "and i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "and i{width} {} {}", lhs, rhs)?;
         }
         Inst::BitOr { lhs, rhs, width } => {
-            write!(w, "or i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "or i{width} {} {}", lhs, rhs)?;
         }
         Inst::BitXor { lhs, rhs, width } => {
-            write!(w, "xor i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "xor i{width} {} {}", lhs, rhs)?;
         }
         Inst::BitShiftLeft { lhs, rhs, width } => {
-            write!(w, "shl i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "shl i{width} {} {}", lhs, rhs)?;
         }
         Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
-            write!(w, "lshr i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "lshr i{width} {} {}", lhs, rhs)?;
         }
         Inst::BitSignedShiftRight { lhs, rhs, width } => {
-            write!(w, "ashr i{width} {} {}", *lhs, *rhs)?;
+            write!(w, "ashr i{width} {} {}", lhs, rhs)?;
         }
         Inst::BakeStaticValue { type_id, value } => {
             write!(w, "bake ")?;
-            k1.display_type_id(w, *type_id, false)?;
-            write!(w, " {}", *value)?;
+            k1.display_type_id(w, type_id, false)?;
+            write!(w, " {}", value)?;
         }
     };
     Ok(())
@@ -3145,38 +3231,43 @@ pub fn display_inst(
 pub fn display_inst_kind(
     w: &mut impl std::fmt::Write,
     types: &TypePool,
-    kind: &InstKind,
+    kind: InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => types.display_pt(w, *t),
+        InstKind::Value(t) => types.display_pt(w, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }
 }
 
-pub fn display_scalar_type(w: &mut impl Write, scalar: &ScalarType) -> std::fmt::Result {
-    match scalar {
-        ScalarType::U8 => write!(w, "u8"),
-        ScalarType::U16 => write!(w, "u16"),
-        ScalarType::U32 => write!(w, "u32"),
-        ScalarType::U64 => write!(w, "u64"),
-        ScalarType::I8 => write!(w, "i8"),
-        ScalarType::I16 => write!(w, "i16"),
-        ScalarType::I32 => write!(w, "i32"),
-        ScalarType::I64 => write!(w, "i64"),
-        ScalarType::F32 => write!(w, "f32"),
-        ScalarType::F64 => write!(w, "f64"),
-        ScalarType::Pointer => write!(w, "ptr"),
+impl From<ScalarType> for &'static str {
+    fn from(st: ScalarType) -> &'static str {
+        match st {
+            ScalarType::U8 => "u8",
+            ScalarType::U16 => "u16",
+            ScalarType::U32 => "u32",
+            ScalarType::U64 => "u64",
+            ScalarType::I8 => "i8",
+            ScalarType::I16 => "i16",
+            ScalarType::I32 => "i32",
+            ScalarType::I64 => "i64",
+            ScalarType::F32 => "f32",
+            ScalarType::F64 => "f64",
+            ScalarType::Pointer => "ptr",
+        }
     }
+}
+pub fn display_scalar_type(w: &mut impl Write, scalar: ScalarType) -> std::fmt::Result {
+    w.write_str(scalar.into())
 }
 
 impl std::fmt::Display for ScalarType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        display_scalar_type(f, self)
+        display_scalar_type(f, *self)
     }
 }
 
-pub fn display_imm(w: &mut impl Write, imm: &DataInst) -> std::fmt::Result {
+pub fn display_imm(w: &mut impl Write, imm: DataInst) -> std::fmt::Result {
     match imm {
         DataInst::U64(u64) => write!(w, "u64 {}", u64),
         DataInst::I64(i64) => write!(w, "i64 {}", i64),
@@ -3198,6 +3289,6 @@ pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
         Value::Data32 { t, data } => write!(w, "data32({}, {})", t, data),
-        Value::PtrZero => write!(w, "ptr0"),
+        Value::Empty => write!(w, "{{}}"),
     }
 }

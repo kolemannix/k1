@@ -40,8 +40,8 @@ ns List {
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: *mut List[T], alloc: AllocMode, count: size): unit {
-    if self.cap() >= count { return(()) };
+  fn reserve[T](self: *mut List[T], alloc: AllocMode, count: size) {
+    if self.cap() >= count { return() };
     self.buffer*._growTo[T](context alloc)(count);
     assertdbg(self.buffer.len == count);
   }
@@ -85,7 +85,7 @@ ns List {
     self.buffer.getRefUnchecked[T](index)
   }
 
-  fn set[T](self: *mut List[T], index: size, elem: T): unit {
+  fn set[T](self: *mut List[T], index: size, elem: T) {
     if index >= self.len {
       crash("List index out of bounds: {index} >= {self.len}")
     };
@@ -105,7 +105,7 @@ ns List {
     } else .Some(self.buffer.get(index))
   }
 
-  fn _grow[T](context mode: AllocMode)(self: *mut List[T]): unit {
+  fn _grow[T](context mode: AllocMode)(self: *mut List[T]) {
     let newCap: size = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
       let elemSize = core/types/sizeOf[T]();
@@ -114,7 +114,6 @@ ns List {
       self.cap() * 2
     };
     self.reserve(mode, newCap);
-    ()
   }
 
   fn cloned[T](self: List[T]): List[T] {
@@ -122,17 +121,16 @@ ns List {
     { len: self.len, buffer: newBuffer }
   }
 
-  fn pushIn[T](context mode: AllocMode)(self: *mut List[T], elem: T): unit {
+  fn pushIn[T](context mode: AllocMode)(self: *mut List[T], elem: T) {
     let startLength = self.len;
     if startLength == self.*.cap() {
       self._grow();
     };
     self.len* <- startLength + 1;
     self.set(startLength, elem);
-    ()
   }
 
-  fn push[T](self: *mut List[T], elem: T): unit {
+  fn push[T](self: *mut List[T], elem: T) {
     self.pushIn[T](context .Current)(elem)
   }
 
@@ -173,11 +171,11 @@ ns List {
     else .None
   }
 
-  fn clear[T](self: *mut List[T]): unit {
+  fn clear[T](self: *mut List[T]) {
     self.len* <- 0
   }
 
-  fn reverse[T](self: *mut List[T]): unit {
+  fn reverse[T](self: *mut List[T]) {
     let i = 0;
     while (i < (self.len / 2)) {
       let j = self.len - i - 1;
@@ -192,22 +190,22 @@ ns List {
     clone.*
   }
 
-  fn appendList[T](self: *mut List[T], other: List[T]): unit {
+  fn appendList[T](self: *mut List[T], other: List[T]) {
     self.appendBuffer(other.asBuffer())
   }
 
-  fn appendBuffer[T](self: *mut List[T], other: Buffer[T]): unit {
+  fn appendBuffer[T](self: *mut List[T], other: Buffer[T]) {
     self.reserve(.Current, self.len + other.len);
     let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
     Buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;
   }
 
-  fn appendView[T](self: *mut List[T], other: View[T]): unit {
+  fn appendView[T](self: *mut List[T], other: View[T]) {
     self.appendBuffer(other.innerBuffer())
   }
 
-  fn swap[T](self: *mut List[T], indexA: size, indexB: size): unit {
+  fn swap[T](self: *mut List[T], indexA: size, indexB: size) {
     if indexA == indexB { return() };
     if indexA >= self.len {
       crash("List index out of bounds: {indexA} >= {self.len}")
@@ -218,9 +216,9 @@ ns List {
     self.buffer*.swap[T](indexA, indexB);
   }
 
-  fn sort[T](input: *mut List[T]): unit where T: Comparable {
+  fn sort[T](input: *mut List[T]) where T: Comparable {
   
-    if input.len <= 1 return(());
+    if input.len <= 1 return();
   
     let halfIndex = input.len / 2;
     let pivot = input.get(halfIndex);
@@ -309,13 +307,13 @@ ns List {
 }
 
 impl Writer for *mut List[char] {
-  fn writeByte(self: Self, value: u8): unit { self.push(value.as[char]) }
-  fn writeBytes(self: Self, bytes: View[byte]): unit { self.appendView(bytes.toCharView()) }
+  fn writeByte(self: Self, value: u8) { self.push(value.as[char]) }
+  fn writeBytes(self: Self, bytes: View[byte]) { self.appendView(bytes.toCharView()) }
 }
 
 impl Writer for *mut List[u8] {
-  fn writeByte(self: Self, value: u8): unit { self.push(value) }
-  fn writeBytes(self: Self, bytes: View[byte]): unit {
+  fn writeByte(self: Self, value: u8) { self.push(value) }
+  fn writeBytes(self: Self, bytes: View[byte]) {
     self.appendView(bytes)
   }
 }
@@ -335,7 +333,7 @@ impl[T: Equals] Equals for List[T] {
 }
 
 impl[T: Print] Print for List[T] {
-  fn printTo[W: Writer](self: List[T], w: W): unit {
+  fn printTo[W: Writer](self: List[T], w: W) {
     w.writeChar('[');
     for self {
       it.printTo(w);

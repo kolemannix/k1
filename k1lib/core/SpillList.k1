@@ -6,7 +6,7 @@ ns SpillList {
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use
-  fn clear[T, N: static size](self: *mut SpillList[T, N]): unit {
+  fn clear[T, N: static size](self: *mut SpillList[T, N]) {
     switch self {
       .Inline(fixlist)* -> fixlist.clear(),
       .Spilled(list)* -> list.clear()
@@ -37,11 +37,11 @@ ns SpillList {
     list.*
   }
 
-  fn push[T, N: static size](self: *mut SpillList[T, N], t: T): unit {
+  fn push[T, N: static size](self: *mut SpillList[T, N], t: T) {
     switch self {
       .Spilled(list)* -> { list.push(t) },
       .Inline(fixlist)* -> {
-        if fixlist.tryPush(t) is .Ok(_) ()
+        if fixlist.tryPush(t) is .Ok(_) {}
         else {
           let* list = _spill(fixlist);
   
@@ -53,11 +53,11 @@ ns SpillList {
     }
   }
 
-  fn pushN[T, N: static size](self: *mut SpillList[T, N], ts: View[T]): unit {
+  fn pushN[T, N: static size](self: *mut SpillList[T, N], ts: View[T]) {
     switch self {
       .Spilled(list)* -> { list.appendView(ts) },
       .Inline(fixlist)* -> {
-        if fixlist.tryPushN(ts) is .Ok(_) ()
+        if fixlist.tryPushN(ts) is .Ok(_) {}
         else {
           // Correctness: The only error case is the out of capacity one
           let* list = _spill(fixlist);
@@ -70,14 +70,14 @@ ns SpillList {
     }
   }
 
-  fn pushString[N: static size](self: *mut SpillList[u8, N], s: string): unit {
+  fn pushString[N: static size](self: *mut SpillList[u8, N], s: string) {
     self.pushN[u8, N](s.viewBytes())
   }
 
 }
 
 impl[T, N: static size] Print for SpillList[T, N] {
-  fn printTo[W: Writer](self: Self, w: W): unit {
+  fn printTo[W: Writer](self: Self, w: W) {
      switch self {
        .Inline(fix) -> {
          w.writeString("inline ");
@@ -91,10 +91,10 @@ impl[T, N: static size] Print for SpillList[T, N] {
 }
 
 impl[N: static size] Writer for *mut SpillList[u8, N] {
-  fn writeByte(self: Self, b: u8): unit {
+  fn writeByte(self: Self, b: u8) {
     self.push(b)
   }
-  fn writeBytes(self: Self, b: View[u8]): unit {
+  fn writeBytes(self: Self, b: View[u8]) {
     self.pushN(b)
   }
 }
