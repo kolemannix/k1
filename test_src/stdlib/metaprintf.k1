@@ -47,7 +47,7 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
   }
 }
 
-fn test(): unit {
+fn test() {
   let s1 = format("My value is: ? ?", {a: 42, b: true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
   println(s1);
@@ -60,7 +60,7 @@ fn test(): unit {
   //let s5 = format("My whatever is ?", true);
   //println(s5);
 
-  ()
+  {}
 }
 
 // I think it compiles to a struct literal; { fmtStr: string, arg1: <t1>, arg2: <t2>, etc, etc, etc }
@@ -82,7 +82,7 @@ fn test(): unit {
 
 //deftype Expr = either FmtString(Parts), Other(string)
 //macro fmt(writer: Expr, s: Expr, args: View[Expr]) {
-//fn fmt[W: Writer, S: static FmtString, Args](writer: W, fmtString: S, args: Args): unit {
+//fn fmt[W: Writer, S: static FmtString, Args](writer: W, fmtString: S, args: Args) {
 //  let* sb = StringBuilder/new();
 //  let argsCount = 
 //  for p in s.parts { 

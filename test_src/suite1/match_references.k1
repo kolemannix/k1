@@ -1,6 +1,6 @@
 ns match_references;
 
-fn test(): unit {
+fn test() {
   let* x = some(42);
   while x.* is .Some(xx) {
     if xx == 0 break()
@@ -34,8 +34,8 @@ fn test(): unit {
 
   switch b {
      true*** -> crash("b  was true!"),
-     false*** -> ()
+     false*** -> {}
   };
 
-  ()
+  {}
 }

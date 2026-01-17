@@ -1,7 +1,8 @@
 ns float_test;
 
-fn test(): unit {
+fn test() {
   let pi: f64 = 3.14159;
+  assertEquals(pi, 3.14159);
   assert(3.0 > 2.0);
   assert(3.0 >= 3.0);
   assert(not 3.0 > 3.0);
@@ -40,11 +41,11 @@ fn test(): unit {
 
   switch 42.0 {
     41.0 -> crash("should not equal"),
-    42.0 -> (),
+    42.0 -> {},
     f -> crash("should not fall through")
   };
 
   // TODO: div by zero
   // pi / 0.0;
-  ()
+  {}
 }

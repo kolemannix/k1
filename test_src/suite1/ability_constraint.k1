@@ -14,9 +14,9 @@ ns ability_constraint {
     fn num(self: Self): i32 { self.as() }
   }
   
-  fn test(): unit {
+  fn test() {
     assert(add(1, 2) == 3);
-    ()
+    {}
   }
 
 }

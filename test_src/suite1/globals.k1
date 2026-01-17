@@ -7,7 +7,7 @@ let globalInt: int = 0;
 let* globalIntRef: *mut int = 10;
 let staticInt: int = 2;
 
-fn test(): unit {
+fn test() {
 
    assertEquals(foo, 42);
    assertEquals(bar, 31);
@@ -20,5 +20,5 @@ fn test(): unit {
    };
    assert(globalIntRef.* == 2);
 
-  ()
+  {}
 }

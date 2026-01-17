@@ -1,6 +1,6 @@
 ns bits_test;
 
-fn test(): unit {
+fn test() {
 
   // NOT
   assert(100.bitNot() == -101);

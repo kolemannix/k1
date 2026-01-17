@@ -21,7 +21,6 @@ fn getArrayInfo[T](): { elementName: string, fiveSize: size, tenSize: size } {
 
 // Generic function with Array parameter type to test substitution
 fn describeArray[T](): string {
-  let elementTypeName = typeName(typeId[T]());
   let schema = typeSchema(typeId[Array[T, 3]]());
   require schema is .Array({ elementTypeId, size }) else {
     return("Failed to get Array schema")
@@ -30,7 +29,7 @@ fn describeArray[T](): string {
   "Array[{actualElementName}, {size.!}]"
 }
 
-fn test(): unit {
+fn test() {
 
   // Test 1: Basic Array type names
   assertEquals(typeName(typeId[Array[i32, 10]]()), "Array[i32, 10]");

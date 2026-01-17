@@ -42,7 +42,7 @@ fn makeArgv(context alloc: mem/AllocMode)(program: string, args: View[string]): 
     argv
 }
 
-fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string]): Result[i32, unit] {
+fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string]): Result[i32, {}] {
     let progCStr = program.toCString();
     let argv = makeArgv(program, args);
     let envp = ptr/NULL.as[**char]; // Use current environment
@@ -64,7 +64,7 @@ fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string])
     }
 }
 
-fn testPosix(): unit {
+fn testPosix() {
     println("Testing process execution...");
     //let context(impl Alloc) temp = mem/AllocMode.Arena;
     let context temp = mem/AllocMode.Arena;
@@ -82,7 +82,7 @@ fn testPosix(): unit {
     println("Nonexistent command isOk(): {failStatus.isOk()}");
 }
 
-fn testExecProcess(): unit {
+fn testExecProcess() {
   #if core/k1/OS_POSIX {
     testPosix()
   } else {

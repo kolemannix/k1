@@ -38,7 +38,7 @@ ns Range {
   }
 }
 
-#debug fn partOne(input: string): unit {
+#debug fn partOne(input: string) {
   let lines = input.splitByChar('\n');
   let parseMode: (either Ranges, Ingredients) = .Ranges;
   let* ranges = List/empty[Range]();

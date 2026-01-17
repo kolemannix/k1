@@ -19,10 +19,10 @@ impl Frob for i32 {
   fn foo(self: i32, y: i32): i32 { self + y }
 }
 
-fn test(): unit {
+fn test() {
   let x: i32 = 10;
   assertEquals(x.foo(), 10);
   assertEquals(x.foo(10), 20);
 
-  ()
+  {}
 }

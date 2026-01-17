@@ -8,8 +8,8 @@ ability ToPoint {
   fn toPoint(self: Self): Point
 }
 
-fn test(): unit {
-  let x: type_order/Point = { x: 1, y: 2 };
+fn test() {
+  let _x: type_order/Point = { x: 1, y: 2 };
 }
 
 

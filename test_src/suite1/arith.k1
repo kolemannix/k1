@@ -12,7 +12,7 @@ fn mult(x: int, y: int): int {
   x * y
 }
 
-fn test(): unit {
+fn test() {
   let x = (1 * 100 * 2) / 3;
   assert(x == 66);
 
@@ -45,7 +45,6 @@ fn test(): unit {
   assert(2 == 2);
 
   let z = 0.show();
-  let zs = "0";
   assertEquals(z, "0");
   assertEquals(1.show(), "1");
   assertEquals(2.show(), "2");
@@ -61,14 +60,14 @@ fn test(): unit {
   assertEquals(-11.show(), "-11");
 
   // Integer suffixes
-  let a: u8 = 255u8;
-  let b: i8 = -128i8;
-  let c: u16 = 65535u16;
-  let d: i16 = -32768i16;
-  let e: u32 = 4294967295u32;
-  let f: i32 = -2147483648i32;
-  let g: u64 = 18446744073709551615u64;
-  let h: i64 = -9223372036854775808i64;
+  let _a: u8 = 255u8;
+  let _b: i8 = -128i8;
+  let _c: u16 = 65535u16;
+  let _d: i16 = -32768i16;
+  let _e: u32 = 4294967295u32;
+  let _f: i32 = -2147483648i32;
+  let _g: u64 = 18446744073709551615u64;
+  let _h: i64 = -9223372036854775808i64;
 
   // Coercions
   // Unsigned widen
@@ -92,6 +91,6 @@ fn test(): unit {
   // Not directly allowed
   assert(testCompile(-1i16.as[u32]).isSome());
 
-  ()
+  {}
 
 }

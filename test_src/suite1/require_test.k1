@@ -1,6 +1,6 @@
 ns require_test;
 
-fn test(): unit {
+fn test() {
   let foo = { x: 1, y: some(2) };
   require foo is { y } and y is .Some(2) and 2 == (1 + 1) else {
     crash("")
@@ -20,5 +20,5 @@ fn test(): unit {
     crash("")
   };
 
-  ()
+  {}
 }

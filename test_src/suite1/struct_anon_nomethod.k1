@@ -14,7 +14,7 @@ ns PointAlias {
   }
 }
 
-fn test(): unit {
+fn test() {
   // Should work because PointNamed is a proper type
   let p: PointNamed = { x: 0, y: 0 };
   p.sum();
@@ -26,5 +26,5 @@ fn test(): unit {
     Opt.Some("Method 'sum' does not exist on type: '{{ x: i64, y: i64 }'")
   );
 
-  ()
+  {}
 }

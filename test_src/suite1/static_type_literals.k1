@@ -1,5 +1,5 @@
 ns static_literals;
-fn test(): unit {
+fn test() {
   assertEquals(testCompile(1: 5), .Some("Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type: 5i64 vs 1i64"));
   let _c: 'c' = 'c';
   let _pi: 3.14 = 3.14;
@@ -15,5 +15,5 @@ fn test(): unit {
     string/fromBytes(bytes.asView())
   };
 
-  ()
+  {}
 }

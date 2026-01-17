@@ -1,7 +1,7 @@
 ns match_fails;
 
 deftype Foo = { x: int, y: ?bool }
-fn useless(): unit {
+fn useless() {
   let foo: Foo = { x: 1, y: .None };
   let result = testCompile(switch foo {
     { x, y: .Some(true) } -> x,
@@ -13,7 +13,7 @@ fn useless(): unit {
 }
 
 deftype Blub = { x: int, y: ?bool }
-fn unhandled(): unit {
+fn unhandled() {
   let blub: Blub = { x: 1, y: .None };
   let result = testCompile(switch blub {
     { x, y: .Some(true) } -> x,
@@ -22,7 +22,7 @@ fn unhandled(): unit {
   assert(result is .Some(_));
 }
 
-fn test(): unit {
+fn test() {
   useless();
   unhandled();
 }

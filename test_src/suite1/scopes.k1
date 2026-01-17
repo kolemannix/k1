@@ -16,18 +16,19 @@ ns scopes {
   
   let x: int = 3;
   fn scopeCollision(x: int): int {
+    x;
     let x: int = 42;
     assert(x == 42);
     0
   }
   
   // Tests that the method gets assigned to the right Foo/value()
-  fn namespaceAlias(): unit {
+  fn namespaceAlias() {
     let x: Alias = {x:1};
     assert(x.value() == 1);
   }
 
-  fn test(): unit {
+  fn test() {
     scopes/scopeCollision(12);
     scopes/namespaceAlias();
   }

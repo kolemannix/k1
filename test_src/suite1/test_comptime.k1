@@ -3,21 +3,21 @@ ns test_comptime;
 let e: ?int = .Some(42);
 let n: ?int = .None;
 
-fn simpleEnum(): unit {
+fn simpleEnum() {
   assertEquals(e.!, 42);
   assert(e != n);
   assertEquals(e, some(42));
-  ()
+  {}
 }
 
 let p: { x: int, y: ?int } = { x: 1, y: .Some(2) };
 
-fn simpleStruct(): unit {
+fn simpleStruct() {
   assertEquals(p.x, 1);
   assertEquals(p.y, some(2));
 }
 
-fn test(): unit {
+fn test() {
   simpleEnum();
   simpleStruct();
 }

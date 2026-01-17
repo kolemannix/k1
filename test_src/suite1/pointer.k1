@@ -4,7 +4,7 @@ use core/types/sizeOf
 
 deftype Point3 = { x: int, y: int, z: int }
 
-fn test(): unit {
+fn test() {
   let* point: *Point3 = { x: 10, y: 20, z: 30 };
   let pointPtr = point.as[ptr];
 

@@ -1,4 +1,4 @@
-fn testAll(): unit {
+fn testAll() {
   hash_test/test();
   testFixList();
   testBitfield();

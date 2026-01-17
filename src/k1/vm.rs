@@ -553,7 +553,7 @@ pub fn execute_compiled_unit(
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
     //if unit.is_debug {
-    eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    //eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
     //}
 
     match unit.unit_id {
@@ -664,13 +664,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_index = inst_to_index(inst_id, inst_offset);
 
         // if debugger {
-        eprintln!(
-            "{}[{}] i{} {}",
-            "  ".repeat(vm.stack.current_frame_index() as usize),
-            vm.stack.current_frame_index(),
-            inst_id.as_u32(),
-            bc::inst_to_string(k1, inst_id)
-        );
+        //eprintln!(
+        //    "{}[{}] i{} {}",
+        //    "  ".repeat(vm.stack.current_frame_index() as usize),
+        //    vm.stack.current_frame_index(),
+        //    inst_id.as_u32(),
+        //    bc::inst_to_string(k1, inst_id)
+        //);
         //std::io::stdin().read_line(&mut line).unwrap();
         //if &line == "v\n" {
         //    vm.dump_current_frame(k1);
@@ -712,7 +712,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let src_value = resolve_value!(src);
                 let src_ptr = src_value.as_ptr();
                 let loaded_value = load_scalar(t, src_ptr);
-                eprintln!("load");
 
                 vm.stack.set_cur_inst_value(inst_index, loaded_value);
                 ip += 1;
@@ -1038,9 +1037,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
 
-                    let arg_pt =
-                        bc::get_value_kind(&k1.bytecode, &k1.types, arg).expect_value().unwrap();
-                    eprintln!("p{index} = {}", debug_value_to_string(vm, k1, arg_pt, vm_value));
+                    //let arg_pt =
+                    //    bc::get_value_kind(&k1.bytecode, &k1.types, arg).expect_value().unwrap();
+                    //eprintln!("p{index} = {}", debug_value_to_string(vm, k1, arg_pt, vm_value));
 
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
@@ -1704,6 +1703,7 @@ pub fn static_value_to_vm_value(
     };
 
     let v = match k1.static_values.get(static_value_id) {
+        StaticValue::Empty => Value(0),
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
         StaticValue::Int(iv) => Value(iv.to_u64_bits()),
@@ -1759,6 +1759,7 @@ pub fn static_value_to_vm_value(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
     match k1.static_values.get(static_value_id) {
+        StaticValue::Empty => {},
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
         StaticValue::Int(iv) => store_typed_int(dst, *iv),
@@ -2230,7 +2231,7 @@ pub fn vm_value_to_static_value(
         );
     };
     if pt.is_empty() {
-        return Ok(k1.static_values.add_struct(k1.types.builtins.empty, MSlice::empty()));
+        return Ok(k1.static_values.empty_id());
     }
     // We know it is a physical type so can be aggressive with matches
     let static_value_id = match k1.types.get(type_id) {
@@ -2317,7 +2318,6 @@ pub fn vm_value_to_static_value(
             } else {
                 let struct_ptr = vm_value.as_ptr();
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
-                // let struct_agg = k1.types.phys_types.get(struct_agg_id).agg_type;
                 let struct_shape = k1.types.get_struct_layout(type_id);
                 for (physical_field, k1_field) in
                     struct_shape.iter().zip(k1.types.mem.getn(struct_type.fields))

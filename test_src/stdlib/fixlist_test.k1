@@ -1,5 +1,5 @@
 use core/FixList
-fn testFixList(): unit {
+fn testFixList() {
   let* fl: *mut FixList[int, 4] = zeroed();
   assertEquals(fl.len(), 0);
   fl.push(40);

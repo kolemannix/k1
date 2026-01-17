@@ -1,20 +1,18 @@
 ns enum_basic;
 
-fn enumNoPayload(): unit {
+fn enumNoPayload() {
   let v: either Yes, No = .No;
-  if v is .No { () } else { crash("") };
+  if v is .No {} else { crash("") };
   v := .Yes;
-  if v is .Yes { () } else { crash("") };
+  if v is .Yes {} else { crash("") };
 }
 
 deftype Maybe = either A, B(char), C(string)
-fn enumPayload(): unit {
+fn enumPayload() {
   let a: Maybe = .A;
   let b: Maybe = .B('x');
   let c: Maybe = .C("hello, enums");
-  if a is .A {
-    ()
-  } else crash("");
+  if a is .A {} else crash("");
   assert(a is .A);
 
   if b is .B(x) {
@@ -24,9 +22,7 @@ fn enumPayload(): unit {
   assert(b is .B('x'));
   assert(b.asB().! == 'x');
 
-  if c is .C("hello, enums") {
-    ()
-  } else crash("");
+  if c is .C("hello, enums") {} else crash("");
   assert(c is .C(_));
   assert(c.asC().! == "hello, enums");
 
@@ -45,7 +41,7 @@ ns MyResult {
   }
 }
 
-fn genericEnum(): unit {
+fn genericEnum() {
     let x1: MyResult[int, string] = .Ok(-3);
     let x2: MyResult[int, string] = .Err("Some error message");
 
@@ -57,7 +53,7 @@ fn genericEnum(): unit {
     assert(x1Ok == .Some(-3));
 
     // Shows that we can talk about the payload type
-    let b: MyResult[int, string].Ok = 42;
+    let _: MyResult[int, string].Ok = 42;
 
     assertEquals(x1.show(), "Ok: -3\n");
     assertEquals(x2.show(), "Error: Some error message\n");
@@ -69,17 +65,17 @@ fn genericEnum(): unit {
 
 // Bug: change this type to name 'E' for a nice surprise
 deftype EByte = either(u8) A, B, C
-fn tags(): unit {
+fn tags() {
   let a: EByte = .A;
   let b: EByte = .B;
   let c: EByte = .C;
   assert(a.tag == 0);
   assert(b.tag == 1);
   assert(c.tag == 2);
-  ()
+  {}
 }
 
-fn test(): unit {
+fn test() {
   tags();
   enumNoPayload();
   enumPayload();

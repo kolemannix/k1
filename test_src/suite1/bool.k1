@@ -4,7 +4,7 @@ fn crashBool(): bool {
   crash("secret crash")
 }
 
-fn test(): unit {
+fn test() {
   let t = true;
   let f = false;
   assert(not (t and f));
@@ -26,5 +26,5 @@ fn test(): unit {
   assertEquals(t.as[i32], 1);
   assertEquals(f.as[i32], 0);
 
-  ()
+  {}
 }

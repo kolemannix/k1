@@ -10,7 +10,7 @@ ns bazi {
   fn name(): string { "bazi" }
 }
 
-fn test(): unit {
+fn test() {
   assert(baz/bazi/name() == "baz/bazi");
   assert(bazi/name() == "bazi");
 }

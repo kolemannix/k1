@@ -11,7 +11,7 @@ fn inspect[T](v: T): int {
   }
 }
 
-fn test(): unit {
+fn test() {
   assertEquals(13,inspect({ x: 3, y: 10 }));
 
   assertEquals(2,inspect("hello"));

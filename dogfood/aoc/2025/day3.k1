@@ -3,7 +3,7 @@ ns day3;
 let sample: string = "987654321111111\n811111111111119\n234234234234278\n818181911112111";
 let input: string = core/files/readToString(context .Arena)("day3_input.txt");
 
-fn part1(input: string): unit {
+fn part1(input: string) {
   let hi: char = '0';
   let lo: char = '0';
   let sum: int = 0;
@@ -35,7 +35,7 @@ fn part1(input: string): unit {
   println("Sum: {sum}")
 }
 
-fn part2(input: string): unit {
+fn part2(input: string) {
   let sum: uint = 0;
   let* sels: *mut List[char] = List/withCapacity(12);
   for bank in input.splitByChar('\n') {

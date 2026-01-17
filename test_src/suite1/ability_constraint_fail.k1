@@ -11,7 +11,7 @@ fn add[T](a: T, b: T): i32 where T: Num, T: Show {
   a.num() + b.num()
 }
 
-fn test(): unit {
+fn test() {
   let result = testCompile(add("asdf": string, "asdf": string));
   assertEquals(
     result,

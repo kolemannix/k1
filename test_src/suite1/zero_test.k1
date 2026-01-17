@@ -2,7 +2,7 @@ ns zero_test;
 
 use core/mem/zeroed
 
-fn testBitcast(): unit {
+fn testBitcast() {
   let x: i32 = -1;
   let y: u32 = mem/bitcast(x);
   assertEquals(y, 0xffff_ffff);
@@ -38,7 +38,7 @@ fn testBitcast(): unit {
   ).isSome());
 }
 
-fn testZero(): unit {
+fn testZero() {
   let v8: u8 = zeroed();
   let v16: u16 = zeroed();
   let v32: u32 = zeroed();
@@ -88,5 +88,5 @@ fn testZero(): unit {
   #static "I should have enough alt vms for this too";
   assertEquals(point.x, 1);
 
-  ()
+  {}
 }

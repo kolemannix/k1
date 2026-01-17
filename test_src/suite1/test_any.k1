@@ -19,7 +19,7 @@ fn typeVariantName(typeId: u64): ?string {
   variant.map(\v. v.name)
 }
 
-fn test(): unit {
+fn test() {
   let* i: *int = 10;
   let intPtr: Any = makeAny(i);
   let* s = { x: 1, y: 100 };

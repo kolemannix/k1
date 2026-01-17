@@ -32,8 +32,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use log::{debug, info, trace};
 
 use crate::bc::{
-    BackendBuiltin, BcCallee, CompiledBlock, Inst, InstId, PhysicalFunctionType,
-    ProgramBytecode,
+    BackendBuiltin, BcCallee, CompiledBlock, Inst, InstId, PhysicalFunctionType, ProgramBytecode,
 };
 use crate::compiler::{self, MAC_SDK_VERSION};
 use crate::kmem::{MHandle, MList, MSlice};
@@ -113,11 +112,6 @@ impl RegisterClass {
 }
 
 #[derive(Copy, Clone)]
-struct LlvmVoidType<'ctx> {
-    di_type: DIType<'ctx>,
-}
-
-#[derive(Copy, Clone)]
 struct LlvmScalarType<'ctx> {
     #[allow(unused)]
     pt: PhysicalType,
@@ -162,14 +156,7 @@ enum CgType<'ctx> {
     Scalar(LlvmScalarType<'ctx>),
     StructType(CgStructType<'ctx>),
     ArrayType(CgArrayType<'ctx>),
-    Void(LlvmVoidType<'ctx>),
     Union(CgUnionType<'ctx>),
-}
-
-impl<'ctx> From<LlvmVoidType<'ctx>> for CgType<'ctx> {
-    fn from(void: LlvmVoidType<'ctx>) -> Self {
-        CgType::Void(void)
-    }
 }
 
 impl<'ctx> From<LlvmScalarType<'ctx>> for CgType<'ctx> {
@@ -190,7 +177,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(s) => s.pt,
             CgType::StructType(s) => s.pt,
             CgType::ArrayType(a) => a.pt,
-            CgType::Void(_) => panic!("no pt on void"),
             CgType::Union(u) => u.pt,
         }
     }
@@ -198,7 +184,6 @@ impl<'ctx> CgType<'ctx> {
     pub fn kind_name(&self) -> &'static str {
         match self {
             CgType::Scalar(_) => "Scalar",
-            CgType::Void(_) => "Void",
             CgType::StructType(_) => "StructType",
             CgType::ArrayType(_) => "ArrayType",
             CgType::Union(_) => "Union",
@@ -208,7 +193,6 @@ impl<'ctx> CgType<'ctx> {
     pub fn is_aggregate(&self) -> bool {
         match self {
             CgType::Scalar(_) => false,
-            CgType::Void(_) => false,
             CgType::StructType(_) => true,
             CgType::ArrayType(_) => true,
             CgType::Union(_) => true,
@@ -237,7 +221,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.layout,
             CgType::StructType(s) => s.layout,
             CgType::ArrayType(a) => a.layout,
-            CgType::Void(_) => panic!("No rich value type on Void / never"),
             CgType::Union(u) => u.layout,
         }
     }
@@ -247,7 +230,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.basic_type,
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
-            CgType::Void(_) => panic!("No rich value type on Void / never"),
             CgType::Union(u) => u.aligned_opaque_repr.as_basic_type_enum(),
         }
     }
@@ -257,15 +239,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::Scalar(value) => value.di_type,
             CgType::StructType(s) => s.di_type,
             CgType::ArrayType(a) => a.di_type,
-            CgType::Void(v) => v.di_type,
             CgType::Union(u) => u.di_type,
-        }
-    }
-
-    fn is_void(&self) -> bool {
-        match self {
-            CgType::Void(_) => true,
-            _ => false,
         }
     }
 
@@ -287,6 +261,12 @@ struct BuiltinTypes<'ctx> {
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
     empty: StructType<'ctx>,
+}
+
+impl<'ctx> BuiltinTypes<'ctx> {
+    fn empty_value(&self) -> BasicValueEnum<'ctx> {
+        self.empty.get_undef().as_basic_value_enum()
+    }
 }
 
 pub struct CgFunction<'ctx> {
@@ -710,6 +690,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     // FIXME(newcodegen): CgType is too big to return by value
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
+        //eprintln!("codegen_type {}", self.k1.types.pt_to_string(pt));
         match pt {
             PhysicalType::Scalar(st) => {
                 let layout = st.get_layout();
@@ -909,14 +890,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // This is mostly what clang does for unions, modulo maybe some cleverness for simple cases
         // and maybe Class detection (for possible float reg passing?)
 
-        if expected_layout.align > expected_layout.size {
+        if expected_layout.align > expected_layout.size && expected_layout.size != 0 {
             panic!(
                 "Cannot create overaligned union with align {} > size {}",
                 expected_layout.align, expected_layout.size
             );
         }
         let aligner_type = self.ctx.custom_width_int_type(expected_layout.align_bits());
-        let padding_bytes = expected_layout.size - (aligner_type.get_bit_width() / 8);
+        let padding_bytes = expected_layout.size.saturating_sub(aligner_type.get_bit_width() / 8);
 
         let padding = self.padding_type(padding_bytes);
         let aligned_struct_repr = self
@@ -963,8 +944,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let param_types = phys_fn_type.params;
         let return_cg_type = self.codegen_type(return_type);
         let return_type_abi_mapping = self.get_abi_mapping_for_type(abi_mode, return_type, true);
-        // eprintln!("make fn type {}", self.k1.type_id_to_string(function_type_id));
-        let return_mapped_type = self.mapped_abi_type_return(return_type, return_type_abi_mapping);
 
         // If a function returns a big (typically > 2 words) struct, its actually
         // 'returned' in the first parameter, which is a pointer
@@ -976,6 +955,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
             AbiParamMapping::StructByPtrNoCopy => true,
+        };
+        let return_mapped_type = if is_sret {
+            None
+        } else {
+            self.mapped_abi_type_return(return_type, return_type_abi_mapping)
         };
 
         let param_count = param_types.len() + if is_sret { 1 } else { 0 };
@@ -993,7 +977,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.mem.new_list(param_count);
 
         if is_sret {
-            debug_assert!(return_mapped_type.unwrap().is_pointer_type());
+            debug_assert!(return_mapped_type.is_none());
             function_final_params.push(self.builtin_types.ptr.as_basic_type_enum().into());
         }
 
@@ -1005,12 +989,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let mapped_type = self.mapped_abi_type_param(param.pt, abi_mapping);
             function_final_params.push(mapped_type.into());
 
-            eprintln!(
-                "abi mapping for {} is {:?}. Mapped type: {:?}",
-                param_cg_type.rich_type(),
-                abi_mapping,
-                mapped_type
-            );
+            //eprintln!(
+            //    "abi mapping for {} is {:?}. Mapped type: {:?}",
+            //    param_cg_type.rich_type(),
+            //    abi_mapping,
+            //    mapped_type
+            //);
         }
 
         let fn_type = match return_mapped_type {
@@ -1147,6 +1131,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn marshal_abi_return_value(
+        &mut self,
+        mapping: AbiParamMapping,
+        cg_ty: &CgType<'ctx>,
+        k1_value: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match mapping {
+            AbiParamMapping::VoidReturnEmpty => None,
+            _ => {
+                let value = self.marshal_abi_param_value(mapping, cg_ty, k1_value, true);
+                Some(value)
+            }
+        }
+    }
+
     /// Takes a canonical k1 value to pass to or return from a function and converts it
     /// to the ABI format
     fn marshal_abi_param_value(
@@ -1164,7 +1163,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             mapping
         );
         match mapping {
-            AbiParamMapping::VoidReturnEmpty => panic!("VoidReturnEmpty for a param"),
+            AbiParamMapping::VoidReturnEmpty => panic!("VoidReturnEmpty should be handled"),
             AbiParamMapping::ScalarInRegister => k1_value,
             AbiParamMapping::StructInInteger { width } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
@@ -1522,10 +1521,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if cg_fn_type.is_sret {
                     let sret_pointer = sret_alloca.unwrap();
                     Ok(sret_pointer.as_basic_value_enum().into())
-                } else if cg_fn_type.return_cg_type.is_void() {
-                    Ok(None)
                 } else {
-                    panic!("Function returned LLVM void but wasn't typed as never and was not sret")
+                    Ok(None)
                 }
             }
         }
@@ -1842,14 +1839,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ScalarType::F64 => {
                         self.ctx.f64_type().const_float(f32::from_bits(data) as f64).into()
                     }
-                    ScalarType::Pointer => unreachable!(),
+                    ScalarType::Pointer => {
+                        if data == 0 {
+                            self.builtin_types.ptr.const_zero().into()
+                        } else {
+                            panic!("Got non-zero Pointer in codegen_llvm: {data}")
+                        }
+                    }
                 };
                 Ok(v)
             }
-            bc::Value::Empty => {
-                let struct_value = self.builtin_types.empty.const_zero();
-                Ok(struct_value.as_basic_value_enum())
-            }
+            bc::Value::Empty => Ok(self.builtin_types.empty_value()),
         }
     }
 
@@ -1952,6 +1952,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Call { id } => {
                 if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
+                } else {
+                    inst_mappings.insert(inst_id, self.builtin_types.empty_value());
                 }
                 Ok(())
             }
@@ -1989,14 +1991,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 match current_fn.sret_pointer {
                     None => {
                         let current_fn_ty = current_fn.function_type.clone();
-                        let ret_value_marshalled = self.marshal_abi_param_value(
+                        let ret_value_marshalled = self.marshal_abi_return_value(
                             current_fn_ty.return_abi_mapping,
                             &current_fn_ty.return_cg_type,
                             ret_value,
-                            true,
                         );
-                        let _return =
-                            self.builder.build_return(Some(&ret_value_marshalled)).unwrap();
+                        let _return = match ret_value_marshalled {
+                            None => self.builder.build_return(None).unwrap(),
+                            Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+                        };
                         Ok(())
                     }
                     Some(sret_ptr) => {
@@ -2879,6 +2882,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
 
         let result = match self.k1.static_values.get(static_value_id) {
+            StaticValue::Empty => self.builtin_types.empty_value(),
             StaticValue::Bool(b) => match b {
                 true => self.builtin_types.true_value.as_basic_value_enum(),
                 false => self.builtin_types.false_value.as_basic_value_enum(),
@@ -2904,6 +2908,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 zero.as_basic_value_enum()
             }
             StaticValue::Struct(s) => {
+                debug_assert!(!s.fields.is_empty());
                 // Always a packed struct, accounting for every byte.
                 let s_type_id = s.type_id;
                 let layout = self.k1.types.get_struct_layout(s.type_id);
@@ -3112,10 +3117,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         let v = self.k1.static_values.get(static_value_id);
         let result = match v {
-            StaticValue::Bool(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
-            StaticValue::Char(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
-            StaticValue::Int(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
-            StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
+            StaticValue::Empty
+            | StaticValue::Bool(_)
+            | StaticValue::Char(_)
+            | StaticValue::Int(_)
+            | StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::String(string_id) => {
                 let string_global = self
                     .codegen_string_id_to_global(

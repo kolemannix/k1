@@ -1,6 +1,6 @@
 ns while_test;
 
-fn whileSimple(): unit {
+fn whileSimple() {
   let i: int = 10;
   let iters = 0;
   while i > -10 {
@@ -18,7 +18,7 @@ fn whileReturn(): int {
 }
 
 fn whileNested(): int {
-  let result = while true {
+  while true {
     while true {
       return(10)
     }
@@ -41,7 +41,7 @@ fn whileBreak(): int {
   4
 }
 
-fn test(): unit {
+fn test() {
   whileSimple();
   assert(whileReturn() == 1);
   assert(whileNested() == 10);

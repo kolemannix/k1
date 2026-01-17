@@ -3,7 +3,7 @@ ns lambdas {
 fn staticAddOne(x: int): int { x + 1 }
 fn staticAddTwo(x: int): int { x + 2 }
 
-fn captures(): unit {
+fn captures() {
   let closedOver: int = 3;
 
   let add = \(x: int) {
@@ -14,28 +14,28 @@ fn captures(): unit {
   assertEquals(add(3), 12);
 }
 
-fn captureMut(): unit {
+fn captureMut() {
   let* counter = 3;
 
-  let myInc = \(x: int) {
+  let myInc = \() {
     counter <- counter.* + 1;
   };
 
-  myInc(0);
-  myInc(0);
-  myInc(0);
+  myInc();
+  myInc();
+  myInc();
 
   assert(counter.* == 6);
 }
 
-fn closureReturn(): unit {
+fn closureReturn() {
   let getThree = \(-> int) { return(3) };
   let nullary = \() 4;
   assert(getThree() == 3);
   assert(nullary() == 4);
 }
 
-fn simpleDyn(thunk: dyn[\()-> unit]): unit {
+fn simpleDyn(thunk: dyn[\() -> {}]) {
   thunk()
 }
 
@@ -51,13 +51,13 @@ fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> ?T): ?T {
   t || f || g
 }
 
-fn runThings(thunks: List[dyn[\()-> unit]]): unit {
+fn runThings(thunks: List[dyn[\()-> empty]]) {
   for thunk in thunks { thunk() }
 }
 
-fn thunksTest(): unit {
+fn thunksTest() {
   let* counter = 0;
-  let thunks: List[dyn[\() -> unit]] = [
+  let thunks: List[dyn[\() -> empty]] = [
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
@@ -67,7 +67,7 @@ fn thunksTest(): unit {
   assertEquals(counter.*, 3);
 }
 
-fn test(): unit {
+fn test() {
 
   let staticAddOneVar = staticAddOne.toRef();
   let staticResult = someFnParam2(5, staticAddOne.toRef(), staticAddOneVar);
@@ -107,7 +107,7 @@ fn test(): unit {
   captures();
   captureMut();
   closureReturn();
-  ()
+  {}
 }
 
 }

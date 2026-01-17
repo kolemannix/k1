@@ -40,7 +40,7 @@ use core/Writer
 use types/TypeSchema
 use types/typeSchema
 
-fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, typeId: u64): unit {
+fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, typeId: u64) {
   switch typeSchema(typeId) {
     .Struct(s) -> {
       code.line("w.writeChar('{{');");
@@ -62,7 +62,6 @@ w.writeString("\"{f.name}\":");
       };
       code.line(`w.writeChar('}');`);
     },
-    .Unit -> code.line(`w.writeString(\`"unit"\`);`),
     .Bool -> {
       code.line(`w.writeString(if {name} "true": string else "false");`)
     },
@@ -77,7 +76,7 @@ w.writeString("\"{f.name}\":");
   };
 }
 
-fn writeJson[T, W: Writer](context w: W)(t: T): unit {
+fn writeJson[T, W: Writer](context w: W)(t: T) {
   #meta {
     let typeId = types/typeId[T]();
     let* code = StringBuilder/new();
@@ -93,21 +92,21 @@ fn toJson[T](t: T): string {
   s
 }
 
-fn testToJson(): unit {
+fn testToJson() {
   assertEquals(toJson(true), "true");
-  let json1 = toJson({ x: 1, y: 2, z: (), d: false });
-  assertEquals(json1, `{{"x":1,"y":2,"z":"unit","d":false}`);
+  let json1 = toJson({ x: 1, y: 2, z: {}, d: false });
+  assertEquals(json1, `{{"x":1,"y":2,"z":{{},"d":false}`);
 
-  ()
+  {}
 }
 
 
-fn test(): unit {
+fn test() {
   simpleIncrement();
   testToJson();
 
   let _x: MyMetaPoint = { x: 0, y: 42 };
   pre/pi;
   
-  ()
+  {}
 }

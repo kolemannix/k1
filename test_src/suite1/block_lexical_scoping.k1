@@ -1,12 +1,12 @@
 ns lexical_scope;
 
-fn test(): unit {
+fn test() {
   let result = testCompile({
-    { let foo = 100 };
-    assert(foo == 100);
+    { let _foo = 100 };
+    assert(_foo == 100);
   });
   assert(
     result is .Some(msg) 
-    and msg.startsWith("Invalid call to assert\nInvalid type for parameter 'value': Variable 'foo' is not defined")
+    and msg.startsWith("Invalid call to assert\nInvalid type for parameter 'value': Variable '_foo' is not defined")
   )
 }

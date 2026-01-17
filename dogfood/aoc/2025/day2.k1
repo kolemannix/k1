@@ -3,7 +3,7 @@ let input: string = "5959566378-5959623425,946263-1041590,7777713106-7777870316,
 let sampleInput: string = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-1698528,446443-446449,38593856-38593862,565653-565659,824824821-824824827,2121212118-2121212124";
 use core/iter/forall
 
-fn day2(part: int, input: string): unit {
+fn day2(part: int, input: string) {
   mem/pushMode(.SystemHeap);
   let ranges = input.splitByChar(',');
   mem/popMode();

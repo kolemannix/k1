@@ -8,16 +8,16 @@ fn ifBasic(): int {
 }
 
 fn ifNoElse(): int {
-  // Gets unit type
+  // Gets empty type
   let x = 0;
-  let expr: unit = if true {
+  let expr: {} = if true {
     x := 42;
   };
   assert(x == 42);
-  assert(expr == ());
+  assert(expr == {});
 
   // Even if one branch is 'never'
-  let expr: unit = if false {
+  let _expr: {} = if false {
     crash("never happens");
   };
   0
@@ -29,17 +29,17 @@ fn returnSimple(): bool {
 
 fn rand(): bool { true }
 fn returnFromIf(): int {
-  let x: unit = if rand() {
+  let _x: {} = if rand() {
     return(1)
   };
 
   0
 }
 
-fn loopBreak(): unit {
+fn loopBreak() {
   // Break with scalar
   let x: int = loop {
-    let inner: int = if true {
+    let _inner: int = if true {
       break(3)
     } else 4
     
@@ -53,14 +53,14 @@ fn loopBreak(): unit {
   assertEquals(y, "asdf")
 }
 
-fn loopNested(): unit {
+fn loopNested() {
   let result = loop {
     break(loop { break(10) })
   };
   assertEquals(result, 10)
 }
 
-fn loopFalse(): unit {
+fn loopFalse() {
   let x = loop {
     break(3);
   };
@@ -71,7 +71,7 @@ fn doCrash(): bool {
   crash("should not run");
 }
 
-fn test(): unit {
+fn test() {
 
   ifBasic();
   ifNoElse();
@@ -79,9 +79,7 @@ fn test(): unit {
   assert(returnFromIf() == 1);
 
   // Short-circuiting is guaranteed
-  if (false and doCrash()) {
-    ()
-  };
+  if (false and doCrash()) {};
 
   loopBreak();
   loopNested();

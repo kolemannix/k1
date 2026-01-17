@@ -53,7 +53,7 @@ ns qualified_syntax {
     fn secret(): int { 20 }
   }
 
-  fn test(): unit {
+  fn test() {
     let sFoo: int = HasSecretGen[A = int]@(Foo)/secret();
     assertEquals(sFoo, 10);
     let sBar: int = HasSecretGen[A = int]@(Bar)/secret();
@@ -67,7 +67,7 @@ ns qualified_syntax {
 }
 
 
-fn test(): unit {
+fn test() {
 
   // Method-style call
   let three = 3: i32;

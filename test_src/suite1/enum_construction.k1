@@ -1,47 +1,49 @@
 ns enum_construction;
 
-deftype State = either On(unit), Off(unit), Zilch
+deftype State = either On(empty), Off(empty), Zilch
 deftype StateHard = either On(?int), Off(?int)
 deftype Contrived[A, B] = either Stuff({ a: A, b: B }), Empty
 
-fn test(): unit {
+fn test() {
 
 
   // A naming collision
-  let State: unit = ();
+  let State = {};
+  State;
 
-  let z0: State = State.Zilch;
+  let _: State = State.Zilch;
 
-  let s1 = enum_construction/State.On(());
-  let s2 = enum_construction/State.Off(());
+  enum_construction/State.On({});
+  enum_construction/State.Off({});
 
-  let s3: enum_construction/State = enum_construction/State.Off(());
-  let s4: enum_construction/State = enum_construction/State.On(());
+  let _: enum_construction/State = enum_construction/State.Off({});
+  let _: enum_construction/State = enum_construction/State.On({});
 
-  let s5 = StateHard.On(.Some(42));
-  let s6: StateHard = StateHard.On(.Some(42));
-  let s7: StateHard = StateHard.On(.None);
+  StateHard.On(.Some(42));
+  let _: StateHard = StateHard.On(.Some(42));
+  let _: StateHard = StateHard.On(.None);
 
   // A naming collision
-  let Opt: unit = ();
+  let Opt = {};
+  Opt;
 
-  let bb: Opt[bool]      = .Some(true);
+  let _: Opt[bool]      = .Some(true);
   let bc = _root/core/Opt.Some[bool](true);
   assert(bc is .Some(true));
   let bc2 = _root/core/Opt.Some(42);
   assert(bc2 is .Some(42));
 
-  let b: Opt[bool] = Opt.None;
-  let b: Opt[bool] = .None;
-  let c: Opt[bool] = Opt.None;
+  let _: Opt[bool] = Opt.None;
+  let _: Opt[bool] = .None;
+  let _: Opt[bool] = Opt.None;
 
-  let i: Opt[i32] = Opt.None[i32];
-  let i: Opt[i32] = Opt.None[i32];
-  let i: Opt[i32] = Opt.None;
+  let _: Opt[i32] = Opt.None[i32];
+  let _: Opt[i32] = Opt.None[i32];
+  let _: Opt[i32] = Opt.None;
 
-  let x = Contrived.Stuff({ a: 42, b: "hello"});
+  Contrived.Stuff({ a: 42, b: "hello"});
 
-  let bbb = Opt.None[int];
+  Opt.None[int];
 
-  ()
+  {}
 }

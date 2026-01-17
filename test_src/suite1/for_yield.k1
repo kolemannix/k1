@@ -10,7 +10,7 @@ fn forString(): int {
   0
 }
 
-fn forYield(): unit {
+fn forYield() {
   let squares: List[int] = List/fromMap([1, 5, 9, 12], \it. it * it);
   assert(squares.len == 4);
   assert(squares.get(0) == 1);
@@ -19,7 +19,7 @@ fn forYield(): unit {
   assert(squares.get(3) == 144);
 }
 
-fn test(): unit {
+fn test() {
   forString();
   forYield();
 }

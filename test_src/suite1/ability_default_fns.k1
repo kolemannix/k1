@@ -39,7 +39,7 @@ impl[T: Increment] IncrFour for T {
 }
 
 
-fn test(): unit {
+fn test() {
   let i: i32 = 554;
   assertEquals(i.inc(), 555);
   assertEquals(i.incTwice(), 556);
@@ -53,5 +53,5 @@ fn test(): unit {
   // Ensures that our specialized implementation is used over the default
   assertEquals(I32_SPEC_COUNTER.*, 6);
   
-  ()
+  {}
 }

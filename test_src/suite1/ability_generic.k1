@@ -55,14 +55,14 @@ ns ability_generic {
     fn to(self: byte): char { self.as() }
   }
 
-  fn test(): unit {
+  fn test() {
 
-    let btoc: char = (101: u8).to();
+    let _btoc: char = (101: u8).to();
 
     let x: i32 = 4;
 
     let add32 = x.gadd(10: i32);
-    //assert(add32 == 14);
+    assert(add32 == 14);
 
     let add64 = x.gadd(12: i64);
     assert(add64 == 16: i64);

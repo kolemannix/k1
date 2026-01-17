@@ -18,7 +18,7 @@ let MODULE_INFO: core/k1/ModuleManifest = {
 ns foo {
 
   deftype VerySmall = { x: u8 }
-  impl Print for VerySmall { fn printTo[W: Writer](self: VerySmall, w: W): unit { w.writeString("{ {self.x} }") } }
+  impl Print for VerySmall { fn printTo[W: Writer](self: VerySmall, w: W) { w.writeString("{ {self.x} }") } }
   impl Equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
   extern("foo", "very_small") fn very_small(x: VerySmall, y: VerySmall): VerySmall
 
@@ -36,7 +36,7 @@ ns foo {
 
 }
 
-fn testAll(): unit {
+fn testAll() {
   assertEquals(
     foo/very_small({ x: 10 }, { x: 20 }),
     { x: 30 }

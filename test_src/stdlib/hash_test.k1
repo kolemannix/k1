@@ -2,7 +2,7 @@ ns hash_test;
 
 use std/HashMap
 
-fn testBasic(): unit {
+fn testBasic() {
   let* myMap = HashMap/new[int]();
   //myMap.insert("a", 10);
   //myMap.insert("b", 11);
@@ -19,7 +19,7 @@ fn testBasic(): unit {
   //assertEquals(myMap.get("b"), .Some(21));
 }
 
-fn testResize(size: int): unit {
+fn testResize(size: int) {
   let* myMap = HashMap/new[int]();
   let i = 0;
   while i < size {
@@ -43,7 +43,7 @@ fn testResize(size: int): unit {
   // myMap.dump();
 }
 
-fn test(): unit {
+fn test() {
   testBasic();
   testResize(1000);
 }

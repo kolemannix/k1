@@ -5,11 +5,11 @@ fn addTracked(context hist: *mut List[string])(x: int, y: int): int {
   x + y
 }
 
-fn addAll(context a: u8, b: u16)(x: int, y: int): int {
+fn addAll(context _a: u8, _b: u16)(x: int, y: int): int {
   x + y
 }
 
-fn test(): unit {
+fn test() {
   let context history: *mut List[string] = core/mem/new([]);
 
   assert(addTracked(context history)(1,2) == 3);

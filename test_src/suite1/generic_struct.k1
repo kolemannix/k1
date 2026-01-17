@@ -13,10 +13,10 @@ fn unboxIt[T](b: Box[Box[Box[T]]]): T {
   b.value.value.value
 }
 
-fn takesPolyAuPair[C, D](x: AuPair[C, D]): unit { () }
+fn takesPolyAuPair[C, D](_x: AuPair[C, D]) { {} }
 
-deftype ConstrainedBox[A, B: Try[T = A, E = unit]] = { inner: B }
-fn testConstraints(): unit {
+deftype ConstrainedBox[A, B: Try[T = A, E = empty]] = { inner: B }
+fn testConstraints() {
   // Should typecheck just fine since the constraint is satisfied
   let x: ConstrainedBox[int, ?int] = { inner: some(4) };
   assertEquals(types/typeId[typeOf(x).A](), types/typeId[int]());
@@ -24,10 +24,10 @@ fn testConstraints(): unit {
     testCompile({ inner: some(4) }: ConstrainedBox[int, ?bool]),
     .Some("Provided type B := Opt[bool] does implement required ability Try, but the implementation parameter T is wrong: Expected type was i64 but the actual implementation uses bool")
   );
-  ()
+  {}
 }
 
-fn test(): unit {
+fn test() {
   let b: Box[int] = { value: 0 };
   b.value;
   let c: Box[bool] = { value: true };
@@ -68,5 +68,5 @@ fn test(): unit {
 
   testConstraints();
 
-  ()
+  {}
 }

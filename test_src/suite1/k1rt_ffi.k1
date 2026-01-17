@@ -1,4 +1,4 @@
-fn testFfi(): unit {
+fn testFfi() {
   let s = #static {
     let* buf = Array/zeroed[char, 1024]();
     let len: core/c_int = core/k1rt/snprintf_f64(

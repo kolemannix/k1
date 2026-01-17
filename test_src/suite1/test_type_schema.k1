@@ -26,10 +26,8 @@ ns type_schema {
     sb.build()
   }
 
-  fn test(): unit {
+  fn test() {
 
-    assert(getTypeSchema[unit] is TypeSchema.Unit);
-    assert(getTypeSchema[unit] is .Unit);
     assert(getTypeSchema[u8]   is .Int(.U8));
     assert(getTypeSchema[u16]  is .Int(.U16));
     assert(getTypeSchema[u32]  is .Int(.U32));
@@ -77,7 +75,6 @@ ns type_schema {
     assertEquals(printStructShape[Point3[u8]], "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *\(int) -> bool = isZero.toRef();
-    let incr2: *\int -> int = ( \(x) x + 2 );
     require getTypeSchema[typeOf(isZeroPtr)]
       is .FunctionPointer({ functionTypeId }) else crash("");
 
@@ -88,7 +85,7 @@ ns type_schema {
     assertEquals(params.get(0).name, "x");
     assert(typeSchema(params.get(0).typeId) is .Int(_));
 
-    ()
+    {}
   }
 
   fn isZero(x: int): bool { x == 0 }

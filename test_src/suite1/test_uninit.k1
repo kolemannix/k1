@@ -2,7 +2,7 @@ ns test_uninit;
 
 let* GLOB: *int = 50;
 
-fn test(): unit {
+fn test() {
   // pointer is initialized, but value is not
   let* x: *mut int = uninit;
   x <- 42;
@@ -18,5 +18,5 @@ fn test(): unit {
   assertEquals(p.as[ptr], GLOB.as[ptr]);
   assertEquals(p.*, 50);
 
-  ()
+  {}
 }

@@ -8,7 +8,7 @@ deftype Json = either
   JsArray(List[json_test/Json]),
   JsObject(List[{ key: string, value: Json }])
 
-fn test(): unit {
+fn test() {
   let size = core/types/sizeOf[Json]();
   let align = core/types/alignOf[Json]();
   assertEquals(size, 32);

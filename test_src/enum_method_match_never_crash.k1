@@ -11,7 +11,7 @@ ns enum_method_match_never {
   }
   
   
-  fn isVariant(): unit {
+  fn isVariant() {
     let x: either A(int), B(int), C = .A(42);
     assert(x.asB().isNone());
     assert(not x is .C);

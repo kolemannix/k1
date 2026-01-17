@@ -743,6 +743,7 @@ impl TypedProgram {
         id: StaticValueId,
     ) -> std::fmt::Result {
         match self.static_values.get(id) {
+            StaticValue::Empty => w.write_str("{}"),
             StaticValue::Bool(b) => write!(w, "{}", *b),
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(typed_integer_value) => {

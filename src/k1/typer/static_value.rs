@@ -53,6 +53,7 @@ nz_u32_id!(StaticValueId);
 static_assert_size!(StaticValue, 24);
 #[derive(Clone)]
 pub enum StaticValue {
+    Empty,
     Bool(bool),
     Char(u8),
     Int(TypedIntValue),
@@ -67,6 +68,7 @@ pub enum StaticValue {
 impl StaticValue {
     pub fn kind_name(&self) -> &'static str {
         match self {
+            StaticValue::Empty => "empty",
             StaticValue::Bool(_) => "bool",
             StaticValue::Char(_) => "char",
             StaticValue::Int(i) => i.kind_name(),
@@ -84,6 +86,7 @@ impl StaticValue {
 
     pub fn get_type(&self) -> TypeId {
         match self {
+            StaticValue::Empty => EMPTY_ID,
             StaticValue::Bool(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
@@ -138,6 +141,7 @@ impl DepHash<StaticValuePool> for StaticValue {
         use std::hash::Hash;
         std::mem::discriminant(self).hash(state);
         match self {
+            StaticValue::Empty => {}
             StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
@@ -178,6 +182,7 @@ impl DepHash<StaticValuePool> for StaticValue {
 impl DepEq<StaticValuePool> for StaticValue {
     fn dep_eq(&self, other: &Self, pool: &StaticValuePool) -> bool {
         match (self, other) {
+            (StaticValue::Empty, StaticValue::Empty) => true,
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
             (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
             (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
@@ -213,7 +218,7 @@ pub struct StaticValuePool {
     pub pool: VPool<StaticValue, StaticValueId>,
     pub hashes: FxHashMap<u64, StaticValueId>,
 
-    empty_struct_id: Option<StaticValueId>,
+    empty_id: StaticValueId,
     false_id: StaticValueId,
     true_id: StaticValueId,
 }
@@ -223,18 +228,19 @@ impl StaticValuePool {
         let mut pool = VPool::make_with_hint("static_values", size_hint);
         let false_id = pool.add(StaticValue::Bool(false));
         let true_id = pool.add(StaticValue::Bool(true));
+        let empty_id = pool.add(StaticValue::Empty);
         StaticValuePool {
             mem: kmem::Mem::make(),
             pool,
             hashes: FxHashMap::with_capacity(size_hint),
-            empty_struct_id: None,
+            empty_id,
             false_id,
             true_id,
         }
     }
 
-    pub fn empty_struct(&mut self, type_id: TypeId) -> StaticValueId {
-        self.add_struct(type_id, MSlice::empty())
+    pub fn empty_id(&mut self) -> StaticValueId {
+        self.empty_id
     }
 
     pub fn false_id(&self) -> StaticValueId {
@@ -285,7 +291,7 @@ impl StaticValuePool {
         fields: &[StaticValueId],
     ) -> StaticValueId {
         let slice = self.mem.pushn(fields);
-        self.add(StaticValue::Struct(StaticStruct { type_id, fields: slice }))
+        self.add_struct(type_id, slice)
     }
 
     pub fn add_int(&mut self, value: TypedIntValue) -> StaticValueId {
@@ -308,14 +314,11 @@ impl StaticValuePool {
     }
 
     pub fn add(&mut self, value: StaticValue) -> StaticValueId {
-        let is_empty_struct = match value {
-            StaticValue::Struct(s) if s.fields.is_empty() => match self.empty_struct_id {
-                None => true,
-                Some(id) => return id,
-            },
+        match value {
+            StaticValue::Struct(s) if s.fields.is_empty() => return self.empty_id,
             StaticValue::Bool(false) => return self.false_id(),
             StaticValue::Bool(true) => return self.true_id(),
-            _ => false,
+            _ => {}
         };
         let hash = self.hash(&value);
         if let Entry::Occupied(entry) = self.hashes.entry(hash) {
@@ -327,9 +330,6 @@ impl StaticValuePool {
         }
         let new_id = self.pool.add(value);
         self.hashes.insert(hash, new_id);
-        if is_empty_struct {
-            self.empty_struct_id = Some(new_id)
-        }
         new_id
     }
 

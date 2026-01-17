@@ -9,7 +9,7 @@ L99
 R14
 L82`;
 
-fn day1(input: string): unit {
+fn day1(input: string) {
 
   let commands = input.splitByChar('\n');
 
@@ -45,7 +45,7 @@ fn day1(input: string): unit {
   println("Day 1 part CLICK: {mzs}");
 }
 
-fn brute(input: string): unit {
+fn brute(input: string) {
   let commands = input.splitByChar('\n');
 
   let pos = 50;

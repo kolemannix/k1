@@ -14,7 +14,7 @@ ns foo {
 }
 
 
-fn test(): unit {
+fn test() {
   let baz = { b: 32 }: foo/Baz;
   assert(foo/Baz/get(baz) + foo/Baz/get2(baz) == 64);
   assert(baz.get() + baz.get2() == 64);

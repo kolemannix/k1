@@ -1,22 +1,22 @@
 ns string_interp_test;
 
 impl Print for { name: string, weight: int } {
-  fn printTo[W: Writer](self: Self, w: W): unit {
+  fn printTo[W: Writer](self: Self, w: W) {
     w.writeString(self.name);
     w.writeString(": ");
     self.weight.printTo(w);
-    ()
+    {}
   }
 }
 
-fn testRawStrings(): unit {
+fn testRawStrings() {
   let s1 = `Hello,
 
   "world"`;
   assertEquals(s1, "Hello,\n\n  \"world\"")
 }
 
-fn test(): unit {
+fn test() {
   let user = { name: "Bob", weight: 199 };
   assertEquals("Hello, '{user}'!", "Hello, 'Bob: 199'!");
 

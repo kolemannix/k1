@@ -24,7 +24,7 @@ fn staticsAndCoercion(): i32 {
 fn getPoint(): { x: u8, y: u32, z: i64 } {
   { x: 1, y: 300, z: -222 }
 }
-fn test(): unit {
+fn test() {
   // String creation (special case)
   #static "Hello, Static";
 
@@ -39,7 +39,7 @@ fn test(): unit {
   assert(#static true);
   assert(not (#static false));
   assert(not (#static true == false));
-  assert(#static () == ());
+  assert(#static {} == {});
   assert(#static 'a' == 'a');
   assert(not #static 'A' == 'a');
   assert(not #static 123 == -123);
@@ -126,7 +126,7 @@ fn test(): unit {
   }, 5);
 
   #static {
-    let* l = List/withCapacity[unit](0);
+    let* l = List/withCapacity[empty](0);
     l.len
   };
 
@@ -191,18 +191,18 @@ fn test(): unit {
   assertEquals(vov.get(1).get(1), 5);
   assertEquals(vov.get(1).get(2), 6);
 
-  ()
+  {}
 }
 
 fn getOne(): int { 1 }
 fn getThree(): int { getOne() + 2 }
 
-fn foo(n: int): unit {
+fn foo(n: int) {
   if n == 0 return()
   else bar(n - 1)
 }
 
-fn bar(n: int): unit {
+fn bar(n: int) {
   if n == 0 return()
   else foo(n - 1)
 }

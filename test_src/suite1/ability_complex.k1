@@ -27,18 +27,18 @@ fn unwrapB[
   y.!
 }
 
-fn getNothin[A, B, T: AsPair[AA=A, BB=B]](t: T): unit {
-  ()
+fn getNothin[A, B, T: AsPair[AA=A, BB=B]](_t: T) {
+  {}
 }
 
-fn test(): unit {
+fn test() {
   // Phase 1
   let myPair: Pair[int, bool] = { a: mem/new(10), b: some(true) };
-  getNothin(t = myPair);
+  getNothin(_t = myPair);
   let b = unwrapB[int, bool, Pair[int, bool]](myPair);
   assert(b);
   let i = unwrapB[bool, int, Pair[int, bool]](myPair);
   assertEquals(i, 10);
 
-  ()
+  {}
 }

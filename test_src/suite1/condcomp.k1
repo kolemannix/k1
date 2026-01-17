@@ -4,10 +4,10 @@ ns condcomp;
 let MY_VALUE: bool = true;
 let MY_VALUE_NEG: bool = not MY_VALUE;
 
-fn test(): unit {
+fn test() {
   use core/k1;
-  let a = k1/OS;
-  let b = "macos";
+  let _a = k1/OS;
+  let _b = "macos";
   assertEquals(k1/OS, "macos");
   assertEquals(k1/TEST, false);
 
@@ -22,5 +22,5 @@ fn test(): unit {
   let comptimeCheck = #if false "foo" else "bar";
   assert(comptimeCheck == "bar");
 
-  ()
+  {}
 }

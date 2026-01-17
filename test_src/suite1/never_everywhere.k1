@@ -1,13 +1,13 @@
 ns never_everywhere;
 
 fn callArgument(): never { println(crash("call arg")) }
-fn letRhs(): unit { let _x = crash("letRhs") }
+fn letRhs(): empty { let _x = crash("letRhs") }
 fn assgnRhs(): never { let _x = 123; _x := crash("assgn rhs") }
 // should fail to compile anyway
 // fn binopLhs(): never { crash("") + 4 }
 fn binopRhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
-fn whileCond(): never { while crash("asdf") { () } }
+fn whileCond(): never { while crash("asdf") { {} } }
 fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
 fn getEnumPayload(): i64 { 
   let x: ?int = Opt.Some(crash(""));
@@ -33,6 +33,6 @@ fn inBreak(): never {
   core/sys/exit(0)
 }
 
-fn test(): unit {
-  ()
+fn test() {
+  {}
 }

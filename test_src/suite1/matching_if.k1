@@ -3,7 +3,7 @@ ns matching_if;
 deftype alias ABC = either A, B, C
 
 impl Print for ABC {
-  fn printTo[W: Writer](self: ABC, w: W): unit {
+  fn printTo[W: Writer](self: ABC, w: W) {
     switch self {
       .A -> w.writeChar('A'),
       .B -> w.writeChar('B'),
@@ -40,7 +40,7 @@ fn switchStruct(v: { x: int, y: int }): ABC {
 }
 
 
-fn test(): unit {
+fn test() {
   // "Matching if" expressions
   // You can match on as many things as you like, as long as the whole chain is connected by 'ands' and your "is" expressions live at the top-level
   let foo = 3;
@@ -105,19 +105,13 @@ fn test(): unit {
   // Test that we can't use bound variables in the pattern itself
   // We should prevent shadowing within the same match, seems like always a bad idea
   let shadowFailure = testCompile({
-    if mixed is .Some({ outer: o, inner: .Some({ value: o })}) {
-      ()
-    } else {
-      ()
-    }
+    if mixed is .Some({ outer: o, inner: .Some({ value: o })}) {} else {}
   });
   assert(shadowFailure.isSome());
 
   let myOpt = some(42);
   let yourOpt = some(false);
-  if myOpt is .Some(x) and x == 42 {
-    ()
-  } else assert(false);
+  if myOpt is .Some(x) and x == 42 {} else assert(false);
 
   assertEquals(bindingIfStruct({ x: 1, y: 2 }), .A);
   assertEquals(bindingIfStruct({ x: 2, y: 2 }), .B);
@@ -136,6 +130,6 @@ fn test(): unit {
   assert(x == 1);
 
 
-  ()
+  {}
 
 }

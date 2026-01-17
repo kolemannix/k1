@@ -29,7 +29,7 @@ ns meta_defns;
 
 #meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
 
-fn test(): unit {
+fn test() {
   let frob: Frob = { b: false };
 
   assertEquals(frob.getName(), "Joe");
@@ -48,7 +48,7 @@ fn test(): unit {
 }
 
 // Only "static, true" and "meta, true" should appear
-#if true #static { println("static, true"); () } 
-#if false #static { println("static, false"); () } 
-#if true #meta { println("meta, true"); "let u1: unit = ();" } 
-#if false #meta { println("meta, false"); "let u2: unit = ();" } 
+#if true #static { println("static, true"); {} } 
+#if false #static { println("static, false"); {} } 
+#if true #meta { println("meta, true"); "let u1: empty = {{};" } 
+#if false #meta { println("meta, false"); "let u2: empty = {{};" } 

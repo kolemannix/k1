@@ -12,7 +12,7 @@ ns mem {
   ability Allocator {
     fn allocate(self: Self, size: size, align: size): ptr
     fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr
-    fn free(self: Self, ptr: ptr, size: size, align: size): unit
+    fn free(self: Self, ptr: ptr, size: size, align: size)
 
     fn allocStyle(): AllocStyle
   }
@@ -24,7 +24,7 @@ ns mem {
     fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
       core/mem/realloc(ptr, oldSize = oldSize, align = align, newSize = newSize)
     }
-    fn free(self: Self, ptr: ptr, size: size, align: size): unit {
+    fn free(self: Self, ptr: ptr, size: size, align: size) {
       core/mem/free(ptr, size, align)
     }
     fn allocStyle(): AllocStyle { .Heap }
@@ -38,7 +38,7 @@ ns mem {
   fn reallocate[A: Allocator](context alloc: A)(ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
     alloc.reallocate(ptr, oldSize, align, newSize)
   }
-  fn free[A: Allocator](context alloc: A)(ptr: ptr, size: size, align: size): unit {
+  fn free[A: Allocator](context alloc: A)(ptr: ptr, size: size, align: size) {
     alloc.free(ptr, size, align)
   }
 
@@ -60,7 +60,7 @@ ns mem {
 
   // The allocator _could_ end up being zero-sized, in which case
   // we should optimize out the function argument altogether!
-  fn bufferGrowTo[T, A: Allocator](context a: A)(self: Buffer[T]*, newCount: u64): unit {
+  fn bufferGrowTo[T, A: Allocator](context a: A)(self: Buffer[T]*, newCount: u64) {
     #if supportsRealloc[A]() {
       let newSize = bufferSizeBytes[T](newCount);
       let realloc = a.realloc(self.dataptr(), newSize);

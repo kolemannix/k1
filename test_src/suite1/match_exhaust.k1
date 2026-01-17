@@ -44,8 +44,8 @@ fn bothTrue(bb: { a: bool, b: bool }): bool {
 
 fn main(): i32 {
   switch 'x' {
-    'x' -> (),
-    a -> ()
+    'x' -> {},
+    a -> {}
   };
 
   assertEquals(matchBool(false), "false");
@@ -64,7 +64,7 @@ fn main(): i32 {
   assert(not failedWithBaz(.No));
 
   switch some(42) {
-    .Some(x) if x == 42 -> (),
+    .Some(x) if x == 42 -> {},
     _ -> assert(false),
   };
 

@@ -140,35 +140,36 @@ impl StructType {
     }
 }
 
-pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
-pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
-pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
-pub const U64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
-pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
-pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
-pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
-pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
+pub const EMPTY_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
+pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
+pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
+pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
+pub const U64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(5).unwrap());
+pub const I8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(6).unwrap());
+pub const I16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(7).unwrap());
+pub const I32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(8).unwrap());
+pub const I64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
 pub const SIZE_TYPE_ID: TypeId = I64_TYPE_ID;
 
-pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(9).unwrap());
-pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
-pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
-pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
-pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
-pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
+pub const CHAR_TYPE_ID: TypeId = TypeId(NonZeroU32::new(10).unwrap());
+pub const BOOL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(11).unwrap());
+pub const NEVER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(12).unwrap());
+pub const POINTER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(13).unwrap());
+pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
+pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
-pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
+pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
 
-pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
+pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 
-pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
-pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
-pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
-pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
-pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
+pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
+pub const OPTIONAL_TYPE_ID: TypeId = TypeId(NonZeroU32::new(20).unwrap());
+pub const COMPILER_SOURCE_LOC_TYPE_ID: TypeId = TypeId(NonZeroU32::new(21).unwrap());
+pub const ORDERING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
 
-pub const _RESULT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(22).unwrap());
+pub const _RESULT_TYPE_ID: TypeId = TypeId(NonZeroU32::new(23).unwrap());
 //pub const TYPE_SCHEMA_TYPE_ID: TypeId = TypeId(NonZeroU32::new(39).unwrap());
 
 #[derive(Clone)]

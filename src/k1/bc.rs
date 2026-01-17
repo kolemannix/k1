@@ -2188,6 +2188,7 @@ fn compile_expr(
             // We lower the simple scalar static values
             // but leave the aggregates as globals
             match b.k1.static_values.get(stat.value_id) {
+                StaticValue::Empty => Ok(Value::Empty),
                 StaticValue::Bool(bv) => {
                     let imm = Value::byte(*bv as u8);
                     let store = store_scalar_if_dst(b, dst, imm);

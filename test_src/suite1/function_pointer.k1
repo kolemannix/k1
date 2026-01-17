@@ -3,7 +3,7 @@ ns function_pointer;
 fn staticAddOne(x: int): int { x + 1 }
 fn staticAddTwo(x: int): int { x + 2 }
 
-fn test(): unit {
+fn test() {
   assert(staticAddOne.toRef().as[ptr] != staticAddTwo.toRef().as[ptr]);
   let someAddFn = staticAddOne.toRef();
   let x = someAddFn(10);
@@ -12,5 +12,5 @@ fn test(): unit {
   let y = someAddFn(20);
   assertEquals(y, 22);
 
-  ()
+  {}
 }

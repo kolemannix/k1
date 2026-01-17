@@ -74,7 +74,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     }
 }
 
-fn end_profile_block(block: ProfileBlock): unit {
+fn end_profile_block(block: ProfileBlock) {
     let elapsed = read_cpu_timer() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
@@ -91,7 +91,7 @@ fn end_profile_block(block: ProfileBlock): unit {
 }
 
 // Print timing results for a single anchor
-fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
+fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor) {
     let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.as[f64] / total_tsc_elapsed.as[f64];
     print("  {anchor.label}[{anchor.hit_count}]: {percent}% ");
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
@@ -103,7 +103,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor): unit {
 }
 
 // Print all anchor profiling data
-fn print_anchor_data(total_cpu_elapsed: u64): unit {
+fn print_anchor_data(total_cpu_elapsed: u64) {
     for anchor in global_profiler_anchors.asBuffer().refIter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
@@ -112,12 +112,12 @@ fn print_anchor_data(total_cpu_elapsed: u64): unit {
 }
 
 // Begin overall profiling session
-fn begin_profile(): unit {
+fn begin_profile() {
     global_profile_start_tsc <- read_cpu_timer()
 }
 
 // End profiling session and print results
-fn end_and_print_profile(): unit {
+fn end_and_print_profile() {
     global_profile_end_tsc <- read_cpu_timer();
     let total_tsc_elapsed = global_profile_end_tsc.* - global_profile_start_tsc.*;
     

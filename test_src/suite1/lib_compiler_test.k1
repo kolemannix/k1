@@ -1,6 +1,6 @@
 ns lib_compiler_test;
 
-fn test(): unit {
+fn test() {
   let loc = core/compiler/location();
   assert(loc.filename == "lib_compiler_test.k1");
   assert(loc.line == 4);

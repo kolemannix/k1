@@ -12,7 +12,7 @@ deftype User = {
 
 deftype UserView = _struct_remove[User, { password: string }]
 
-fn test(): unit {
+fn test() {
   let t: Text = { text: "Hello, Builder!", x: 0, y: 0, width: 0, height: 0 };
   assert(t is { text: "Hello, Builder!" });
   assert(t.x == 0);

@@ -12,7 +12,7 @@ ns UserId {
 
 }
 
-fn test(): unit {
+fn test() {
   let user_id: UserId = UserId/make(11);
   assert(user_id.toInt() == 11);
 

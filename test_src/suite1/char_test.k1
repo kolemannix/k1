@@ -1,6 +1,6 @@
 ns char_test;
 
-fn basic(): unit {
+fn basic() {
   let c: char = '!';
   assert(c == '!');
   let s = c.toString();
@@ -12,7 +12,7 @@ fn basic(): unit {
   assert(s.appendChar('!') == "!!");
 }
 
-fn escape(): unit {
+fn escape() {
 
   // EscapedChar { sentinel: 'n', output: b'\n' },
   // EscapedChar { sentinel: '0', output: b'\0' },
@@ -42,10 +42,10 @@ fn escape(): unit {
   let c = '\\';
   assert(c.as[u8] == 92);
 
-  ()
+  {}
 }
 
-fn test(): unit {
+fn test() {
   basic();
   escape();
 }

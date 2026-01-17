@@ -2,7 +2,7 @@ ns enum_fail;
 ns inner;
 deftype E = either A(int) , B , C
 
-fn test(): unit {
+fn test() {
   let result = testCompile(.A(true): E);
   assertEquals(
     result,

@@ -65,13 +65,13 @@ fn indexToBit(index: u64): Bitboard {
   1u64 << index.as[u32]()
 }
 
-fn printBitboard(b: Bitboard): unit {
+fn printBitboard(b: Bitboard) {
   let* l = List/empty[char]();
   writeBitboard(l, b);
   println(string/wrapList(l))
 }
 
-fn writeBitboard[W: Writer](writer: W, b: Bitboard): unit {
+fn writeBitboard[W: Writer](writer: W, b: Bitboard) {
   // Scanlines by rank backwards so it reads naturally
   let rank = 7;
   while rank >= 0 {
@@ -107,7 +107,7 @@ ns GameState {
       castleRights: 0b00000011, enPassantFile: -1, turn: .White }
   }
 
-  fn printGrid(self: GameState): unit {
+  fn printGrid(self: GameState) {
     let* writer = List/withCapacity[char](128);
     let rank = 7;
     while rank >= 0 {
@@ -205,8 +205,8 @@ fn cmdIsReady(): string {
   "readyok"
 }
 
-fn cmdNewGame(): unit {
-  ()
+fn cmdNewGame() {
+  {}
 }
 
 
@@ -238,7 +238,7 @@ ns Engine {
   fn inDebugMode(self: Engine): bool { true }
 }
 
-fn debugLog(context eng: Engine)(s: string): unit {
+fn debugLog(context eng: Engine)(s: string) {
   if eng.inDebugMode() {
     println("[debug] {s}");
   }

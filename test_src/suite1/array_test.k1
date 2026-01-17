@@ -5,7 +5,7 @@ deftype Thing = {
   data2: Array[u64, 1024],
 }
 
-fn testLiterals(): unit {
+fn testLiterals() {
   let* array: *mut Array[bool, 3] = [false, true, true];
   let buffer: Buffer[bool] = [false, true, true];
   let list: List[bool] = [false, true, true];
@@ -13,7 +13,7 @@ fn testLiterals(): unit {
   assertEquals(list.asBuffer(), buffer);
 }
 
-fn testFilled(): unit {
+fn testFilled() {
   let context alloc: mem/AllocMode = .Arena;
   let buffer: Buffer[u8] = Buffer/filledIn(size = 64, value = 3);
   let array: *Array[u8, 64] = Array/filledIn(3, 64);
@@ -28,7 +28,7 @@ fn testFilled(): unit {
   }
 }
 
-fn testArray(): unit {
+fn testArray() {
   let context alloc: mem/AllocMode = .Arena;
   let ls: List[u8] = List/filledIn(size = 10, value = 3);
 
@@ -46,7 +46,7 @@ fn testArray(): unit {
 
 }
 
-fn test(): unit {
+fn test() {
   assertEquals(types/sizeOf[Thing](), 9216);
 
   testArray();
@@ -61,5 +61,5 @@ fn test(): unit {
   assert(buf.get(0) == array.get(0));
   assertEquals(buf.get(0), array.get(0));
 
-  ()
+  {}
 }

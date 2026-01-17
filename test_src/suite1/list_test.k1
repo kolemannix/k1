@@ -34,7 +34,7 @@ fn listFill(): int {
   0
 }
 
-fn listSlice(): unit {
+fn listSlice() {
   let* a =  [1,2,3];
   let slice = a.slice(0,2);
   assert(slice.len == 2);
@@ -102,17 +102,17 @@ impl Equals for { rank: int, payload: string } {
   }
 }
 
-fn testSortInt(input: List[int], expected: List[int]): unit {
+fn testSortInt(input: List[int], expected: List[int]) {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
 
-fn testSortOther(input: List[{ rank: int, payload: string }], expected: List[{ rank: int, payload: string }]): unit {
+fn testSortOther(input: List[{ rank: int, payload: string }], expected: List[{ rank: int, payload: string }]) {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
 
-fn testSort(): unit {
+fn testSort() {
   testSortInt([], []);
   testSortInt([0], [0]);
   testSortInt([5,4], [4,5]);
@@ -128,7 +128,7 @@ fn testSort(): unit {
   ]);
 }
 
-fn testSwap(): unit {
+fn testSwap() {
   let* a = [1,2];
   a.swap(0,1);
   assert(a.* == [2,1]);
@@ -153,7 +153,7 @@ fn iterator(): int {
   0
 }
 
-fn test(): unit {
+fn test() {
   list_test/listOfStructs();
   list_test/listSlice();
   list_test/listFill();

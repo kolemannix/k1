@@ -17,7 +17,7 @@ ability SayHello {
 }
 
 
-fn test(): unit {
+fn test() {
   let foo: Foo = { name: "Joe" };
   foo.hello();
   assert(takesHelloer(foo).s == "Joe");
@@ -30,7 +30,7 @@ deftype Foo = { name: string }
 ns bar {
   // Type with NS used before defined
   use foo/core/Test
-  fn doIt(t: Test): Test { 
+  fn doIt(_t: Test): Test { 
     // before called
     before();
     Test/default
@@ -41,7 +41,7 @@ ns bar {
 
 ns secret {
   // before defined (below where imported and called)
-  fn before(): unit { () }
+  fn before() { {} }
 }
 
 ns foo {

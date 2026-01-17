@@ -1,9 +1,9 @@
 ns is_patterns;
 
-fn test(): unit {
-  // Unit
-  let u = ();
-  assert(u is ());
+fn test() {
+  // Empty
+  let e = {};
+  assert(e is {});
 
   let i = 42;
   assert(not (i is 41));
@@ -44,7 +44,7 @@ fn test(): unit {
 
   // Else works
   let else_ran = false;
-  if foo is { x: 200 } { () } else {
+  if foo is { x: 200 } {} else {
     else_ran := true;
   };
   assert(else_ran);
@@ -63,7 +63,5 @@ fn test(): unit {
 
   // Optionals
   let opt: ?{ x: i64 } = .Some({ x: 1 });
-  if opt is .Some({ x: 2 }) {
-    ()
-  } else assert(true);
+  if opt is .Some({ x: 2 }) {} else assert(true);
 }

@@ -15,11 +15,11 @@ fn basicStruct(): int {
 deftype Foo = { x: int, y: bool }
 ns Foo {
   fn getValue(self: Foo): int { self.x }
-  fn setValue(self: *mut Foo, x: int): unit { self.x* <- x; }
+  fn setValue(self: *mut Foo, x: int) { self.x* <- x; }
   fn new(x: int): Foo { { x: x, y: false } }
 }
 
-fn structArgMut(): unit {
+fn structArgMut() {
   let* x = Foo/new(42);
   assert(x.x == 42);
   assert(x.getValue() == 42);
@@ -33,7 +33,7 @@ impl Equals for { a: int } {
     self.a == other.a
   }
 }
-fn eqAnon(): unit {
+fn eqAnon() {
   let foo = { a: 3 };
   let bar = { a: 4 };
   assert(foo != bar);
@@ -48,7 +48,7 @@ deftype Block = {
 
 fn block_area(b: Block): int { b.position.width * b.position.height }
 
-fn structNested(): unit {
+fn structNested() {
   let width = 50;
   let b: Block = {
     position: { x: 1, y: 1, width, height: 50 },
@@ -60,7 +60,7 @@ fn structNested(): unit {
   assert(area2 == 2500);
 }
 
-fn test(): unit {
+fn test() {
   basicStruct();
   structArgMut();
   eqAnon();

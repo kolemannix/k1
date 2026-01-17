@@ -5,7 +5,7 @@ ability Num {
 
 deftype Tool = either True, False, Iono
 
-fn test(): unit {
+fn test() {
   let p: Tool = .True;
   let result = testCompile(p.num());
   assertEquals(result, .Some(

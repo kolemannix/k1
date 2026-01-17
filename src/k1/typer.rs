@@ -2416,7 +2416,11 @@ impl Timing {
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
         let ast = ParsedProgram::make(program_name, config);
-        let types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
+
+        let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
+        let empty_struct_id = types.add_empty_struct();
+        assert_eq!(empty_struct_id, EMPTY_ID);
+
         let root_ident = ast.idents.b.root_module_name;
         let mut scopes = Scopes::make(root_ident, 8192);
         let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
@@ -2854,7 +2858,11 @@ impl TypedProgram {
             TypedStmt::Expr(_, ty) => *ty,
             TypedStmt::Let(val_def) => {
                 // nocommit: Make this impossible; just don't emit the let
-                if val_def.variable_type == NEVER_TYPE_ID { NEVER_TYPE_ID } else { self.types.builtins.empty }
+                if val_def.variable_type == NEVER_TYPE_ID {
+                    NEVER_TYPE_ID
+                } else {
+                    self.types.builtins.empty
+                }
             }
             TypedStmt::Assignment(assgn) => {
                 // nocommit: Make this impossible; just don't emit the assignment
@@ -4509,12 +4517,6 @@ impl TypedProgram {
             }
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
-                if struct_pattern.fields.is_empty() {
-                    return failf!(
-                        struct_pattern.span,
-                        "Useless pattern: Struct pattern has no fields; use wildcard pattern '_' instead",
-                    );
-                }
                 let struct_pattern = struct_pattern.clone();
                 let expected_struct = target_type
                     .as_struct()
@@ -7488,6 +7490,7 @@ impl TypedProgram {
                     if !stat.is_definition_level {
                         content.push_str("{\n");
                     }
+                    // nocommit: Write file asynchronously too
                     // FIXME: generated_filename is not unique if we specialized on multiple types
                     //        We need a specialization context, for both debugging and logging
                     //        and for this
@@ -7816,8 +7819,10 @@ impl TypedProgram {
             None,
             None,
         );
-        self.scopes
-            .add_loop_info(body_block_scope_id, ScopeLoopInfo { break_type: Some(self.types.builtins.empty) });
+        self.scopes.add_loop_info(
+            body_block_scope_id,
+            ScopeLoopInfo { break_type: Some(self.types.builtins.empty) },
+        );
 
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
@@ -9367,12 +9372,13 @@ impl TypedProgram {
         // branches have a matching type, making codegen simpler
         // However, if the consequent is a never type (does not return), we don't need to do this, in
         // fact we can't because then we'd have an expression following a never expression
-        let consequent = if if_expr.alt.is_none() && !cons_never && consequent_type != self.types.builtins.empty
-        {
-            self.synth_discard_call(consequent, ctx.with_no_expected_type())?
-        } else {
-            consequent
-        };
+        let consequent =
+            if if_expr.alt.is_none() && !cons_never && consequent_type != self.types.builtins.empty
+            {
+                self.synth_discard_call(consequent, ctx.with_no_expected_type())?
+            } else {
+                consequent
+            };
         let consequent_type = self.exprs.get_type(consequent);
 
         let alternate = if let Some(parsed_alt) = if_expr.alt {
@@ -11664,20 +11670,10 @@ impl TypedProgram {
                 let layout_from = self.types.get_layout(type_from);
                 let layout_to = self.types.get_layout(type_to);
                 if layout_from.size == 0 {
-                    kbail!(
-                        self,
-                        call.span,
-                        "Cannot bitcast from zero-sized type: {}",
-                        type_from
-                    )
+                    kbail!(self, call.span, "Cannot bitcast from zero-sized type: {}", type_from)
                 }
                 if layout_to.size == 0 {
-                    kbail!(
-                        self,
-                        call.span,
-                        "Cannot bitcast to zero-sized type: {}",
-                        type_to
-                    )
+                    kbail!(self, call.span, "Cannot bitcast to zero-sized type: {}", type_to)
                 }
                 if layout_from.size != layout_to.size {
                     kbail!(
@@ -13631,13 +13627,9 @@ impl TypedProgram {
                 {
                     let return_type_span = match parsed_function_ret_type {
                         None => function_signature_span,
-                        Some(rt) => self.ast.get_type_expr_span(rt)
+                        Some(rt) => self.ast.get_type_expr_span(rt),
                     };
-                    return failf!(
-                        return_type_span,
-                        "Return type mismatch: {}",
-                        msg
-                    );
+                    return failf!(return_type_span, "Return type mismatch: {}", msg);
                 } else {
                     Some(block)
                 }
@@ -13646,12 +13638,15 @@ impl TypedProgram {
 
         if let Some(body_block) = body_block {
             let f = self.functions.get(declaration_id);
-            for param_variable in self.mem.getn(f.params).iter() {
-                self.warn_variable_usage_counts(
-                    "Parameter",
-                    param_variable.variable_id,
-                    param_variable.span,
-                );
+
+            if !is_generic {
+                for param_variable in self.mem.getn(f.params).iter() {
+                    self.warn_variable_usage_counts(
+                        "Parameter",
+                        param_variable.variable_id,
+                        param_variable.span,
+                    );
+                }
             }
 
             // Set the function's body

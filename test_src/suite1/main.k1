@@ -1,4 +1,4 @@
-fn low(): unit {
+fn low() {
   test_string_literal/test();
   arith/test();
   bool_test/test();
@@ -33,7 +33,7 @@ fn low(): unit {
   test_globals/test();
 }
 
-fn moderate(): unit {
+fn moderate() {
   defer_test/test();
   never_everywhere/test();
   ns_extend/test();
@@ -68,7 +68,7 @@ fn moderate(): unit {
   any_test/test();
 }
 
-fn coreLib(): unit {
+fn coreLib() {
   // core lib coverage
   for_yield_test/test();
   allocator_test/test();

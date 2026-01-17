@@ -1,6 +1,6 @@
 ns string_test;
 
-fn escape(): unit {
+fn escape() {
   let s = "\n\0\t\r\"\\";
   let codes = List/fromMap(s, \c. c.as_u8());
   assert(codes == [10, 0, 9, 13, 34, 92]);
@@ -12,7 +12,7 @@ fn escape(): unit {
   assert(s.get(5) == '\\');
 }
 
-fn test(): unit {
+fn test() {
 
   let abc: string = "abc";
   let conc = abc.concat(abc);
