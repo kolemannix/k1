@@ -396,7 +396,7 @@ impl FunctionType {
 #[derive(Clone)]
 pub struct RecursiveReference {
     pub root_type_id: TypeId,
-    pub type_args: SV4<TypeId>,
+    //pub type_args: SV4<TypeId>,
 }
 
 #[derive(Clone)]
@@ -430,11 +430,7 @@ pub struct FunctionPointerType {
     pub function_type_id: TypeId,
 }
 
-// To shrink this, we'd
-// [x] move TypeDefnInfo off,
-// [ ] convert Vecs to EcoVecs, or slice handles when we can
-// nocommit let's reach 32, it'll be fun
-static_assert_size!(Type, 40);
+static_assert_size!(Type, 32);
 #[derive(Clone)]
 pub enum Type {
     Char,
@@ -1720,7 +1716,6 @@ impl TypePool {
 
                 let tag_scalar = self.get_physical_type(e.tag_type).unwrap().expect_scalar();
                 let tag_layout = tag_scalar.get_layout();
-                // nocommit: Can Enums have zero variants?
 
                 let mut physical_variants = self.mem.new_list(variant_count);
                 let mut union_members = self.mem.new_list(variant_count);

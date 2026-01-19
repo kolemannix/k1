@@ -1,3 +1,4 @@
+// nocommit convert and commit test case
 let g: {} = {};
 let* g2: *{} = {};
 
@@ -7,7 +8,7 @@ fn testGlobal(): empty {
   assertEquals(g, g2.*);
 }
 
-fn testLocal(): empty {
+fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
   let l = {}; 
   assertEquals(types/sizeOf[typeOf(l)], 0);
   l
@@ -15,13 +16,10 @@ fn testLocal(): empty {
 
 fn main(): i32  {
 
-  g;
-  // i1 = empty
-  g2;
-  // i2 = null ptr
-  g2.*;
-  // i3 = empty
+  g; // empty
+  g2; // null ptr
+  g2.*; // no-op yielding Value::Empty
 
-  testLocal();
+  testLocal({}, {}, {}, {});
   0
 }

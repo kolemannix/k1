@@ -3219,6 +3219,9 @@ impl TypedProgram {
             ParsedTypeExpr::Enum(e) => {
                 let e = e.clone();
                 let variant_count = e.variants.len();
+                if variant_count == 0 {
+                    return failf!(e.span, "either must have at least one variant");
+                }
 
                 let tag_type = match e.tag_type {
                     None => {
@@ -3759,7 +3762,7 @@ impl TypedProgram {
                                     root_type_id: type_id,
                                     // TODO: Support generic recursive types
                                     // by storing this
-                                    type_args: smallvec![],
+                                    // type_args: smallvec![],
                                 }));
                             Ok(recursive_reference)
                         } else {
@@ -7504,7 +7507,6 @@ impl TypedProgram {
                     if !stat.is_definition_level {
                         content.push_str("{\n");
                     }
-                    // nocommit: Write file asynchronously too
                     // FIXME: generated_filename is not unique if we specialized on multiple types
                     //        We need a specialization context, for both debugging and logging
                     //        and for this
@@ -7512,9 +7514,8 @@ impl TypedProgram {
                     //        If its not generic pass, provide specialization info payload
                     // TODO: if specializing, print what the types are at the top of the file.
                     //       this is actually really important debugging context
-                    // TODO: stem source.filename too
                     let generated_filename =
-                        format!("meta_{}_{}.k1", source.filename, line.line_number());
+                        format!("meta_{}_{}.k1", source.filename.strip_suffix(".k1").unwrap(), line.line_number());
 
                     content.push_str(emitted_string);
                     if !stat.is_definition_level {
@@ -7536,6 +7537,7 @@ impl TypedProgram {
                             generated_filename,
                             content.clone(),
                         ));
+                    // nocommit: Write #meta source files asynchronously
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
                             "Failed to write out generated metaprogram at {}. {e}",

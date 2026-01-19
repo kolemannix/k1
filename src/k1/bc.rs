@@ -2281,7 +2281,6 @@ fn compile_cast(
         | CastType::StaticErase
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
-            // nocommit: Reconsider correct behavior for all of these cast types
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
             let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
@@ -2882,8 +2881,7 @@ pub fn display_unit_name(
 }
 
 // nocommit ZST checklist:
-// - De-reference operation
-// - function ABI
+// - `alloca {}`
 // - Make static types ZSTs
 pub fn display_phys_fn_type(
     w: &mut impl Write,
