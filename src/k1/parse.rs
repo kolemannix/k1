@@ -2080,10 +2080,12 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         }
     }
     pub fn parse_file(&mut self) {
-        let mut new_definitions: Vec<ParsedId> = vec![];
         loop {
             match self.parse_definition(K::Eof) {
-                Ok(Some(def)) => new_definitions.push(def),
+                Ok(Some(def)) => {
+                    //new_definitions.push(def);
+                    self.ast.namespaces.get_mut(self.module_namespace_id).definitions.push(def)
+                }
                 Err(err) => {
                     self.ast.push_error(err);
                     // For now, break on first parse error
@@ -2092,8 +2094,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 Ok(None) => break,
             }
         }
-
-        self.ast.namespaces.get_mut(self.module_namespace_id).definitions.extend(new_definitions);
     }
 
     fn error_here(&self, message: impl AsRef<str>) -> ParseError {

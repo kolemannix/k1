@@ -305,7 +305,7 @@ pub fn compile_program(
     let profiler_guard = if args.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
-                .frequency(50000)
+                .frequency(9999)
                 .blocklist(&["libc", "libgcc", "pthread", "vdso"])
                 .build()
                 .unwrap(),

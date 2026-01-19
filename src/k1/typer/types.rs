@@ -197,6 +197,7 @@ pub struct FunctionTypeParameter {
 #[derive(Clone)]
 pub struct InferenceHoleType {
     pub index: u32,
+    pub static_type: Option<TypeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -420,7 +421,7 @@ pub struct LambdaObjectType {
 
 #[derive(Clone, Copy)]
 pub struct StaticType {
-    pub inner_type_id: TypeId,
+    pub family_type_id: TypeId,
     pub value_id: Option<StaticValueId>,
 }
 
@@ -518,7 +519,9 @@ impl TypePool {
                     && ftp1.scope_id == ftp2.scope_id
                     && ftp1.function_type == ftp2.function_type
             }
-            (Type::InferenceHole(h1), Type::InferenceHole(h2)) => h1.index == h2.index,
+            (Type::InferenceHole(h1), Type::InferenceHole(h2)) => {
+                h1.index == h2.index && h1.static_type == h2.static_type
+            }
             (Type::Enum(e1), Type::Enum(e2)) => {
                 if defn1 != defn2 {
                     return false;
@@ -611,6 +614,7 @@ impl TypePool {
             }
             Type::InferenceHole(hole) => {
                 hole.index.hash(state);
+                hole.static_type.hash(state);
             }
             Type::Enum(e) => {
                 defn.hash(state);
@@ -651,7 +655,7 @@ impl TypePool {
                 co.struct_representation.hash(state);
             }
             Type::Static(stat) => {
-                stat.inner_type_id.hash(state);
+                stat.family_type_id.hash(state);
                 stat.value_id.hash(state)
             }
             Type::Unresolved(id) => {
@@ -1285,10 +1289,10 @@ impl TypePool {
 
     pub fn add_static_type(
         &mut self,
-        inner_type_id: TypeId,
+        family_type_id: TypeId,
         value_id: Option<StaticValueId>,
     ) -> TypeId {
-        self.add_anon(Type::Static(StaticType { inner_type_id, value_id }))
+        self.add_anon(Type::Static(StaticType { family_type_id, value_id }))
     }
 
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
@@ -1319,6 +1323,11 @@ impl TypePool {
                 debug_assert!(self.get_no_follow(t).as_static().is_some());
                 Some(t)
             }
+            Type::InferenceHole(ih) if ih.static_type.is_some() => {
+                let t = ih.static_type.unwrap();
+                debug_assert!(self.get_no_follow(t).as_static().is_some());
+                Some(t)
+            }
             _ => None,
         }
     }
@@ -1330,6 +1339,10 @@ impl TypePool {
         }
     }
 
+    pub fn is_static(&self, type_id: TypeId) -> bool {
+        self.get_static_type_id_of_type(type_id).is_some()
+    }
+
     #[inline]
     /// Its important to understand that this basic 'get type' follows
     /// redirects for both recursives and statics. This is because 99% of
@@ -1339,7 +1352,7 @@ impl TypePool {
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
-            Type::Static(stat) => self.get(stat.inner_type_id),
+            Type::Static(stat) => self.get(stat.family_type_id),
             t => t,
         }
     }
@@ -1359,7 +1372,7 @@ impl TypePool {
     pub fn get_chased_id(&self, type_id: TypeId) -> TypeId {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => rr.root_type_id,
-            Type::Static(stat) => stat.inner_type_id,
+            Type::Static(stat) => stat.family_type_id,
             _ => type_id,
         }
     }
@@ -1374,9 +1387,9 @@ impl TypePool {
         // Then follow statics
         match self.get_no_follow(static_chased) {
             Type::RecursiveReference(rr) => rr.root_type_id,
-            Type::Static(stat) => stat.inner_type_id,
+            Type::Static(stat) => stat.family_type_id,
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
-                self.get_static_type_of_type(tp.static_constraint.unwrap()).unwrap().inner_type_id
+                self.get_static_type_of_type(tp.static_constraint.unwrap()).unwrap().family_type_id
             }
             _ => static_chased,
         }
@@ -1594,7 +1607,7 @@ impl TypePool {
                 } else {
                     EMPTY
                 };
-                let inner = self.count_type_variables(stat.inner_type_id);
+                let inner = self.count_type_variables(stat.family_type_id);
                 this.add(inner)
             }
             Type::Unresolved(_) => EMPTY,
@@ -1785,7 +1798,7 @@ impl TypePool {
             }
             Type::Static(stat) => {
                 // Re-use the inner physical type
-                self.add_physical_duplicate(type_id, stat.inner_type_id)
+                self.add_physical_duplicate(type_id, stat.family_type_id)
             }
             Type::Never => None,
             Type::Function(_)
@@ -1926,7 +1939,7 @@ impl TypePool {
             Type::Enum(_) => true,
             Type::Lambda(_) => true,
             Type::LambdaObject(_) => true,
-            Type::Static(stat) => self.is_aggregate(stat.inner_type_id),
+            Type::Static(stat) => self.is_aggregate(stat.family_type_id),
             Type::Array(_) => true,
             Type::Char => false,
             Type::Integer(_) => false,

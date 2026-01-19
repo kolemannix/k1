@@ -162,11 +162,11 @@ fn test() {
   #static bar(2);
 
   // View
-  let view = #static {
+  let view: View[int] = #static {
     let xs = [1,2,3,4,5];
     xs.asView()
   };
-  assertEquals(view, [1,2,3,4,5].asView());
+  assertEquals(view, [1,2,3,4,5]);
   #static {
     let* l = List/wrapBuffer(Buffer/copyFromView(INT_VIEW));
     l.push(9);

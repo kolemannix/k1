@@ -89,8 +89,8 @@ impl ProgramBytecode {
             calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
             exprs: FxHashMap::new(),
             module_config: BcModuleConfig {},
-            b_blocks: vec![],
-            b_variables: vec![],
+            b_blocks: Vec::with_capacity(256),
+            b_variables: Vec::with_capacity(256),
             b_loops: FxHashMap::default(),
             b_units_pending_compile: vec![],
         }
@@ -263,7 +263,7 @@ pub struct BcCall {
 /// This would allow for a universal wire-format for k1 data and we could say that "nothing is platform-specific"* in terms of data layout which would be great
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
-//task(bc): Get inst to 32 bytes at the most
+//task(bc): Get inst down to 32 bytes
 #[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
@@ -1039,7 +1039,7 @@ impl<'k1> Builder<'k1> {
             }
             None => {
                 self.block_count += 1;
-                self.k1.bytecode.b_blocks.push(Block { name, instrs: vec![] });
+                self.k1.bytecode.b_blocks.push(Block { name, instrs: Vec::with_capacity(256) });
             }
         }
 
@@ -1892,19 +1892,22 @@ fn compile_expr(
             let match_end_block = b.push_block(end_name);
             b.goto_block(match_end_block);
             let result_inst_kind = b.type_to_inst_kind(match_result_type);
-            let result_came_from = match result_inst_kind {
-                InstKind::Value(_) => {
-                    let pt = b.get_physical_type(match_result_type);
-                    Some(b.push_inst(
-                        Inst::CameFrom { t: pt, incomings: MSlice::empty() },
-                        "match phi",
-                    ))
+            let (result_came_from, is_empty) = match result_inst_kind {
+                InstKind::Value(pt) => {
+                    if pt.is_empty() {
+                        (None, true)
+                    } else {
+                        let came_from_inst = b.push_inst(
+                            Inst::CameFrom { t: pt, incomings: MSlice::empty() },
+                            "match phi",
+                        );
+                        (Some(came_from_inst), false)
+                    }
                 }
                 InstKind::Void => {
-                    eprintln!("expr {}", b.k1.expr_to_string(expr));
                     return failf!(b.cur_span, "come from void");
                 }
-                InstKind::Terminator => None,
+                InstKind::Terminator => (None, false),
             };
 
             let mut incomings: MList<CameFromCase, _> =
@@ -1939,9 +1942,13 @@ fn compile_expr(
             b.goto_block(match_end_block);
             match result_came_from {
                 None => {
-                    // match is divergent; we never get here
-                    let inst = b.push_inst(Inst::Unreachable, "divergent match");
-                    Ok(inst.as_value())
+                    if is_empty {
+                        Ok(Value::Empty)
+                    } else {
+                        // match is divergent
+                        let inst = b.push_inst(Inst::Unreachable, "divergent match");
+                        Ok(inst.as_value())
+                    }
                 }
                 Some(came_from) => {
                     let real_incomings = b.k1.bytecode.mem.list_to_handle(incomings);
@@ -2584,10 +2591,6 @@ fn compile_matching_condition(
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                // nocommit: Ensure a MatchingConditionInstr::Cond can't be Never; just desugar to the block
-                if b.k1.exprs.get_type(*value) == NEVER_TYPE_ID {
-                    return Ok(());
-                }
                 let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
                 let continue_block = b.push_block(continue_name);
                 b.push_jump_if(

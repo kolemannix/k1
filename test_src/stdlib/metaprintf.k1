@@ -1,10 +1,7 @@
 use core/StringBuilder
 use meta/CodeWriter
 
-// TODO: need to flesh this out more with format specifiers
-//           and other things
-fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
-  let* result: *mut List[char] = List/empty();
+fn fmt[Fmt: static string, Args, W: Writer](w: W, fmtString: Fmt, args: Args) {
   #meta(fmtString) {
     let* code = StringBuilder/new();
     let argsTypeId = types/typeId[Args]();
@@ -22,8 +19,8 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
         };
         //meta/emitLine("its a string baby");
-        code.line("parts.get(0).printTo(result);");
-        code.line("result.writeString(args);");
+        code.line("parts.get(0).printTo(w);");
+        code.line("w.writeString(args);");
       },
       .Struct({fields}) -> {
         if parts.len != fields.len() {
@@ -35,30 +32,34 @@ fn format[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
         };
 
         for part in parts {
-          code.line("parts.get({itIndex}).printTo(result);");
-          code.line("f{itIndex}.printTo(result);");
+          code.line("parts.get({itIndex}).printTo(w);");
+          code.line("f{itIndex}.printTo(w);");
         };
 
       },
       _ -> crash("Unsupported format arguments: {types/getTypeName[Args]}")
     };
-    code.line("string/wrapList(result)");
     code.build()
   }
 }
 
+// TODO: need to flesh this out more with format specifiers
+//           and other things
+fn fmtString[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
+  let* result = StringBuilder/new();
+  fmt(result, fmtString, args);
+  result.build()
+}
+
 fn test() {
-  let s1 = format("My value is: ? ?", {a: 42, b: true});
+  let s1 = fmtString("My value is: ? ?", {a: 42, b: true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
-  println(s1);
-  let s3 = format("My values are: ? and ?", {a: "asdf", b: true});
-  println(s3);
+  assertEquals(s1, "My value is: 42 true");
+  let s3 = fmtString("My values are: ? and ?", {a: "asdf", b: true});
+  assertEquals(s3, "My values are: asdf and true");
 
-  let s4 = format("My string is ?", "Hello, World!");
-  println(s4);
-
-  //let s5 = format("My whatever is ?", true);
-  //println(s5);
+  let s4 = fmtString("My string is ?", "Hello, World!");
+  assertEquals(s4, "My string is Hello, World!");
 
   {}
 }

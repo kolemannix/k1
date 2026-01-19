@@ -229,6 +229,10 @@ impl TypedProgram {
             Type::InferenceHole(hole) => {
                 w.write_str("'")?;
                 write!(w, "{}", hole.index)?;
+                if let Some(stat) = hole.static_type {
+                    w.write_str(": ")?;
+                    self.display_type_id(w, stat, expand)?;
+                }
                 Ok(())
             }
             Type::Reference(r) => {
@@ -325,7 +329,7 @@ impl TypedProgram {
             }
             Type::Static(stat) => {
                 w.write_str("static[")?;
-                self.display_type_id(w, stat.inner_type_id, expand)?;
+                self.display_type_id(w, stat.family_type_id, expand)?;
                 if let Some(value_id) = stat.value_id {
                     w.write_str(", ")?;
                     self.display_static_value(w, value_id)?;

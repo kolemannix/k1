@@ -4,19 +4,19 @@ use std/HashMap
 
 fn testBasic() {
   let* myMap = HashMap/new[int]();
-  //myMap.insert("a", 10);
-  //myMap.insert("b", 11);
-  //myMap.insert("c", 12);
-  //assertEquals(myMap.get("a"), .Some(10));
-  //assertEquals(myMap.get("b"), .Some(11));
-  //assertEquals(myMap.get("c"), .Some(12));
-  //myMap.remove("a");
-  //assertEquals(myMap.get("a"), .None);
-  //assertEquals(myMap.get("b"), .Some(11));
-  //myMap.insert("a", 20);
-  //assertEquals(myMap.get("a"), .Some(20));
-  //myMap.insert("b", 21);
-  //assertEquals(myMap.get("b"), .Some(21));
+  myMap.insert("a", 10);
+  myMap.insert("b", 11);
+  myMap.insert("c", 12);
+  assertEquals(myMap.get("a"), .Some(10));
+  assertEquals(myMap.get("b"), .Some(11));
+  assertEquals(myMap.get("c"), .Some(12));
+  myMap.remove("a");
+  assertEquals(myMap.get("a"), .None);
+  assertEquals(myMap.get("b"), .Some(11));
+  myMap.insert("a", 20);
+  assertEquals(myMap.get("a"), .Some(20));
+  myMap.insert("b", 21);
+  assertEquals(myMap.get("b"), .Some(21));
 }
 
 fn testResize(size: int) {

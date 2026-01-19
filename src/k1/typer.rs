@@ -2856,24 +2856,10 @@ impl TypedProgram {
     pub fn get_stmt_type(&self, stmt: TypedStmtId) -> TypeId {
         match self.stmts.get(stmt) {
             TypedStmt::Expr(_, ty) => *ty,
-            TypedStmt::Let(val_def) => {
-                // nocommit: Make this impossible; just don't emit the let
-                if val_def.variable_type == NEVER_TYPE_ID {
-                    NEVER_TYPE_ID
-                } else {
-                    self.types.builtins.empty
-                }
-            }
-            TypedStmt::Assignment(assgn) => {
-                // nocommit: Make this impossible; just don't emit the assignment
-                if self.exprs.get_type(assgn.value) == NEVER_TYPE_ID {
-                    NEVER_TYPE_ID
-                } else {
-                    self.types.builtins.empty
-                }
-            }
-            TypedStmt::Require(_req) => self.types.builtins.empty,
-            TypedStmt::Defer(_defer) => self.types.builtins.empty,
+            TypedStmt::Let(_)
+            | TypedStmt::Assignment(_)
+            | TypedStmt::Require(_)
+            | TypedStmt::Defer(_) => self.types.builtins.empty,
         }
     }
 
@@ -3201,7 +3187,7 @@ impl TypedProgram {
                                 Some(I64_TYPE_ID),
                             )?;
                         let static_type =
-                            StaticType { inner_type_id, value_id: Some(static_value_id) };
+                            StaticType { family_type_id: inner_type_id, value_id: Some(static_value_id) };
                         self.types.add_anon(Type::Static(static_type))
                     }
                     _ => {
@@ -3213,11 +3199,11 @@ impl TypedProgram {
                 let Some(static_type) = self.types.get_static_type_of_type(size_type_id) else {
                     return failf!(arr.span, "Array size must be a static type");
                 };
-                if static_type.inner_type_id != I64_TYPE_ID {
+                if static_type.family_type_id != I64_TYPE_ID {
                     return failf!(
                         arr.span,
                         "Array size must be an int; got {}",
-                        self.type_id_to_string(static_type.inner_type_id)
+                        self.type_id_to_string(static_type.family_type_id)
                     );
                 }
                 let concrete_size = self.get_concrete_count_of_array(size_type_id);
@@ -3538,7 +3524,7 @@ impl TypedProgram {
                         "Static type cannot be nested inside another static type"
                     );
                 };
-                let static_type = StaticType { inner_type_id, value_id: None };
+                let static_type = StaticType { family_type_id: inner_type_id, value_id: None };
                 let static_type_id = self.types.add_anon(Type::Static(static_type));
                 Ok(static_type_id)
             }
@@ -4208,13 +4194,13 @@ impl TypedProgram {
                     // But you can inside type "static[T; _]"
                     type_id
                 } else {
-                    let inner_type = stat.inner_type_id;
+                    let inner_type = stat.family_type_id;
                     let new_inner_type = self.substitute_in_type(inner_type, substitution_pairs);
                     if new_inner_type == inner_type {
                         type_id
                     } else {
                         self.types.add_anon(Type::Static(StaticType {
-                            inner_type_id: new_inner_type,
+                            family_type_id: new_inner_type,
                             value_id: None,
                         }))
                     }
@@ -4416,7 +4402,7 @@ impl TypedProgram {
                     },
                     ParsedLiteral::String(string_id, span) => {
                         match self.types.get_no_follow_static(target_type_id) {
-                            Type::Static(s) if s.inner_type_id == STRING_TYPE_ID => Ok(()),
+                            Type::Static(s) if s.family_type_id == STRING_TYPE_ID => Ok(()),
                             _ if target_type_id == STRING_TYPE_ID => Ok(()),
                             _ => failf!(
                                 self.ast.get_pattern_span(pat_expr),
@@ -4696,17 +4682,17 @@ impl TypedProgram {
             // whether the type inside this static would pass muster under the 'expected type',
             // If so, erase the static
             (_, Some(actual_static))
-                if self.check_types(expected, actual_static.inner_type_id, scope_id).is_ok() =>
+                if self.check_types(expected, actual_static.family_type_id, scope_id).is_ok() =>
             {
                 return CheckExprTypeResult::Coerce(
-                    self.synth_cast(expr, actual_static.inner_type_id, CastType::StaticErase, None),
+                    self.synth_cast(expr, actual_static.family_type_id, CastType::StaticErase, None),
                     "static_erase".into(),
                 );
             }
             // If we failed typechecking, and we expected a static, and we passed a non-static
             // Try to lift it
             (Type::Static(expected_static), None) => {
-                if expected_static.inner_type_id == actual_type_id {
+                if expected_static.family_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
                         let static_lifted_type = self.exprs.get_type(static_lifted);
                         return match self.check_types(expected, static_lifted_type, scope_id) {
@@ -5077,7 +5063,7 @@ impl TypedProgram {
                     scope_id,
                 ),
             (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
-                if exp_static_type.inner_type_id == act_static_type.inner_type_id {
+                if exp_static_type.family_type_id == act_static_type.family_type_id {
                     match (exp_static_type.value_id, act_static_type.value_id) {
                         (None, None) => Ok(()),    // Both unresolved
                         (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
@@ -5146,9 +5132,15 @@ impl TypedProgram {
 
     fn eval_trivial_static_expr(
         &mut self,
-        expr_id: TypedExprId,
-        _scope_id: ScopeId,
+        parsed_expr_id: ParsedExprId,
+        ctx: EvalExprContext,
     ) -> TyperResult<Option<StaticValueId>> {
+        match self.ast.exprs.get(parsed_expr_id) {
+            ParsedExpr::Literal(_) => {}
+            ParsedExpr::Variable(_) => {}
+            _ => return Ok(None),
+        };
+        let expr_id = self.eval_expr(parsed_expr_id, ctx)?;
         match self.exprs.get(expr_id) {
             TypedExpr::StaticValue(s) => Ok(Some(s.value_id)),
             TypedExpr::Variable(v) => {
@@ -5229,24 +5221,29 @@ impl TypedProgram {
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> TyperResult<StaticValueId> {
+        if let Some(shortcut_value_id) = self.eval_trivial_static_expr(parsed_expr, ctx)? {
+            //eprintln!(
+            //    "shortcut value {} expected type: {}",
+            //    self.static_value_to_string(shortcut_value_id),
+            //    self.type_id_to_string_opt(ctx.expected_type_id)
+            //);
+            return Ok(shortcut_value_id);
+        }
+
         if ctx.is_inference() {
             return failf!(
                 self.ast.get_expr_span(parsed_expr),
-                "#static cannot be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
+                "Only #static literals can be used directly in generic calls. Try supplying the types to the call, or moving the static block outside the call"
             );
         }
 
-        // Note: We need to mask access from inside a static to outside variables!
+        // FIXME: We need to mask access from inside a static to outside variables!
         //       Currently we'll just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
-
-        if let Some(shortcut_value_id) = self.eval_trivial_static_expr(expr, ctx.scope_id)? {
-            return Ok(shortcut_value_id);
-        }
 
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_bytecode()?;
@@ -5412,7 +5409,7 @@ impl TypedProgram {
         let declared_type = typed_global.ty;
 
         let is_referencing = parsed_global.is_referencing;
-        let expected_type = if is_referencing {
+        let expected_rhs_type = if is_referencing {
             let Type::Reference(r) = self.types.get(declared_type) else {
                 return failf!(parsed_global.span, "Global references must have a reference type");
             };
@@ -5424,48 +5421,54 @@ impl TypedProgram {
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
 
+        let expected_type_for_execution =
+            match self.types.get_static_type_of_type(expected_rhs_type) {
+                Some(s) => s.family_type_id,
+                None => expected_rhs_type,
+            };
+
         let ctx = EvalExprContext {
             scope_id,
-            expected_type_id: Some(expected_type),
+            expected_type_id: Some(expected_type_for_execution),
             static_ctx: Some(StaticExecContext {
                 is_metaprogram: false,
-                expected_return_type: Some(expected_type),
+                expected_return_type: Some(expected_type_for_execution),
             }),
             global_defn_name: Some(global_name),
             flags: EvalExprFlags::empty(),
         };
-        let StaticExecutionResult::TypedExpr(static_expr_id) = self.eval_static_expr_and_exec(
-            value_expr_id,
-            ParsedStaticExpr {
-                base_expr: value_expr_id,
-                kind: ParsedStaticBlockKind::Value,
-                is_definition_level: false,
-                condition_if_definition: None,
-                parameter_names: SliceHandle::empty(),
-                span: parsed_global.span,
-            },
-            ctx,
-        )?
-        else {
-            ice_span!(self, global_span, "Expected a typed expr from static execution")
-        };
-        let TypedExpr::StaticValue(sce) = self.exprs.get(static_expr_id) else {
-            ice_span!(self, global_span, "Got a non-static expr")
-        };
-        let static_value_id = sce.value_id;
+        let static_value_id = self.execute_static_expr(value_expr_id, ctx, &[])?;
+        let static_value_type_id = self.static_values.get(static_value_id).get_type();
 
-        match self.check_expr_type(expected_type, static_expr_id, scope_id) {
-            CheckExprTypeResult::Ok => {}
-            CheckExprTypeResult::Err(msg) => {
-                return failf!(
-                    global_span,
-                    "Type mismatch for global {}: {}",
-                    self.ident_str(global_name),
-                    msg
-                );
+        match self.types.get_static_type_of_type(expected_rhs_type) {
+            None => {
+                if let Err(msg) =
+                    self.check_types(expected_rhs_type, static_value_type_id, scope_id)
+                {
+                    return failf!(
+                        global_span,
+                        "Type mismatch for global {}: {}",
+                        self.ident_str(global_name),
+                        msg
+                    );
+                }
             }
-            CheckExprTypeResult::Coerce(_, cow) => {
-                panic!("Global would be coerced {cow}!")
+            Some(static_type) => {
+                let Some(expected_value_id) = static_type.value_id else {
+                    return failf!(
+                        global_span,
+                        "A global can't have an abstract static type: {}",
+                        self.type_id_to_string(expected_rhs_type)
+                    );
+                };
+                if expected_value_id != static_value_id {
+                    return failf!(
+                        global_span,
+                        "Wrong static value: expected {} but got {}",
+                        self.static_value_to_string(expected_value_id),
+                        self.static_value_to_string(static_value_id)
+                    );
+                }
             }
         }
 
@@ -5812,7 +5815,7 @@ impl TypedProgram {
         // Follow 'statics' since we're never going to be implementing abilities for the
         // specific static values but instead for the inner types
         let self_type_id = match self.types.get_no_follow(self_type_id) {
-            Type::Static(stat) => stat.inner_type_id,
+            Type::Static(stat) => stat.family_type_id,
             _ => self_type_id,
         };
         self.find_ability_impl_for_type_or_generate_new(
@@ -5977,10 +5980,10 @@ impl TypedProgram {
             if let Some(static_constraint) = tp.static_constraint {
                 let static_type =
                     self.types.get_no_follow_static(static_constraint).as_static().unwrap();
-                if static_type.inner_type_id != solution.type_id {
+                if static_type.family_type_id != solution.type_id {
                     eprintln!(
                         "Blanket impl almost matched but a static constraint failed: {} != {}",
-                        self.type_id_to_string(static_type.inner_type_id),
+                        self.type_id_to_string(static_type.family_type_id),
                         self.type_id_to_string(solution.type_id)
                     );
                     return None;
@@ -6941,17 +6944,24 @@ impl TypedProgram {
             ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => Ok(self.synth_bool(*b, *span)),
             ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
                 let static_value_id = self.static_values.add_string(*string_id);
-                // nocommit: Remove this is_inference behavior for string literals
-                // nocommit: Try passing static bools into modules as compiler config / feature
-                // flags
-                let is_typed_as_static = ctx.is_inference();
-                let type_to_use = if is_typed_as_static {
+                let should_type_as_static = match ctx.expected_type_id {
+                    None => false,
+                    Some(t) => match self.types.get_static_type_of_type(t) {
+                        None => false,
+                        Some(stat) => stat.family_type_id == STRING_TYPE_ID,
+                    },
+                };
+                let type_to_use = if should_type_as_static {
                     self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id))
                 } else {
                     STRING_TYPE_ID
                 };
-                let static_expr =
-                    self.exprs.add_static(static_value_id, type_to_use, is_typed_as_static, *span);
+                let static_expr = self.exprs.add_static(
+                    static_value_id,
+                    type_to_use,
+                    should_type_as_static,
+                    *span,
+                );
                 Ok(static_expr)
             }
             ParsedExpr::Variable(_variable) => {
@@ -7372,15 +7382,17 @@ impl TypedProgram {
         }
 
         let kind = stat.kind;
-        let (expected_type_for_execution, expected_is_static) = match kind {
+        let expected_type_for_execution = match kind {
             ParsedStaticBlockKind::Value => match ctx.expected_type_id {
-                None => (None, false),
-                Some(expected_type_id) => match self.types.get_no_follow_static(expected_type_id) {
-                    Type::Static(s) => (Some(s.inner_type_id), true),
-                    _ => (Some(expected_type_id), false),
-                },
+                None => None,
+                Some(expected_type_id) => {
+                    match self.types.get_static_type_of_type(expected_type_id) {
+                        Some(s) => Some(s.family_type_id),
+                        None => Some(expected_type_id),
+                    }
+                }
             },
-            ParsedStaticBlockKind::Metaprogram => (Some(STRING_TYPE_ID), false),
+            ParsedStaticBlockKind::Metaprogram => Some(STRING_TYPE_ID),
         };
         let is_metaprogram = kind.is_metaprogram();
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
@@ -7450,11 +7462,13 @@ impl TypedProgram {
 
         match kind {
             ParsedStaticBlockKind::Value => {
-                let expr = if expected_is_static {
-                    self.add_static_value_expr(vm_result, span)
-                } else {
-                    self.add_static_constant_expr(vm_result, span)
-                };
+                //eprintln!("expected_exists_non_static={expected_exists_non_static}");
+                //let expr = if expected_exists_non_static {
+                //    self.add_static_constant_expr(vm_result, span)
+                //} else {
+                //    self.add_static_value_expr(vm_result, span)
+                //};
+                let expr = self.add_static_value_expr(vm_result, span);
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
@@ -8339,15 +8353,16 @@ impl TypedProgram {
         let arms_ctx = ctx.with_scope(match_scope_id);
 
         let parsed_cases = &match_parsed_expr.cases;
-        let total_arms: usize =
+        let parsed_pattern_count: usize =
             parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
 
-        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_list(total_arms as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: MList<TypedMatchArm, _> =
+            self.mem.new_list(parsed_pattern_count as u32 + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
         let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
-            self.tmp.new_list(parsed_cases.iter().map(|pc| pc.patterns.len() as u32).sum());
+            self.tmp.new_list(parsed_pattern_count as u32);
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
@@ -8432,16 +8447,12 @@ impl TypedProgram {
                         pattern_eval_ctx,
                     )?;
 
-                    match parsed_case.guard_condition_expr {
-                        None => {}
-                        Some(guard_condition_expr_id) => {
-                            let guard_condition_expr = self.eval_expr(
-                                guard_condition_expr_id,
-                                pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
-                            )?;
-                            instrs
-                                .push(MatchingConditionInstr::Cond { value: guard_condition_expr });
-                        }
+                    if let Some(guard_condition_expr_id) = parsed_case.guard_condition_expr {
+                        let guard_condition_expr = self.eval_expr(
+                            guard_condition_expr_id,
+                            pattern_eval_ctx.with_expected_type(Some(BOOL_TYPE_ID)),
+                        )?;
+                        instrs.push(MatchingConditionInstr::Cond { value: guard_condition_expr });
                     };
 
                     // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
@@ -8454,7 +8465,11 @@ impl TypedProgram {
                     let consequent_expr_type = self.exprs.get_type(consequent_expr);
 
                     if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
-                        expected_arm_type_id = Some(consequent_expr_type);
+                        // We chase down the type because, if its a static, it doesn't really make
+                        // sense to expect every arm to evaluate to the same static, but rather to
+                        // the static's inner type
+                        let chased_consequent_id = self.types.get_chased_id(consequent_expr_type);
+                        expected_arm_type_id = Some(chased_consequent_id);
                     }
 
                     let match_arm = TypedMatchArm {
@@ -8553,7 +8568,7 @@ impl TypedProgram {
         ))
     }
 
-    fn eval_static_match_expr(&mut self, _match_expr_id: ParsedExprId, _ctx: EvalExprContext) {
+    fn _eval_static_match_expr(&mut self, _match_expr_id: ParsedExprId, _ctx: EvalExprContext) {
         todo!("support static matches")
     }
 
@@ -9004,7 +9019,7 @@ impl TypedProgram {
                 ),
             },
             Type::Static(stat) => {
-                if target_type == stat.inner_type_id {
+                if target_type == stat.family_type_id {
                     Ok(CastType::StaticErase)
                 } else {
                     failf!(
@@ -9363,26 +9378,37 @@ impl TypedProgram {
         };
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
-        let consequent_type = self.exprs.get_type(consequent);
+        let consequent_original_type = self.exprs.get_type(consequent);
 
-        let cons_never = consequent_type == NEVER_TYPE_ID;
+        let cons_original_never = consequent_original_type == NEVER_TYPE_ID;
 
         // if without else:
         // If there is no alternate, we coerce the consequent to return Unit, so both
         // branches have a matching type, making codegen simpler
         // However, if the consequent is a never type (does not return), we don't need to do this, in
         // fact we can't because then we'd have an expression following a never expression
-        let consequent =
-            if if_expr.alt.is_none() && !cons_never && consequent_type != self.types.builtins.empty
-            {
-                self.synth_discard_call(consequent, ctx.with_no_expected_type())?
-            } else {
-                consequent
-            };
+        let consequent = if if_expr.alt.is_none()
+            && !cons_original_never
+            && consequent_original_type != self.types.builtins.empty
+        {
+            self.synth_discard_call(consequent, ctx.with_no_expected_type())?
+        } else {
+            consequent
+        };
+
         let consequent_type = self.exprs.get_type(consequent);
+        let cons_never = consequent_type == NEVER_TYPE_ID;
 
         let alternate = if let Some(parsed_alt) = if_expr.alt {
-            let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
+            let type_hint = if cons_never {
+                ctx.expected_type_id
+            } else {
+                // We chase down the type because, if its a static, it doesn't really make
+                // sense to expect every arm to evaluate to the same static, but rather to
+                // the static's inner type
+                let consequent_type_chased = self.types.get_chased_id(consequent_type);
+                Some(consequent_type_chased)
+            };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
         } else {
             self.synth_empty_struct(if_expr.span)
@@ -9390,7 +9416,6 @@ impl TypedProgram {
         let alternate_type = self.exprs.get_type(alternate);
         let alternate_span = self.exprs.get_span(alternate);
 
-        let cons_never = consequent_type == NEVER_TYPE_ID; // By now, consequent could be 'unit'
         let alt_never = alternate_type == NEVER_TYPE_ID;
         let no_never = !cons_never && !alt_never;
 
@@ -10438,7 +10463,7 @@ impl TypedProgram {
                 };
                 return Ok(Either::Left(self.synth_cast(
                     base_value,
-                    static_type.inner_type_id,
+                    static_type.family_type_id,
                     CastType::StaticErase,
                     Some(call_span),
                 )));
@@ -10755,7 +10780,7 @@ impl TypedProgram {
         // Follow 'statics' since we're never going to be implementing abilities for the
         // specific static values but instead for the inner types
         let solved_self = match self.types.get_no_follow(solved_self) {
-            Type::Static(stat) => stat.inner_type_id,
+            Type::Static(stat) => stat.family_type_id,
             _ => solved_self,
         };
         let impl_handle = self
@@ -11558,7 +11583,7 @@ impl TypedProgram {
                     .get_no_follow_static(self.exprs.get_type(result))
                     .as_static()
                     .unwrap()
-                    .inner_type_id,
+                    .family_type_id,
                 self.exprs.get_type(expr_id)
             );
         }
@@ -12302,17 +12327,22 @@ impl TypedProgram {
                     return failf!(assignment.span, "Invalid type for assignment: {}", msg);
                 }
 
-                self.variables
-                    .get_mut(typed_variable_id)
-                    .flags
-                    .set(VariableFlags::Reassigned, true);
-                let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                    destination: lhs,
-                    value: rhs,
-                    span: assignment.span,
-                    kind: AssignmentKind::Set,
-                }));
-                Ok(Some(stmt_id))
+                if rhs_type == NEVER_TYPE_ID {
+                    let rhs_as_stmt = self.add_expr_stmt(rhs);
+                    Ok(Some(rhs_as_stmt))
+                } else {
+                    self.variables
+                        .get_mut(typed_variable_id)
+                        .flags
+                        .set(VariableFlags::Reassigned, true);
+                    let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
+                        destination: lhs,
+                        value: rhs,
+                        span: assignment.span,
+                        kind: AssignmentKind::Set,
+                    }));
+                    Ok(Some(stmt_id))
+                }
             }
             ParsedStmt::Store(set_stmt) => {
                 static_assert_size!(parse::StoreStmt, 12);

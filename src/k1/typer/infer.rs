@@ -82,9 +82,11 @@ impl TypedProgram {
         for (idx, param) in all_type_params.iter().enumerate() {
             let hole_index = idx as u32 + inference_var_count;
 
+            let static_type = self_.types.get(param.type_id).as_tvar().unwrap().static_constraint;
+
             let type_hole = self_
                 .types
-                .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32 }));
+                .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32, static_type }));
 
             self_.ictx_mut().inference_vars.push(type_hole);
             params_to_holes.push(spair! { param.type_id() => type_hole });
@@ -300,7 +302,7 @@ impl TypedProgram {
             let Some(solution_static_type) =
                 self.types.get_static_type_id_of_type(solution_type_id)
             else {
-                error!("The solution was not a static type; this is probably crashworthy");
+                error!("The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it");
                 return Ok(());
             };
             let subst_set = self.make_inference_substitution_set();
@@ -1073,14 +1075,14 @@ impl TypedProgram {
                 ),
             (Type::Static(passed_static), Type::Static(param_static)) => self
                 .unify_and_find_substitutions_rec(
-                    passed_static.inner_type_id,
-                    param_static.inner_type_id,
+                    passed_static.family_type_id,
+                    param_static.family_type_id,
                 ),
             (Type::Static(passed_static), _non_static) => {
-                self.unify_and_find_substitutions_rec(passed_static.inner_type_id, slot_type)
+                self.unify_and_find_substitutions_rec(passed_static.family_type_id, slot_type)
             }
             (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
-                self.unify_and_find_substitutions_rec(passed_type, static_slot.inner_type_id)
+                self.unify_and_find_substitutions_rec(passed_type, static_slot.family_type_id)
             }
             _ if passed_type == slot_type => TypeUnificationResult::Matching,
             // --------------- MISS CASES: further cases for better error information ---------------------
