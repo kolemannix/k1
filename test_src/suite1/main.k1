@@ -35,6 +35,8 @@ fn low() {
 
 fn moderate() {
   defer_test/test();
+  zst_test/test();
+  structural/test();
   never_everywhere/test();
   ns_extend/test();
   optionals/test();

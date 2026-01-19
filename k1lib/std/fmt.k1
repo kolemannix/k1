@@ -1,0 +1,49 @@
+// TODO: need to flesh this out more with format specifiers
+//           and other things
+fn fmt[Fmt: static string, Args, W: Writer](w: W, fmtString: Fmt, args: Args) {
+  #meta(fmtString) {
+    let* code = StringBuilder/new();
+    let argsTypeId = types/typeId[Args]();
+    let schema = types/typeSchema(argsTypeId);
+    // This naive splitting doesn't work; we need to walk the format string
+    // emitting "string parts" or "arg specifiers"
+    // Then iterate that structure to produce the runtime
+    // code, which will need the baked string parts
+    let parts = fmtString.splitByChar('?');
+
+    code.var("parts", parts.asView());
+    switch schema {
+      .String -> {
+        if parts.len != 1 {
+          crash("Got 1 format argument (a string) but format string has {parts.len}")
+        };
+        //meta/emitLine("its a string baby");
+        code.line("parts.get(0).printTo(w);");
+        code.line("w.writeString(args);");
+      },
+      .Struct({fields}) -> {
+        if parts.len != fields.len() {
+          crash("Mismatching format arg count")
+        };
+
+        for field in fields {
+          code.line("let f{itIndex} = args.{field.name};")
+        };
+
+        for part in parts {
+          code.line("parts.get({itIndex}).printTo(w);");
+          code.line("f{itIndex}.printTo(w);");
+        };
+
+      },
+      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]}")
+    };
+    code.build()
+  }
+}
+
+fn fmtString[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
+  let* result = core/StringBuilder/new();
+  fmt(result, fmtString, args);
+  result.build()
+}

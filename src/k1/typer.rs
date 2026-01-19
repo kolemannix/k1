@@ -1272,11 +1272,6 @@ pub struct LambdaExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionToLambdaObjectExpr {
-    pub function_id: FunctionId,
-}
-
-#[derive(Debug, Clone)]
 pub struct FunctionPointerExpr {
     pub function_id: FunctionId,
 }
@@ -1367,13 +1362,6 @@ pub enum TypedExpr {
     Lambda(LambdaExpr),
     /// Calling .toRef() on a function by name
     FunctionPointer(FunctionPointerExpr),
-    /// # Evaluation
-    /// To evaluate a FunctionToLambdaObject,
-    /// you must create an empty struct of the specified type
-    /// and then construct a lambda object struct using
-    /// - the address function pointed at by function_id as the function ptr
-    /// - the (empty) environment struct; it will not be accessed
-    FunctionToLambdaObject(FunctionToLambdaObjectExpr),
     /// These get re-written into struct access expressions once we know all captures and have
     /// generated the lambda's capture struct
     PendingCapture(PendingCaptureExpr),
@@ -1406,7 +1394,6 @@ impl TypedExpr {
             TypedExpr::Break(_) => "break",
             TypedExpr::Lambda(_) => "lambda",
             TypedExpr::FunctionPointer(_) => "function_pointer",
-            TypedExpr::FunctionToLambdaObject(_) => "function_to_lambda_object",
             TypedExpr::PendingCapture(_) => "pending_capture",
             TypedExpr::StaticValue(_) => "static_value",
         }
@@ -3186,8 +3173,10 @@ impl TypedProgram {
                                 scope_id,
                                 Some(I64_TYPE_ID),
                             )?;
-                        let static_type =
-                            StaticType { family_type_id: inner_type_id, value_id: Some(static_value_id) };
+                        let static_type = StaticType {
+                            family_type_id: inner_type_id,
+                            value_id: Some(static_value_id),
+                        };
                         self.types.add_anon(Type::Static(static_type))
                     }
                     _ => {
@@ -4588,49 +4577,6 @@ impl TypedProgram {
         }
     }
 
-    fn typecheck_struct(
-        &self,
-        expected: &StructType,
-        actual: &StructType,
-        scope_id: ScopeId,
-    ) -> Result<(), MStr<MemTmp>> {
-        if expected.fields.len() != actual.fields.len() {
-            return Err(k1_format_user!(
-                self,
-                "expected struct with {} fields, got {}",
-                expected.fields.len(),
-                actual.fields.len()
-            ));
-        }
-        for (expected_field, actual_field) in self
-            .types
-            .mem
-            .getn(expected.fields)
-            .iter()
-            .zip(self.types.mem.getn(actual.fields).iter())
-        {
-            if actual_field.name != expected_field.name {
-                return Err(k1_format_user!(
-                    self,
-                    "expected field name {} but got {}",
-                    expected_field.name,
-                    actual_field.name
-                ));
-            }
-            self.check_types(expected_field.type_id, actual_field.type_id, scope_id).map_err(
-                |msg| {
-                    k1_format_user!(
-                        self,
-                        "Struct type mismatch on field '{}': {}",
-                        actual_field.name,
-                        msg
-                    )
-                },
-            )?;
-        }
-        Ok(())
-    }
-
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
         let lookup_result = self.types.get_no_follow(type_id);
         match lookup_result {
@@ -4688,7 +4634,12 @@ impl TypedProgram {
                 if self.check_types(expected, actual_static.family_type_id, scope_id).is_ok() =>
             {
                 return CheckExprTypeResult::Coerce(
-                    self.synth_cast(expr, actual_static.family_type_id, CastType::StaticErase, None),
+                    self.synth_cast(
+                        expr,
+                        actual_static.family_type_id,
+                        CastType::StaticErase,
+                        None,
+                    ),
                     "static_erase".into(),
                 );
             }
@@ -4981,7 +4932,9 @@ impl TypedProgram {
 
         match (self.types.get_no_follow_static(expected), self.types.get_no_follow_static(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
-            (Type::Struct(r1), Type::Struct(r2)) => self.typecheck_struct(r1, r2, scope_id),
+            (Type::Struct(_), Type::Struct(_)) => {
+                Err(k1_format_user!(self, "expected struct {} but got struct {}", expected, actual))
+            }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
                 match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
                     e @ Err(_) => e,
@@ -7446,7 +7399,7 @@ impl TypedProgram {
             }
         }
         for s in &static_parameters {
-            eprintln!(
+            debug!(
                 "Variable {} := `{}` will be passed in to static execution",
                 self.ident_str(self.variables.get(s.0).name),
                 self.static_value_to_string(s.1)
@@ -7514,8 +7467,11 @@ impl TypedProgram {
                     //        If its not generic pass, provide specialization info payload
                     // TODO: if specializing, print what the types are at the top of the file.
                     //       this is actually really important debugging context
-                    let generated_filename =
-                        format!("meta_{}_{}.k1", source.filename.strip_suffix(".k1").unwrap(), line.line_number());
+                    let generated_filename = format!(
+                        "meta_{}_{}.k1",
+                        source.filename.strip_suffix(".k1").unwrap(),
+                        line.line_number()
+                    );
 
                     content.push_str(emitted_string);
                     if !stat.is_definition_level {
@@ -10580,10 +10536,10 @@ impl TypedProgram {
         call_span: SpanId,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
+        let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
         let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
             dyn_fn_id
         } else {
-            let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
             let mut new_function = function.clone();
             let new_function_id = self.functions.next_id();
 
@@ -10621,14 +10577,29 @@ impl TypedProgram {
             dyn_function.type_id,
             dyn_function.parsed_id,
         );
-        let function_to_lam_obj_id = self.exprs.add(
-            TypedExpr::FunctionToLambdaObject(FunctionToLambdaObjectExpr {
-                function_id: dyn_function_id,
+
+        let null_value_id = self.static_values.add(StaticValue::Zero(POINTER_TYPE_ID));
+        let null_ptr_expr = self.exprs.add(
+            TypedExpr::StaticValue(StaticConstantExpr {
+                value_id: null_value_id,
+                is_typed_as_static: false,
             }),
+            POINTER_TYPE_ID,
+            call_span,
+        );
+        let fn_ptr_field = StructLiteralField {
+            name: self.ast.idents.b.fn_ptr,
+            expr: self.function_to_reference(dyn_function_id, call_span),
+        };
+        let env_ptr_field =
+            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: null_ptr_expr };
+        let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
+        let lambda_object_struct_literal = self.exprs.add(
+            TypedExpr::Struct(StructLiteral { fields }),
             lambda_object_type_id,
             call_span,
         );
-        function_to_lam_obj_id
+        lambda_object_struct_literal
     }
 
     fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {

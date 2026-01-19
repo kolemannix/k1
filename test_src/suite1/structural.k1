@@ -1,0 +1,33 @@
+ns structural;
+
+// Nominal
+deftype handle = { index: size }
+deftype handle2 = { index: size }
+
+// Structural, just an alias
+deftype alias handle3 = { index: size }
+
+fn takesStr(_s: { index: size}) { {} }
+
+ns handle { fn make(index: size): handle { { index } } }
+
+fn get(_h: handle): string { "mock" }
+
+fn test() {
+  let h = { index: 10 };
+
+  let h1 = { index: 10 }: handle;
+  let h2: handle2 = { index: 10 };
+
+  takesStr(h);
+  assert(testCompile(takesStr(h2)).isSome());
+
+
+  // Ok; structural type 'promoted' to nominal
+  get({ index: 10 });
+  assert(testCompile(get(h)).isSome());
+  // Ok; correct nominal type
+  get(h1);
+  // Not ok; different nominal types!
+  assert(testCompile(get(h2)).isSome());
+}

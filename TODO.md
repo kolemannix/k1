@@ -11,11 +11,13 @@ AbilitySignature as context variable kind in addition to Type (enables context W
       A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
 A let* that goes to the heap, mark/reset on function return. (function arenas)
 Support ".c" sources; compiles your c and adds it to the main compilation unit
+- definitions #c "void foo() { }"
+- #cfile "asm.c"
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
-- [ ] Unit syntax of '()', as well as the name `unit` by the way, makes no sense when we don't have tuples.
+- [x] Unit syntax of '()', as well as the name `unit` by the way, makes no sense when we don't have tuples.
       What about `{}`
 
 Non-major Ideas
@@ -41,7 +43,7 @@ Syntax/elegance
   - [x] Ok now I'm really thinking about `size` and it being signed.
   - [x] Also: do safe integer coercions automatically
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
-- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+- [x] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing
@@ -57,7 +59,7 @@ Simple but missing
 
 # Bugs
 - [ ] Defect: Generic (co)recursive types do not work
-- [ ] We should require that a blanket impl's params appear in the Self type
+- [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
@@ -71,13 +73,15 @@ Simple but missing
 
 ## VM Profiler: Instrument the vm itself
 
-## K1 Profiler: Add `core` and/or compiler support to allow block profiling of k1 programs
+## K1 Profiler
+Add `core` and/or compiler support to allow block profiling of k1 programs
 
 ## Project: Redesign the physical representation of enums
 - [x] Implement `union` as a thing
 - [x] Represent enums as `{ tag, union }`,
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
+- [ ] Rename `Enum` -> `Sum` or `DUnion` in the code
 - [ ] Think about optimizing no-payload enums into non-aggregates
 
 ## Project: Instruction-level IR ('bytecode')
@@ -106,13 +110,14 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Introduce Warnings
 - [x] Unused var
 - [ ] Unused type bound
-- [ ] Footgun, warn on naked variable patterns in 'is'
+- [x] Footgun, warn on naked variable patterns in 'is'
     - `if self.slots.get(probe_index) is None {`
 
 ## Project: Zero-Sized Types
-- [ ] Treat Unit and empty Struct as ZSTs
+- [x] Treat Unit and empty Struct as ZSTs
+- [x] Compile ZSTs to missing arguments, and LLVM void returns, and no-ops inside other types
 - [ ] Treat statics as ZSTs
-- [ ] Make Result[T, never] == T ?
+- [ ] Think about `never` in either variants: Result[T, never]
 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 

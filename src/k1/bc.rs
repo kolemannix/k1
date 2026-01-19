@@ -1345,7 +1345,6 @@ fn compile_expr(
                 None => b.push_alloca(struct_pt, "struct literal").as_value(),
             };
             for (field_index, field) in b.k1.mem.getn(struct_literal.fields).iter().enumerate() {
-                debug_assert!(b.k1.types.get(struct_type_id).as_struct().is_some());
                 let struct_offset = b.push_struct_offset(
                     struct_agg_id,
                     struct_base,
@@ -2163,33 +2162,7 @@ fn compile_expr(
             b.k1.bytecode.b_units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
-        TypedExpr::FunctionToLambdaObject(fn_to_lam_obj) => {
-            // nocommit: FunctionToLambdaObject should happen in typer phase
-            let lambda_object_type_id = expr_type;
-            let obj_struct_type = b.get_physical_type(lambda_object_type_id);
-            let lam_obj_ptr = match dst {
-                Some(dst) => dst,
-                None => b.push_alloca(obj_struct_type, "lam obj storage").as_value(),
-            };
-            let fn_ptr = Value::FunctionAddr(fn_to_lam_obj.function_id);
-            let lam_obj_fn_ptr_addr = b.push_struct_offset(
-                obj_struct_type.expect_agg(),
-                lam_obj_ptr,
-                TypePool::LAMBDA_OBJECT_FN_PTR_INDEX as u32,
-                "",
-            );
-            b.push_store(lam_obj_fn_ptr_addr, fn_ptr, "");
-            let lam_obj_env_ptr_addr = b.push_struct_offset(
-                obj_struct_type.expect_agg(),
-                lam_obj_ptr,
-                TypePool::LAMBDA_OBJECT_ENV_PTR_INDEX as u32,
-                "",
-            );
-            b.push_store(lam_obj_env_ptr_addr, Value::PTR_ZERO, "");
-            b.k1.bytecode.b_units_pending_compile.push(fn_to_lam_obj.function_id);
-            Ok(lam_obj_ptr)
-        }
-        TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bc on PendingCapture", b.cur_span),
+        TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bytecode on PendingCapture", b.cur_span),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             // We lower the simple scalar static values

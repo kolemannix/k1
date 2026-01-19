@@ -710,11 +710,6 @@ impl TypedProgram {
                 w.write_str(self.ident_str(fun.name))?;
                 w.write_str(".toRef()")
             }
-            TypedExpr::FunctionToLambdaObject(fn2lam) => {
-                let fun = self.get_function(fn2lam.function_id);
-                w.write_str(self.ident_str(fun.name))?;
-                w.write_str(".toDyn()")
-            }
             TypedExpr::PendingCapture(pending_capture) => {
                 w.write_str("capture(")?;
                 let variable = self.variables.get(pending_capture.captured_variable_id);

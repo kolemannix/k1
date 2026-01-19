@@ -60,7 +60,7 @@ fn runCommand(context alloc: mem/AllocMode)(program: string, args: View[string])
         .Ok(status.*);
     } else {
         // Fork failed
-        .Err(())
+        .Err({})
     }
 }
 
