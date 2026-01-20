@@ -1127,7 +1127,6 @@ fn store_rich_if_dst(
     match dst {
         None => value,
         Some(dst) => {
-            // smoking gun
             store_value(b, pt, dst, value, comment);
             dst
         }
@@ -1531,10 +1530,19 @@ fn compile_expr(
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 let _physical_type = b.get_physical_type(type_id);
 
-                                let value = compile_expr(b, None, call.args[0])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let value = compile_expr(b, None, arg0)?;
                                 let bake =
                                     b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
-                                let stored = store_scalar_if_dst(b, dst, bake.as_value());
+
+                                // Produces a type id, which is a scalar
+                                let stored = store_rich_if_dst(
+                                    b,
+                                    dst,
+                                    phys_fn_type.return_type,
+                                    bake.as_value(),
+                                    "",
+                                );
                                 Ok(stored)
                             };
                         }
@@ -1586,7 +1594,8 @@ fn compile_expr(
                         }
                         BuiltinHandler::BcBoolNegate => {
                             return {
-                                let base = compile_expr(b, None, call.args[0])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let base = compile_expr(b, None, arg0)?;
                                 let neg = b.push_inst_anon(Inst::BoolNegate { v: base });
                                 let stored = store_scalar_if_dst(b, dst, neg.as_value());
                                 Ok(stored)
@@ -1594,7 +1603,8 @@ fn compile_expr(
                         }
                         BuiltinHandler::BcBitNot => {
                             return {
-                                let base = compile_expr(b, None, call.args[0])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let base = compile_expr(b, None, arg0)?;
                                 let neg = b.push_inst_anon(Inst::BitNot { v: base });
                                 let stored = store_scalar_if_dst(b, dst, neg.as_value());
                                 Ok(stored)
@@ -1610,7 +1620,8 @@ fn compile_expr(
                                 let from_pt = b.get_physical_type(from_type_id);
                                 let to_pt = b.get_physical_type(to_type_id);
 
-                                let from_value = compile_expr(b, None, call.args[0])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let from_value = compile_expr(b, None, arg0)?;
                                 match (from_pt, to_pt) {
                                     (PhysicalType::Empty, _) | (_, PhysicalType::Empty) => {
                                         return failf!(
@@ -1687,8 +1698,10 @@ fn compile_expr(
                         }
                         BuiltinHandler::BcBitwiseBinop(op) => {
                             return {
-                                let lhs = compile_expr(b, None, call.args[0])?;
-                                let rhs = compile_expr(b, None, call.args[1])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let lhs = compile_expr(b, None, arg0)?;
+                                let arg1 = *b.k1.mem.get_nth(call.args, 1);
+                                let rhs = compile_expr(b, None, arg1)?;
                                 let lhs_pt = b.get_value_kind(&lhs).expect_value().unwrap();
                                 let width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
                                 let inst = match op {
@@ -1716,8 +1729,10 @@ fn compile_expr(
                                 let elem_type_id =
                                     b.k1.named_types.get_nth(call.type_args, 0).type_id;
                                 let elem_pt = b.get_physical_type(elem_type_id);
-                                let base = compile_expr(b, None, call.args[0])?;
-                                let element_index = compile_expr(b, None, call.args[1])?;
+                                let arg0 = *b.k1.mem.get_nth(call.args, 0);
+                                let base = compile_expr(b, None, arg0)?;
+                                let arg1 = *b.k1.mem.get_nth(call.args, 1);
+                                let element_index = compile_expr(b, None, arg1)?;
                                 let offset = b.push_inst(
                                     Inst::ArrayOffset { element_t: elem_pt, base, element_index },
                                     "refAtIndex offest",
@@ -1811,7 +1826,7 @@ fn compile_expr(
                 }
             }
 
-            for (index, arg) in call.args.iter().enumerate() {
+            for (index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
                 // In case this has a side-effect and produces an Empty value, we still need to
                 // compile this expression!
                 let value = compile_expr(b, None, *arg)?;
@@ -2162,7 +2177,9 @@ fn compile_expr(
             b.k1.bytecode.b_units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
-        TypedExpr::PendingCapture(_) => b.k1.ice_with_span("bytecode on PendingCapture", b.cur_span),
+        TypedExpr::PendingCapture(_) => {
+            b.k1.ice_with_span("bytecode on PendingCapture", b.cur_span)
+        }
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             // We lower the simple scalar static values
@@ -2403,11 +2420,13 @@ fn compile_arith_binop(
     call: &Call,
     dst: Option<Value>,
 ) -> TyperResult<Value> {
-    let lhs = compile_expr(b, None, call.args[0])?;
-    let rhs = compile_expr(b, None, call.args[1])?;
+    let arg0 = *b.k1.mem.get_nth(call.args, 0);
+    let lhs = compile_expr(b, None, arg0)?;
+    let arg1 = *b.k1.mem.get_nth(call.args, 1);
+    let rhs = compile_expr(b, None, arg1)?;
     use ArithOpClass as Class;
     use ArithOpOp as Op;
-    let lhs_type = b.k1.exprs.get_type(call.args[0]);
+    let lhs_type = b.k1.exprs.get_type(arg0);
     let lhs_width = b.k1.types.get_layout(lhs_type).size_bits() as u8;
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {

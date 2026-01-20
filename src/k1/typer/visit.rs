@@ -122,7 +122,7 @@ impl TypedProgram {
                     }
                     _ => {}
                 };
-                for arg in call.args.iter() {
+                for arg in self.mem.getn(call.args) {
                     recurse!(*arg);
                 }
             }

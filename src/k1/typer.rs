@@ -994,7 +994,7 @@ impl Callee {
 #[derive(Clone)]
 pub struct Call {
     pub callee: Callee,
-    pub args: SmallVec<[TypedExprId; FUNC_PARAM_IDEAL_COUNT]>,
+    pub args: MSlice<TypedExprId, TypedProgram>,
     /// type_args remain unerased for some intrinsics where we want codegen to see the types.
     /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
     /// better to specialize anyway and inline? idk
@@ -6699,7 +6699,7 @@ impl TypedProgram {
             self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.mem, 0);
         let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
-            args: smallvec![get_error_call],
+            args: self.mem.pushn(&[get_error_call]),
             type_args: SliceHandle::empty(),
             return_type: block_return_type,
             span,
@@ -11316,7 +11316,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     false,
                 )?;
-                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
                 for (maybe_typed_expr, param) in args_and_params.iter() {
                     let checked_expr = match *maybe_typed_expr {
                         MaybeTypedExpr::Typed(typed) => typed,
@@ -11338,7 +11338,7 @@ impl TypedProgram {
                     };
                     typechecked_args.push(checked_expr);
                 }
-                (callee, typechecked_args, SliceHandle::empty())
+                (callee, typechecked_args.into_handle(&mut self.mem), SliceHandle::empty())
             }
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
@@ -11432,7 +11432,7 @@ impl TypedProgram {
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
-                let mut typechecked_args = SmallVec::with_capacity(args_and_params.len());
+                let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
 
                 // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
@@ -11474,7 +11474,7 @@ impl TypedProgram {
                     }
                 }
 
-                (final_callee, typechecked_args, type_args)
+                (final_callee, typechecked_args.into_handle(&mut self.mem), type_args)
             }
         };
 
@@ -11482,9 +11482,11 @@ impl TypedProgram {
         // So let's not generate a `Call`, but rather just the arguments expressions that should be
         // evaluated. This simplifies later compiler stages to not have to carve out special cases
         // for divergent expressions
-        for (index, arg) in typechecked_arguments.iter().enumerate() {
+        let typechecked_arguments_slice = self.mem.getn(typechecked_arguments);
+        for (index, arg) in typechecked_arguments_slice.iter().enumerate() {
+            // nocommit: A test in crash_never whatever test that these exprs all actually run
             if self.exprs.get_type(*arg) == NEVER_TYPE_ID {
-                let exprs_so_far = &typechecked_arguments[0..=index];
+                let exprs_so_far = &typechecked_arguments_slice[0..=index];
                 return Ok(self.make_never_block(exprs_so_far, ctx.scope_id, span));
             }
         }
@@ -11572,7 +11574,8 @@ impl TypedProgram {
         let span = call.span;
         match intrinsic {
             Builtin::GetStaticValue => {
-                let static_value_id_arg = self.exprs.get(call.args[0]);
+                let arg0 = *self.mem.get_nth(call.args, 0);
+                let static_value_id_arg = self.exprs.get(arg0);
                 // For now, require a literal. We could relax this and evaluate it
                 // if that's useful
                 // This is fun because we take a static value id pointing to an integer and interpret that

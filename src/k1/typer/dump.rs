@@ -589,7 +589,7 @@ impl TypedProgram {
                     }
                 };
                 w.write_str("(")?;
-                for (idx, arg) in call.args.iter().enumerate() {
+                for (idx, arg) in self.mem.getn(call.args).iter().enumerate() {
                     if idx > 0 {
                         w.write_str(", ")?;
                     }

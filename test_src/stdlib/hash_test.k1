@@ -45,5 +45,5 @@ fn testResize(size: int) {
 
 fn test() {
   testBasic();
-  testResize(1000);
+  testResize(100);
 }

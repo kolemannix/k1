@@ -1,3 +1,6 @@
+use core/StringBuilder
+use meta/CodeWriter
+
 // TODO: need to flesh this out more with format specifiers
 //           and other things
 fn fmt[Fmt: static string, Args, W: Writer](w: W, fmtString: Fmt, args: Args) {

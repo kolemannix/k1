@@ -4,7 +4,6 @@ fn basic() {
   let c: char = '!';
   assert(c == '!');
   let s = c.toString();
-  print(s);
   //println(s);
   assert(s.len() == 1);
   assert(s.get(0) == '!');

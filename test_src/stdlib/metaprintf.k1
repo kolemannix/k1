@@ -1,15 +1,8 @@
 use core/StringBuilder
+use std/fmtString
 use meta/CodeWriter
 
-// nocommit test case
 fn staticAdd[A: static int, B: static int](a: A, b: B): int { a + b }
-
-#static {
-  let res: int = staticAdd(#static 3, #static 2);
-  let res2: 5 = staticAdd(#static 3, #static 2);
-  printIt(res);
-  printIt(res2);
-}
 
 fn test() {
   let s1 = fmtString("My value is: ? ?", {a: 42, b: true});
@@ -20,6 +13,9 @@ fn test() {
 
   let s4 = fmtString("My string is ?", "Hello, World!");
   assertEquals(s4, "My string is Hello, World!");
+
+  let res: int = staticAdd(#static 3, #static 2);
+  assertEquals(res, 5);
 
   {}
 }
