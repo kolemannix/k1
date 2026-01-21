@@ -21,4 +21,14 @@ fn test() {
   g2.*; // no-op yielding Value::Empty
 
   testLocal({}, {}, {}, {});
+  staticZst();
 }
+
+fn staticZst() {
+  let point = #static { x: 1, y: (#static 2): int };
+  assertEquals(point.x.fromStatic(), 1);
+}
+
+//fn staticGetX[P: static { x: int, y: int }](p: P): int {
+//  p.x.fromStatic()
+//}

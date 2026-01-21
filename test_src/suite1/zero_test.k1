@@ -80,13 +80,5 @@ fn testZero() {
   let o: ?typeOf(point) = zeroed();
   assertEquals(o.tag, 0);
 
-
-  let point = #static {
-    ({ x: 1, y: #static 2 })
-  };
-  #static "I should have enough alt vms for this";
-  #static "I should have enough alt vms for this too";
-  assertEquals(point.x, 1);
-
   {}
 }

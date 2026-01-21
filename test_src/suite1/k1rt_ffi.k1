@@ -1,5 +1,5 @@
 fn testFfi() {
-  let s = #static {
+  let s: string = #static {
     let* buf = Array/zeroed[char, 1024]();
     let len: core/c_int = core/k1rt/snprintf_f64(
       buf.basePtr(), 1024, 3.14, places = 3

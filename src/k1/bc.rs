@@ -712,18 +712,32 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     // Set up parameters
     let fn_params = f.params;
     let fn_phys_type = b.get_physical_fn_type(f.type_id);
-    for (index, param) in b.k1.mem.getn(fn_params).iter().enumerate() {
+    let mut non_empty_index = 0;
+    for param in b.k1.mem.getn(fn_params).iter() {
         let v = b.k1.variables.get(param.variable_id);
         let t = b.get_physical_type(v.type_id);
-        if !t.is_empty() {
-            b.k1.bytecode.b_variables.push(BuilderVariable {
-                id: param.variable_id,
-                value: Value::FnParam { t, index: index as u32 },
-                indirect: false,
-            });
-        }
+
+        // We do not skip empty types here, even though they do not appear in the physical function
+        // type. This is because they do not need to be passed, but we do need to be able to look
+        // them up. Consider a function that takes an empty named t: `t: {}`. It should be legal to
+        // use `t`.
+        //let phys_param =
+        //    b.k1.bytecode
+        //        .mem
+        //        .getn(fn_phys_type.params)
+        //        .iter()
+        //        .find(|p| p.original_index as usize == index);
+        let value = if t.is_empty() {
+            Value::Empty
+        } else {
+            let value = Value::FnParam { t, index: non_empty_index as u32 };
+            non_empty_index += 1;
+            value
+        };
+        let builder_variable = BuilderVariable { id: param.variable_id, value, indirect: false };
+        b.k1.bytecode.b_variables.push(builder_variable);
     }
-    debug_assert_eq!(b.k1.bytecode.b_variables.len() as u32, fn_phys_type.params.len());
+    // debug_assert_eq!(b.k1.bytecode.b_variables.len() as u32, fn_phys_type.params.len());
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
@@ -1077,7 +1091,6 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    /// Returns the function type, and a list of skipped ZSTs by index
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
         let function_type = *self.k1.types.get(type_id).expect_function();
         let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
@@ -1125,7 +1138,13 @@ fn store_rich_if_dst(
     comment: impl Into<BcStr>,
 ) -> Value {
     match dst {
-        None => value,
+        None => {
+            if pt.is_empty() {
+                Value::Empty
+            } else {
+                value
+            }
+        }
         Some(dst) => {
             store_value(b, pt, dst, value, comment);
             dst
@@ -1183,38 +1202,52 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     original_type_id: let_stmt.variable_type,
                 }),
             };
-            let variable_alloca = b.push_alloca_ext(var_pt, comment, debug_info);
 
-            // value_ptr means a pointer matching the type of the rhs
-            // For a referencing let, the original alloca a ptr
-            // So we need one for the inner type as well
-            let value_ptr = if let_stmt.is_referencing {
-                let Type::Reference(reference_type) = b.k1.types.get(let_stmt.variable_type) else {
-                    panic!("Expected reference for referencing let");
-                };
-                let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
-                let value_alloca =
-                    b.push_alloca(reference_inner_type_pt_id, "referencing inner alloca");
-                b.push_store(
-                    variable_alloca.as_value(),
-                    value_alloca.as_value(),
-                    "referencing initializer store",
-                );
-                value_alloca
+            if var_pt.is_empty() {
+                //let span = b.cur_span;
+                if let Some(init) = let_stmt.initializer {
+                    compile_expr(b, None, init)?;
+                }
+                b.k1.bytecode.b_variables.push(BuilderVariable {
+                    id: let_stmt.variable_id,
+                    value: Value::Empty,
+                    indirect: false,
+                });
+                Ok(Value::Empty)
             } else {
-                variable_alloca
-            };
+                let variable_alloca = b.push_alloca_ext(var_pt, comment, debug_info);
+                // value_ptr means a pointer matching the type of the rhs
+                // For a referencing let, the original alloca a ptr
+                // So we need one for the inner type as well
+                let value_ptr = if let_stmt.is_referencing {
+                    let Type::Reference(reference_type) = b.k1.types.get(let_stmt.variable_type)
+                    else {
+                        panic!("Expected reference for referencing let");
+                    };
+                    let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
+                    let value_alloca =
+                        b.push_alloca(reference_inner_type_pt_id, "referencing inner alloca");
+                    b.push_store(
+                        variable_alloca.as_value(),
+                        value_alloca.as_value(),
+                        "referencing initializer store",
+                    );
+                    value_alloca
+                } else {
+                    variable_alloca
+                };
 
-            // If there's an initializer, store it in value_ptr
-            if let Some(init) = let_stmt.initializer {
-                compile_expr(b, Some(value_ptr.as_value()), init)?;
+                // If there's an initializer, store it in value_ptr
+                if let Some(init) = let_stmt.initializer {
+                    compile_expr(b, Some(value_ptr.as_value()), init)?;
+                }
+                b.k1.bytecode.b_variables.push(BuilderVariable {
+                    id: let_stmt.variable_id,
+                    value: variable_alloca.as_value(),
+                    indirect: true,
+                });
+                Ok(Value::Empty)
             }
-            b.k1.bytecode.b_variables.push(BuilderVariable {
-                id: let_stmt.variable_id,
-                value: variable_alloca.as_value(),
-                indirect: true,
-            });
-            Ok(Value::Empty)
         }
         TypedStmt::Assignment(ass) => {
             let ass = *ass;
@@ -1242,7 +1275,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             }
         }
         TypedStmt::Require(req) => {
-            //task(bc): matching condition clone
             let req = req.clone();
             let continue_name = mformat!(b.k1.bytecode.mem, "req_cont_{}", stmt.as_u32());
             let require_continue_block = b.push_block(continue_name);
@@ -1473,12 +1505,13 @@ fn compile_expr(
                         );
                         b.k1.ice_with_span("Missing variable", expr_span)
                     };
-                    let var_type_pt_id = b.get_physical_type(expr_type);
+                    let var_pt = b.get_physical_type(expr_type);
                     let var_value = var.value;
-                    if var.indirect {
+                    let var_indirect = var.indirect;
+                    if var_indirect {
                         let loaded = load_or_copy(
                             b,
-                            var_type_pt_id,
+                            var_pt,
                             dst,
                             var_value,
                             false,
@@ -1487,7 +1520,7 @@ fn compile_expr(
                         Ok(loaded)
                     } else {
                         let stored =
-                            store_rich_if_dst(b, dst, var_type_pt_id, var_value, "direct variable");
+                            store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
                         Ok(stored)
                     }
                 }
@@ -1506,7 +1539,6 @@ fn compile_expr(
             Ok(last)
         }
         TypedExpr::Call { call_id } => {
-            // nocommit(2): deal with 96 byte clone() of Call in bc
             let call = b.k1.calls.get(call_id).clone();
 
             let function_type_id = b.k1.get_callee_function_type(&call.callee);
@@ -2268,7 +2300,6 @@ fn compile_cast(
         | CastType::IntegerCast(IntegerCastDirection::NoOp)
         | CastType::IntegerCast(IntegerCastDirection::SignChange)
         | CastType::Integer8ToChar
-        | CastType::StaticErase
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
@@ -2427,7 +2458,8 @@ fn compile_arith_binop(
     use ArithOpClass as Class;
     use ArithOpOp as Op;
     let lhs_type = b.k1.exprs.get_type(arg0);
-    let lhs_width = b.k1.types.get_layout(lhs_type).size_bits() as u8;
+    let lhs_pt = b.get_physical_type(lhs_type);
+    let lhs_width = b.k1.types.get_pt_layout(lhs_pt).size_bits() as u8;
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
             Inst::IntAdd { lhs, rhs, width: lhs_width }
@@ -2872,9 +2904,6 @@ pub fn display_unit_name(
     Ok(())
 }
 
-// nocommit ZST checklist:
-// - `alloca {}`
-// - Make static types ZSTs
 pub fn display_phys_fn_type(
     w: &mut impl Write,
     k1: &TypedProgram,

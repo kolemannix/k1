@@ -1,0 +1,38 @@
+"Functional programming doesn't matter"
+
+What we care about:
+Correctness, Dexterity, Performance
+How we get it:
+Expressive static types, higher-order functions
+What we maybe don't care about so much:
+Purity, Laziness
+
+
+My version
+
+What I care about:
+Correctness, Ergonomics, Performance
+
+"In the beginning you want results, in the end all you want is control"
+"Everyone wants to write code in an HLL but wants everything to have been written in C"
+In choosing language A, have I dropped the quality ceiling of my shipped software?
+
+How I get it
+Maximally expressive static types
+- free* higher order functions
+- free* Options (sum types in general)
+- structural typing
+- pattern matching -> "combining checks with making typelevel progress, "parse dont validate"
+- flat (unboxed), predictable, native data layouts (C-like and compatible)
+A strong polymorphism solution (I choose and champion type classes which I call Ability)
+Fast, productive feedback loops
+- Designed for compile times
+- repl and interpreter, interactive development
+
+What I don't have
+- Safety (hope to do escape analysis + some sort of type tagging like Ocaml modes)
+
+test_src/stdlib/metaprintf.k1
+test_src/stdlib/bitfield_test.k1
+k1lib/core/builtin.k1:107
+

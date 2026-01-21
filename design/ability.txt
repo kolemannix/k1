@@ -1,0 +1,17 @@
+Adding typeclasses to a C-like
+
+ability Default {
+
+}
+
+ability ToString {
+
+}
+
+ability AddSimple {
+
+}
+
+ability AddPoly {
+
+}

@@ -1219,7 +1219,6 @@ pub enum CastType {
     IntegerUnsignedToFloat,
     IntegerSignedToFloat,
     LambdaToLambdaObject,
-    StaticErase,
 }
 
 impl Display for CastType {
@@ -1243,7 +1242,6 @@ impl Display for CastType {
             CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
             CastType::IntegerSignedToFloat => write!(f, "sinttof"),
             CastType::LambdaToLambdaObject => write!(f, "lam2dyn"),
-            CastType::StaticErase => write!(f, "staticerase"),
         }
     }
 }
@@ -2406,7 +2404,7 @@ impl TypedProgram {
 
         let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
         let empty_struct_id = types.add_empty_struct();
-        assert_eq!(empty_struct_id, EMPTY_ID);
+        assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
 
         let root_ident = ast.idents.b.root_module_name;
         let mut scopes = Scopes::make(root_ident, 8192);
@@ -3510,7 +3508,7 @@ impl TypedProgram {
                     scope_id,
                     EvalTypeExprContext { is_inside_static_type: true, ..context },
                 )?;
-                if let Type::Static(_) = self.types.get_no_follow_static(inner_type_id) {
+                if let Type::Static(_) = self.types.get(inner_type_id) {
                     return failf!(
                         parsed_static.span,
                         "Static type cannot be nested inside another static type"
@@ -4243,7 +4241,7 @@ impl TypedProgram {
     }
 
     pub fn get_value_of_static_type(&self, type_id: TypeId) -> Option<&StaticValue> {
-        match self.types.get_no_follow_static(type_id) {
+        match self.types.get(type_id) {
             Type::Static(StaticType { value_id: Some(value_id), .. }) => {
                 Some(self.static_values.get(*value_id))
             }
@@ -4393,7 +4391,7 @@ impl TypedProgram {
                         ),
                     },
                     ParsedLiteral::String(string_id, span) => {
-                        match self.types.get_no_follow_static(target_type_id) {
+                        match self.types.get(target_type_id) {
                             Type::Static(s) if s.family_type_id == STRING_TYPE_ID => Ok(()),
                             _ if target_type_id == STRING_TYPE_ID => Ok(()),
                             _ => failf!(
@@ -4624,7 +4622,7 @@ impl TypedProgram {
 
         // Static lifting and erasing
         match (
-            self.types.get_no_follow_static(expected),
+            self.types.get(expected),
             self.types.get_static_type_of_type(actual_type_id),
         ) {
             // If we failed typechecking, and passed a static, then see
@@ -4633,14 +4631,15 @@ impl TypedProgram {
             (_, Some(actual_static))
                 if self.check_types(expected, actual_static.family_type_id, scope_id).is_ok() =>
             {
+                let span = self.exprs.get_span(expr);
+                let materialized_value = self.materialize_static_value(
+                    actual_static.family_type_id,
+                    actual_static.value_id,
+                    span,
+                );
                 return CheckExprTypeResult::Coerce(
-                    self.synth_cast(
-                        expr,
-                        actual_static.family_type_id,
-                        CastType::StaticErase,
-                        None,
-                    ),
-                    "static_erase".into(),
+                    materialized_value,
+                    "static_materialize".into(),
                 );
             }
             // If we failed typechecking, and we expected a static, and we passed a non-static
@@ -4930,7 +4929,7 @@ impl TypedProgram {
             self.type_id_to_string(expected).blue(),
         );
 
-        match (self.types.get_no_follow_static(expected), self.types.get_no_follow_static(actual)) {
+        match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(_), Type::Struct(_)) => {
                 Err(k1_format_user!(self, "expected struct {} but got struct {}", expected, actual))
@@ -5770,10 +5769,11 @@ impl TypedProgram {
 
         // Follow 'statics' since we're never going to be implementing abilities for the
         // specific static values but instead for the inner types
-        let self_type_id = match self.types.get_no_follow(self_type_id) {
-            Type::Static(stat) => stat.family_type_id,
-            _ => self_type_id,
-        };
+        // let self_type_id = match self.types.get_no_follow(self_type_id) {
+        //     Type::Static(stat) => stat.family_type_id,
+        //     _ => self_type_id,
+        // };
+
         self.find_ability_impl_for_type_or_generate_new(
             self_type_id,
             base_ability,
@@ -5935,7 +5935,7 @@ impl TypedProgram {
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
                 let static_type =
-                    self.types.get_no_follow_static(static_constraint).as_static().unwrap();
+                    self.types.get(static_constraint).as_static().unwrap();
                 if static_type.family_type_id != solution.type_id {
                     eprintln!(
                         "Blanket impl almost matched but a static constraint failed: {} != {}",
@@ -6386,12 +6386,15 @@ impl TypedProgram {
         self.types.get(self.exprs.get_type(expr_id))
     }
 
+    pub fn get_expr_type_no_follow_static(&self, expr_id: TypedExprId) -> &Type {
+        self.types.get(self.exprs.get_type(expr_id))
+    }
+
     fn eval_field_access(
         &mut self,
         expr_id: ParsedExprId,
         field_access: &parse::FieldAccess,
         ctx: EvalExprContext,
-        is_assignment_lhs: bool,
     ) -> TyperResult<TypedExprId> {
         // Special case: Enum Constructor
         let span = field_access.span;
@@ -6442,9 +6445,6 @@ impl TypedProgram {
             if field_access.is_referencing {
                 return failf!(field_access.span, "Cannot use * with unwrap operator");
             }
-            if is_assignment_lhs {
-                return failf!(field_access.span, "Cannot assign to unwrap operator");
-            }
             return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
         }
 
@@ -6455,9 +6455,6 @@ impl TypedProgram {
             }
             if field_access.is_referencing {
                 return failf!(field_access.span, "Cannot use * with try operator");
-            }
-            if is_assignment_lhs {
-                return failf!(field_access.span, "Cannot assign to try operator");
             }
             return self.eval_try_operator(field_access.base, ctx, field_access.span);
         }
@@ -6521,9 +6518,6 @@ impl TypedProgram {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "TODO: support coalesce for .tag");
             }
-            if is_assignment_lhs {
-                return failf!(field_access.span, "Cannot assign to tag");
-            }
             if let Some(get_tag) = self.handle_enum_get_tag(base_expr, field_access.span)? {
                 return Ok(get_tag);
             }
@@ -6533,25 +6527,18 @@ impl TypedProgram {
             if field_access.is_coalescing {
                 return failf!(field_access.span, "TODO: support coalesce for .variantName");
             }
-            if is_assignment_lhs {
-                return failf!(field_access.span, "Cannot assign to variantName");
-            }
             return failf!(
                 field_access.span,
                 "TODO: Generate variantName() code (for only enums that it is called on!)"
             );
         }
 
-        // Perform auto-dereference for accesses that are not 'lvalue'-style or 'referencing' style
-        let (struct_type_id, base_reference_type) = match self.get_expr_type(base_expr) {
+        let (base_type_id, base_reference_type) = match self.get_expr_type(base_expr) {
             Type::Reference(reference_type) => {
                 let inner_type = reference_type.inner_type;
                 (inner_type, Some(*reference_type))
             }
             _other => {
-                if is_assignment_lhs {
-                    return failf!(base_span, "Cannot assign to member of non-reference struct");
-                }
                 if field_access.is_referencing && !field_access.is_coalescing {
                     return failf!(
                         base_span,
@@ -6574,11 +6561,46 @@ impl TypedProgram {
         if field_access.is_coalescing {
             return failf!(span, "?. not implemented currently");
         }
-        match self.types.get(struct_type_id) {
-            Type::Struct(struct_type) => {
-                if is_assignment_lhs && !base_is_reference {
-                    return failf!(span, "Struct must be a reference to be assignable");
+        //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
+        match self.types.get(base_type_id) {
+            Type::Static(st) => {
+                let Some(struct_type) = self.types.get(st.family_type_id).as_struct() else {
+                    kbail!(
+                        self,
+                        span,
+                        "Field {} not found on static type {}",
+                        field_access.field_name,
+                        base_type_id
+                    )
+                };
+                let (field_index, _target_field) = struct_type
+                    .find_field(&self.types.mem, field_access.field_name)
+                    .ok_or_else(|| {
+                        errf!(
+                            span,
+                            "Field {} not found on struct {}",
+                            self.ast.idents.get_name(field_access.field_name),
+                            self.type_id_to_string(base_type_id)
+                        )
+                    })?;
+                match st.value_id {
+                    None => {
+                        // Abstract case
+                        kbail!(self, span, "Can't work with abstract static structs yet")
+                    }
+                    Some(value_id) => {
+                        let StaticValue::Struct(static_struct) = self.static_values.get(value_id)
+                        else {
+                            ice_span!(self, span, "Expected static struct")
+                        };
+                        let field_value_id =
+                            self.static_values.mem.get_nth(static_struct.fields, field_index);
+                        let expr_id = self.add_static_value_expr(*field_value_id, span);
+                        Ok(expr_id)
+                    }
                 }
+            }
+            Type::Struct(struct_type) => {
                 let (field_index, target_field) = struct_type
                     .find_field(&self.types.mem, field_access.field_name)
                     .ok_or_else(|| {
@@ -6586,7 +6608,7 @@ impl TypedProgram {
                             span,
                             "Field {} not found on struct {}",
                             self.ast.idents.get_name(field_access.field_name),
-                            self.type_id_to_string(struct_type_id)
+                            self.type_id_to_string(base_type_id)
                         )
                     })?;
                 let result_type = if field_access.is_referencing {
@@ -6600,7 +6622,7 @@ impl TypedProgram {
                         base: base_expr,
                         field_index: field_index as u32,
                         access_kind,
-                        struct_type: struct_type_id,
+                        struct_type: base_type_id,
                     }),
                     result_type,
                     span,
@@ -6925,7 +6947,7 @@ impl TypedProgram {
             }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = field_access.clone();
-                self.eval_field_access(expr_id, &field_access, ctx, false)
+                self.eval_field_access(expr_id, &field_access, ctx)
             }
             ParsedExpr::Block(block) => {
                 let block = block.clone();
@@ -7160,6 +7182,18 @@ impl TypedProgram {
         self.exprs.add_static(value_id, type_id, false, span)
     }
 
+    fn materialize_static_value(
+        &mut self,
+        family_type_id: TypeId,
+        value_id: Option<StaticValueId>,
+        span: SpanId,
+    ) -> TypedExprId {
+        match value_id {
+            Some(value_id) => self.add_static_constant_expr(value_id, span),
+            None => self.synth_phony(family_type_id, span),
+        }
+    }
+
     fn eval_list_literal(
         &mut self,
         _expr_id: ParsedExprId,
@@ -7333,8 +7367,9 @@ impl TypedProgram {
         // So we just return the expected type, or a unit
         debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass());
         if ctx.is_generic_pass() {
-            let filler_expr = self.synth_phony_value_of_expected_type(ctx, span);
-            return Ok(StaticExecutionResult::TypedExpr(filler_expr));
+            let phony_type = ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID);
+            let phony_expr = self.synth_phony(phony_type, span);
+            return Ok(StaticExecutionResult::TypedExpr(phony_expr));
         }
 
         let kind = stat.kind;
@@ -7361,7 +7396,7 @@ impl TypedProgram {
             let (variable_id, variable_expr) =
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get_type(variable_expr);
-            match self.types.get_no_follow_static(variable_type) {
+            match self.types.get(variable_type) {
                 Type::Static(stat) => {
                     if let Some(value_id) = stat.value_id {
                         static_parameters.push((variable_id, value_id));
@@ -7376,7 +7411,7 @@ impl TypedProgram {
                 Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                     let static_type = self
                         .types
-                        .get_no_follow_static(tp.static_constraint.unwrap())
+                        .get(tp.static_constraint.unwrap())
                         .as_static()
                         .unwrap();
                     let Some(value_id) = static_type.value_id else {
@@ -8718,11 +8753,8 @@ impl TypedProgram {
                     target_expr
                 } else {
                     // The type pattern failed, and the consequent code will never run, but we need
-                    // it to typecheck, so call `core/phony[T]`
-                    self.synth_phony_value_of_expected_type(
-                        ctx.with_expected_type(Some(pattern.type_id)),
-                        pattern.span,
-                    )
+                    // it to typecheck
+                    self.synth_phony(pattern.type_id, pattern.span)
                 };
                 self.compile_pattern_into_values(
                     pattern.inner_pattern,
@@ -8840,7 +8872,7 @@ impl TypedProgram {
             self.report(warnf!(span, "Useless cast"));
             return Ok(base_expr);
         }
-        let cast_type = match self.types.get_no_follow_static(base_expr_type) {
+        let cast_type = match self.types.get(base_expr_type) {
             Type::Integer(from_integer_type) => match self.types.get(target_type) {
                 Type::Integer(to_integer_type) => {
                     let cast_type = match from_integer_type.width().cmp(&to_integer_type.width()) {
@@ -8976,18 +9008,6 @@ impl TypedProgram {
                     self.type_id_to_string(target_type).blue()
                 ),
             },
-            Type::Static(stat) => {
-                if target_type == stat.family_type_id {
-                    Ok(CastType::StaticErase)
-                } else {
-                    failf!(
-                        span,
-                        "Cannot cast static '{}' to '{}'",
-                        self.type_id_to_string(base_expr_type).blue(),
-                        self.type_id_to_string(target_type).blue()
-                    )
-                }
-            }
             _ => failf!(
                 span,
                 "Cannot cast '{}' to '{}'",
@@ -9292,7 +9312,8 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         if ctx.is_generic_pass() {
-            let filler_expr = self.synth_phony_value_of_expected_type(ctx, if_expr.span);
+            let filler_expr =
+                self.synth_phony(ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID), if_expr.span);
             return Ok(filler_expr);
         }
         let condition_bool = match ctx.is_generic_pass() {
@@ -10202,10 +10223,7 @@ impl TypedProgram {
                         // And someone called arr.len. The value does not matter as it will never
                         // be seen at runtime, or even compile-time since we don't execute during
                         // the generic pass. So we just provide a validly-typed value of type 'N'.
-                        self.synth_phony_value_of_expected_type(
-                            ctx.with_expected_type(Some(array_type.size_type)),
-                            span,
-                        )
+                        self.synth_phony(array_type.size_type, span)
                     }
                     Some(s) => self.synth_i64(s as i64, span),
                 };
@@ -10419,12 +10437,12 @@ impl TypedProgram {
                         self.type_id_to_string(base_type_id)
                     );
                 };
-                return Ok(Either::Left(self.synth_cast(
-                    base_value,
+                let materialized = self.materialize_static_value(
                     static_type.family_type_id,
-                    CastType::StaticErase,
-                    Some(call_span),
-                )));
+                    static_type.value_id,
+                    call_span,
+                );
+                return Ok(Either::Left(materialized));
             }
         }
 
@@ -11555,7 +11573,7 @@ impl TypedProgram {
         if let Ok(result) = result {
             debug_assert_eq!(
                 self.types
-                    .get_no_follow_static(self.exprs.get_type(result))
+                    .get(self.exprs.get_type(result))
                     .as_static()
                     .unwrap()
                     .family_type_id,
@@ -11569,7 +11587,7 @@ impl TypedProgram {
         &mut self,
         call: Call,
         intrinsic: Builtin,
-        ctx: EvalExprContext,
+        _ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
         let span = call.span;
         match intrinsic {
@@ -11603,7 +11621,7 @@ impl TypedProgram {
 
                 let return_type = call.return_type;
                 let Type::Static(static_type) =
-                    self.types.get_no_follow_static(static_type_arg.type_id)
+                    self.types.get(static_type_arg.type_id)
                 else {
                     return failf!(
                         span,
@@ -11618,10 +11636,7 @@ impl TypedProgram {
                     // and we just need to generate a term that typechecks, so a
                     // unit casted to the generic static type. We should probably invent
                     // a way to do this that doesn't require 2 nodes
-                    let filler_expr = self.synth_phony_value_of_expected_type(
-                        ctx.with_expected_type(Some(return_type)),
-                        span,
-                    );
+                    let filler_expr = self.synth_phony(return_type, span);
                     Ok(filler_expr)
                 }
             }
@@ -13324,7 +13339,7 @@ impl TypedProgram {
             // Handle 'existential' type parameters. These are value parameters that
             // introduce a type parameter 'for free' inline.
             // - `some ty` function type parameter, inject the type parameter into the
-            match self_.types.get_no_follow_static(type_id) {
+            match self_.types.get(type_id) {
                 Type::FunctionTypeParameter(ftp) => {
                     function_type_params.push(FunctionTypeParam {
                         name: ftp.name,
@@ -15960,6 +15975,10 @@ impl TypedProgram {
             self.write_error(&mut std::io::stderr(), &e).unwrap();
         }
         self.errors.push(e);
+    }
+
+    pub fn report_hint(&mut self, span: SpanId, message: impl AsRef<str>) {
+        self.report(TyperError { message: message.as_ref().to_string(), span, level: MessageLevel::Hint } );
     }
 
     pub fn write_error(

@@ -140,7 +140,7 @@ impl StructType {
     }
 }
 
-pub const EMPTY_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
+pub const EMPTY_TYPE_ID: TypeId = TypeId(NonZeroU32::new(1).unwrap());
 pub const U8_TYPE_ID: TypeId = TypeId(NonZeroU32::new(2).unwrap());
 pub const U16_TYPE_ID: TypeId = TypeId(NonZeroU32::new(3).unwrap());
 pub const U32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(4).unwrap());
@@ -966,6 +966,14 @@ pub enum PhysicalType {
 }
 
 impl PhysicalType {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            PhysicalType::Scalar(_) => "scalar",
+            PhysicalType::Agg(_) => "agg",
+            PhysicalType::Empty => "empty",
+        }
+    }
+
     pub fn is_agg(&self) -> bool {
         matches!(self, PhysicalType::Agg(_))
     }
@@ -974,7 +982,7 @@ impl PhysicalType {
     pub fn expect_agg(&self) -> AggregateTypeId {
         match self {
             PhysicalType::Agg(id) => *id,
-            _ => panic!("Expected agg"),
+            _ => panic!("Expected agg on {}", self.kind_name()),
         }
     }
 
@@ -1301,10 +1309,10 @@ impl TypePool {
     }
 
     #[inline]
-    pub fn get_no_follow_static(&self, type_id: TypeId) -> &Type {
+    pub fn get_root_id(&self, type_id: TypeId) -> TypeId {
         match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => self.get_no_follow_static(rr.root_type_id),
-            t => t,
+            Type::RecursiveReference(rr) => rr.root_type_id,
+            _ => type_id,
         }
     }
 
@@ -1312,7 +1320,7 @@ impl TypePool {
     /// and type parameters with a constraint to a specific static, which is basically the same
     /// thing since it can have no other constraints
     pub fn get_static_type_id_of_type(&self, type_id: TypeId) -> Option<TypeId> {
-        match self.get_no_follow_static(type_id) {
+        match self.get(type_id) {
             Type::Static(_st) => Some(type_id),
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 let t = tp.static_constraint.unwrap();
@@ -1331,7 +1339,7 @@ impl TypePool {
     pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<StaticType> {
         match self.get_static_type_id_of_type(type_id) {
             None => None,
-            Some(type_id) => Some(*self.get_no_follow_static(type_id).as_static().unwrap()),
+            Some(type_id) => Some(*self.get(type_id).as_static().unwrap()),
         }
     }
 
@@ -1348,7 +1356,6 @@ impl TypePool {
     pub fn get(&self, type_id: TypeId) -> &Type {
         match self.get_no_follow(type_id) {
             Type::RecursiveReference(rr) => self.get(rr.root_type_id),
-            Type::Static(stat) => self.get(stat.family_type_id),
             t => t,
         }
     }
@@ -1638,7 +1645,7 @@ impl TypePool {
     }
 
     pub fn compile_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {
-        match self.get_no_follow_static(type_id) {
+        match self.get(type_id) {
             Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::U8)),
 
             Type::Integer(i) => {
@@ -1791,10 +1798,7 @@ impl TypePool {
             Type::LambdaObject(lam_obj) => {
                 self.add_physical_duplicate(type_id, lam_obj.struct_representation)
             }
-            Type::Static(stat) => {
-                // Re-use the inner physical type
-                self.add_physical_duplicate(type_id, stat.family_type_id)
-            }
+            Type::Static(_stat) => Some(PhysicalType::Empty),
             Type::Never => None,
             Type::Function(_)
             | Type::Generic(_)
@@ -1851,14 +1855,6 @@ impl TypePool {
         }
     }
 
-    pub fn get_physical_type(&self, type_id: TypeId) -> Option<PhysicalType> {
-        let chased = self.get_chased_id(type_id);
-        match self.type_phys_type_lookup.get(chased) {
-            None => None,
-            Some(pt) => Some(*pt),
-        }
-    }
-
     /// Works for enum variants too
     // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
     // I wanna return a slice but with what backing memory?
@@ -1911,8 +1907,16 @@ impl TypePool {
         self.mem.getn(variants).iter().find(|v| v.index == index).unwrap()
     }
 
+    pub fn get_physical_type(&self, type_id: TypeId) -> Option<PhysicalType> {
+        let chased = self.get_root_id(type_id);
+        match self.type_phys_type_lookup.get(chased) {
+            None => None,
+            Some(pt) => Some(*pt),
+        }
+    }
+
     pub fn get_layout(&self, type_id: TypeId) -> Layout {
-        let chased = self.get_chased_id(type_id);
+        let chased = self.get_root_id(type_id);
         match self.type_phys_type_lookup.get(chased) {
             None => Layout::ZERO_SIZED,
             Some(pt) => self.get_pt_layout(*pt),

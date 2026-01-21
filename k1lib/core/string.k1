@@ -65,7 +65,6 @@ ns string {
     if self.nonEmpty() .Some(self.get(self.len() - 1)) else .None
   }
 
-
   fn indexOf(self: string, c: char): i64 {
     for self.view {
       if it == c return(itIndex)

@@ -4,7 +4,7 @@ use meta/CodeWriter
 
 fn staticAdd[A: static int, B: static int](a: A, b: B): int { a + b }
 
-fn test() {
+fn testFormat() {
   let s1 = fmtString("My value is: ? ?", {a: 42, b: true});
   //let s1 = sprintf(args.get(1), {a: 42, b: true});
   assertEquals(s1, "My value is: 42 true");

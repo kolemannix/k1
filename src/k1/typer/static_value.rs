@@ -86,7 +86,7 @@ impl StaticValue {
 
     pub fn get_type(&self) -> TypeId {
         match self {
-            StaticValue::Empty => EMPTY_ID,
+            StaticValue::Empty => EMPTY_TYPE_ID,
             StaticValue::Bool(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),

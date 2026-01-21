@@ -171,6 +171,8 @@ pub struct BuiltinIdents {
     pub StringBuilder: Ident,
     pub Bitwise: Ident,
     pub arena: Ident,
+    pub T: Ident,
+    pub phony: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -367,6 +369,8 @@ impl IdentPool {
             StringBuilder: intern!("StringBuilder"),
             Bitwise: intern!("Bitwise"),
             arena: intern!("arena"),
+            T: intern!("T"),
+            phony: intern!("phony"),
         };
 
         macro_rules! make_fn {

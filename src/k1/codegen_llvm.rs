@@ -1390,6 +1390,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let f = self.get_insert_function();
         let function_entry_block = f.function_value.get_first_basic_block().unwrap();
 
+
         // Position the builder
         match f.last_alloca_instr {
             None => match function_entry_block.get_first_instruction() {

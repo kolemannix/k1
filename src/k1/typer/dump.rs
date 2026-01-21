@@ -217,7 +217,12 @@ impl TypedProgram {
                     w.write_str("$")?;
                     w.write_str(self.ident_str(tv.name))?;
                 } else {
+                    w.write_str("$")?;
                     w.write_str(self.ident_str(tv.name))?;
+                }
+                if let Some(static_constraint) = tv.static_constraint {
+                    w.write_str(": ")?;
+                    self.display_type_id(w, static_constraint, expand)?;
                 }
                 Ok(())
             }

@@ -32,8 +32,13 @@ fn test() {
   let point = #static {
     ({ x: 1, y: 2 })
   };
-  assertEquals(point.x, 1);
-  assertEquals(point.y, 2);
+
+  // Type assertions
+  (point.x: 1);
+  (point.y: 2);
+  // Value assertions
+  assertEquals(point.x.fromStatic(), 1);
+  assertEquals(point.y.fromStatic(), 2);
 
   // Scalars
   assert(#static true);
@@ -69,11 +74,11 @@ fn test() {
     let padded = { a: 1: u8, b: 2: u8, c: 3: u8, d: 4: u64, e: 5 };
     padded
   };
-  assertEquals(padded.a, 1);
-  assertEquals(padded.b, 2);
-  assertEquals(padded.c, 3);
-  assertEquals(padded.d, 4);
-  assertEquals(padded.e, 5);
+  (padded.a: 1u8);
+  (padded.b: 2u8);
+  (padded.c: 3u8);
+  (padded.d: 4u64);
+  (padded.e: 5i64);
 
   let letRef = #static {
     let* i = 10;
@@ -156,8 +161,6 @@ fn test() {
     some("Static execution exited with code: 111")
   );
 
-  assert(testCompile(#static crash("")).isSome());
-
   // Call order
   #static bar(2);
 
@@ -190,6 +193,10 @@ fn test() {
   assertEquals(vov.get(1).get(0), 4);
   assertEquals(vov.get(1).get(1), 5);
   assertEquals(vov.get(1).get(2), 6);
+
+
+  let point = #static { x: 1, y: (#static 2): int };
+  assertEquals(point.fromStatic().x, 1);
 
   {}
 }

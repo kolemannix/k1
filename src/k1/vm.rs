@@ -1034,6 +1034,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     // Note: These need to execute before we push, in case they access this stack's
                     // params or instrs by index, which is basically always! The other option would
                     // be parameterizing 'resolve_value' by stack frame
+
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
 
@@ -1759,7 +1760,7 @@ pub fn static_value_to_vm_value(
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
     match k1.static_values.get(static_value_id) {
-        StaticValue::Empty => {},
+        StaticValue::Empty => {}
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
         StaticValue::Int(iv) => store_typed_int(dst, *iv),

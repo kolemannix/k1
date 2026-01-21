@@ -117,7 +117,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Treat Unit and empty Struct as ZSTs
 - [x] Compile ZSTs to missing arguments, and LLVM void returns, and no-ops inside other types
 - [ ] Treat statics as ZSTs
-- [ ] Think about `never` in either variants: Result[T, never]
+- [ ] Think about `never` in either variants: Is it a ZST? Does it make the variant unreachable? Result[T, never]
 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 

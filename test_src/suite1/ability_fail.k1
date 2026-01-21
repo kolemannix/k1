@@ -11,6 +11,6 @@ fn test() {
   assertEquals(result, .Some(
 `Call to Num/num with Self := Tool does not work
 No matching implementations found
-Function type: \(Self) -> i32`
+Function type: \($Self) -> i32`
   ))
 }

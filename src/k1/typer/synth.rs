@@ -1,8 +1,6 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use crate::failf;
-
 /// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
 /// as some general lowering
 use super::*;
@@ -16,7 +14,8 @@ impl TypedProgram {
 
     pub(super) fn synth_empty_struct(&mut self, span: SpanId) -> TypedExprId {
         let value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
-            type_id: self.types.builtins.empty, fields: MSlice::empty()
+            type_id: self.types.builtins.empty,
+            fields: MSlice::empty(),
         }));
         self.add_static_constant_expr(value_id, span)
     }
@@ -407,34 +406,26 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_phony_call(
-        &mut self,
-        span: SpanId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
-        let Some(expected_type) = ctx.expected_type_id else {
-            return failf!(span, "Cannot synth phony call without expected type")
-        };
-        self.synth_typed_call_typed_args(
-            self.ast.idents.f.core_phony.with_span(span),
-            &[expected_type],
-            &[],
-            ctx.with_no_expected_type(),
-            false,
-        )
-    }
-
     /// Used when we skip static execution, but still need to typecheck the rest of the
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
-    pub(super) fn synth_phony_value_of_expected_type(
+    pub(super) fn synth_phony(
         &mut self,
-        ctx: EvalExprContext,
+        type_id: TypeId,
         span: SpanId,
     ) -> TypedExprId {
-        let t = ctx.expected_type_id.unwrap_or(self.types.builtins.empty);
-        let ctx = ctx.with_expected_type(Some(t));
-        self.synth_phony_call(span, ctx).expect("failed to make phony call")
+        let type_args = self.named_types.add_slice_copy(&[NameAndType { name: self.ast.idents.b.T, type_id }]);
+        let phony_fn_id = self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
+        let specialized_phony_fn_id = self.specialize_function_signature(type_args, SliceHandle::empty(), phony_fn_id).unwrap();
+        let call = Call {
+            callee: Callee::StaticFunction(specialized_phony_fn_id),
+            args: MSlice::empty(),
+            type_args,
+            return_type: type_id,
+            span,
+        };
+        let call_id = self.calls.add(call);
+        self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
     pub(super) fn synth_enum_is_variant(

@@ -15,6 +15,6 @@ fn test() {
   let result = testCompile(add("asdf": string, "asdf": string));
   assertEquals(
     result,
-    .Some("Invalid call to add\n    Could not satisfy ability constraint Num for given type T := string due to: No matching implementations found")
+    .Some("Invalid call to add\n    Could not satisfy ability constraint Num for given type $T := string due to: No matching implementations found")
   )
 }

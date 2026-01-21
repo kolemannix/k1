@@ -2,11 +2,14 @@ fn testAll() {
   hash_test/test();
   testFixList();
   testBitfield();
+  testFormat();
 }
 fn main(): i32 {
 
   #static testAll();
   testAll();
+
+
 
   0
 }
