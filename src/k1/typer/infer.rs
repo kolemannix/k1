@@ -84,9 +84,10 @@ impl TypedProgram {
 
             let static_type = self_.types.get(param.type_id).as_tvar().unwrap().static_constraint;
 
-            let type_hole = self_
-                .types
-                .add_anon(Type::InferenceHole(InferenceHoleType { index: hole_index as u32, static_type }));
+            let type_hole = self_.types.add_anon(Type::InferenceHole(InferenceHoleType {
+                index: hole_index as u32,
+                static_type,
+            }));
 
             self_.ictx_mut().inference_vars.push(type_hole);
             params_to_holes.push(spair! { param.type_id() => type_hole });
@@ -302,7 +303,9 @@ impl TypedProgram {
             let Some(solution_static_type) =
                 self.types.get_static_type_id_of_type(solution_type_id)
             else {
-                error!("The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it");
+                error!(
+                    "The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it"
+                );
                 return Ok(());
             };
             let subst_set = self.make_inference_substitution_set();
@@ -556,7 +559,7 @@ impl TypedProgram {
         Ok(solved_type_params)
     }
 
-    pub(crate) fn determine_function_type_args_for_call(
+    pub(crate) fn determine_fnlike_type_args_for_call(
         &mut self,
         original_function_sig: FunctionSignature,
         type_args: NamedTypeSlice,
@@ -572,10 +575,10 @@ impl TypedProgram {
         // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
         //
         // This method is risk-free in terms of 'leaking' inference types out
-        let mut function_type_args: SV8<NameAndType> = SmallVec::new();
-        let mut function_type_arg_values: SV8<TypedExprId> = SmallVec::new();
+        let mut fnlike_type_args: SV8<NameAndType> = smallvec![];
+        let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
         if !original_function_sig.function_type_params.is_empty() {
-            let subst_pairs: SmallVec<[_; 8]> = self
+            let subst_pairs: SV8<_> = self
                 .named_types
                 .get_slice(original_function_sig.type_params)
                 .iter()
@@ -676,19 +679,19 @@ impl TypedProgram {
                         (substituted_lambda_object_type, expr)
                     }
                 };
-                function_type_arg_values.push(final_value);
-                function_type_args
+                fnlike_type_arg_values.push(final_value);
+                fnlike_type_args
                     .push(NameAndType { name: function_type_param.name, type_id: final_type });
             }
         }
-        if !function_type_args.is_empty() {
+        if !fnlike_type_args.is_empty() {
             debug!(
-                "We're passing function_type_args! {}",
-                self.pretty_print_named_types(&function_type_args, ", ")
+                "We're passing fnlike_type_args! {}",
+                self.pretty_print_named_types(&fnlike_type_args, ", ")
             );
         }
-        let function_type_args_handle = self.named_types.add_slice_copy(&function_type_args);
-        Ok((function_type_args_handle, function_type_arg_values))
+        let fnlike_type_args_handle = self.named_types.add_slice_copy(&fnlike_type_args);
+        Ok((fnlike_type_args_handle, fnlike_type_arg_values))
     }
 
     fn add_substitution(&mut self, pair: TypeSubstitutionPair) {

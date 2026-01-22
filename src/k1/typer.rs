@@ -722,7 +722,7 @@ pub struct TypedBlock {
 pub struct SpecializationInfo {
     pub parent_function: FunctionId,
     pub type_arguments: NamedTypeSlice,
-    pub function_type_arguments: NamedTypeSlice,
+    pub fnlike_type_arguments: NamedTypeSlice,
     pub specialized_function_id: FunctionId,
     pub specialized_function_type: TypeId,
 }
@@ -11392,8 +11392,8 @@ impl TypedProgram {
                     )?,
                 };
 
-                let (function_type_args, function_type_arg_values) = self
-                    .determine_function_type_args_for_call(
+                let (fnlike_type_args, fnlike_type_arg_values) = self
+                    .determine_fnlike_type_args_for_call(
                         signature,
                         type_args,
                         &original_args_and_params,
@@ -11401,7 +11401,7 @@ impl TypedProgram {
                     )?;
 
                 let specialized_function_type =
-                    self.substitute_in_function_signature(type_args, function_type_args, signature);
+                    self.substitute_in_function_signature(type_args, fnlike_type_args, signature);
                 let is_abstract = self
                     .types
                     .get_contained_type_variable_counts(specialized_function_type)
@@ -11419,7 +11419,7 @@ impl TypedProgram {
                         Callee::StaticFunction(function_id) => {
                             let function_id = self.specialize_function_signature(
                                 type_args,
-                                function_type_args,
+                                fnlike_type_args,
                                 function_id,
                             )?;
                             Callee::StaticFunction(function_id)
@@ -11466,7 +11466,7 @@ impl TypedProgram {
                             .position(|ftp| ftp.value_param_index as usize == param_index);
                         let expr = match matching_ftp_index {
                         Some(ftp_index) => {
-                            let value = function_type_arg_values[ftp_index];
+                            let value = fnlike_type_arg_values[ftp_index];
                             value
                         }
                         None => match *maybe_typed_expr {
@@ -11804,7 +11804,7 @@ impl TypedProgram {
         // Must 'zip' up with each type param
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
-        function_type_arguments: NamedTypeSlice,
+        fnlike_type_arguments: NamedTypeSlice,
         generic_function_sig: FunctionSignature,
     ) -> TypeId {
         //let generic_function = self.get_function(generic_function_id);
@@ -11820,7 +11820,7 @@ impl TypedProgram {
             .function_type_params
             .get_slice(generic_function_sig.function_type_params)
             .iter()
-            .zip(self.named_types.get_slice(function_type_arguments))
+            .zip(self.named_types.get_slice(fnlike_type_arguments))
         {
             subst_pairs.push(TypeSubstitutionPair {
                 from: function_type_param.type_id,
@@ -11854,7 +11854,7 @@ impl TypedProgram {
         // Must 'zip' up with each type param
         type_arguments: NamedTypeSlice,
         // Must 'zip' up with each function type param
-        function_type_arguments: NamedTypeSlice,
+        fnlike_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
     ) -> TyperResult<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
@@ -11866,8 +11866,8 @@ impl TypedProgram {
                 .named_types
                 .slices_equal_copy(existing_specialization.type_arguments, type_arguments)
                 && self.named_types.slices_equal_copy(
-                    existing_specialization.function_type_arguments,
-                    function_type_arguments,
+                    existing_specialization.fnlike_type_arguments,
+                    fnlike_type_arguments,
                 )
             {
                 debug!(
@@ -11878,7 +11878,7 @@ impl TypedProgram {
                         ", "
                     ),
                     self.pretty_print_named_type_slice(
-                        existing_specialization.function_type_arguments,
+                        existing_specialization.fnlike_type_arguments,
                         ", "
                     ),
                 );
@@ -11887,7 +11887,7 @@ impl TypedProgram {
         }
         let specialized_function_type_id = self.substitute_in_function_signature(
             type_arguments,
-            function_type_arguments,
+            fnlike_type_arguments,
             generic_function.signature(),
         );
         let specialized_function_id = self.functions.next_id();
@@ -11953,7 +11953,7 @@ impl TypedProgram {
         let specialization_info = SpecializationInfo {
             parent_function: generic_function_id,
             type_arguments,
-            function_type_arguments,
+            fnlike_type_arguments,
             specialized_function_id: FunctionId::PENDING,
             specialized_function_type: specialized_function_type_id,
         };
@@ -12112,7 +12112,7 @@ impl TypedProgram {
                     return false;
                 }
             }
-            for t in self.named_types.get_slice(spec_info.function_type_arguments) {
+            for t in self.named_types.get_slice(spec_info.fnlike_type_arguments) {
                 if self.types.type_variable_counts.get(t.type_id).is_abstract() {
                     return false;
                 }

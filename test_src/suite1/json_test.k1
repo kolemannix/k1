@@ -1,12 +1,12 @@
 ns json_test;
 
 deftype Json = either
-  JsStr(string),
-  JsNumber(string),
-  JsBool(bool),
-  JsNull,
-  JsArray(List[json_test/Json]),
-  JsObject(List[{ key: string, value: Json }])
+  Null,
+  Str(string),
+  Number(string),
+  Bool(bool),
+  Array(List[Json]),
+  Object(List[{ key: string, value: Json }])
 
 fn test() {
   let size = core/types/sizeOf[Json]();
@@ -14,16 +14,16 @@ fn test() {
   assertEquals(size, 32);
   assertEquals(align, 8);
 
-  let obj: Json = .JsStr("hello");
-  let null: Json = .JsNull;
-  assert(obj is .JsStr("hello"));
-  assert(null is .JsNull);
+  let obj: Json = .Str("hello");
+  let null: Json = .Null;
+  assert(obj is .Str("hello"));
+  assert(null is .Null);
 
-  let obj2: Json = .JsArray([.JsStr("hello"), .JsNumber("123")]);
-  assert(obj2.asJsArray().!.get(0) is .JsStr("hello"));
-  assert(obj2.asJsArray().!.get(1) is .JsNumber("123"));
+  let obj2: Json = .Array([.Str("hello"), .Number("123")]);
+  assert(obj2.asArray().!.get(0) is .Str("hello"));
+  assert(obj2.asArray().!.get(1) is .Number("123"));
 
-  // TODO: Causes stack overflow due to no indirection
+  // TODO: Causes compiler crash due to no indirection
   // type Node = { value: string, child: ?Node }
   // let n: Node = { value: "hello", child: None };
 }
