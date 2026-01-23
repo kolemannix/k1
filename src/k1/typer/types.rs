@@ -1089,13 +1089,12 @@ pub struct TypePool {
     /// got slow
     pub hashes: FxHashMap<u64, TypeId>,
 
-    /// AoS-style info associated with each type id
-    pub type_phys_type_lookup: VPool<Option<PhysicalType>, TypeId>,
     pub type_variable_counts: VPool<TypeVariableInfo, TypeId>,
     pub instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
     pub specializations: FxHashMap<TypeId, Vec<(TypeIdSlice, TypeId)>>,
+    pub phys_types: FxHashMap<TypeId, Option<PhysicalType>>,
 
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
@@ -1117,18 +1116,15 @@ impl TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
             hashes: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT),
 
-            type_phys_type_lookup: VPool::make_with_hint(
-                "type_phys_type_lookup",
-                EXPECTED_TYPE_COUNT,
-            ),
             type_variable_counts: VPool::make_with_hint(
                 "type_variable_counts",
                 EXPECTED_TYPE_COUNT,
             ),
             instance_info: VPool::make_with_hint("instance_info", EXPECTED_TYPE_COUNT),
 
-            defn_info: FxHashMap::default(),
-            specializations: FxHashMap::default(),
+            defn_info: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
+            specializations: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
+            phys_types: FxHashMap::with_capacity(EXPECTED_TYPE_COUNT / 2),
 
             ast_type_defn_mapping: FxHashMap::default(),
             ast_ability_mapping: FxHashMap::default(),
@@ -1185,13 +1181,9 @@ impl TypePool {
         let type_id = self.types.add(typ);
         self.hashes.insert(hash, type_id);
 
-        // 3 AoS fields to handle
-        // pub type_phys_type_lookup
+        // 2 AoS fields to handle
         // pub type_variable_counts
         // pub instance_info
-
-        let pt_id = self.compile_physical_type(type_id);
-        self.type_phys_type_lookup.add(pt_id);
 
         let variable_counts = self.count_type_variables(type_id);
         self.type_variable_counts.add(variable_counts);
@@ -1204,7 +1196,6 @@ impl TypePool {
 
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
         debug_assert_eq!(self.instance_info.len(), self.types.len());
-        debug_assert_eq!(self.instance_info.len(), self.type_phys_type_lookup.len());
 
         type_id
     }
@@ -1248,9 +1239,6 @@ impl TypePool {
         let variable_counts = self.count_type_variables(unresolved_type_id);
         *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
         *self.instance_info.get_mut(unresolved_type_id) = instance_info;
-
-        let pt_id = self.compile_physical_type(unresolved_type_id);
-        *self.type_phys_type_lookup.get_mut(unresolved_type_id) = pt_id;
     }
 
     pub fn next_type_id(&self) -> TypeId {
@@ -1658,26 +1646,34 @@ impl TypePool {
             Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
                 Some(PhysicalType::Scalar(ScalarType::Pointer))
             }
-            Type::Array(array) => match self.get_physical_type(array.element_type) {
-                None => None,
-                Some(element_t) => match array.concrete_count {
+            Type::Array(array) => {
+                let count = array.concrete_count;
+                match count {
                     None => None,
                     Some(len) => {
                         if len == 0 {
                             Some(PhysicalType::Empty)
                         } else {
-                            let elem_layout = self.get_pt_layout(element_t);
-                            let record = AggregateTypeRecord {
-                                agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
-                                origin_type_id: type_id,
-                                layout: elem_layout.array_me(len as usize),
-                            };
-                            let id = self.agg_types.add(record);
-                            Some(PhysicalType::Agg(id))
+                            match self.get_physical_type(array.element_type) {
+                                None => None,
+                                Some(element_t) => {
+                                    let elem_layout = self.get_pt_layout(element_t);
+                                    let record = AggregateTypeRecord {
+                                        agg_type: AggType::Array {
+                                            element_pt: element_t,
+                                            len: len as u32,
+                                        },
+                                        origin_type_id: type_id,
+                                        layout: elem_layout.array_me(len as usize),
+                                    };
+                                    let id = self.agg_types.add(record);
+                                    Some(PhysicalType::Agg(id))
+                                }
+                            }
                         }
                     }
-                },
-            },
+                }
+            }
             Type::Struct(s) => {
                 let s_fields = s.fields;
                 let mut fields = self.mem.new_list(s.fields.len());
@@ -1858,7 +1854,7 @@ impl TypePool {
     /// Works for enum variants too
     // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
     // I wanna return a slice but with what backing memory?
-    pub fn get_struct_layout(&self, struct_type_id: TypeId) -> SV4<StructField> {
+    pub fn get_struct_layout(&mut self, struct_type_id: TypeId) -> SV4<StructField> {
         let struct_pt = self.get_physical_type(struct_type_id).unwrap();
         if struct_pt.is_empty() {
             smallvec![]
@@ -1876,7 +1872,7 @@ impl TypePool {
         }
     }
 
-    pub fn get_agg_for_type(&self, type_id: TypeId) -> &AggregateTypeRecord {
+    pub fn get_agg_for_type(&mut self, type_id: TypeId) -> &AggregateTypeRecord {
         let agg_id = self.get_physical_type(type_id).unwrap().expect_agg();
         self.agg_types.get(agg_id)
     }
@@ -1907,19 +1903,34 @@ impl TypePool {
         self.mem.getn(variants).iter().find(|v| v.index == index).unwrap()
     }
 
-    pub fn get_physical_type(&self, type_id: TypeId) -> Option<PhysicalType> {
-        let chased = self.get_root_id(type_id);
-        match self.type_phys_type_lookup.get(chased) {
-            None => None,
-            Some(pt) => Some(*pt),
+    pub fn get_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {
+        let root_id = self.get_root_id(type_id);
+        match self.phys_types.get(&type_id) {
+            Some(res) => *res,
+            None => {
+                let maybe_pt = self.compile_physical_type(root_id);
+                self.phys_types.insert(type_id, maybe_pt);
+                maybe_pt
+            }
         }
     }
 
-    pub fn get_layout(&self, type_id: TypeId) -> Layout {
-        let chased = self.get_root_id(type_id);
-        match self.type_phys_type_lookup.get(chased) {
+    pub fn get_layout_nonmut(&self, type_id: TypeId) -> Option<Layout> {
+        let root_id = self.get_root_id(type_id);
+        match self.phys_types.get(&root_id) {
+            Some(maybe_pt) => match maybe_pt {
+                None => Some(Layout::ZERO_SIZED),
+                Some(pt) => Some(self.get_pt_layout(*pt)),
+            },
+            None => None,
+        }
+    }
+
+    pub fn get_layout(&mut self, type_id: TypeId) -> Layout {
+        let root_id = self.get_root_id(type_id);
+        match self.get_physical_type(root_id) {
             None => Layout::ZERO_SIZED,
-            Some(pt) => self.get_pt_layout(*pt),
+            Some(pt) => self.get_pt_layout(pt),
         }
     }
 

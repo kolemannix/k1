@@ -336,6 +336,7 @@ pub enum PatternCtor {
     TypeVariable,
     FunctionPointer,
     LambdaObject,
+    Static,
     Buffer,
     View,
     /// In the future, we should do real array patterns since length is statically known
@@ -3310,7 +3311,8 @@ impl TypedProgram {
                     {
                         let actual_type =
                             self.types.mem.get_nth(spec_info.type_args, matching_type_var_pos);
-                        return Ok(*actual_type);
+                        let root_type = self.types.get_root_id(*actual_type);
+                        return Ok(root_type);
                     }
                 }
                 match self.types.get(base_type) {
@@ -4621,10 +4623,7 @@ impl TypedProgram {
         let Err(msg) = check_result else { return CheckExprTypeResult::Ok };
 
         // Static lifting and erasing
-        match (
-            self.types.get(expected),
-            self.types.get_static_type_of_type(actual_type_id),
-        ) {
+        match (self.types.get(expected), self.types.get_static_type_of_type(actual_type_id)) {
             // If we failed typechecking, and passed a static, then see
             // whether the type inside this static would pass muster under the 'expected type',
             // If so, erase the static
@@ -4932,6 +4931,34 @@ impl TypedProgram {
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(_), Type::Struct(_)) => {
+                // if s1.fields.len() != s2.fields.len() {
+                //     return Err(k1_format_user!(
+                //         self,
+                //         "expected struct {} but got struct {}",
+                //         expected,
+                //         actual
+                //     ));
+                // }
+                // for (f1, f2) in
+                //     self.types.mem.getn(s1.fields).iter().zip(self.types.mem.getn(s2.fields))
+                // {
+                //     if f1.name != f2.name {
+                //         return Err(k1_format_user!(
+                //             self,
+                //             "struct names differ {}, {}",
+                //             f1.name,
+                //             f2.name
+                //         ));
+                //     }
+                //     if let Err(msg) = self.check_types(f1.type_id, f2.type_id, scope_id) {
+                //         return Err(k1_format_user!(
+                //             self,
+                //             "Struct field {} type mismatch: {msg}",
+                //             f1.name
+                //         ));
+                //     };
+                // }
+                // Ok(())
                 Err(k1_format_user!(self, "expected struct {} but got struct {}", expected, actual))
             }
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
@@ -5934,8 +5961,7 @@ impl TypedProgram {
             );
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
-                let static_type =
-                    self.types.get(static_constraint).as_static().unwrap();
+                let static_type = self.types.get(static_constraint).as_static().unwrap();
                 if static_type.family_type_id != solution.type_id {
                     eprintln!(
                         "Blanket impl almost matched but a static constraint failed: {} != {}",
@@ -7236,7 +7262,7 @@ impl TypedProgram {
                 };
                 let this_element_type = self.exprs.get_type(element_expr_checked);
                 if element_type.is_none() {
-                    // Erase static type info
+                    // Erase static type info since a list of all one static value isn't very useful
                     let chased_type = self.types.get_chased_id(this_element_type);
                     element_type = Some(chased_type)
                 };
@@ -7409,11 +7435,8 @@ impl TypedProgram {
                     }
                 }
                 Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
-                    let static_type = self
-                        .types
-                        .get(tp.static_constraint.unwrap())
-                        .as_static()
-                        .unwrap();
+                    let static_type =
+                        self.types.get(tp.static_constraint.unwrap()).as_static().unwrap();
                     let Some(value_id) = static_type.value_id else {
                         return failf!(
                             span,
@@ -10023,6 +10046,7 @@ impl TypedProgram {
         } else {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
+        debug!("return type: {}", self.type_id_to_string_opt(expected_return_type));
         let return_value = match parsed_expr {
             None => self.synth_empty_struct(span),
             Some(parsed_expr) => self.eval_expr_with_coercion(
@@ -10767,10 +10791,10 @@ impl TypedProgram {
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
         let solved_self = self.named_types.get_nth(self_solution, 0).type_id;
+        let solved_self = self.types.get_root_id(solved_self);
 
-        // Follow 'statics' since we're never going to be implementing abilities for the
-        // specific static values but instead for the inner types
-        let solved_self = match self.types.get_no_follow(solved_self) {
+        // nocommit: probably shouldnt follow statics here
+        let solved_self = match self.types.get(solved_self) {
             Type::Static(stat) => stat.family_type_id,
             _ => solved_self,
         };
@@ -11572,11 +11596,7 @@ impl TypedProgram {
         };
         if let Ok(result) = result {
             debug_assert_eq!(
-                self.types
-                    .get(self.exprs.get_type(result))
-                    .as_static()
-                    .unwrap()
-                    .family_type_id,
+                self.types.get(self.exprs.get_type(result)).as_static().unwrap().family_type_id,
                 self.exprs.get_type(expr_id)
             );
         }
@@ -11620,9 +11640,7 @@ impl TypedProgram {
                 let static_type_arg = self.named_types.get_nth(call.type_args, 1);
 
                 let return_type = call.return_type;
-                let Type::Static(static_type) =
-                    self.types.get(static_type_arg.type_id)
-                else {
+                let Type::Static(static_type) = self.types.get(static_type_arg.type_id) else {
                     return failf!(
                         span,
                         "Internal Error: 2nd type arg should be static: {}",
@@ -12778,11 +12796,14 @@ impl TypedProgram {
                 }
             }
             Some(payload_type) => {
+                let payload_type_root = self.types.get_root_id(payload_type);
                 if let Some(payload_arg) = payload {
-                    let payload_value =
-                        self.eval_expr(payload_arg, ctx.with_expected_type(Some(payload_type)))?;
                     let payload_value = self
-                        .check_and_coerce_expr(payload_type, payload_value, ctx.scope_id)
+                        .eval_expr_with_coercion(
+                            payload_arg,
+                            ctx.with_expected_type(Some(payload_type_root)),
+                            true,
+                        )
                         .map_err(|e| errf!(span, "Variant payload type mismatch: {}", e.message))?;
                     Ok(Some(payload_value))
                 } else {
@@ -14933,7 +14954,6 @@ impl TypedProgram {
         self.eval_namespace_type_eval_phase(module_root_parsed_namespace, skip_defns);
         check_for_errors!("type bodies");
 
-        debug_assert_eq!(self.types.types.len(), self.types.type_phys_type_lookup.len());
         debug_assert_eq!(self.types.types.len(), self.types.type_variable_counts.len());
 
         for type_id in self.types.iter_ids().collect_vec() {
@@ -15286,6 +15306,7 @@ impl TypedProgram {
             Type::LambdaObject(_) => {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
+            Type::Static(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Static))),
             _ => self
                 .write_error(
                     &mut stderr(),
@@ -15504,6 +15525,7 @@ impl TypedProgram {
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
                 // { fields: View[{ ... }] }
+                let struct_type_fields = struct_type.fields;
                 let struct_schema_fields_view_type_id =
                     self.types.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
@@ -15511,8 +15533,8 @@ impl TypedProgram {
                 // { name: string), typeId: u64, offset: size }
                 let struct_layout = self.types.get_struct_layout(type_id);
                 let mut field_values: MList<StaticValueId, StaticValuePool> =
-                    self.static_values.mem.new_list(struct_type.fields.len());
-                for (index, f) in self.types.mem.getn(struct_type.fields).iter().enumerate() {
+                    self.static_values.mem.new_list(struct_type_fields.len());
+                for (index, f) in self.types.mem.getn(struct_type_fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
                     let name_string_value_id = self.static_values.add_string(name_string_id);
 
@@ -15611,7 +15633,7 @@ impl TypedProgram {
                 let enum_agg_id = self.types.get_physical_type(type_id).unwrap().expect_agg();
                 let enum_pt = self.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
                 let maybe_payload_offset = enum_pt.payload_offset;
-                let mut variant_values = self.static_values.mem.new_list(typed_enum.variants.len());
+                let mut variant_values = self.static_values.mem.new_list(target_enum_variants.len());
                 for variant in self.types.mem.getn(target_enum_variants) {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
@@ -15978,7 +16000,11 @@ impl TypedProgram {
     }
 
     pub fn report_hint(&mut self, span: SpanId, message: impl AsRef<str>) {
-        self.report(TyperError { message: message.as_ref().to_string(), span, level: MessageLevel::Hint } );
+        self.report(TyperError {
+            message: message.as_ref().to_string(),
+            span,
+            level: MessageLevel::Hint,
+        });
     }
 
     pub fn write_error(

@@ -1072,17 +1072,13 @@ impl<'k1> Builder<'k1> {
         self.k1.bytecode.b_variables.iter().find(|bv| bv.id == variable_id)
     }
 
-    fn get_physical_type(&self, type_id: TypeId) -> PhysicalType {
+    fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
         self.k1.types.get_physical_type(type_id).unwrap_or_else(|| {
-            b_ice!(
-                self,
-                "Not a physical type: {}",
-                self.k1.type_id_to_string_ext(self.k1.types.get_chased_id(type_id), true)
-            )
+            b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string_ext(type_id, true))
         })
     }
 
-    fn type_to_inst_kind(&self, type_id: TypeId) -> InstKind {
+    fn type_to_inst_kind(&mut self, type_id: TypeId) -> InstKind {
         if type_id == NEVER_TYPE_ID {
             InstKind::Terminator
         } else {
@@ -1224,7 +1220,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                     else {
                         panic!("Expected reference for referencing let");
                     };
-                    let reference_inner_type_pt_id = b.get_physical_type(reference_type.inner_type);
+                    let inner_type = reference_type.inner_type;
+                    let reference_inner_type_pt_id = b.get_physical_type(inner_type);
                     let value_alloca =
                         b.push_alloca(reference_inner_type_pt_id, "referencing inner alloca");
                     b.push_store(
@@ -1505,9 +1502,9 @@ fn compile_expr(
                         );
                         b.k1.ice_with_span("Missing variable", expr_span)
                     };
-                    let var_pt = b.get_physical_type(expr_type);
                     let var_value = var.value;
                     let var_indirect = var.indirect;
+                    let var_pt = b.get_physical_type(expr_type);
                     if var_indirect {
                         let loaded = load_or_copy(
                             b,
@@ -1793,7 +1790,8 @@ fn compile_expr(
                     Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
-                        let env_pt = b.get_physical_type(b.k1.exprs.get_type(*lambda_value_expr));
+                        let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
+                        let env_pt = b.get_physical_type(lambda_env_type_id);
                         //b.k1.write_location(&mut stderr(), b.cur_span);
                         // TODO: Lambda environments really need to go on the arena
                         // Here is where we literally put the env on the stack, even if it contains

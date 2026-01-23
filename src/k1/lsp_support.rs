@@ -1,4 +1,5 @@
 use crate::parse::{FileId, ParsedId};
+use crate::typer::types::Layout;
 use crate::{SV8, typer::*};
 use smallvec::smallvec;
 
@@ -31,7 +32,7 @@ pub fn get_expr_at_point(
     if let Some((expr_id, _)) = matching_exprs.first() {
         let type_id = k1.exprs.get_type(*expr_id);
         let type_string = k1.type_id_to_string(type_id);
-        let layout = k1.types.get_layout(type_id);
+        let layout = k1.types.get_layout_nonmut(type_id).unwrap_or(Layout::ZERO_SIZED);
         let expr_string = k1.expr_to_string(*expr_id);
         let kind_name = k1.exprs.get(*expr_id).kind_str();
         let msg = format!(

@@ -880,6 +880,7 @@ impl TypedProgram {
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
             PatternCtor::FunctionPointer => writ.write_str("fn*"),
             PatternCtor::LambdaObject => writ.write_str("dyn[fn ...]"),
+            PatternCtor::Static => writ.write_str("static[...]"),
             PatternCtor::Buffer => writ.write_str("buffer"),
             PatternCtor::View => writ.write_str("view"),
             PatternCtor::Array => writ.write_str("<array>"),
@@ -1216,7 +1217,7 @@ impl TypedProgram {
     pub fn dump_type(&self, w: &mut impl Write, id: TypeId) -> std::fmt::Result {
         write!(w, "type #{:02} {:10} ", id, self.types.get_no_follow(id).kind_name())?;
         let tvar_info = self.types.get_contained_type_variable_counts(id);
-        let l = self.types.get_layout(id);
+        let l = self.types.get_layout_nonmut(id).unwrap_or(Layout::ZERO_SIZED);
         let defn_name = self.types.get_defn_info(id).map(|i| self.ident_str(i.name));
         write!(w, "defn_name={} size={} align={} ", defn_name.unwrap_or("-"), l.size, l.align)?;
         write!(

@@ -58,6 +58,7 @@ Simple but missing
 - [ ] Bindings generator; `rust-bindgen` equivalent
 
 # Bugs
+- [ ] Defect: RecursiveReference approach to recursive types seems bad
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
@@ -71,6 +72,8 @@ Simple but missing
 - [ ] Fix random jumping to function header
 - [ ] Annotate U8s with boolean somehow where they are actually booleans
 
+## Project: Recursive types take 2
+
 ## VM Profiler: Instrument the vm itself
 
 ## K1 Profiler
@@ -82,7 +85,7 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
 - [ ] Rename `Enum` -> `Sum` or `DUnion` in the code
-- [ ] Think about optimizing no-payload enums into non-aggregates
+- [ ] Think about optimizing no-payload enums into non-aggregates, but at the typer level.
 
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.

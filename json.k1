@@ -1,0 +1,142 @@
+ns json;
+
+deftype Json = either
+  Null,
+  Str(string),
+  Number(string),
+  Bool(bool),
+  Array(List[Json]),
+  Object(List[{ key: string, value: Json }])
+
+deftype Parser = {
+  input: string,
+  cursor: size,
+}
+ns Parser {
+  fn peek(self: Parser): ?char { self.input.getOpt(self.cursor) }
+  fn next(self: *mut Parser): ?char {
+    switch self.peek() {
+      .None -> .None,
+      .Some(c) -> {
+        self.cursor* <- self.cursor + 1;
+        .Some(c)
+      }
+    }
+  }
+  fn advance(self: *mut Parser) { self.cursor* <- self.cursor + 1 }
+  fn advanceN(self: *mut Parser, n: size) { self.cursor* <- self.cursor + n }
+  fn expect(self: *mut Parser, c: char): bool {
+    switch self.peek() {
+      .Some(p) -> {
+        let ok = p == c;
+        if ok { self.advance() };
+        ok
+      },
+      .None -> false
+    }
+  }
+  fn eatWhitespace(self: *mut Parser) {
+    loop {
+      switch self.peek() {
+        .None -> break(),
+        .Some(c) -> {
+          // todo: support all valid whitespace per json spec
+          if c == ' ' or c == '\n' or c == '\t' {
+            self.advance()
+          } else {
+            break()
+          }
+        }
+      }
+    }
+  }
+}
+
+fn nextOr(context p: *mut Parser)(msg: string): Result[char, string] {
+  switch p.next() {
+    .None -> .Err(msg),
+    .Some(c) -> .Ok(c)
+  }
+}
+
+fn _parseString(context p: *mut Parser)(): Result[Json, string] {
+  if not p.expect('"') { return(.Err("expected string")) };
+  let* sb = StringBuilder/new();
+  loop {
+    let c1 = nextOr("Unterminated string").try;
+    if c1 == '\\' {
+      // Escaped chars
+      let c2 = nextOr("Unterminated string").try;
+      switch c2 {
+        '\\' -> { sb.writeChar('\\') },
+        '"' -> { sb.writeChar('"') },
+        _ -> return(.Err("Unsupported escaped char: {c2}"))
+      };
+    } else if c1 == '"' {
+      break(.Ok(.Str(sb.build())))
+    } else {
+      sb.writeChar(c1);
+    }
+  }
+}
+
+fn _parseObject(context p: *mut Parser)(): Result[Json, string] {
+  if not p.expect('{') { return(.Err("expected {{")) };
+  if p.peek() == .Some('}') { 
+    p.advance();
+    return(.Ok(.Object([])))
+  };
+
+  let* members = List/empty[{ key: string, value: Json }]();
+
+  loop {
+    eprintln("parseObject m={members.len()} {p.peek()}");
+    p.eatWhitespace();
+    require _parseString().try is .Str(keyName) else {
+      return(.Err("expected string key in object"))
+    };
+
+    p.eatWhitespace();
+    if not p.expect(':') { return(.Err("expected colon")) };
+    p.eatWhitespace();
+    let value = _parseNextValue().try;
+    members.push({ key: keyName, value });
+
+    p.eatWhitespace();
+    switch p.peek() {
+      .None -> break(.Err("Unexpected end of input in object")),
+      .Some('}') -> break(.Ok(.Object(members.*))),
+      .Some(',') -> {
+        p.advance();
+      },
+      .Some(_) -> break(.Err("Expected comma or }"))
+    };
+  }
+}
+
+fn _parseNextValue(context p: *mut Parser)(): Result[Json, string] {
+  println("pnv loop {p.cursor} {p.peek()}");
+  p.eatWhitespace();
+  if p.peek() is .Some(c) {
+    switch c {
+      'n' -> {
+        p.advanceN(4);
+        .Ok(.Null)
+      },
+      'f' -> { p.advanceN(5); .Ok(.Bool(false)) },
+      't' -> { p.advanceN(4); .Ok(.Bool(true)) },
+      '"' -> _parseString(),
+      '{' -> _parseObject(),
+      '[' -> crash("parse array"),
+      _ if c.isAsciiDigit() -> crash("parse number"),
+      _ -> return(.Err("Not valid Json"))
+    }
+  } else {
+    return(.Err("No content"))
+  }
+}
+
+fn parse(input: string): Result[Json, string] {
+  let* p: *mut Parser = { input, cursor: 0 };
+  _parseNextValue(context p)()
+}

@@ -1767,7 +1767,8 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
         StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
-            store_value(&k1.types, k1.types.get_physical_type(STRING_TYPE_ID).unwrap(), dst, value);
+            let string_pt = k1.types.get_physical_type(STRING_TYPE_ID).unwrap();
+            store_value(&k1.types, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
             let layout = k1.types.get_layout(*type_id);
@@ -2318,10 +2319,11 @@ pub fn vm_value_to_static_value(
                 }
             } else {
                 let struct_ptr = vm_value.as_ptr();
+                let struct_type_fields = struct_type.fields;
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
                 let struct_shape = k1.types.get_struct_layout(type_id);
                 for (physical_field, k1_field) in
-                    struct_shape.iter().zip(k1.types.mem.getn(struct_type.fields))
+                    struct_shape.iter().zip(k1.types.mem.getn(struct_type_fields))
                 {
                     let field_ptr = unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
                     let field_value = load_value(physical_field.field_t, field_ptr);
@@ -2338,14 +2340,16 @@ pub fn vm_value_to_static_value(
         Type::Enum(typed_enum) => {
             let enum_ptr = vm_value.as_ptr();
 
+            let tag_type = typed_enum.tag_type;
+            let variants = typed_enum.variants;
             let enum_agg_id = k1.types.get_physical_type(type_id).unwrap().expect_agg();
             let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
+            let payload_offset = enum_pt.payload_offset;
 
-            let tag_int_type = k1.types.get(typed_enum.tag_type).expect_integer();
+            let tag_int_type = k1.types.get(tag_type).expect_integer();
             let tag_scalar_type = enum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, enum_ptr).as_typed_int(tag_int_type);
-            let Some(variant) =
-                k1.types.mem.getn(typed_enum.variants).iter().find(|v| v.tag_value == tag)
+            let Some(variant) = k1.types.mem.getn(variants).iter().find(|v| v.tag_value == tag)
             else {
                 return failf!(span, "No variant found with tag value {}", tag);
             };
@@ -2355,7 +2359,7 @@ pub fn vm_value_to_static_value(
                 None => None,
                 Some(payload_type_id) => {
                     let payload_pt = k1.types.get_physical_type(payload_type_id).unwrap();
-                    let payload_offset = enum_pt.payload_offset.unwrap();
+                    let payload_offset = payload_offset.unwrap();
                     let payload_ptr = unsafe { enum_ptr.byte_add(payload_offset as usize) };
 
                     let payload_value = load_value(payload_pt, payload_ptr);

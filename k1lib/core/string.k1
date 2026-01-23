@@ -14,6 +14,11 @@ ns string {
     self.view.get(index)
   }
 
+  fn getOpt(self: string, index: size): ?char {
+    if index >= self.len() .None
+    else .Some(self.get(index))
+  }
+
   fn viewBytes(self: string): View[byte] {
     self.view().asByteView()
   }

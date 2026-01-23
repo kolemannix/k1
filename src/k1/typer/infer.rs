@@ -159,8 +159,13 @@ impl TypedProgram {
                             // know the types of the inputs yet. When a lambda fails here, we
                             // choose to continue and report a different, likely more informative,
                             // error
+                            //
+                            // This is swallowing really important info when the lambda is just
+                            // mis-written, so need to rethink this, toggling to false for now
+                            // Eventually I think we need a signal score heuristic on errors to
+                            // determine whether the lambda failure would stop inference here or not
                             let should_skip = match self_.ast.exprs.get(*parsed_expr) {
-                                ParsedExpr::Lambda(_) => true,
+                                ParsedExpr::Lambda(_) => false,
                                 _ => false,
                             };
                             if should_skip {
@@ -938,7 +943,8 @@ impl TypedProgram {
             self.type_id_to_string(slot_type).blue()
         );
 
-        match (self.types.get_no_follow(passed_type), self.types.get_no_follow(slot_type)) {
+        match (self.types.get(passed_type), self.types.get(slot_type)) {
+            _ if passed_type == slot_type => TypeUnificationResult::Matching,
             (Type::InferenceHole(_passed_hole), _slot_type) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
@@ -1082,18 +1088,26 @@ impl TypedProgram {
                     param_static.family_type_id,
                 ),
             (Type::Static(passed_static), _non_static) => {
+                // We infer 'through' statics, even though they'll fail typecheck without a cast.
+                // This improves error messages, as we essentially end up solving the user's intent,
+                // then telling them why their intent doesn't compile
                 self.unify_and_find_substitutions_rec(passed_static.family_type_id, slot_type)
             }
             (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
+                // We infer 'through' statics, even though they'll fail typecheck without a cast.
+                // This improves error messages, as we essentially end up solving the user's intent,
+                // then telling them why their intent doesn't compile
                 self.unify_and_find_substitutions_rec(passed_type, static_slot.family_type_id)
             }
-            _ if passed_type == slot_type => TypeUnificationResult::Matching,
-            // --------------- MISS CASES: further cases for better error information ---------------------
+
+            // --------------- MISS CASES: we detect further explicit cases for better error message ---------------------
             (passed_type, Type::Reference(_passed_t)) if passed_type.as_reference().is_none() => {
                 TypeUnificationResult::NonMatching("Consider passing a reference")
             }
             _ => {
                 debug!("  -> Non-Matching");
+                // If you see 'Unrelated types', consider coming here and adding a case; its
+                // a little rude and sometimes not even true
                 TypeUnificationResult::NonMatching("Unrelated types")
             }
         }
