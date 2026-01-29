@@ -39,6 +39,10 @@ fn error_to_diagnostic(
         MessageLevel::Info => DiagnosticSeverity::INFORMATION,
         MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
+    let mut escaped_message = String::with_capacity(message.len() * 2);
+    escaped_message.push_str("```txt");
+    escaped_message.push_str(message);
+    escaped_message.push_str("```");
     let diagnostic = Diagnostic {
         range: Range {
             start: Position {
@@ -54,7 +58,7 @@ fn error_to_diagnostic(
         code: None,
         code_description: None,
         source: Some(ast.name.clone()),
-        message,
+        message: escaped_message,
         related_information: None,
         tags: None,
         data: None,

@@ -127,7 +127,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: More LSP features
 - [x] Hover first pass
 - [x] Hover much better
-- [ ] Hover no more markdown
+- [x] Hover no more markdown
 - [ ] Go-to
 - [ ] Completion
 
