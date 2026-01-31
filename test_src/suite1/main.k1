@@ -34,6 +34,7 @@ fn low() {
 }
 
 fn moderate() {
+  recurse_basic/test();
   defer_test/test();
   zst_test/test();
   structural/test();

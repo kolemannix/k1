@@ -1,0 +1,757 @@
+// Copyright (c) 2025 knix
+// All rights reserved.
+
+// Only code that is necessary for the compiler's operation
+// belongs in this file
+
+///////////
+// Types //
+deftype u8          = builtin
+deftype u16         = builtin
+deftype u32         = builtin
+deftype u64         = builtin
+deftype alias usize = u64
+deftype alias uint  = u64
+deftype i8          = builtin
+deftype i16         = builtin
+deftype i32         = builtin
+deftype i64         = builtin
+deftype alias int   = i64
+deftype alias size  = i64
+
+// TODO: Incorporate this instead of a 64-bit align type
+deftype alias align = u16
+
+deftype char    = builtin
+deftype bool    = builtin
+
+/// An uninhabited type representing that code with this type never returns
+/// Used to signal termination and enables basic control flow analysis
+deftype never   = builtin
+
+deftype ptr = builtin
+
+deftype f32 = builtin
+deftype f64 = builtin
+
+
+deftype buffer[T] = { len: size, data: *mut T }
+
+deftype view[T] = { buffer: buffer[T] }
+
+deftype List[T] = { len: size, buffer: buffer[T] }
+deftype string = { view: view[char] }
+
+deftype opt[T] = either none, some(T)
+
+
+deftype alias c_sizet = u64
+deftype alias c_ssizet = i64
+deftype alias c_int = i32
+deftype alias c_long = i64
+
+ns compiler {
+  deftype SourceLocation = { filename: string, line: u64 }
+  // Need some way to mark this and IS_STATIC as comptime only
+  let* CAPTURE_PRINTS: *mut bool = true;
+}
+
+deftype Ordering = either Less, Equal, Greater
+
+deftype Result[T, E] = either Ok(T), Err(E)
+
+deftype alias empty = {}
+
+deftype alias byte = u8
+
+ns types {
+
+  intern fn sizeOf[T](): int
+  intern fn sizeOfStride[T](): int
+  intern fn alignOf[T](): int
+
+  intern fn typeId[T](): u64
+  fn typeIdOfVal[T](_t: T): u64 { typeId[T] } 
+
+  intern fn typeSchema(id: u64): TypeSchema
+  intern fn typeName(id: u64): string
+
+  fn getTypeName[T](): string { typeName(typeId[T]) }
+  fn getTypeNameOfVal[T](_t: T): string { typeName(typeId[T]) }
+  fn getTypeSchema[T](): TypeSchema { typeSchema(typeId[T]) }
+
+  // DO NOT REORDER VARIANTS
+  deftype int-kind = either U8, U16, U32, U64, I8, I16, I32, I64
+  ns IntKind {
+    fn bitWidth(self: IntKind): size {
+      switch self {
+        .U8  -> 8,
+        .U16 -> 16,
+        .U32 -> 32,
+        .U64 -> 64,
+        .I8  -> 8,
+        .I16 -> 16,
+        .I32 -> 32,
+        .I64 -> 64,
+      }
+    }
+  }
+
+  // DO NOT REORDER VARIANTS
+  deftype IntValue = either
+    U8(u8), U16(u16), U32(u32), U64(u64),
+    I8(i8), I16(i16), I32(i32), I64(i64)
+
+  deftype Layout = { size: u32, align: u32 }
+
+  deftype TypeSchema = (either
+    Char,
+    Int(IntKind),
+    Float(either F32, F64),
+    Bool,
+    Ptr,
+    String,
+    Reference({ innerTypeId: u64, mutable: bool }),
+    Array({
+      elementTypeId: u64,
+      size: ?int
+    }),
+    Struct({
+      fields: view[{
+        name: string,
+        typeId: u64,
+        offset: size
+      }],
+    }),
+    Either({
+      tagType: IntKind,
+      variants: view[{
+        name: string,
+        tag: IntValue,
+        payload: ?{ typeId: u64, offset: size }
+      }],
+    }),
+    Function({
+      params: view[{ name: string, typeId: u64 }],
+      returnTypeId: u64,
+    }),
+    FunctionPointer({ functionTypeId: u64 }),
+    Never,
+    // StaticScalar(),
+    // TODO: lambda schema, lambda object schema
+    // Lambda({ typeId: u64, functionTypeId: u64 }),
+    // LambdaObject({ functionTypeId: u64 }),
+    Other(string)
+  )
+
+  deftype Any = {
+    typeId: u64,
+    value: ptr
+  }
+
+
+  fn makeAny[T](t: *T): Any {
+    { typeId: typeId[T](), value: t.as[ptr] }
+  }
+
+  fn assertWrapperType[Wrapper, Inner]() {
+    let schemaA = types/getTypeSchema[Wrapper]();
+    let bTypeId = types/typeId[Inner]();
+    require schemaA is .Struct({ fields }) else { crash("isWrapperType: Wrapper must be a struct") };
+    require fields.first() is .some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
+    let equal = field.typeId == bTypeId;
+    if not equal { crash("Expected {types/getTypeName[Inner]} but got {types/typeName(field.typeId)}") };
+  }
+
+  fn typeEq[A, B](): bool { types/typeId[A] == types/typeId[B] }
+
+}
+
+ns meta {
+
+  /////// Static value ferrying across the runtime/comptime border:
+  /////// Likely marked internal eventually
+  intern fn bakeStaticValue[T](value: T): u64
+  // Must be provided an integer literal.
+  // Can only be called by generated code
+  intern fn getStaticValue[T](id: u64): T
+
+  intern fn staticTypeToValue[T, ST: static T](): T
+
+}
+
+////////////////////////////////
+// Built-in Abilities
+
+// Equals must have ability id 0
+ability Equals {
+  fn equals(self: Self, other: Self): bool
+}
+
+// TODO(dogfood): Enhance with an `impl Error` type parameter
+// TODO(dogfood): Allow Error = never for infallible writes
+ability Writer {
+  fn writeByte(self: Self, value: u8) 
+  fn writeBytes(self: Self, bytes: view[byte])
+
+  fn writeChar(self: Self, value: char) { self.writeByte(value.as[u8]) }
+  fn writeString(self: Self, value: string) { self.writeBytes(value.viewBytes()) }
+
+  fn repeat(self: Self, value: string, n: size) {
+    let i = 0;
+    while i < n {
+      self.writeString(value);
+      i := i + 1;
+    }
+  }
+}
+
+ability Print {
+  fn printTo[W: Writer](self: Self, w: W)
+}
+
+// Show must have ability id 4
+// TODO: Show does not belong in k1 long term because it says nothing about where the data
+//       is allocated, and the name is too Haskelly, which is to say
+//       both erudite and pedestrian at the same time? Looking at you,
+//       'Just'
+//       POSSIBLY we could keep it as like To(Temp)String
+ability Show {
+  fn show(self: Self): string
+}
+
+ability Bitwise {
+  fn bitNot(self: Self): Self
+  fn bitAnd(self: Self, other: Self): Self
+  fn bitOr(self: Self, other: Self): Self
+  fn xor(self: Self, other: Self): Self
+
+  fn shiftLeft(self: Self, count: u32): Self
+  fn shiftRight(self: Self, count: u32): Self
+}
+
+ability Add { fn add(self: Self, rhs: Self): Self }
+ability Sub { fn sub(self: Self, rhs: Self): Self }
+ability Mul { fn mul(self: Self, rhs: Self): Self }
+ability Div { fn div(self: Self, rhs: Self): Self }
+ability Rem { fn rem(self: Self, rhs: Self): Self }
+
+// I understand this is a 'Closed', more simple notion of Add
+// than Rust's std::ops::Add, generic over Rhs and Output. However,
+// being able to assume a symmetric add gives us much better and simpler
+// type inference for 99% of cases. If we ever do Defaults, where
+// we could default Rhs and Output to Self, and also somehow use
+// that information while inferring... then maybe. But I don't want
+// to achieve it by doing "try the call with every impl" for performance reasons
+impl Add for u8  {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u16 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u32 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for u64 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i8  {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i16 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i32 {   intern fn add(self: Self, rhs: Self): Self }
+impl Add for i64 {   intern fn add(self: Self, rhs: Self): Self }
+
+impl Sub for u8  {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u16 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u32 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for u64 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i8  {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i16 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i32 {   intern fn sub(self: Self, rhs: Self): Self }
+impl Sub for i64 {   intern fn sub(self: Self, rhs: Self): Self }
+
+impl Mul for u8    { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u16   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u32   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for u64   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i8    { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i16   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i32   { intern fn mul(self: Self, rhs: Self): Self }
+impl Mul for i64   { intern fn mul(self: Self, rhs: Self): Self }
+  
+impl Div for u8    { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u16   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u32   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for u64   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i8    { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i16   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i32   { intern fn div(self: Self, rhs: Self): Self }
+impl Div for i64   { intern fn div(self: Self, rhs: Self): Self }
+
+impl Rem for u8    { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u16   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u32   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for u64   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i8    { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i16   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i32   { intern fn rem(self: Self, rhs: Self): Self }
+impl Rem for i64   { intern fn rem(self: Self, rhs: Self): Self }
+
+ability ScalarCmp {
+  fn lt(self: Self, other: Self): bool
+  fn le(self: Self, other: Self): bool
+  fn gt(self: Self, other: Self): bool
+  fn ge(self: Self, other: Self): bool
+}
+
+impl ScalarCmp for u8 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u16 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u32 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for u64 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i8 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i16 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i32 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+impl ScalarCmp for i64 {
+  intern fn lt(self: Self, other: Self): bool
+  intern fn le(self: Self, other: Self): bool
+  intern fn gt(self: Self, other: Self): bool
+  intern fn ge(self: Self, other: Self): bool
+}
+
+ability Comparable {
+  fn compare(self: Self, other: Self): Ordering
+}
+
+ability Try[impl T, impl E] {
+  // DO NOT REORDER `try` internal operation expects error to be first! (FIXME)
+  fn error(e: E): Self
+  fn value(t: T): Self
+
+  fn isOk(self: Self): bool
+  fn getError(self: Self): E
+  fn getValue(self: Self): T
+}
+
+ability Iterator[impl Item] {
+  fn next(self: *mut Self): ?Item {
+    let p = self.peek();
+    if p is .some(_) { self.advanceBy(1) };
+    p
+  }
+  fn peek(self: *Self): ?Item
+  fn sizeHint(self: *Self): { at-least: size, at-most: ?size }
+  fn advanceBy(self: *mut Self, n: size)
+  fn nth(self: *mut Self, n: size): ?Item
+
+  fn isDone(self: *Self): bool { self.peek().isNone() }
+}
+
+ability Iterable[impl Item, impl I: Iterator[Item = Item]] {
+  fn iterator(self: Self): I
+}
+
+/////////////////////////////////
+// Code that we want to have available very early
+// to enable basic comptime execution inside of builtin/core
+// For example `if os == "macos"` requires string equality!
+
+ns buffer {
+  fn equalsBits[T](self: buffer[T], other: buffer[T]): bool {
+    if self.len == 0 and other.len == 0 true
+    else if self.len != other.len       false else {
+      mem/equals(self.dataPtr(), other.dataPtr(), self.sizeBytes())
+    }
+  }
+}
+
+ns view {
+  fn equalsBits[T](self: view[T], other: view[T]): bool {
+    self.buffer.equalsBits(other.buffer)
+  }
+}
+
+impl Equals for buffer[u8] {
+  fn equals(self: buffer[u8], other: buffer[u8]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for buffer[char] {
+  fn equals(self: buffer[char], other: buffer[char]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for buffer[int] {
+  fn equals(self: buffer[int], other: buffer[int]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for buffer[bool] {
+  fn equals(self: buffer[bool], other: buffer[bool]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for view[u8] {
+  fn equals(self: view[u8], other: view[u8]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for view[char] {
+  fn equals(self: view[char], other: view[char]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for view[int] {
+  fn equals(self: view[int], other: view[int]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for view[bool] {
+  fn equals(self: view[bool], other: view[bool]): bool {
+    self.equalsBits(other)
+  }
+}
+
+impl Equals for string {
+  fn equals(self: string, that: string): bool {
+    self.view == that.view
+  }
+}
+
+impl Print for string {
+  fn printTo[W: Writer](self: string, w: W) { w.writeString(self) }
+}
+
+impl Print for {} {
+  fn printTo[W: Writer](self: {}, w: W) { w.writeString("{{}") }
+}
+
+
+impl Equals for {} {
+  fn equals(_self: {}, _other: {}): bool { true }
+}
+
+ns mem {
+
+  // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
+  intern fn alloc(size: size, align: size): ptr
+  intern fn allocZeroed(size: size, align: size): ptr
+  intern fn realloc(ptr: ptr, oldSize: size, align: size, newSize: size): ptr
+  intern fn free(ptr: ptr, size: size, align: size)
+
+  intern fn copy(
+    dst: ptr,
+    src: ptr,
+    count: size
+  )
+  intern fn set(
+    dst: ptr,
+    value: u8,
+    count: size
+  )
+  intern fn equals(p1: ptr, p2: ptr, size: int): bool
+
+  intern fn zeroed[T](): T
+
+  intern fn bitcast[T, U](t: T): U
+
+}
+
+/////////////////////////////////
+// Compiler builtins
+ns k1 {
+  // IS_STATIC is set to 'true' when executing K1 code statically, at compile-time
+  let IS_STATIC: bool = builtin;
+
+  let TEST: bool = builtin;
+  let NO_STD: bool = builtin;
+  let DEBUG: bool = builtin;
+
+  let OS: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
+  let OS_MACOS: bool = OS == "macos";
+  let OS_POSIX: bool = OS == "macos" or OS == "linux";
+
+  let MULTITHREADING: bool = builtin;
+
+  intern fn emitCompilerMessage(
+    locn: compiler/SourceLocation,
+    level: (either(u8) Info, Warn, Error),
+    msg: string
+  )
+
+  deftype ModuleKind = either(u8) Library, Executable, Script
+
+  deftype ModuleManifest = {
+    kind: ModuleKind,
+    deps: view[string],
+
+    // Primary module settings
+    multithreading: bool,
+    libs: view[string],
+  }
+
+}
+
+/////////////////////////////////
+// Core sizing intrinsics
+
+ns compiler {
+  intern fn location(): SourceLocation
+}
+
+ns sys {
+  intern fn exit(code: i32): never
+}
+
+ns ptr {
+  let null: ptr = 0.as[ptr];
+
+  fn isNull(self: ptr): bool {
+    self == null
+  }
+
+  fn r[T](self: ptr): *T { self.as[*T] }
+  fn rw[T](self: ptr): *mut T { self.as[*mut T] }
+
+  // This is an intrinsic so that we can codegen a getelementptr
+  // instruction in LLVM rather than a pointer cast.
+  // But we _could_ do it in userland using sizeOf and arithmetic which is neat!
+  intern fn refAtIndex[T](self: ptr, index: int): *mut T
+
+  fn addBytes(self: ptr, offset: int): ptr { 
+    (self.as[int] + offset).as[ptr]
+  }
+
+  fn subBytes(self: ptr, offset: int): ptr { 
+    (self.as[int] - offset).as[ptr]
+  }
+
+  fn diff(self: ptr, other: ptr): int {
+    self.as[int] - other.as[int]
+  }
+
+  fn alignAddr(baseAddress: size, alignBytes: size): int {
+    let mask = alignBytes - 1;
+    (baseAddress + mask) & mask.bitNot()
+  }
+
+  fn aligned(self: ptr, alignBytes: int): ptr {
+    alignAddr(self.as[size], alignBytes).as()
+  }
+
+}
+
+impl Equals for ptr {
+  fn equals(self: ptr, other: ptr): bool {
+    self.as[int] == other.as[int]
+  }
+}
+
+ns bool {
+  intern fn negated(self: bool): bool
+  fn as_u8(self: bool): u8 { self.as[u8] }
+  fn from_u8(value: u8): bool { value != 0u8 }
+}
+
+impl Equals for bool { intern fn equals(self: bool, other: bool): bool }
+
+impl Equals for u8 { intern fn equals(self: u8, other: u8): bool }
+impl Equals for u16 { intern fn equals(self: u16, other: u16): bool }
+impl Equals for u32 { intern fn equals(self: u32, other: u32): bool }
+impl Equals for u64 { intern fn equals(self: u64, other: u64): bool }
+
+impl Equals for i8 { intern fn equals(self: i8, other: i8): bool }
+impl Equals for i16 { intern fn equals(self: i16, other: i16): bool }
+impl Equals for i32 { intern fn equals(self: i32, other: i32): bool }
+impl Equals for i64 { intern fn equals(self: i64, other: i64): bool }
+
+impl Equals for char { intern fn equals(self: char, other: char): bool }
+
+fn discard[T](_t: T): empty { {} }
+fn phony[T](): T { crash("phony") }
+
+ns Array {
+  fn getBaseRead[T, N: static int](array: *Array[T, N]): *T {
+    array.getRef(0)
+  }
+  fn getBase[T, N: static int](array: *mut Array[T, N]): *mut T {
+    array.getRef(0)
+  }
+  fn basePtr[T, N: static int](array: *mut Array[T, N]): ptr {
+    array.as[ptr]
+  }
+  fn sizeBytes[T, N: static int](_array: Array[T, N]): int {
+    types/sizeOf[Array[T, N]]()
+  }
+
+  fn zeroed[T, N: static int](): Array[T, N] {
+    mem/zeroed[Array[T, N]]()
+  }
+
+  fn bytes[N: static int](): Array[u8, N] {
+    mem/zeroed[Array[u8, N]]()
+  }
+
+  fn allocate[T, N: static int](context alloc: mem/allocMode)(): *mut Array[T, N] {
+    alloc.allocT[Array[T, N]]()
+  }
+
+  fn memset[T, N: static int](array: *mut Array[T, N], value: u8) {
+    mem/set(dst = array.basePtr(), value = value, count = array.sizeBytes())
+  }
+
+  fn set[T, N: static int](array: *mut Array[T, N], index: int, value: T) {
+    array.getRef(index) <- value
+  }
+
+  fn filledIn[T, N: static int](context alloc: mem/allocMode)(t: T, n: N): *mut Array[T, N] {
+    let arrayUninit = allocate[T, N]();
+    let i = 0;
+    while i < n.fromStatic() {
+      arrayUninit.getRef(i) <- t;
+      i := i + 1;
+    };
+    arrayUninit
+  }
+
+  fn asBuffer[T, N: static int](array: *mut Array[T, N]): buffer[T] {
+    { len: array.len(), data: array.getBase() }
+  }
+
+  fn asView[T, N: static int](array: *Array[T, N]): view[T] {
+    let temp = array.toMut.asBuffer();
+    view/wrapBuffer(temp)
+  }
+
+}
+
+#if k1/OS_POSIX ns posix {
+
+  let STDIN: i32 = 0;
+  let STDOUT: i32 = 1;
+  let STDERR: i32 = 2;
+
+  extern("read") fn read(fileNo: c_int, buffer: ptr, count: c_sizet): i64
+  extern("write") fn write(fileNo: c_int, data: ptr, count: c_sizet): i64
+  
+  // These may only hold on macos; temporary until we have a bindings generation system
+  let MAP_FILE   : c_int = 0x0000;
+  let MAP_SHARED : c_int = 0x0001;
+  let MAP_PRIVATE: c_int = 0x0002;
+  let MAP_FIXED  : c_int = 0x0010;
+  // MAP_ANONYMOUS = 0x20 on Linux, but MAP_ANON = 0x1000 on macOS.
+  let MAP_ANON   : c_int = (if k1/OS_MACOS 0x1000 else 0x20);
+
+  // Pages may not be accessed.
+  let PROT_NONE: c_int = 0x0;
+  // Pages may be read.
+  let PROT_READ: c_int = 0x1;
+  // Pages may be written.
+  let PROT_WRITE: c_int = 0x2;
+  // Pages may be executed.
+  let PROT_EXEC: c_int = 0x4;
+  let MAP_FAILED: i64 = -1;
+  extern("mmap") fn mmap(addr: ptr, len: size, prot: i32, flags: c_int, fd: c_int, offset: size): ptr
+
+  extern("munmap") fn munmap(addr: ptr, len: size): i32
+
+  let MADV_SEQUENTIAL: i32 = 2;
+  extern("posix_madvise") fn madvise(addr: ptr, len: c_sizet, advice: c_int): c_int
+
+  extern("backtrace") fn backtrace(buffer: ptr, size: c_int)
+
+}
+
+// Eventually: #if k1/C_RUNTIME
+ns libc {
+
+  extern("exit") fn exit(code: i32): never
+
+  extern("memcmp") fn memcmp(s1: ptr, s2: ptr, size: size): i32
+
+  extern("malloc") fn malloc(size: size): ptr
+  extern("calloc") fn calloc(count: int, size: size): ptr
+  extern("free") fn free(ptr: ptr)
+  extern("realloc") fn realloc(ptr: ptr, size: size): ptr
+
+  extern("perror") fn perror(msg: ptr)
+
+  ns files {
+    let SEEK_END: i32 = 2;
+    let SEEK_SET: i32 = 0;
+    extern("fopen")  fn fopen(pathCString: ptr, modeCString: ptr): ptr
+    extern("fseek")  fn fseek(fileDesc: ptr, offset: i64, whence: i32): i32
+    extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): c_sizet
+    extern("fclose") fn fclose(fileDesc: ptr): c_int
+    extern("ftell")  fn ftell(fileDesc: ptr): c_long
+  }
+
+}
+
+fn assert(context locn: compiler/SourceLocation)(value: bool) {
+  if not value { crash("ASSERT FAILED") };
+}
+
+fn assertdbg(context locn: compiler/SourceLocation)(value: bool) {
+  #if k1/DEBUG { if not value { crash("ASSERT FAILED") } }
+  else         { locn; value; {} }
+}
+
+fn crash(context locn: compiler/SourceLocation)(msg: string): never {
+  if k1/NO_STD {
+    let s = "exiting (nostd)\n\0";
+    posix/write(
+      fileNo = 1,
+      data = s.view().dataPtr(),
+      count = (s.view().len() - 1).as[c_sizet],
+    );
+    sys/exit(1)
+  } else if k1/IS_STATIC {
+    k1/emitCompilerMessage(locn, .Error, msg);
+    sys/exit(111)
+  } else {
+    let filename = locn.filename;
+    let line = locn.line;
+    sys/printBacktrace();
+    let s = "{msg} at {filename}:{line}\n";
+    eprint(s);
+    sys/exit(1)
+  }
+}
+
+fn crashBounds(context locn: compiler/SourceLocation)(size: size, index: size, msg: string): never {
+  crash("{msg}: {index} >= {size}")
+}
+

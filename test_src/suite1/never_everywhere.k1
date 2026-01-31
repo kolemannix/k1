@@ -8,9 +8,9 @@ fn assgnRhs(): never { let _x = 123; _x := crash("assgn rhs") }
 fn binopRhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn whileCond(): never { while crash("asdf") { {} } }
-fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
+fn enumConstrPayload(): never { opt.some(crash("asdf")) }
 fn getEnumPayload(): i64 { 
-  let x: ?int = Opt.Some(crash(""));
+  let x: ?int = opt.some(crash(""));
 }
 fn castTarget(): i64 { crash(""): i64 }
 fn inReturn(): never { 
@@ -18,7 +18,7 @@ fn inReturn(): never {
     testCompile(
       return(crash("what"))
     ),
-    .Some("return is dead since returned expression is divergent; remove the return")
+    .some("return is dead since returned expression is divergent; remove the return")
   );
 
   core/sys/exit(0)
@@ -28,7 +28,7 @@ fn inBreak(): never {
     testCompile(
       loop { break(crash("inBreak")) }
     ),
-    .Some("break is dead since returned expression is divergent; consider removing the 'break'")
+    .some("break is dead since returned expression is divergent; consider removing the 'break'")
   );
   core/sys/exit(0)
 }

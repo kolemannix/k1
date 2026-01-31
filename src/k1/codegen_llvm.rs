@@ -564,9 +564,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .build_call(function_value, &params, "")
             .unwrap()
             .try_as_basic_value()
-            .basic()
-            .unwrap();
-        self.builder.build_return(Some(&res)).unwrap();
+            .basic();
+        // nocommit: Fix 0 return for void mains
+        match res {
+            None => self.builder.build_return(None).unwrap(),
+            Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+        };
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
@@ -1389,7 +1392,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let original_block = self.builder.get_insert_block().unwrap();
         let f = self.get_insert_function();
         let function_entry_block = f.function_value.get_first_basic_block().unwrap();
-
 
         // Position the builder
         match f.last_alloca_instr {

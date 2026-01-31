@@ -10,17 +10,17 @@
 // - Loops and control flow
 // - Numeric operations
 // - String handling
-// - Builds on List which is implemented in k1
+// - Builds on list which is implemented in k1
 
 // Demonstrates that the defaults of
 // Library, no dependencies, not multithreaded work
-let MODULE_INFO: core/k1/ModuleManifest = core/mem/zeroed();
+let MODULE_INFO: core/k1/module-manifest = core/mem/zeroed();
 
 deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
 deftype HashMap[V] = {
   size: size,
   // TODO: Switch to a 3-state enum for the deleted variant for a more efficient layout
-  entries: List[Entry[V]],
+  entries: list[Entry[V]],
 }
 
 fn fnv1a_hash(key: string): u64 {
@@ -37,7 +37,7 @@ fn fnv1a_hash(key: string): u64 {
 ns HashMap {
 
   fn _make[V](cap: size): HashMap[V] {
-    { size: 0, entries: List/filled(cap, .None) }
+    { size: 0, entries: list/filled(cap, .none) }
   }
 
   fn new[V](): HashMap[V] {
@@ -53,7 +53,7 @@ ns HashMap {
     self <- newMap;
 
     for v in oldEntries {
-      if v is .Some(v) {
+      if v is .some(v) {
         if not v.deleted self.insert(v.key, v.value)
       }
     };
@@ -73,7 +73,7 @@ ns HashMap {
       if probeIndex == self.entries.len { probeIndex := 0 };
 
       let entryRef = self.entries*.getRef(probeIndex);
-      if entryRef is .None* {
+      if entryRef is .none* {
         return(entryRef)
       }
     }
@@ -94,16 +94,16 @@ ns HashMap {
     let entryRef = self.entries*.getRef(index);
     let entry = { key: key, value: value, deleted: false };
     switch entryRef.* {
-      .None -> {
-        entryRef <- .Some(entry);
+      .none -> {
+        entryRef <- .some(entry);
         self.size* <- self.size + 1;
       },
-      .Some({ key: existingKey, value: _ }) -> {
+      .some({ key: existingKey, value: _ }) -> {
         if existingKey == key {
-          entryRef <- .Some(entry);
+          entryRef <- .some(entry);
         } else {
           let nextAvailableEntry = self._probe(index);
-          nextAvailableEntry <- .Some(entry);
+          nextAvailableEntry <- .some(entry);
           self.size* <- self.size + 1;
         }
       }
@@ -113,11 +113,11 @@ ns HashMap {
   fn get[V](self: *HashMap[V], key: string): ?V {
     let index = self._computeIndex(key);
     let slot = self.entries.get(index);
-    require slot is .Some({ key: existingKey, value: v, deleted }) else {
-      return(.None)
+    require slot is .some({ key: existingKey, value: v, deleted }) else {
+      return(.none)
     };
     if existingKey == key {
-      if deleted .None else .Some(v)
+      if deleted .none else .some(v)
     } else {
       let probeIndex = index;
       loop {
@@ -125,13 +125,13 @@ ns HashMap {
         if probeIndex == self.entries.len { probeIndex := 0 };
 
         switch self.entries.get(probeIndex) {
-          .Some({ key: existingKey, value, deleted }) -> {
+          .some({ key: existingKey, value, deleted }) -> {
             if key == existingKey {
-              if deleted break(.None)
-              else break(.Some(value))
+              if deleted break(.none)
+              else break(.some(value))
             }
           },
-          .None -> { break(.None) },
+          .none -> { break(.none) },
         }
       }
     }
@@ -140,7 +140,7 @@ ns HashMap {
   fn remove[V](self: *mut HashMap[V], key: string): bool {
     let index = self._computeIndex(key);
     let entryRef = self.entries*.getRef(index);
-    require entryRef is .Some({ key: existingKey, value: value, deleted })* else {
+    require entryRef is .some({ key: existingKey, value: value, deleted })* else {
       return(false)
     };
     if key == existingKey {
@@ -159,7 +159,7 @@ ns HashMap {
 
         let probedEntryRef = self.entries*.getRef(probeIndex);
         switch probedEntryRef {
-          .Some({ key: existingKey, value, deleted })* -> {
+          .some({ key: existingKey, value, deleted })* -> {
             if key == existingKey.* {
               let wasDeleted = deleted.*;
               if not wasDeleted {
@@ -171,21 +171,21 @@ ns HashMap {
               }
             }
           },
-          .None* -> { break(false) },
+          .none* -> { break(false) },
         }
       }
     }
   }
 
-  fn dump[V](self: HashMap[V]) where V: Print {
+  fn dump[V](self: HashMap[V]) where V: print {
     let capacity = self.entries.len;
     let size = self.size;
     println("Size: {size}, Capacity: {capacity}");
     for self.entries {
       print("  SLOT {itIndex}: ");
       switch it {
-        .None -> println("empty"),
-        .Some({ key, value, deleted }) -> {
+        .none -> println("empty"),
+        .some({ key, value, deleted }) -> {
           println("{key} -> {value} (d={deleted})");
         }
       }

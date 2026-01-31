@@ -43,7 +43,7 @@ fn checkInvalidPart1(value: i64): bool {
   buffer.reset();
   value.printTo(buffer);
   let valueStr = string/fromView(buffer.rawView());
-  if valueStr.len().bitAnd(1) == 1 {
+  if valueStr.len() & 1 == 1 {
     //println("skipping odd len {valueStr}");
     return(false)
   };

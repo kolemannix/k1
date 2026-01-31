@@ -4,111 +4,111 @@
 // A growable, ordered collection of elements.
 // Backed by an efficient, contiguously allocated buffer
 //
-// List stores a copy of its allocator, because it is intended
+// list stores a copy of its allocator, because it is intended
 // to be a convenient and easy workhorse for most use cases
-ns List {
+ns list {
 
   ///////////////////////////
   // Construction functions
 
-  use mem/AllocMode
+  use mem/alloc-mode
 
-  fn empty[T](): List[T] {
+  fn empty[T](): list[T] {
     withCapacity[T](0)
   }
 
-  fn len[T](self: List[T]): size { self.len }
-  fn cap[T](self: List[T]): size { self.buffer.len }
+  fn len[T](self: list[T]): size { self.len }
+  fn cap[T](self: list[T]): size { self.buffer.len }
 
-  fn filled[T](size: size, value: T): List[T] {
-    let buffer = Buffer/filled(size, value);
+  fn filled[T](size: size, value: T): list[T] {
+    let buffer = buffer/filled(size, value);
     { len: size, buffer: buffer }
   }
 
-  fn filledIn[T](context mode: AllocMode)(size: size, value: T): List[T] {
-    let buffer = Buffer/filledIn(size, value);
+  fn filledIn[T](context mode: alloc-mode)(size: size, value: T): list[T] {
+    let buffer = buffer/filledIn(size, value);
     { len: size, buffer: buffer }
   }
 
-  fn withCapacity[T](cap: size): List[T] {
-    let buffer = Buffer/_allocate[T](cap);
+  fn withCapacity[T](cap: size): list[T] {
+    let buffer = buffer/_allocate[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn withCapacityIn[T](context mode: AllocMode)(cap: size): List[T] {
-    let buffer = Buffer/_allocateIn[T](cap);
+  fn withCapacityIn[T](context mode: alloc-mode)(cap: size): list[T] {
+    let buffer = buffer/_allocateIn[T](cap);
     { len: 0, buffer: buffer }
   }
 
-  fn reserve[T](self: *mut List[T], alloc: AllocMode, count: size) {
+  fn reserve[T](self: *mut list[T], alloc: alloc-mode, count: size) {
     if self.cap() >= count { return() };
     self.buffer*._growTo[T](context alloc)(count);
     assertdbg(self.buffer.len == count);
   }
 
-  fn single[T](value: T): List[T] {
+  fn single[T](value: T): list[T] {
     filled[T](1, value)
   }
 
-  fn wrapBuffer[T](buffer: Buffer[T]): List[T] {
+  fn wrapBuffer[T](buffer: buffer[T]): list[T] {
     { len: buffer.len, buffer: buffer }
   }
 
   // Return only the part of our buffer with Ts in it!!!
   // Does not create a copy!
-  fn asBuffer[T](self: List[T]): Buffer[T] {
+  fn asBuffer[T](self: list[T]): buffer[T] {
     self.buffer.slice(0, self.len)
   }
 
-  fn asView[T](self: List[T]): View[T] {
-    View/wrapBuffer(self.asBuffer[T]())
+  fn asView[T](self: list[T]): view[T] {
+    view/wrapBuffer(self.asBuffer[T]())
   }
 
-  fn copyToBuffer[T](self: List[T]): Buffer[T] {
+  fn copyToBuffer[T](self: list[T]): buffer[T] {
     self.asBuffer().cloned()
   }
 
-  fn copyToArray[T, N: static size](self: List[T], count: N): *mut Array[T, N] {
-    let countVal = count.fromStatic();
+  fn copyToArray[T, N: static size](self: list[T], count: N): *mut array[T, N] {
+    let countVal = count.from-static();
     assertEquals(self.len, countVal);
     let base: ptr = self.asBuffer().cloned().dataPtr();
     base.as()
   }
 
-  // The possibly-uninitialized backing buffer of this List
-  fn innerBuffer[T](self: List[T]): Buffer[T] { self.buffer }
+  // The possibly-uninitialized backing buffer of this list
+  fn innerBuffer[T](self: list[T]): buffer[T] { self.buffer }
 
-  fn getRef[T](self: *mut List[T], index: size): *mut T {
+  fn getRef[T](self: *mut list[T], index: size): *mut T {
     if index < 0 or index >= self.len {
-      crash("List index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: {index} >= {self.len}")
     };
     self.buffer.getRefUnchecked[T](index)
   }
 
-  fn set[T](self: *mut List[T], index: size, elem: T) {
+  fn set[T](self: *mut list[T], index: size, elem: T) {
     if index >= self.len {
-      crash("List index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: {index} >= {self.len}")
     };
     self.buffer.set(index, elem);
   }
 
-  fn get[T](self: List[T], index: size): T {
+  fn get[T](self: list[T], index: size): T {
     if index >= self.len {
-      crash("List index out of bounds: {index} >= {self.len}")
+      crash("list index out of bounds: {index} >= {self.len}")
     };
     self.buffer.get(index)
   }
 
-  fn getOpt[T](self: List[T], index: size): ?T {
+  fn getOpt[T](self: list[T], index: size): ?T {
     if index >= self.len {
-      .None
-    } else .Some(self.buffer.get(index))
+      .none
+    } else .some(self.buffer.get(index))
   }
 
-  fn _grow[T](context mode: AllocMode)(self: *mut List[T]) {
+  fn _grow[T](context mode: alloc-mode)(self: *mut list[T]) {
     let newCap: size = if self.buffer.isEmpty() {
       // For large elements, just allocate what's needed - Rust's RawVec does this :)
-      let elemSize = core/types/sizeOf[T]();
+      let elemSize = core/types/size-of[T]();
       if elemSize >= 1024 1 else 8
     } else {
       self.cap() * 2
@@ -116,12 +116,12 @@ ns List {
     self.reserve(mode, newCap);
   }
 
-  fn cloned[T](self: List[T]): List[T] {
+  fn cloned[T](self: list[T]): list[T] {
     let newBuffer = self.buffer.cloned();
     { len: self.len, buffer: newBuffer }
   }
 
-  fn pushIn[T](context mode: AllocMode)(self: *mut List[T], elem: T) {
+  fn pushIn[T](context mode: alloc-mode)(self: *mut list[T], elem: T) {
     let startLength = self.len;
     if startLength == self.*.cap() {
       self._grow();
@@ -130,52 +130,52 @@ ns List {
     self.set(startLength, elem);
   }
 
-  fn push[T](self: *mut List[T], elem: T) {
+  fn push[T](self: *mut list[T], elem: T) {
     self.pushIn[T](context .Current)(elem)
   }
 
-  fn slice[T](self: List[T], start: size, end: size): Buffer[T] {
-    if self.len == 0 return(Buffer/empty[T]());
-    if end > self.len { crash("List slice end out of bounds: {end}") };
+  fn slice[T](self: list[T], start: size, end: size): buffer[T] {
+    if self.len == 0 return(buffer/empty[T]());
+    if end > self.len { crash("list slice end out of bounds: {end}") };
     self.buffer.slice(start, end)
   }
 
-  fn isEmpty[T](self: List[T]): bool {
+  fn isEmpty[T](self: list[T]): bool {
     self.len == 0
   }
 
-  fn nonEmpty[T](self: List[T]): bool {
+  fn nonEmpty[T](self: list[T]): bool {
     self.len > 0
   }
 
-  fn firstRef[T](self: *mut List[T]): ?(*mut T) {
+  fn firstRef[T](self: *mut list[T]): ?(*mut T) {
     if self.nonEmpty() {
-      .Some(self.getRef(0))
+      .some(self.getRef(0))
     } else {
-      .None
+      .none
     }
   }
 
-  fn first[T](self: List[T]): ?T {
-    if self.nonEmpty() .Some(self.get(0)) 
-    else .None
+  fn first[T](self: list[T]): ?T {
+    if self.nonEmpty() .some(self.get(0)) 
+    else .none
   }
 
-  fn lastRef[T](self: *mut List[T]): ?(*mut T) {
-    if self.nonEmpty() .Some(self.getRef(self.len - 1))
-    else .None
+  fn lastRef[T](self: *mut list[T]): ?(*mut T) {
+    if self.nonEmpty() .some(self.getRef(self.len - 1))
+    else .none
   }
 
-  fn last[T](self: List[T]): ?T {
-    if self.nonEmpty() .Some(self.get(self.len - 1))
-    else .None
+  fn last[T](self: list[T]): ?T {
+    if self.nonEmpty() .some(self.get(self.len - 1))
+    else .none
   }
 
-  fn clear[T](self: *mut List[T]) {
+  fn clear[T](self: *mut list[T]) {
     self.len* <- 0
   }
 
-  fn reverse[T](self: *mut List[T]) {
+  fn reverse[T](self: *mut list[T]) {
     let i = 0;
     while (i < (self.len / 2)) {
       let j = self.len - i - 1;
@@ -184,54 +184,54 @@ ns List {
     }
   }
 
-  fn reversed[T](self: List[T]): List[T] {
+  fn reversed[T](self: list[T]): list[T] {
     let* clone = self.cloned();
     clone.reverse[T]();
     clone.*
   }
 
-  fn appendList[T](self: *mut List[T], other: List[T]) {
+  fn appendList[T](self: *mut list[T], other: list[T]) {
     self.appendBuffer(other.asBuffer())
   }
 
-  fn appendBuffer[T](self: *mut List[T], other: Buffer[T]) {
+  fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
     self.reserve(.Current, self.len + other.len);
     let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
-    Buffer/copyFrom(src = other, dst = dst);
+    buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;
   }
 
-  fn appendView[T](self: *mut List[T], other: View[T]) {
+  fn appendView[T](self: *mut list[T], other: view[T]) {
     self.appendBuffer(other.innerBuffer())
   }
 
-  fn swap[T](self: *mut List[T], indexA: size, indexB: size) {
+  fn swap[T](self: *mut list[T], indexA: size, indexB: size) {
     if indexA == indexB { return() };
     if indexA >= self.len {
-      crash("List index out of bounds: {indexA} >= {self.len}")
+      crash("list index out of bounds: {indexA} >= {self.len}")
     };
     if indexA >= self.len {
-      crash("List index out of bounds: {indexB} >= {self.len}")
+      crash("list index out of bounds: {indexB} >= {self.len}")
     };
     self.buffer*.swap[T](indexA, indexB);
   }
 
-  fn sort[T](input: *mut List[T]) where T: Comparable {
+  fn sort[T](input: *mut list[T]) where T: comparable {
   
     if input.len <= 1 return();
   
     let halfIndex = input.len / 2;
     let pivot = input.get(halfIndex);
   
-    let* left = List/withCapacity[T](halfIndex);
-    let* right = List/withCapacity[T](halfIndex);
-    let* equal = List/withCapacity[T](4);
+    let* left = list/withCapacity[T](halfIndex);
+    let* right = list/withCapacity[T](halfIndex);
+    let* equal = list/withCapacity[T](4);
   
     for item in input.* {
       switch item.compare(pivot) {
-        .Less -> left.push(item),
-        .Equal -> equal.push(item),
-        .Greater -> right.push(item)
+        .less -> left.push(item),
+        .equal -> equal.push(item),
+        .greater -> right.push(item)
       }
     };
   
@@ -255,30 +255,30 @@ ns List {
     };
   }
 
-  fn sorted[T](self: List[T]): List[T] where T: Comparable {
+  fn sorted[T](self: list[T]): list[T] where T: comparable {
     let* copy = self.cloned();
     copy.sort();
     copy.*
   }
 
   // TODO(stdlib) remove or tweak this; assumes global allocation
-  fn join[T: Show](self: List[T], sep: string): string {
+  fn join[T: show](self: list[T], sep: string): string {
     let* b = StringBuilder/new();
     for s in self {
-      b.writeString(s.show());
+      b.write-string(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
-        b.writeString(sep);
+        b.write-string(sep);
       }
     };
     b.build()
   }
 
-  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some \T -> U): List[U]
-  where Iter: Iterator[Item = T], Iterable: Iterable[Item = T, I = Iter]
+  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some \T -> U): list[U]
+  where Iter: iterator[item = T], Iterable: iterable[item = T, i = Iter]
   {
     let* iter = input.iterator();
-    let* us = List/withCapacity[U](iter.sizeHint().atLeast);
+    let* us = list/withCapacity[U](iter.size-hint().at-least);
     for iter.* {
       let u = f(it);
       us.push(u)
@@ -286,74 +286,74 @@ ns List {
     us.*
   }
 
-  fn map[T, U](self: List[T], f: some \T -> U): List[U] {
-    let* us = List/withCapacity[U](self.len);
+  fn map[T, U](self: list[T], f: some \T -> U): list[U] {
+    let* us = list/withCapacity[U](self.len);
     for i in self { us.push[U](f(i)) };
     us.*
   }
   
-  fn flatMap[T, U](self: List[T], f: some \T -> List[U]): List[U] {
-    let* us = List/empty[U]();
+  fn flatMap[T, U](self: list[T], f: some \T -> list[U]): list[U] {
+    let* us = list/empty[U]();
     for i in self { us.appendList[U](f(i)) };
     us.*
   }
   
-  fn filter[T](self: List[T], f: some \T -> bool): List[T] {
-    let* keep = List/empty[T]();
+  fn filter[T](self: list[T], f: some \T -> bool): list[T] {
+    let* keep = list/empty[T]();
     for i in self { if f(i) keep.push(i) };
     keep
   }
 
 }
 
-impl Writer for *mut List[char] {
-  fn writeByte(self: Self, value: u8) { self.push(value.as[char]) }
-  fn writeBytes(self: Self, bytes: View[byte]) { self.appendView(bytes.toCharView()) }
+impl writer for *mut list[char] {
+  fn write-byte(self: self, value: u8) { self.push(value.as[char]) }
+  fn write-bytes(self: self, bytes: view[byte]) { self.appendView(bytes.toCharView()) }
 }
 
-impl Writer for *mut List[u8] {
-  fn writeByte(self: Self, value: u8) { self.push(value) }
-  fn writeBytes(self: Self, bytes: View[byte]) {
+impl writer for *mut list[u8] {
+  fn write-byte(self: self, value: u8) { self.push(value) }
+  fn write-bytes(self: self, bytes: view[byte]) {
     self.appendView(bytes)
   }
 }
 
-impl Equals for List[u8] {
-  fn equals(self: List[u8], other: List[u8]): bool { self.asBuffer() == other.asBuffer() }
+impl equals for list[u8] {
+  fn equals(self: list[u8], other: list[u8]): bool { self.asBuffer() == other.asBuffer() }
 }
 
-impl Equals for List[int] {
-  fn equals(self: List[int], other: List[int]): bool { self.asBuffer() == other.asBuffer() }
+impl equals for list[int] {
+  fn equals(self: list[int], other: list[int]): bool { self.asBuffer() == other.asBuffer() }
 }
 
-impl[T: Equals] Equals for List[T] {
-  fn equals(self: List[T], other: List[T]): bool {
+impl[T: equals] equals for list[T] {
+  fn equals(self: list[T], other: list[T]): bool {
     self.asBuffer() == other.asBuffer()
   }
 }
 
-impl[T: Print] Print for List[T] {
-  fn printTo[W: Writer](self: List[T], w: W) {
-    w.writeChar('[');
+impl[T: print] print for list[T] {
+  fn printTo[w: writer](self: list[T], w: w) {
+    w.write-char('[');
     for self {
       it.printTo(w);
       let last = itIndex == self.len - 1;
       if not last {
-        w.writeString(",");
+        w.write-string(",");
       };
     };
-    w.writeChar(']');
+    w.write-char(']');
   }
 }
 
-impl[T] Iterable[Item = T, I = BufferIterator[T]] for List[T] {
-  fn iterator(self: Self): I {
+impl[T] iterable[item = T, i = BufferIterator[T]] for list[T] {
+  fn iterator(self: self): i {
     self.asBuffer().iterator()
   }
 }
 
-impl[T] Iterable[Item = T, I = BufferIterator[T]] for *List[T] {
-  fn iterator(self: Self): I {
+impl[T] iterable[item = T, i = BufferIterator[T]] for *list[T] {
+  fn iterator(self: self): i {
     self.*.iterator()
   }
 }

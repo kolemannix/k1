@@ -36,6 +36,7 @@ Non-major Ideas
 
 Syntax/elegance
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [ ] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
 - [x] Replace the builtin for ... yield with a userspace function taking a lambda
 - [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept
@@ -58,7 +59,7 @@ Simple but missing
 - [ ] Bindings generator; `rust-bindgen` equivalent
 
 # Bugs
-- [ ] Defect: RecursiveReference approach to recursive types seems bad
+- [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
@@ -119,7 +120,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Zero-Sized Types
 - [x] Treat Unit and empty Struct as ZSTs
 - [x] Compile ZSTs to missing arguments, and LLVM void returns, and no-ops inside other types
-- [ ] Treat statics as ZSTs
+- [x] Treat statics as ZSTs
 - [ ] Think about `never` in either variants: Is it a ZST? Does it make the variant unreachable? Result[T, never]
 
 ## Project: system interface, 'Write' ability and intrinsic fix.

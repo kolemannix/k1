@@ -923,14 +923,14 @@ impl TypedProgram {
             return TypeUnificationResult::Matching;
         }
 
-        let passed_type = match self.types.get_no_follow(passed_type) {
+        let passed_type = match self.types.get(passed_type) {
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 tp.static_constraint.unwrap()
             }
             _ => passed_type,
         };
 
-        let slot_type = match self.types.get_no_follow(slot_type) {
+        let slot_type = match self.types.get(slot_type) {
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 tp.static_constraint.unwrap()
             }

@@ -2,10 +2,10 @@ ns inference;
 
 fn combine[T](a: T, _b: T): T { a }
 fn combine3[T](a: T, b: T, c: { one: T, two: T }): T { a }
-fn getOrElse[T](a: Opt[T], b: T): T { if a is .Some(a) a else b }
-fn some[U](value: U): Opt[U] { Opt.Some[U](value) }
+fn getOrElse[T](a: opt[T], b: T): T { if a is .some(a) a else b }
+fn some[U](value: U): opt[U] { opt.some[U](value) }
 
-fn get[UU](value: Opt[UU]): UU { if value is .Some(u) u else core/sys/exit(1) }
+fn get[UU](value: opt[UU]): UU { if value is .some(u) u else core/sys/exit(1) }
 fn identity[T](value: T): T { value }
 
 fn identityNested[T](t: T): T {
@@ -14,7 +14,7 @@ fn identityNested[T](t: T): T {
 
 fn occursCheckTest[T](x: T): T {
   assert(
-    testCompile( combine(x, some(x)) ) is .Some(_)
+    testCompile( combine(x, some(x)) ) is .some(_)
   );
   x
 }
@@ -26,7 +26,7 @@ fn test() {
   let x = identity(12);
   assert(x == 12);
 
-  identity(identity([])): List[bool];
+  identity(identity([])): list[bool];
 
   assert(identityNested(4) == 4);
   assert(identityNested(true));
@@ -46,15 +46,15 @@ fn test() {
 
   occursCheckTest(42);
 
-  combine(Opt.Some(4), some(23));
-  combine(Opt.Some(4), some(23)): Opt[u32];
+  combine(opt.some(4), some(23));
+  combine(opt.some(4), some(23)): opt[u32];
 
-  let* x = Opt.Some(42);
+  let* x = opt.some(42);
 
   let withNever = testCompile(
     combine3(x.*, core/sys/exit(1), { one: some(-1), two: some(3), })
   );
-  assertEquals(withNever, .None);
+  assertEquals(withNever, .none);
 
   {}
 }

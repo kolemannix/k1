@@ -574,7 +574,7 @@ impl Scopes {
     pub fn add_use_binding(
         &mut self,
         scope_id: ScopeId,
-        useable_symbol: UseableSymbol,
+        useable_symbol: &UseableSymbol,
         name_to_use: Ident,
     ) {
         match useable_symbol.id {

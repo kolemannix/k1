@@ -4,14 +4,14 @@ let g: {} = {};
 let* g2: *{} = {};
 
 fn testGlobal(): empty {
-  assertEquals(0, types/sizeOf[typeOf(g)]);
+  assertEquals(0, types/size-of[typeOf(g)]);
   g2;
   assertEquals(g, g2.*);
 }
 
 fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
-  let l = {}; 
-  assertEquals(types/sizeOf[typeOf(l)], 0);
+  let l = {};
+  assertEquals(types/size-of[typeOf(l)], 0);
   l
 }
 
@@ -26,9 +26,9 @@ fn test() {
 
 fn staticZst() {
   let point = #static { x: 1, y: (#static 2): int };
-  assertEquals(point.x.fromStatic(), 1);
+  assertEquals(point.x.from-static(), 1);
 }
 
 //fn staticGetX[P: static { x: int, y: int }](p: P): int {
-//  p.x.fromStatic()
+//  p.x.from-static()
 //}

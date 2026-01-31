@@ -358,7 +358,7 @@ fn unclosed_ability_impl() -> ParseResult<()> {
     let input = r#"impl Equals for List[int] {
   fn equals(self: List[int], other: List[int]): bool { self.buffer == other.buffer }
 
-impl Print for bool {
+impl print for bool {
   fn print(self: bool): string { if self "true" else "false" }
 }
   "#;

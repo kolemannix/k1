@@ -1,4 +1,4 @@
-deftype SpillList[T, N: static size] = either Inline(FixList[T, N]), Spilled(List[T])
+deftype SpillList[T, N: static size] = either Inline(FixList[T, N]), Spilled(list[T])
 ns SpillList {
 
   fn new[T, N: static int](): SpillList[T, N] {
@@ -20,18 +20,18 @@ ns SpillList {
     }
   }
 
-  fn asView[T, N: static size](self: *SpillList[T, N]): View[T] {
+  fn asView[T, N: static size](self: *SpillList[T, N]): view[T] {
     switch self {
       .Spilled(list)* -> list.asView(),
       .Inline(fixlist)* -> fixlist.asView()
     }
   }
 
-  fn _spill[T, N: static size](fixlist: *mut FixList[T, N]): List[T] {
-    let* list = List/withCapacityIn[T](context .Current)(fixlist.cap() * 2);
+  fn _spill[T, N: static size](fixlist: *mut FixList[T, N]): list[T] {
+    let* list = list/withCapacityIn[T](context .Current)(fixlist.cap() * 2);
 
-    let srcBuffer = fixlist.asBuffer();
-    list.appendBuffer(srcBuffer);
+    let srcbuffer = fixlist.asBuffer();
+    list.appendBuffer(srcbuffer);
     // eprintln("Spilled to a list of cap {list.cap()}");
 
     list.*
@@ -41,7 +41,7 @@ ns SpillList {
     switch self {
       .Spilled(list)* -> { list.push(t) },
       .Inline(fixlist)* -> {
-        if fixlist.tryPush(t) is .Ok(_) {}
+        if fixlist.tryPush(t) is .ok(_) {}
         else {
           let* list = _spill(fixlist);
   
@@ -53,11 +53,11 @@ ns SpillList {
     }
   }
 
-  fn pushN[T, N: static size](self: *mut SpillList[T, N], ts: View[T]) {
+  fn pushN[T, N: static size](self: *mut SpillList[T, N], ts: view[T]) {
     switch self {
       .Spilled(list)* -> { list.appendView(ts) },
       .Inline(fixlist)* -> {
-        if fixlist.tryPushN(ts) is .Ok(_) {}
+        if fixlist.tryPushN(ts) is .ok(_) {}
         else {
           // Correctness: The only error case is the out of capacity one
           let* list = _spill(fixlist);
@@ -76,25 +76,25 @@ ns SpillList {
 
 }
 
-impl[T, N: static size] Print for SpillList[T, N] {
-  fn printTo[W: Writer](self: Self, w: W) {
+impl[T, N: static size] print for SpillList[T, N] {
+  fn printTo[w: writer](self: self, w: w) {
      switch self {
        .Inline(fix) -> {
-         w.writeString("inline ");
+         w.write-string("inline ");
        },
        .Spilled(list) -> {
-         w.writeString("spilled ");
+         w.write-string("spilled ");
        }
      };
      self.len().printTo(w);
   }
 }
 
-impl[N: static size] Writer for *mut SpillList[u8, N] {
-  fn writeByte(self: Self, b: u8) {
+impl[N: static size] writer for *mut SpillList[u8, N] {
+  fn write-byte(self: self, b: u8) {
     self.push(b)
   }
-  fn writeBytes(self: Self, b: View[u8]) {
+  fn write-bytes(self: self, b: view[u8]) {
     self.pushN(b)
   }
 }

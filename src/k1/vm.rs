@@ -2392,8 +2392,7 @@ pub fn vm_value_to_static_value(
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)
         | Type::InferenceHole(_)
-        | Type::Unresolved(_)
-        | Type::RecursiveReference(_) => unreachable!(),
+        | Type::Unresolved(_) => unreachable!(),
     };
     Ok(static_value_id)
 }

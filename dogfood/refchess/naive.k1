@@ -1,4 +1,4 @@
-// The intuitive representation, a List[SquareState]
+// The intuitive representation, a list[SquareState]
 deftype SquareState = either
   Blank, 
   WPawn, WKnight, WBishop, WRook, WQueen, WKing,
@@ -47,7 +47,7 @@ ns Square {
   }
 }
 
-impl Show for Square {
+impl show for Square {
   fn show(self: Square): string {
     let file = switch self.file {
       0 -> 'a',
@@ -66,7 +66,7 @@ impl Show for Square {
 }
 
 
-fn dump(board: List[SquareState]) {
+fn dump(board: list[SquareState]) {
   for square in board {
     let symbol = square.charSymbol();
     if itIndex % 8 == 7 {
@@ -77,8 +77,8 @@ fn dump(board: List[SquareState]) {
   }
 }
 
-fn startPos(): List[SquareState] {
-  let* board = List/filled[SquareState](64, .Blank);
+fn startPos(): list[SquareState] {
+  let* board = list/filled[SquareState](64, .Blank);
   board.set(0, .WRook);
   board.set(1, .WKnight);
   board.set(2, .WBishop);

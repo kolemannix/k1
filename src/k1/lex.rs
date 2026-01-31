@@ -184,7 +184,6 @@ pub enum TokenKind {
     KeywordFor,
     KeywordIn,
     KeywordDo,
-    KeywordEither,
     KeywordAbility,
     KeywordImpl,
     KeywordAuto,
@@ -286,7 +285,6 @@ impl TokenKind {
             K::KeywordFor => "for",
             K::KeywordIn => "in",
             K::KeywordDo => "do",
-            K::KeywordEither => "either",
             K::KeywordAbility => "ability",
             K::KeywordImpl => "impl",
             K::KeywordAuto => "auto",
@@ -430,7 +428,6 @@ impl TokenKind {
             "for" => Some(K::KeywordFor),
             "in" => Some(K::KeywordIn),
             "do" => Some(K::KeywordDo),
-            "either" => Some(K::KeywordEither),
             "ability" => Some(K::KeywordAbility),
             "impl" => Some(K::KeywordImpl),
             "auto" => Some(K::KeywordAuto),
@@ -467,7 +464,6 @@ impl TokenKind {
             K::KeywordFor => true,
             K::KeywordIn => true,
             K::KeywordDo => true,
-            K::KeywordEither => true,
             K::KeywordAbility => true,
             K::KeywordImpl => true,
             K::KeywordAuto => true,
@@ -861,9 +857,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     // 100.42 -> Ident(100.42)
                     // 100.toInt() -> Ident(100), Dot, Ident(toInt)
                     // knows to accept dot for numbers
-                    if is_number && single_char_tok == K::Dot {
+                    if single_char_tok == K::Minus {
+                        // Fall through; let the ident code handle this
+                    } else if is_number && single_char_tok == K::Dot {
                         if next.is_numeric() {
-                            // Fall through, continue the floating point number including a dot
+                            // Fall through, let the ident code handle this, which will
+                            // continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
                             tokens.push(make_keyword_or_ident(self, tok_buf, n));
@@ -965,14 +964,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     is_number = true;
                 }
                 tok_buf.push(c);
-            } else if !tok_buf.is_empty() && is_ident_char(c) || c == '.' {
+            } else if !tok_buf.is_empty() && (is_ident_char(c) || c == '.') {
                 if c == '.' && !is_number {
                     panic!("lexer got dot outside of is_number state")
                 }
 
                 // case: Continue an ident
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
-                    return Err(errf!(self, n, "Identifiers cannot begin with __"));
+                    return Err(errf!(self, n, "the __ prefix is reserved for internals"));
                 }
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop
@@ -1013,7 +1012,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 }
 
 pub fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
 fn is_ident_or_num_start(c: char) -> bool {

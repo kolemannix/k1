@@ -1,71 +1,71 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-ns Opt {
-  fn isSome[T](self: ?T): bool { self is .Some(_) }
-  fn isNone[T](self: ?T): bool { self is .None }
+ns opt {
+  fn isSome[T](self: ?T): bool { self is .some(_) }
+  fn isNone[T](self: ?T): bool { self is .none }
 
-  fn get[T](context locn: compiler/SourceLocation)(self: ?T): T {
-    if self is .Some(t) t else {
-      crash("Opt.get on None")
+  fn get[T](context locn: compiler/source-location)(self: ?T): T {
+    if self is .some(t) t else {
+      crash("opt.get on None")
     }
   }
 
-  fn contains[T: Equals](self: ?T, t: T): bool {
+  fn contains[T: equals](self: ?T, t: T): bool {
     switch self {
-      .None -> false,
-      .Some(v) -> v == t
+      .none -> false,
+      .some(v) -> v == t
     }
   }
 
   // I'm leaving this separate function here 
   // because at one point it exercised a really weird compiler bug
-  fn opt_equals[T](a: Opt[T], b: Opt[T]): bool where T: Equals {
-    if a is .Some(at) {
-      if b is .Some(bt) at == bt else false
+  fn equals[T](a: opt[T], b: opt[T]): bool where T: equals {
+    if a is .some(at) {
+      if b is .some(bt) at == bt else false
     } else {
-      b is .None
+      b is .none
     }
   }
 
-  fn map[T, U](self: Opt[T], f: some \T -> U): Opt[U] {
+  fn map[T, U](self: opt[T], f: some \T -> U): opt[U] {
     switch self {
-      .None -> .None,
-      .Some(t) -> .Some(f(t))
+      .none -> .none,
+      .some(t) -> .some(f(t))
     }
   }
 
 }
 
-// Convenience constructors in the global scope for Opt instances
-fn none[T](): Opt[T] { Opt.None[T] }
-fn some[T](value: T): Opt[T] { Opt.Some[T](value) }
+// Convenience constructors in the global scope for opt instances
+fn none[T](): opt[T] { opt.none[T] }
+fn some[T](value: T): opt[T] { opt.some[T](value) }
 
 
-impl[T: Equals] Equals for Opt[T] {
-  fn equals(self: Opt[T], other: Opt[T]): bool {
+impl[T: equals] equals for opt[T] {
+  fn equals(self: opt[T], other: opt[T]): bool {
     // I'm leaving this separate function call here 
     // because at one point it exercised a really weird compiler bug
-    Opt/opt_equals(self, other)
+    opt/equals(self, other)
   }
 }
 
-impl[A] Try[T = A, E = empty] for Opt[A] {
-  fn error(_e: empty): Opt[T] { .None }
-  fn value(t: T): Opt[T] { Opt.Some(t) }
+impl[A] try[t = A, e = empty] for opt[A] {
+  fn error(_e: empty): opt[t] { .none }
+  fn value(t: t): opt[t] { opt.some(t) }
 
-  fn isOk(self: Opt[T]): bool { self is .Some(_) }
-  fn getError(self: Opt[T]): empty {
+  fn is-ok(self: opt[t]): bool { self is .some(_) }
+  fn get-error(self: opt[t]): empty {
     switch self {
-      .None -> {},
-      .Some(_) -> crash("getError on Opt.Some")
+      .none -> {},
+      .some(_) -> crash("getError on opt.some")
     }
   }
-  fn getValue(self: Opt[T]): T { self.get() }
+  fn get-value(self: opt[t]): t { self.get() }
 }
 
-impl[T: Print] Print for Opt[T] {
-  fn printTo[W: Writer](self: Opt[T], w: W) {
-    if self is .Some(v) w.writeString("Some({v})") else w.writeString("None")
+impl[t: print] print for opt[t] {
+  fn printTo[w: writer](self: opt[t], w: w) {
+    if self is .some(v) w.write-string("Some({v})") else w.write-string("None")
   }
 }

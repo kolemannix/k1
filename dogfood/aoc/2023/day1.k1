@@ -2,10 +2,10 @@ fn day2(): int {
   let input: string = Files/readToString("/Users/knix/dev/k1/dogfood/aoc/2023/1.txt");
   let lines = input.splitByChar('\n');
   let lineDigits = for line in lines yield {
-    let* digits: List[i64]* = [];
+    let* digits: list[i64]* = [];
     for c in line {
-      let thisDigit: ?i64 = if c.toAsciiDigit() is .Some(d) {
-        .Some(d.as[i64])
+      let thisDigit: ?i64 = if c.toAsciiDigit() is .some(d) {
+        .some(d.as[i64])
       } else {
         let rest = line.substring(itIndex, line.len);
         if rest.startsWith("one")   1    else 
@@ -18,9 +18,9 @@ fn day2(): int {
         if rest.startsWith("eight") 8    else 
         if rest.startsWith("nine")  9    else 
         if rest.startsWith("zero")  0    else 
-        .None
+        .none
       };
-      if thisDigit is .Some(d) {
+      if thisDigit is .some(d) {
         digits.push(d);
       }
     };
@@ -28,8 +28,8 @@ fn day2(): int {
   };
   let sum = 0;
   for lineDigits {
-    if it.first() is .Some(fst) {
-      if it.last() is .Some(lst) {
+    if it.first() is .some(fst) {
+      if it.last() is .some(lst) {
         let two_digit = fst * 10 + lst;
         sum := sum + two_digit;
       };
@@ -44,7 +44,7 @@ fn main(): i32 {
   print("The file was ");
   printUInt(input.len);
   println(" characters long");
-  let* digits: List[List[int]]* = [];
+  let* digits: list[list[int]]* = [];
   let line: u64 = 0;
   let first = true;
   for c in input {
@@ -52,7 +52,7 @@ fn main(): i32 {
       line := line + 1;
       first := true;
     };
-    if c.toAsciiDigit() is .Some(i) {
+    if c.toAsciiDigit() is .some(i) {
       if first {
         digits.push([i.as[int]]);
         first := false;
@@ -63,8 +63,8 @@ fn main(): i32 {
   };
   let sum = 0;
   for *digits {
-    if it.first() is .Some(fst) {
-      if it.last() is .Some(lst) {
+    if it.first() is .some(fst) {
+      if it.last() is .some(lst) {
         let two_digit = fst * 10 + lst;
         sum := sum + two_digit;
       };

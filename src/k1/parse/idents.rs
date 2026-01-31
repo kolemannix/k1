@@ -62,52 +62,38 @@ impl QIdent {
 }
 
 #[allow(non_snake_case)]
-pub struct BuiltinIdents {
+pub(crate) struct BuiltinIdents {
     pub main: Ident,
     pub next: Ident,
     pub _self: Ident,
     pub self_: Ident,
-    pub Self_: Ident,
     pub it: Ident,
-    pub unit: Ident,
-    pub char: Ident,
     pub string: Ident,
-    pub length: Ident,
     pub len: Ident,
-    pub hasValue: Ident,
     pub get: Ident,
-    pub getRef: Ident,
-    pub not: Ident,
+    pub get_ref: Ident,
     pub iter: Ident,
-    pub iteree: Ident,
     pub itIndex: Ident,
     pub as_: Ident,
-    pub List: Ident,
+    pub list: Ident,
     pub withCapacity: Ident,
     pub dest: Ident,
-    pub yieldDest: Ident,
-    pub iteree_length: Ident,
     pub block_expr_val: Ident,
     pub optelse_lhs: Ident,
-    pub list_literal: Ident,
-    pub source_location_typename: Ident,
     pub lambda_env_var_name: Ident,
     pub env: Ident,
     pub fn_ptr: Ident,
     pub env_ptr: Ident,
-    pub amp: Ident,
     pub asterisk: Ident,
     pub bang: Ident,
-    pub sb: Ident,
     pub payload: Ident,
     pub try_: Ident,
     pub try_value: Ident,
     pub if_target: Ident,
-    pub crash: Ident,
     pub toRef: Ident,
     pub toDyn: Ident,
-    pub toStatic: Ident,
-    pub fromStatic: Ident,
+    pub to_static: Ident,
+    pub from_static: Ident,
     pub filename: Ident,
     pub line: Ident,
     pub equals: Ident,
@@ -119,39 +105,30 @@ pub struct BuiltinIdents {
     pub std: Ident,
     pub k1: Ident,
     pub types: Ident,
-    pub TypeSchema: Ident,
-    pub IntKind: Ident,
-    pub IntValue: Ident,
-    pub Layout: Ident,
-    pub Array: Ident,
-    pub toMut: Ident,
-    pub unMut: Ident,
-    pub data: Ident,
-    pub meta: Ident,
+    pub type_schema: Ident,
+    pub int_kind: Ident,
+    pub int_value: Ident,
+    pub layout: Ident,
+    pub array: Ident,
+    pub to_mut: Ident,
+    pub un_mut: Ident,
     pub pre: Ident,
-    pub Iterator: Ident,
-    pub Iterable: Ident,
-    pub Opt: Ident,
-    pub Try: Ident,
-    pub Buffer: Ident,
+    pub iterator: Ident,
+    pub iterable: Ident,
+    pub opt: Ident,
+    pub buffer: Ident,
     pub set: Ident,
     pub mem: Ident,
     pub sys: Ident,
     pub libc: Ident,
-    pub memset: Ident,
-    pub View: Ident,
+    pub view: Ident,
     pub Equals: Ident,
-    pub Add: Ident,
     pub add: Ident,
-    pub Sub: Ident,
     pub sub: Ident,
-    pub Mul: Ident,
     pub mul: Ident,
-    pub Div: Ident,
     pub div: Ident,
-    pub Rem: Ident,
     pub rem: Ident,
-    ScalarCmp: Ident,
+    scalar_cmp: Ident,
     lt: Ident,
     le: Ident,
     gt: Ident,
@@ -166,17 +143,15 @@ pub struct BuiltinIdents {
     pub param_6: Ident,
     pub param_7: Ident,
     pub param_8: Ident,
-    pub Some: Ident,
-    pub None: Ident,
     pub StringBuilder: Ident,
-    pub Bitwise: Ident,
+    pub bitwise: Ident,
     pub arena: Ident,
-    pub T: Ident,
+    pub t: Ident,
     pub phony: Ident,
 }
 
 #[allow(non_snake_case)]
-pub struct BuiltinFunctions {
+pub(crate) struct BuiltinFunctions {
     pub List_withCapacity: QIdent,
     pub List_push: QIdent,
     pub Iterator_next: QIdent,
@@ -191,13 +166,13 @@ pub struct BuiltinFunctions {
     pub bool_and: QIdent,
     pub bool_or: QIdent,
     pub core_crash: QIdent,
-    pub core_crashBounds: QIdent,
+    pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
     pub core_phony: QIdent,
     pub core_Print_printTo: QIdent,
     pub core_string_wrapList: QIdent,
-    pub Buffer__allocate: QIdent,
-    pub Buffer_set: QIdent,
+    pub buffer__allocate: QIdent,
+    pub buffer_set: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
     pub View_wrapBuffer: QIdent,
@@ -212,7 +187,6 @@ pub struct BuiltinFunctions {
     pub ScalarCmp_gt: QIdent,
     pub ScalarCmp_ge: QIdent,
     pub StringBuilder_new: QIdent,
-    pub StringBuilder_build: QIdent,
     pub StringBuilder_buildTmp: QIdent,
     pub Bitwise_and: QIdent,
     pub Bitwise_or: QIdent,
@@ -227,9 +201,9 @@ pub struct IdentPool {
     intern_pool: string_interner::StringInterner<StringBackend, fxhash::FxBuildHasher>,
     pub slices: VPool<Ident, IdentSliceId>,
     /// b for builtins
-    pub b: BuiltinIdents,
+    pub(crate) b: BuiltinIdents,
     /// f for functions
-    pub f: BuiltinFunctions,
+    pub(crate) f: BuiltinFunctions,
 }
 impl IdentPool {
     pub fn intern(&mut self, s: impl AsRef<str>) -> Ident {
@@ -265,47 +239,33 @@ impl IdentPool {
             main: intern!("main"),
             _self: intern!("_self"),
             self_: intern!("self"),
-            Self_: intern!("Self"),
             it: intern!("it"),
-            unit: intern!("unit"),
-            char: intern!("char"),
             string: intern!("string"),
-            length: intern!("length"),
             len: intern!("len"),
-            hasValue: intern!("hasValue"),
             get: intern!("get"),
-            getRef: intern!("getRef"),
-            not: intern!("not"),
+            get_ref: intern!("get-ref"),
             iter: intern!("iter"),
-            iteree: intern!("iteree"),
             itIndex: intern!("itIndex"),
             as_: intern!("as"),
-            List: intern!("List"),
+            list: intern!("list"),
             withCapacity: intern!("withCapacity"),
             dest: intern!("dest"),
-            yieldDest: intern!("yieldDest"),
-            iteree_length: intern!("iteree_length"),
-            block_expr_val: intern!("block_expr_val"),
+            block_expr_val: intern!("block-expr-val"),
             optelse_lhs: intern!("optelse_lhs"),
-            list_literal: intern!("list_literal"),
-            source_location_typename: intern!("SourceLocation"),
             lambda_env_var_name: intern!("__lambda_env"),
             env: intern!("env"),
             fn_ptr: intern!("fn_ptr"),
             env_ptr: intern!("env_ptr"),
-            amp: intern!("&"),
             asterisk: intern!("*"),
             bang: intern!("!"),
-            sb: intern!("sb"),
             payload: intern!("payload"),
             try_: intern!("try"),
             try_value: intern!("try_value"),
             if_target: intern!("if_target"),
-            crash: intern!("crash"),
             toRef: intern!("toRef"),
             toDyn: intern!("toDyn"),
-            toStatic: intern!("toStatic"),
-            fromStatic: intern!("fromStatic"),
+            to_static: intern!("to-static"),
+            from_static: intern!("from-static"),
             filename: intern!("filename"),
             line: intern!("line"),
             equals: intern!("equals"),
@@ -317,43 +277,34 @@ impl IdentPool {
             std: intern!("std"),
             k1: intern!("k1"),
             types: intern!("types"),
-            TypeSchema: intern!("TypeSchema"),
-            IntKind: intern!("IntKind"),
-            IntValue: intern!("IntValue"),
-            Layout: intern!("Layout"),
-            Array: intern!("Array"),
-            toMut: intern!("toMut"),
-            unMut: intern!("unMut"),
-            data: intern!("data"),
-            meta: intern!("meta"),
+            type_schema: intern!("type-schema"),
+            int_kind: intern!("int-kind"),
+            int_value: intern!("int-value"),
+            layout: intern!("layout"),
+            array: intern!("array"),
+            to_mut: intern!("to-mut"),
+            un_mut: intern!("un-mut"),
             pre: intern!("pre"),
-            Opt: intern!("Opt"),
-            Try: intern!("Try"),
-            Buffer: intern!("Buffer"),
+            opt: intern!("opt"),
+            buffer: intern!("buffer"),
             set: intern!("set"),
             mem: intern!("mem"),
             sys: intern!("sys"),
             libc: intern!("libc"),
-            memset: intern!("memset"),
-            View: intern!("View"),
-            Equals: intern!("Equals"),
-            Add: intern!("Add"),
+            view: intern!("view"),
+            Equals: intern!("equals"),
             add: intern!("add"),
-            Sub: intern!("Sub"),
             sub: intern!("sub"),
-            Mul: intern!("Mul"),
             mul: intern!("mul"),
-            Div: intern!("Div"),
             div: intern!("div"),
-            Rem: intern!("Rem"),
             rem: intern!("rem"),
-            ScalarCmp: intern!("ScalarCmp"),
+            scalar_cmp: intern!("scalar-cmp"),
             lt: intern!("lt"),
             le: intern!("le"),
             gt: intern!("gt"),
             ge: intern!("ge"),
-            Iterator: intern!("Iterator"),
-            Iterable: intern!("Iterable"),
+            iterator: intern!("iterator"),
+            iterable: intern!("iterable"),
             next: intern!("next"),
             param_0: intern!("param_0"),
             param_1: intern!("param_1"),
@@ -364,12 +315,10 @@ impl IdentPool {
             param_6: intern!("param_6"),
             param_7: intern!("param_7"),
             param_8: intern!("param_8"),
-            Some: intern!("Some"),
-            None: intern!("None"),
             StringBuilder: intern!("StringBuilder"),
-            Bitwise: intern!("Bitwise"),
+            bitwise: intern!("bitwise"),
             arena: intern!("arena"),
-            T: intern!("T"),
+            t: intern!("t"),
             phony: intern!("phony"),
         };
 
@@ -379,71 +328,70 @@ impl IdentPool {
             };
         }
 
-        let List_withCapacity = make_fn!(&[b.core, b.List], b.withCapacity);
-        let List_push = make_fn!(&[b.core, b.List], intern!("push"));
-        let Iterator_next = make_fn!(&[b.Iterator], b.next);
-        let Iterator_sizeHint = make_fn!(&[b.Iterator], intern!("sizeHint"));
+        let List_withCapacity = make_fn!(&[b.core, b.list], b.withCapacity);
+        let List_push = make_fn!(&[b.core, b.list], intern!("push"));
+        let Iterator_next = make_fn!(&[b.iterator], b.next);
+        let iterator_size_hint = make_fn!(&[b.iterator], intern!("sizeHint"));
 
-        let Iterable_iterator = make_fn!(&[b.Iterable], intern!("iterator"));
+        let Iterable_iterator = make_fn!(&[b.iterable], intern!("iterator"));
 
-        let Opt_isSome = make_fn!(&[b.Opt], intern!("isSome"));
-        let Opt_get = make_fn!(&[b.Opt], b.get);
+        let Opt_isSome = make_fn!(&[b.opt], intern!("isSome"));
+        let Opt_get = make_fn!(&[b.opt], b.get);
 
         let bool_negated = make_fn!(&[intern!("bool")], intern!("negated"));
         let bool_and = make_fn!(&[intern!("bool")], intern!("_and"));
         let bool_or = make_fn!(&[intern!("bool")], intern!("_or"));
 
         let core_crash = make_fn!(&[b.core], intern!("crash"));
-        let core_crashBounds = make_fn!(&[b.core], intern!("crashBounds"));
+        let core_crashBounds = make_fn!(&[b.core], intern!("crash-bounds"));
         let core_discard = make_fn!(&[b.core], intern!("discard"));
         let core_phony = make_fn!(&[b.core], intern!("phony"));
 
-        let core_Print_printTo = make_fn!(&[b.core, intern!("Print")], intern!("printTo"));
+        let core_Print_printTo = make_fn!(&[b.core, intern!("print")], intern!("printTo"));
 
         let core_string_wrapList = make_fn!(&[b.core, intern!("string")], intern!("wrapList"));
 
-        let Try_isOk: QIdent = make_fn!(&[b.Try], intern!("isOk"));
-        let Try_getValue: QIdent = make_fn!(&[b.Try], intern!("getValue"));
-        let Try_getError: QIdent = make_fn!(&[b.Try], intern!("getError"));
+        let Try_isOk: QIdent = make_fn!(&[b.try_], intern!("is-ok"));
+        let Try_getValue: QIdent = make_fn!(&[b.try_], intern!("get-value"));
+        let Try_getError: QIdent = make_fn!(&[b.try_], intern!("get-error"));
 
-        let Buffer__allocate: QIdent = make_fn!(&[b.core, b.Buffer], intern!("_allocate"));
-        let Buffer_set: QIdent = make_fn!(&[b.core, b.Buffer], intern!("set"));
+        let buffer__allocate: QIdent = make_fn!(&[b.core, b.buffer], intern!("_allocate"));
+        let buffer_set: QIdent = make_fn!(&[b.core, b.buffer], intern!("set"));
 
-        let Array_set: QIdent = make_fn!(&[b.Array], intern!("set"));
+        let Array_set: QIdent = make_fn!(&[b.array], intern!("set"));
 
         let mem_zeroed: QIdent = make_fn!(&[b.mem], intern!("zeroed"));
 
-        let View_wrapBuffer: QIdent = make_fn!(&[b.core, b.View], intern!("wrapBuffer"));
+        let View_wrapBuffer: QIdent = make_fn!(&[b.core, b.view], intern!("wrapBuffer"));
 
         let Equals_equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
 
-        let Add_add: QIdent = make_fn!(&[b.Add], b.add);
-        let Sub_sub: QIdent = make_fn!(&[b.Sub], b.sub);
-        let Mul_mul: QIdent = make_fn!(&[b.Mul], b.mul);
-        let Div_div: QIdent = make_fn!(&[b.Div], b.div);
-        let Rem_rem: QIdent = make_fn!(&[b.Rem], b.rem);
+        let Add_add: QIdent = make_fn!(&[b.add], b.add);
+        let Sub_sub: QIdent = make_fn!(&[b.sub], b.sub);
+        let Mul_mul: QIdent = make_fn!(&[b.mul], b.mul);
+        let Div_div: QIdent = make_fn!(&[b.div], b.div);
+        let Rem_rem: QIdent = make_fn!(&[b.rem], b.rem);
 
-        let ScalarCmp_lt: QIdent = make_fn!(&[b.ScalarCmp], b.lt);
-        let ScalarCmp_le: QIdent = make_fn!(&[b.ScalarCmp], b.le);
-        let ScalarCmp_gt: QIdent = make_fn!(&[b.ScalarCmp], b.gt);
-        let ScalarCmp_ge: QIdent = make_fn!(&[b.ScalarCmp], b.ge);
+        let ScalarCmp_lt: QIdent = make_fn!(&[b.scalar_cmp], b.lt);
+        let ScalarCmp_le: QIdent = make_fn!(&[b.scalar_cmp], b.le);
+        let ScalarCmp_gt: QIdent = make_fn!(&[b.scalar_cmp], b.gt);
+        let ScalarCmp_ge: QIdent = make_fn!(&[b.scalar_cmp], b.ge);
 
         let StringBuilder_new: QIdent = make_fn!(&[b.core, b.StringBuilder], intern!("new"));
-        let StringBuilder_build: QIdent = make_fn!(&[b.core, b.StringBuilder], intern!("build"));
         let StringBuilder_buildTmp: QIdent =
             make_fn!(&[b.core, b.StringBuilder], intern!("buildTmp"));
 
-        let Bitwise_and = make_fn!(&[b.core, b.Bitwise], intern!("bitAnd"));
-        let Bitwise_or = make_fn!(&[b.core, b.Bitwise], intern!("bitOr"));
-        let Bitwise_xor = make_fn!(&[b.core, b.Bitwise], intern!("xor"));
-        let Bitwise_shl = make_fn!(&[b.core, b.Bitwise], intern!("shiftLeft"));
-        let Bitwise_shr = make_fn!(&[b.core, b.Bitwise], intern!("shiftRight"));
+        let Bitwise_and = make_fn!(&[b.core, b.bitwise], intern!("bit-and"));
+        let Bitwise_or = make_fn!(&[b.core, b.bitwise], intern!("bit-or"));
+        let Bitwise_xor = make_fn!(&[b.core, b.bitwise], intern!("xor"));
+        let Bitwise_shl = make_fn!(&[b.core, b.bitwise], intern!("shift-left"));
+        let Bitwise_shr = make_fn!(&[b.core, b.bitwise], intern!("shift-right"));
 
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
             Iterator_next,
-            Iterator_sizeHint,
+            Iterator_sizeHint: iterator_size_hint,
             Iterable_iterator,
             Opt_isSome,
             Opt_get,
@@ -454,13 +402,13 @@ impl IdentPool {
             bool_and,
             bool_or,
             core_crash,
-            core_crashBounds,
+            core_crash_bounds: core_crashBounds,
             core_discard,
             core_phony,
             core_Print_printTo,
             core_string_wrapList,
-            Buffer__allocate,
-            Buffer_set,
+            buffer__allocate,
+            buffer_set,
             Array_set,
             mem_zeroed,
             View_wrapBuffer,
@@ -475,7 +423,6 @@ impl IdentPool {
             ScalarCmp_gt,
             ScalarCmp_ge,
             StringBuilder_new,
-            StringBuilder_build,
             StringBuilder_buildTmp,
             Bitwise_and,
             Bitwise_or,

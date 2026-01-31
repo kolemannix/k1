@@ -81,8 +81,18 @@ pub struct ParsedPatternId(u32);
 nz_u32_id!(ParsedUseId);
 
 #[derive(Debug, Clone, Copy)]
+pub enum UseKind {
+    Fn,
+    Global,
+    Type,
+    Ns,
+    Ability,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ParsedUse {
     pub target: QIdent,
+    pub explicit_kind: Option<UseKind>,
     pub alias: Option<Ident>,
     pub span: SpanId,
 }
@@ -1128,8 +1138,8 @@ pub struct SomeQuantifier {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ParsedStaticTypeExpr {
-    pub inner_type_expr: ParsedTypeExprId,
+pub struct ParsedStaticFamilyTypeExpr {
+    pub family_type_expr: ParsedTypeExprId,
     pub span: SpanId,
 }
 
@@ -1146,7 +1156,7 @@ pub enum ParsedTypeExpr {
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
     SomeQuant(SomeQuantifier),
-    Static(ParsedStaticTypeExpr),
+    Static(ParsedStaticFamilyTypeExpr),
     /// Used only by compiler-generated code, currently
     TypeFromId(ParsedTypeFromId),
     StaticLiteral(ParsedLiteral),
@@ -2789,10 +2799,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let opt_id =
                 self.ast.type_exprs.add(ParsedTypeExpr::Optional(ParsedOptional { base, span }));
             Ok(Some(opt_id))
-        } else if first.kind == K::KeywordEither {
-            let enumm = self.expect_enum_type_expression()?;
-            let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Enum(enumm));
-            Ok(Some(type_expr_id))
         } else if first.kind == K::BackSlash {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
@@ -2810,7 +2816,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
-            if ident_chars == "typeOf" {
+            if ident_chars == "either" {
+                let enumm = self.expect_enum_type_expression()?;
+                let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Enum(enumm));
+                Ok(Some(type_expr_id))
+            } else if ident_chars == "typeOf" {
                 self.advance();
                 self.expect_eat_token(K::OpenParen)?;
                 let target_expr = self.expect_expression()?;
@@ -2831,8 +2841,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 let inner_type_expr = self.expect_type_expression()?;
                 let span = self.extend_to_here(first.span);
-                let static_expr =
-                    ParsedTypeExpr::Static(ParsedStaticTypeExpr { inner_type_expr, span });
+                let static_expr = ParsedTypeExpr::Static(ParsedStaticFamilyTypeExpr {
+                    family_type_expr: inner_type_expr,
+                    span,
+                });
                 Ok(Some(self.ast.type_exprs.add(static_expr)))
             } else if ident_chars == "some" {
                 self.advance();
@@ -2848,7 +2860,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 //           I do think we should do a special syntax for slices and arrays and
                 //           lists, just not sure what yet
                 if base_name.path.is_empty() {
-                    if self.ast.idents.get_name(base_name.name) == "Array" {
+                    if self.ast.idents.get_name(base_name.name) == "array" {
                         self.expect_eat_token(K::OpenBracket)?;
 
                         let element_type = self.expect_type_expression()?;
@@ -2913,7 +2925,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
-        let keyword = self.expect_eat_token(K::KeywordEither)?;
+        let (keyword, _) = self.expect_ident()?;
         let explicit_tag_type_expr =
             if self.maybe_consume_next_no_whitespace(K::OpenParen).is_some() {
                 let tag_expr = self.expect_type_expression()?;
@@ -3372,11 +3384,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::Dot => {
                 self.advance();
                 self.expect_eat_token(K::Ident)?;
-                // <dot> <ident> for example .Red
+                // <dot> <ident> for example .red
 
-                if self.token_chars(second).chars().next().unwrap().is_lowercase() {
-                    return Err(error("Variant names must be uppercase", second));
-                }
+                // if self.token_chars(second).chars().next().unwrap().is_uppercase() {
+                //     return Err(error("Variant names must be lowercase", second));
+                // }
+
                 let variant_name = self.intern_ident_token(second);
 
                 if third.kind == K::OpenParen {
@@ -4229,7 +4242,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_named_type_constraint(&mut self) -> ParseResult<ParsedTypeConstraint> {
-        let (name_token, name) = self.expect_ident_upper()?;
+        let (name_token, name) = self.expect_ident()?;
         self.expect_eat_token(K::Colon)?;
         let constraint_expr = self.expect_type_constraint_expr()?;
         let span = self.extend_to_here(name_token.span);
@@ -4255,6 +4268,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok((token, self.ast.idents.intern(tok_chars)))
     }
 
+    #[allow(unused)]
     fn expect_ident_upper(&mut self) -> ParseResult<(Token, Ident)> {
         self.expect_ident_ext(true, false)
     }
@@ -4468,6 +4482,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok(None);
         };
 
+        let next = self.peek();
+        let kind_specifier = if next.kind == K::Ident {
+            let tok_chars = self.token_chars(next);
+            let s = match tok_chars {
+                "fn" => Some(UseKind::Fn),
+                "global" => Some(UseKind::Global),
+                "type" => Some(UseKind::Type),
+                "ns" => Some(UseKind::Ns),
+                "ability" => Some(UseKind::Ability),
+                _ => None,
+            };
+            if s.is_some() {
+                self.advance();
+            }
+            s
+        } else {
+            None
+        };
         let namespaced_ident = self.expect_namespaced_ident()?;
         let next = self.peek();
         let next_chars = self.token_chars(next);
@@ -4479,8 +4511,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None
         };
         let span = self.extend_to_here(use_token.span);
-        let parsed_use_id =
-            self.ast.uses.add_use(ParsedUse { target: namespaced_ident, alias, span });
+        let parsed_use_id = self.ast.uses.add_use(ParsedUse {
+            target: namespaced_ident,
+            alias,
+            span,
+            explicit_kind: kind_specifier,
+        });
         Ok(Some(parsed_use_id))
     }
 
@@ -4817,7 +4853,7 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Static(s) => {
                 w.write_str("static ")?;
-                self.display_type_expr_id(s.inner_type_expr, w)?;
+                self.display_type_expr_id(s.family_type_expr, w)?;
                 Ok(())
             }
             ParsedTypeExpr::TypeFromId(tfi) => {

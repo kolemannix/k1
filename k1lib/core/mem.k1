@@ -12,10 +12,10 @@ ns mem {
   }
 
   fn virtualAlloc(size: size): ptr {
-    let rw = posix/PROT_READ.bitOr(posix/PROT_WRITE);
-    let privateAnon = posix/MAP_PRIVATE.bitOr(posix/MAP_ANON);
+    let rw = posix/PROT_READ | posix/PROT_WRITE;
+    let privateAnon = posix/MAP_PRIVATE | posix/MAP_ANON;
     let addr = posix/mmap(
-      addr = ptr/NULL,
+      addr = ptr/null,
       len = size,
       prot = rw,
       flags = privateAnon,
@@ -23,7 +23,7 @@ ns mem {
       offset = 0
     );
     if addr == posix/MAP_FAILED.as[ptr] {
-      libc/perror(ptr/NULL);
+      libc/perror(ptr/null);
       crash("mmap failed");
     };
     addr
@@ -35,7 +35,7 @@ ns mem {
     {}
   }
 
-  deftype AllocMode = either
+  deftype alloc-mode = either
     Current,
     SystemHeap,
     CustomHeap(*mut Allocator),
@@ -43,22 +43,22 @@ ns mem {
     CustomArena(*mut Arena),
     Gc
 
-  impl Print for AllocMode {
-    fn printTo[W: Writer](self: Self, w: W) {
-      w.writeString(self.kindName())
+  impl print for alloc-mode {
+    fn printTo[w: writer](self: self, w: w) {
+      w.write-string(self.kindName())
     }
   }
 
-  ns AllocMode {
+  ns alloc-mode {
 
-    fn supportsRealloc(self: AllocMode): bool { switch self {
+    fn supportsRealloc(self: alloc-mode): bool { switch self {
       .Current -> crash("unreachable"),
       .SystemHeap or .CustomHeap(_) -> true,
       .Arena or .CustomArena(_) -> false,
       .Gc -> false
     } }
 
-    fn requiresFree(self: AllocMode): bool { switch self {
+    fn requiresFree(self: alloc-mode): bool { switch self {
       .Current -> crash("unreachable"),
       .SystemHeap -> true,
       .CustomHeap(_) -> true,
@@ -67,7 +67,7 @@ ns mem {
       .Gc -> false
     } }
 
-    fn kindName(self: AllocMode): string { switch self {
+    fn kindName(self: alloc-mode): string { switch self {
       .Current -> "current",
       .SystemHeap -> "system",
       .CustomHeap(_) -> "custom",
@@ -76,21 +76,21 @@ ns mem {
       .Gc -> "gc"
     } }
 
-    fn resolve(self: AllocMode): AllocMode {
+    fn resolve(self: alloc-mode): alloc-mode {
       switch self {
         .Current -> {
           let mode = mem/current();
-          if mode is .Current { crash("currentAllocMode.kind is Current; this will never resolve") };
+          if mode is .Current { crash("currentalloc-mode.kind is Current; this will never resolve") };
           mode
         },
         _ -> self,
       }
     }
 
-    fn alloc(self: AllocMode, size: size, align: size): ptr {
+    fn alloc(self: alloc-mode, size: size, align: size): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
-        .SystemHeap -> mem/allocZeroed(size, align),
+        .SystemHeap -> mem/alloc-zeroed(size, align),
         .CustomHeap(alloc) -> {
           let zalloc = alloc.*.zalloc;
           zalloc(size, align)
@@ -107,7 +107,7 @@ ns mem {
       }
     }
 
-    fn realloc(self: AllocMode, oldPtr: ptr, oldSize: size, align: size, newSize: size): ptr {
+    fn realloc(self: alloc-mode, oldPtr: ptr, oldSize: size, align: size, newSize: size): ptr {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/realloc(oldPtr, oldSize, align, newSize),
@@ -121,7 +121,7 @@ ns mem {
       }
     }
 
-    fn free(self: AllocMode, ptr: ptr, size: size, align: size) {
+    fn free(self: alloc-mode, ptr: ptr, size: size, align: size) {
       switch self.resolve() {
         .Current -> { crash("unreachable") },
         .SystemHeap -> mem/free(ptr, size, align),
@@ -136,47 +136,47 @@ ns mem {
     }
 
 
-    fn allocT[T](self: AllocMode): *mut T {
-      self.alloc(size = types/sizeOf[T](), align = types/alignOf[T]()).as()
+    fn allocT[T](self: alloc-mode): *mut T {
+      self.alloc(size = types/size-of[T], align = types/align-of[T]).as()
     }
 
-    fn new[T](self: AllocMode, t: T): *mut T {
-      let ref = self.allocT[T]();
+    fn new[T](self: alloc-mode, t: T): *mut T {
+      let ref = self.allocT[T];
       ref <- t;
       ref
     }
 
   }
 
-  fn new[T](t: T): *mut T { AllocMode.Current.new(t) }
+  fn new[T](t: T): *mut T { alloc-mode.Current.new(t) }
 
   let* tls arena: *mut Arena = zeroed();
 
   deftype alias ALLOC_STACK_MAX = 128
-  let* tls allocStack: *mut FixList[AllocMode, ALLOC_STACK_MAX] = { 
-    let* s = zeroed[FixList[AllocMode, ALLOC_STACK_MAX]]();
+  let* tls allocStack: *mut FixList[alloc-mode, ALLOC_STACK_MAX] = { 
+    let* s = zeroed[FixList[alloc-mode, ALLOC_STACK_MAX]]();
     s.push(.Arena);
     s
   };
 
-  fn pushMode(mode: AllocMode) {
+  fn pushMode(mode: alloc-mode) {
     allocStack.push(mode)
   }
-  fn popMode(): AllocMode {
+  fn popMode(): alloc-mode {
     allocStack.pop().!
   }
-  fn current(): AllocMode {
+  fn current(): alloc-mode {
     let s = allocStack.last().!;
     s
   }
 
   fn initTempArena() {
-    if not arena.basePtr.isNull() crash("Arena already initialized");
+    if not arena.basePtr.is-null() crash("Arena already initialized");
     arena <- Arena/default();
   }
 
   fn arena(): *mut Arena {
-    if arena.basePtr.isNull() { initTempArena() };
+    if arena.basePtr.is-null() { initTempArena() };
     arena
   }
 

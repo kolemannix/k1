@@ -1,49 +1,43 @@
 ns enum_construction;
 
-deftype State = either On(empty), Off(empty), Zilch
-deftype StateHard = either On(?int), Off(?int)
-deftype Contrived[A, B] = either Stuff({ a: A, b: B }), Empty
+deftype state = either on(empty), off(empty), zilch
+deftype state-hard = either on(?int), off(?int)
+deftype contrived[A, B] = either stuff({ a: A, b: B }), empty
 
 fn test() {
 
+  let _: state = state.zilch;
 
-  // A naming collision
-  let State = {};
-  State;
+  enum_construction/state.on({});
+  enum_construction/state.off({});
 
-  let _: State = State.Zilch;
+  let _: enum_construction/state = enum_construction/state.off({});
+  let _: enum_construction/state = enum_construction/state.on({});
 
-  enum_construction/State.On({});
-  enum_construction/State.Off({});
+  state-hard.on(.some(42));
 
-  let _: enum_construction/State = enum_construction/State.Off({});
-  let _: enum_construction/State = enum_construction/State.On({});
+  let _: state-hard = state-hard.on(.some(42));
+  let _: state-hard = state-hard.on(.none);
 
-  StateHard.On(.Some(42));
-  let _: StateHard = StateHard.On(.Some(42));
-  let _: StateHard = StateHard.On(.None);
+  let _: opt[bool] = .some(true);
 
-  // A naming collision
-  let Opt = {};
-  Opt;
+  let bc = _root/core/opt.some[bool](true);
+  assert(bc is .some(true));
 
-  let _: Opt[bool]      = .Some(true);
-  let bc = _root/core/Opt.Some[bool](true);
-  assert(bc is .Some(true));
-  let bc2 = _root/core/Opt.Some(42);
-  assert(bc2 is .Some(42));
+  let bc2 = _root/core/opt.some(42);
+  assert(bc2 is .some(42));
 
-  let _: Opt[bool] = Opt.None;
-  let _: Opt[bool] = .None;
-  let _: Opt[bool] = Opt.None;
+  let _: opt[bool] = opt.none;
+  let _: opt[bool] = .none;
+  let _: opt[bool] = opt.none;
 
-  let _: Opt[i32] = Opt.None[i32];
-  let _: Opt[i32] = Opt.None[i32];
-  let _: Opt[i32] = Opt.None;
+  let _: opt[i32] = opt.none[i32];
+  let _: opt[i32] = opt.none[i32];
+  let _: opt[i32] = opt.none;
 
-  Contrived.Stuff({ a: 42, b: "hello"});
+  contrived.stuff({ a: 42, b: "hello"});
 
-  Opt.None[int];
+  opt.none[int];
 
   {}
 }

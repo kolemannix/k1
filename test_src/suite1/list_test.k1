@@ -1,7 +1,7 @@
 ns list_test;
 
 fn listFill(): int {
-  let* xs = List/empty[int]();
+  let* xs = list/empty[int]();
   assert(xs.cap() == 0);
   assert(xs.len == 0);
 
@@ -26,7 +26,7 @@ fn listFill(): int {
   let xs2 = xs.cloned();
   assert(xs2 == xs.*);
 
-  let empty = []: List[byte];
+  let empty = []: list[byte];
   let emptyCloned = empty.cloned();
   assert(empty.len == emptyCloned.len);
   assert(empty.cloned() == empty);
@@ -41,7 +41,7 @@ fn listSlice() {
   assert(slice.get(0) == 1);
   assert(slice.get(1) == 2);
 
-  let emptyList = []: List[int];
+  let emptyList = []: list[int];
   let emptySlice = emptyList.slice(0,0);
   assert(emptySlice.len == 0);
 
@@ -72,7 +72,7 @@ fn listOfStructs(): int {
 }
 
 fn listEquality(): int {
-  let empty: List[int] = [];
+  let empty: list[int] = [];
   assert(empty != [1]);
   assert(empty == empty);
   assert([3] == [3]);
@@ -82,32 +82,32 @@ fn listEquality(): int {
 
 // Begin sort stuff
 
-impl Show for { rank: int, payload: string } {
-  fn show(self: Self): string {
+impl show for { rank: int, payload: string } {
+  fn show(self: self): string {
     let rank = self.rank;
     let payload = self.payload;
     "Payload: {payload} (rank={rank})"
   }
 }
 
-impl Comparable for { rank: int, payload: string } {
-  fn compare(self: Self, other: Self): Ordering {
+impl comparable for { rank: int, payload: string } {
+  fn compare(self: self, other: self): ordering {
     self.rank.compare(other.rank)
   }
 }
 
-impl Equals for { rank: int, payload: string } {
-  fn equals(self: Self, other: Self): bool {
+impl equals for { rank: int, payload: string } {
+  fn equals(self: self, other: self): bool {
     self.rank == other.rank and self.payload == other.payload
   }
 }
 
-fn testSortInt(input: List[int], expected: List[int]) {
+fn testSortInt(input: list[int], expected: list[int]) {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
 
-fn testSortOther(input: List[{ rank: int, payload: string }], expected: List[{ rank: int, payload: string }]) {
+fn testSortOther(input: list[{ rank: int, payload: string }], expected: list[{ rank: int, payload: string }]) {
   let sorted = input.sorted();
   assert(sorted == expected);
 }
@@ -141,15 +141,15 @@ fn testSwap() {
 fn iterator(): int {
   let l = [1,2,3];
   let* i = l.iterator();
-  assert(i.sizeHint().atLeast == 3);
+  assert(i.size-hint().at-least == 3);
   assert(i.next().! == 1);
   assert(i.next().! == 2);
   assert(i.next().! == 3);
   assert(i.next().isNone());
   let* i2 = l.iterator();
-  assert(i2.nth(2) == .Some(3));
+  assert(i2.nth(2) == .some(3));
   let* i3 = l.iterator();
-  assert(i3.nth(10) == .None);
+  assert(i3.nth(10) == .none);
   0
 }
 

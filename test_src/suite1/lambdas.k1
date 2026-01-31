@@ -51,13 +51,13 @@ fn someFnParamGen[T](t: T, f: some \T -> T, g: some \T -> ?T): ?T {
   t || f || g
 }
 
-fn runThings(thunks: List[dyn[\()-> empty]]) {
+fn runThings(thunks: list[dyn[\()-> empty]]) {
   for thunk in thunks { thunk() }
 }
 
 fn thunksTest() {
   let* counter = 0;
-  let thunks: List[dyn[\() -> empty]] = [
+  let thunks: list[dyn[\() -> empty]] = [
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
     \() { counter <- counter.* + 1 },
@@ -88,7 +88,7 @@ fn test() {
   let withGenerics = someFnParamGen(true, \b. not b, \b. some(b));
   assert(withGenerics == some(false));
 
-  use List/filter; use List/map;
+  use list/filter; use list/map;
   let result = [1,2,3,5,6,7,8]
     || map(\x. x + 1)
     || filter(\x. x % 2 == 0);

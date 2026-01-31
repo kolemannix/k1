@@ -47,7 +47,7 @@ let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 };
 let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
 
 #debug fn run(title: string): i32 {
-  let context allocMode: mem/AllocMode = .Arena;
+  let context alloc-mode: mem/alloc-mode = .Arena;
   let titleC = title.toCString();
   raylib/init(800, 450, titleC.ptr);
   raylib/SetTargetFPS(60);
@@ -68,7 +68,7 @@ let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
   };
 
   raylib/CloseWindow();
-  if k1/IS_STATIC 11 else 1
+  if k1/is-static 11 else 1
 }
 
 fn main(): i32 {

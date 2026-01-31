@@ -1,8 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use core/types/sizeOf
-use core/types/alignOf
+use core/types/size-of
+use core/types/align-of
 
 // TODO: Move to <header> . <mem block> model vs separate struct
 deftype Arena = {
@@ -26,19 +26,19 @@ ns Arena {
   fn _virtual(usageHintMb: size): Arena {
     let sizeBytes = 1 * gb;
     let basePtr: ptr = mem/virtualAlloc(sizeBytes);
-    #if k1/DEBUG mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
-    posix/madvise(basePtr, (usageHintMb * mb).as[c_sizet], advice = posix/MADV_SEQUENTIAL);
+    #if k1/debug mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
+    posix/madvise(basePtr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
     {
       basePtr: basePtr,
       curAddr: basePtr,
-      maxAddr: basePtr.addBytes(sizeBytes)
+      maxAddr: basePtr.add-bytes(sizeBytes)
     }
   }
 
   fn default(): Arena {
     _virtual(usageHintMb = 10)
     //let header: *mut Arena = basePtr.as[*mut Arena];
-    //header.basePtr* <- basePtr.addBytes(types/sizeOf[Arena]());
+    //header.basePtr* <- basePtr.addBytes(types/size-of[Arena]());
   }
 
   fn release(self: *mut Arena) {
@@ -58,7 +58,7 @@ ns Arena {
 
   fn pushLayout(self: *mut Arena, size: size, align: size): ptr {
     let dataStart = self.curAddr.aligned(align);
-    let newEnd = dataStart.addBytes(size);
+    let newEnd = dataStart.add-bytes(size);
     if newEnd.as[usize] > self.maxAddr.as[usize] {
       mem/pushMode(.SystemHeap);
       crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
@@ -69,34 +69,34 @@ ns Arena {
   }
 
   fn pushUninit[T](self: *mut Arena): *mut T {
-    let dataStart = self.pushLayout(sizeOf[T](), alignOf[T]());
+    let dataStart = self.pushLayout(size-of[T](), align-of[T]());
     dataStart.as[*mut T]
   }
 
   fn push[T](self: *mut Arena, t: T): *mut T {
-    let dataStart = self.pushLayout(sizeOf[T](), alignOf[T]());
+    let dataStart = self.pushLayout(size-of[T](), align-of[T]());
 
     let ref: *mut T = dataStart.rw();
     ref <- t;
     ref
   }
 
-  fn pushN[T](self: *mut Arena, ts: View[T]): Buffer[T] {
+  fn pushN[T](self: *mut Arena, ts: view[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
-    let align = types/alignOf[T]();
+    let align = types/align-of[T]();
     let base = self.pushLayout(size, align);
-    let buffer: Buffer[T] = Buffer/fromPtrAndCount[T](base, ts.len());
-    Buffer/copyFrom(src = ts.buffer, dst = buffer);
+    let buffer: buffer[T] = buffer/fromPtrAndCount[T](base, ts.len());
+    buffer/copyFrom(src = ts.buffer, dst = buffer);
     buffer
   }
 
   fn pushString(self: *mut Arena, s: string): string {
-    let data: Buffer[char] = self.pushN(s.view());
+    let data: buffer[char] = self.pushN(s.view());
     string/wrapBuffer(data)
   }
 
-  fn pushList[T](self: *mut Arena, cap: size): List[T] {
-    List/withCapacityIn(context .CustomArena(self))(cap)
+  fn pushList[T](self: *mut Arena, cap: size): list[T] {
+    list/withCapacityIn(context .CustomArena(self))(cap)
   }
 
 }

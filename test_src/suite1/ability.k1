@@ -1,29 +1,29 @@
 ns ability_01;
 
 ability Num {
-  fn num(self: Self): i32
+  fn num(self: self): i32
 }
 
 deftype Point = { x: i32, y: i32 }
 
 impl Num for Point {
-  fn num(self: Self): i32 {
+  fn num(self: self): i32 {
     self.x + self.y
   }
 }
 
 ability Codec {
   fn aConst(): u8
-  fn write(self: Self): View[u8]
-  fn read(buffer: View[u8]): Self
+  fn write(self: self): view[u8]
+  fn read(buffer: view[u8]): self
 }
 
 impl Codec for string {
   fn aConst(): u8 { 10 }
-  fn write(self: string): View[u8] {
+  fn write(self: string): view[u8] {
     self.view().asByteView()
   }
-  fn read(buffer: View[u8]): string {
+  fn read(buffer: view[u8]): string {
     string/fromBytes(buffer)
   }
 }
@@ -80,7 +80,7 @@ fn test() {
   let p = { x: 1, y: 2 }: Point;
   assert(p.num() == 3);
 
-  let buf: View[u8] = [104: u8, 101, 108, 108, 111].asView();
+  let buf: view[u8] = [104: u8, 101, 108, 108, 111].asView();
   let x: string = Codec/read(buf);
   assertEquals(x, "hello");
   assertEquals[string]("asdf", Codec/read("asdf".write()));
@@ -91,7 +91,7 @@ fn test() {
 // This is below 'main' so that
 // it tests for order-independence of the impls
 impl Num for i32 {
-  fn num(self: Self): i32 {
+  fn num(self: self): i32 {
     self
   }
 }

@@ -3,13 +3,13 @@ ns bits_test;
 fn test() {
 
   // NOT
-  assert(100.bitNot() == -101);
-  assert(Bitwise/bitNot(0) == -1);
+  assert(100.bit-not() == -101);
+  assert(bitwise/bit-not(0) == -1);
   // 2^63-1 == 9223372036854775807
   // 2^63 == 9223372036854775808
-  assert(9223372036854775807.bitNot() == -9223372036854775808);
+  assert(9223372036854775807.bit-not() == -9223372036854775808);
 
-  assertEquals(Bitwise/bitNot(-24555: i32), 24554);
+  assertEquals(bitwise/bit-not(-24555: i32), 24554);
 
   // AND
   assert(100 & 100 == 100);

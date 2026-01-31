@@ -115,8 +115,9 @@ pub struct TypeDefnInfo {
     pub scope: ScopeId,
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
+    pub recursive: bool
 }
-impl_copy_if_small!(20, TypeDefnInfo);
+impl_copy_if_small!(24, TypeDefnInfo);
 
 impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -394,12 +395,6 @@ impl FunctionType {
 }
 
 #[derive(Clone)]
-pub struct RecursiveReference {
-    pub root_type_id: TypeId,
-    //pub type_args: SV4<TypeId>,
-}
-
-#[derive(Clone)]
 pub struct LambdaType {
     pub function_type: TypeId,
     pub env_type: TypeId,
@@ -465,11 +460,6 @@ pub enum Type {
     FunctionTypeParameter(FunctionTypeParameter),
     InferenceHole(InferenceHoleType),
     Unresolved(ParsedTypeDefnId),
-    /// A recursive reference to the type in which it appears
-    /// Also used for Co-recursive references, e.g.:
-    /// deftype Red = { b: Black* }
-    /// deftype Black = { r: Red* }
-    RecursiveReference(RecursiveReference),
 }
 
 impl TypePool {
@@ -561,9 +551,6 @@ impl TypePool {
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             (Type::Static(stat1), Type::Static(stat2)) => stat1.value_id == stat2.value_id,
-            (Type::RecursiveReference(rr1), Type::RecursiveReference(rr2)) => {
-                rr1.root_type_id == rr2.root_type_id
-            }
             (Type::Unresolved(ur1), Type::Unresolved(ur2)) => ur1 == ur2,
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
@@ -657,9 +644,6 @@ impl TypePool {
             Type::Unresolved(id) => {
                 id.hash(state);
             }
-            Type::RecursiveReference(rr) => {
-                rr.root_type_id.hash(state);
-            }
             Type::Array(arr) => {
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
@@ -692,7 +676,6 @@ impl Type {
             Type::LambdaObject(_) => "lambdaobj",
             Type::Static(_) => "static",
             Type::Unresolved(_) => "unresolved",
-            Type::RecursiveReference(_) => "recurse",
             Type::Array(_) => "array",
         }
     }
@@ -791,14 +774,6 @@ impl Type {
         match self {
             Type::TypeParameter(tvar) => Some(tvar),
             _ => None,
-        }
-    }
-
-    #[track_caller]
-    pub fn expect_recursive_reference(&mut self) -> &mut RecursiveReference {
-        match self {
-            Type::RecursiveReference(r) => r,
-            _ => panic!("expected recursive reference"),
         }
     }
 
@@ -1292,16 +1267,9 @@ impl TypePool {
     }
 
     #[inline]
-    pub fn get_no_follow(&self, type_id: TypeId) -> &Type {
-        self.types.get(type_id)
-    }
-
-    #[inline]
     pub fn get_root_id(&self, type_id: TypeId) -> TypeId {
-        match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => rr.root_type_id,
-            _ => type_id,
-        }
+        // nocommit remove after reasoning about call sites
+        type_id
     }
 
     /// The two types of types that we need to treat as 'static' types are Static types themselves
@@ -1312,12 +1280,12 @@ impl TypePool {
             Type::Static(_st) => Some(type_id),
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 let t = tp.static_constraint.unwrap();
-                debug_assert!(self.get_no_follow(t).as_static().is_some());
+                debug_assert!(self.get(t).as_static().is_some());
                 Some(t)
             }
             Type::InferenceHole(ih) if ih.static_type.is_some() => {
                 let t = ih.static_type.unwrap();
-                debug_assert!(self.get_no_follow(t).as_static().is_some());
+                debug_assert!(self.get(t).as_static().is_some());
                 Some(t)
             }
             _ => None,
@@ -1336,16 +1304,8 @@ impl TypePool {
     }
 
     #[inline]
-    /// Its important to understand that this basic 'get type' follows
-    /// redirects for both recursives and statics. This is because 99% of
-    /// code wants to treat them as their contained type
-    /// And the other 1% is the code that explicitly is checking for Static or RecursiveReference,
-    /// and will be forced to call get_no_follow in order to achieve its goal anyway
     pub fn get(&self, type_id: TypeId) -> &Type {
-        match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => self.get(rr.root_type_id),
-            t => t,
-        }
+        self.types.get(type_id)
     }
 
     pub fn get_struct_field(&self, type_id: TypeId, field_index: usize) -> &StructTypeField {
@@ -1361,23 +1321,23 @@ impl TypePool {
     }
 
     pub fn get_chased_id(&self, type_id: TypeId) -> TypeId {
-        match self.get_no_follow(type_id) {
-            Type::RecursiveReference(rr) => rr.root_type_id,
+        match self.get(type_id) {
             Type::Static(stat) => stat.family_type_id,
             _ => type_id,
         }
     }
 
+    // nocommit: This needs to not follow statics; we have to require summoning to call arbitrary
+    // methods on the family type
     pub fn get_base_for_method(&self, type_id: TypeId) -> TypeId {
         // Follow references
-        let static_chased = match self.get_no_follow(type_id) {
+        let static_chased = match self.get(type_id) {
             Type::Reference(r) => r.inner_type,
             _ => type_id,
         };
 
         // Then follow statics
-        match self.get_no_follow(static_chased) {
-            Type::RecursiveReference(rr) => rr.root_type_id,
+        match self.get(static_chased) {
             Type::Static(stat) => stat.family_type_id,
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 self.get_static_type_of_type(tp.static_constraint.unwrap()).unwrap().family_type_id
@@ -1526,9 +1486,19 @@ impl TypePool {
     /// Note: We could cache whether or not a type is generic on insertion into the type pool
     ///       But types are not immutable so this could be a dangerous idea!
     pub fn count_type_variables(&self, type_id: TypeId) -> TypeVariableInfo {
+        // nocommit visited allocation
+        let mut visited = vec![];
+        self.count_type_variables_rec(type_id, &mut visited)
+    }
+    pub fn count_type_variables_rec(&self, type_id: TypeId, visited: &mut Vec<TypeId>) -> TypeVariableInfo {
         const EMPTY: TypeVariableInfo = TypeVariableInfo::EMPTY;
-        debug!("count_type_variables of {} {}", type_id, self.get_no_follow(type_id).kind_name());
-        match self.get_no_follow(type_id) {
+        debug!("count_type_variables of {} {}", type_id, self.get(type_id).kind_name());
+        if visited.contains(&type_id) {
+            return TypeVariableInfo::EMPTY
+        }
+
+        visited.push(type_id);
+        match self.get(type_id) {
             Type::TypeParameter(_tp) => TypeVariableInfo {
                 type_parameter_count: 1,
                 inference_variable_count: 0,
@@ -1540,7 +1510,7 @@ impl TypePool {
                     inference_variable_count: 0,
                     unresolved_static_count: 0,
                 };
-                let fn_info = self.count_type_variables(ftp.function_type);
+                let fn_info = self.count_type_variables_rec(ftp.function_type, visited);
                 base_info.add(fn_info)
             }
             Type::InferenceHole(_hole) => TypeVariableInfo {
@@ -1556,16 +1526,16 @@ impl TypePool {
             Type::Struct(struc) => {
                 let mut result = EMPTY;
                 for field in self.mem.getn(struc.fields).iter() {
-                    result = result.add(self.count_type_variables(field.type_id))
+                    result = result.add(self.count_type_variables_rec(field.type_id, visited))
                 }
                 result
             }
-            Type::Reference(refer) => self.count_type_variables(refer.inner_type),
+            Type::Reference(refer) => self.count_type_variables_rec(refer.inner_type, visited),
             Type::Enum(e) => {
                 let mut result = EMPTY;
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = v.payload {
-                        result = result.add(self.count_type_variables(payload));
+                        result = result.add(self.count_type_variables_rec(payload, visited));
                     }
                 }
                 result
@@ -1577,17 +1547,17 @@ impl TypePool {
             Type::Function(fun) => {
                 let mut result = EMPTY;
                 for param in self.mem.getn(fun.physical_params).iter() {
-                    result = result.add(self.count_type_variables(param.type_id))
+                    result = result.add(self.count_type_variables_rec(param.type_id, visited))
                 }
-                result = result.add(self.count_type_variables(fun.return_type));
+                result = result.add(self.count_type_variables_rec(fun.return_type, visited));
                 result
             }
-            Type::FunctionPointer(fp) => self.count_type_variables(fp.function_type_id),
+            Type::FunctionPointer(fp) => self.count_type_variables_rec(fp.function_type_id, visited),
             Type::Lambda(lambda) => self
-                .count_type_variables(lambda.function_type)
-                .add(self.count_type_variables(lambda.env_type)),
+                .count_type_variables_rec(lambda.function_type, visited)
+                .add(self.count_type_variables_rec(lambda.env_type, visited)),
             // But a lambda object is generic if its function is generic
-            Type::LambdaObject(co) => self.count_type_variables(co.function_type),
+            Type::LambdaObject(co) => self.count_type_variables_rec(co.function_type, visited),
             Type::Static(stat) => {
                 let this = if stat.value_id.is_none() {
                     TypeVariableInfo {
@@ -1598,26 +1568,15 @@ impl TypePool {
                 } else {
                     EMPTY
                 };
-                let inner = self.count_type_variables(stat.family_type_id);
+                let inner = self.count_type_variables_rec(stat.family_type_id, visited);
                 this.add(inner)
             }
             Type::Unresolved(_) => EMPTY,
-            Type::RecursiveReference(rr) => {
-                if let Type::Generic(generic) = self.get(rr.root_type_id) {
-                    TypeVariableInfo {
-                        inference_variable_count: 0,
-                        type_parameter_count: generic.params.len() as u32,
-                        unresolved_static_count: 0,
-                    }
-                } else {
-                    EMPTY
-                }
-            }
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
-                self.count_type_variables(arr.element_type)
-                    .add(self.count_type_variables(arr.size_type))
+                self.count_type_variables_rec(arr.element_type, visited)
+                    .add(self.count_type_variables_rec(arr.size_type, visited))
             }
         }
     }
@@ -1801,8 +1760,7 @@ impl TypePool {
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
-            | Type::Unresolved(_)
-            | Type::RecursiveReference(_) => None,
+            | Type::Unresolved(_) => None,
         }
     }
 
@@ -1965,7 +1923,6 @@ impl TypePool {
             Type::FunctionTypeParameter(_) => false,
             Type::InferenceHole(_) => false,
             Type::Unresolved(_) => false,
-            Type::RecursiveReference(_) => false,
         }
     }
 

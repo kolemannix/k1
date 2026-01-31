@@ -19,7 +19,7 @@ ns StringBuilder {
 
   // Careful, if the StringBuilder is stack-allocated, and not 
   // spilled, this points to the stack memory!
-  fn rawView(self: *StringBuilder): View[char] {
+  fn rawView(self: *StringBuilder): view[char] {
     self.list*.asView().toCharView()
   }
 
@@ -31,11 +31,11 @@ ns StringBuilder {
   }
 }
 
-impl Writer for *mut StringBuilder {
-  fn writeByte(self: Self, b: u8): empty {
+impl writer for *mut StringBuilder {
+  fn write-byte(self: self, b: u8): empty {
     self.list*.push(b)
   }
-  fn writeBytes(self: Self, b: View[u8]): empty {
+  fn write-bytes(self: self, b: view[u8]): empty {
     self.list*.pushN(b)
   }
 }

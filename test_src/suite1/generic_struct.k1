@@ -15,14 +15,14 @@ fn unboxIt[T](b: Box[Box[Box[T]]]): T {
 
 fn takesPolyAuPair[C, D](_x: AuPair[C, D]) { {} }
 
-deftype ConstrainedBox[A, B: Try[T = A, E = empty]] = { inner: B }
+deftype ConstrainedBox[A, B: try[t = A, e = empty]] = { inner: B }
 fn testConstraints() {
   // Should typecheck just fine since the constraint is satisfied
   let x: ConstrainedBox[int, ?int] = { inner: some(4) };
-  assertEquals(types/typeId[typeOf(x).A](), types/typeId[int]());
+  assertEquals(types/type-id[typeOf(x).A], types/type-id[int]);
   assertEquals(
     testCompile({ inner: some(4) }: ConstrainedBox[int, ?bool]),
-    .Some("Provided type B := Opt[bool] does implement required ability Try, but the implementation parameter T is wrong: Expected type was i64 but the actual implementation uses bool")
+    .some("Provided type B := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool")
   );
   {}
 }
@@ -32,7 +32,7 @@ fn test() {
   b.value;
   let c: Box[bool] = { value: true };
   let c2: Box[bool] = { value: false };
-  let c3: Box[?bool] = { value: .Some(false) };
+  let c3: Box[?bool] = { value: .some(false) };
   let c4: Box[*bool] = { value: core/mem/new(false) };
   assertEquals(b.value, 0);
   assertEquals(c.value, true);
@@ -49,8 +49,8 @@ fn test() {
   let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);
 
-  takesPolyAuPair({ t: some(42), u: Opt.Some(true) });
-  takesPolyAuPair({ t: some(42), u: .Some(true) });
+  takesPolyAuPair({ t: some(42), u: opt.some(true) });
+  takesPolyAuPair({ t: some(42), u: .some(true) });
   takesPolyAuPair({ t: some(42), u: some(true) });
 
   takesPolyAuPair[int, _]({ t: some(42), u: some(true) });
@@ -59,11 +59,11 @@ fn test() {
 
   assert(
     testCompile(takesPolyAuPair[ptr, _]({ t: some(42), u: some(true) }))
-    is .Some(_)
+    is .some(_)
   );
   assert(
     testCompile(takesPolyAuPair[_, ptr]({ t: some(42), u: some(true) }))
-    is .Some(_)
+    is .some(_)
   );
 
   testConstraints();

@@ -16,17 +16,17 @@ fn testBox() {
   {}
 }
 
-fn contextC[T: Equals](context t: T, name: string)(value: T) {
+fn contextC[T: equals](context t: T, name: string)(value: T) {
   assert(name == "Joe");
   assert(t == value);
 }
 
-fn contextB[T: Equals](context t: T, name: string)(value: T) {
+fn contextB[T: equals](context t: T, name: string)(value: T) {
   assert(t == value);
   contextC(value)
 }
 
-fn contextA[T: Equals](context t: T, name: string)(value: T) {
+fn contextA[T: equals](context t: T, name: string)(value: T) {
   assert(t == value);
   contextB(value)
 }

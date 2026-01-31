@@ -1,7 +1,7 @@
 // fn parse_delimited()
 macro fn mlist(parse: meta/Parser) {
   loop {
-    require tokens.expect_expr() is .Ok(e) else { crash("expr")};
+    require tokens.expect_expr() is .ok(e) else { crash("expr")};
     let n = tokens.next();
     switch n.kind {
       .Comma -> {},

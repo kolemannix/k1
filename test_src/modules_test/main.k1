@@ -1,25 +1,15 @@
-let MODULE_INFO: core/k1/ModuleManifest = {
-  kind: .Executable,
+let MODULE_INFO: core/k1/module-manifest = {
+  kind: .executable,
   deps: [],
   multithreading: false,
   libs: ["foo"]
 };
 
-//fn deriveStructPrint[S](): string {
-//  let schema = types/getTypeSchema[S]();
-//  require schema is .Struct({ fields }) else { crash("") };
-//  let* code = StringBuilder/new();
-//  code.putString("{{ ");
-//  for fields {
-//    code.putString()
-//  }
-//}
-
 ns foo {
 
   deftype VerySmall = { x: u8 }
-  impl Print for VerySmall { fn printTo[W: Writer](self: VerySmall, w: W) { w.writeString("{ {self.x} }") } }
-  impl Equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
+  impl print for VerySmall { fn printTo[w: writer](self: VerySmall, w: w) { w.write-string("{ {self.x} }") } }
+  impl equals for VerySmall { fn equals(self: VerySmall, other: VerySmall): bool { self.x == other.x } }
   extern("foo", "very_small") fn very_small(x: VerySmall, y: VerySmall): VerySmall
 
   deftype Small = { r: u8, g: u8, b: u8, a: u8 }
@@ -28,7 +18,7 @@ ns foo {
   deftype Medium = { a: u64, b: u64 }
   extern("foo", "medium")     fn medium(a: Medium, b: Medium): Medium
 
-  deftype MixedClassMedium = { f1: f32, f2: f32, i3: Array[i16, 4] }
+  deftype MixedClassMedium = { f1: f32, f2: f32, i3: array[i16, 4] }
 
   deftype Large = { med1: Medium, med2: Medium }
   extern("foo", "large")      fn large(a: Large, b: Large): Large

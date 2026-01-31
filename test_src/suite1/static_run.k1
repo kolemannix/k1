@@ -1,5 +1,5 @@
 ns static_run;
-let INT_VIEW: View[int] = [1,2,3,4,5];
+let INT_VIEW: view[int] = [1,2,3,4,5];
 
 let i2: 12 = { 3 * 4 };
 let i3: 12 = #static { 3 * 4 };
@@ -37,8 +37,8 @@ fn test() {
   (point.x: 1);
   (point.y: 2);
   // Value assertions
-  assertEquals(point.x.fromStatic(), 1);
-  assertEquals(point.y.fromStatic(), 2);
+  assertEquals(point.x.from-static(), 1);
+  assertEquals(point.y.from-static(), 2);
 
   // Scalars
   assert(#static true);
@@ -89,12 +89,12 @@ fn test() {
   };
   assertEquals[int](letRef, 10);
 
-  assertEquals(core/k1/IS_STATIC, false);
-  #static assert(core/k1/IS_STATIC);
+  assertEquals(core/k1/is-static, false);
+  #static assert(core/k1/is-static);
 
   let enum1 = #static {
     let x = some(42);
-    let y = if x is .Some(x) x else crash("");
+    let y = if x is .some(x) x else crash("");
     y
   };
   assertEquals[int](enum1, 42);
@@ -131,7 +131,7 @@ fn test() {
   }, 5);
 
   #static {
-    let* l = List/withCapacity[empty](0);
+    let* l = list/withCapacity[empty](0);
     l.len
   };
 
@@ -152,7 +152,7 @@ fn test() {
 
   assertEquals[string](#static {
     let* sb = core/StringBuilder/new();
-    sb.writeString("Hello");
+    sb.write-string("Hello");
     sb.build()
   }, "Hello");
 
@@ -165,13 +165,13 @@ fn test() {
   #static bar(2);
 
   // View
-  let view: View[int] = #static {
+  let view: view[int] = #static {
     let xs = [1,2,3,4,5];
     xs.asView()
   };
   assertEquals(view, [1,2,3,4,5]);
   #static {
-    let* l = List/wrapBuffer(Buffer/copyFromView(INT_VIEW));
+    let* l = list/wrapBuffer(buffer/copyFromView(INT_VIEW));
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));
@@ -185,7 +185,7 @@ fn test() {
   }, 2);
 
   // View of views!
-  let vov: View[View[int]] = #static [[1,2,3], [4,5,6]];
+  let vov: view[view[int]] = #static [[1,2,3], [4,5,6]];
   assertEquals(vov.len(), 2);
   assertEquals(vov.get(0).get(0), 1);
   assertEquals(vov.get(0).get(1), 2);
@@ -196,7 +196,7 @@ fn test() {
 
 
   let point = #static { x: 1, y: (#static 2): int };
-  assertEquals(point.fromStatic().x, 1);
+  assertEquals(point.from-static().x, 1);
 
   {}
 }

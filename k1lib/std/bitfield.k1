@@ -13,31 +13,31 @@ fn intWidthForBits(bits: size): size {
 fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
 fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
 fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
-fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): string {
+fn define[Base](type-name: string, members: view[{ name: string, bits: size }]): string {
   use core/StringBuilder; use meta/CodeWriter;
 
-  let baseTypeId: u64 = types/typeId[Base]();
-  let baseSchema = types/typeSchema(baseTypeId);
-  let baseName = types/typeName(baseTypeId);
-  require baseSchema is .Int(intKind) else { crash("Base should be an int; got {baseName}") };
-  let totalBits = intKind.bitWidth();
+  let baseTypeId: u64 = types/type-id[Base]();
+  let baseSchema = types/type-schema(baseTypeId);
+  let baseName = types/type-name(baseTypeId);
+  require baseSchema is .int(intKind) else { crash("Base should be an int; got {baseName}") };
+  let totalBits = intKind.bit-width();
 
   // This is just a regular StringBuilder that gets some extra methods since we've
   // brought the meta/CodeWriter ability into scope
   let* code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
 
   // This defines a named struct type with one field, which is a common newtype pattern
-  code.line("deftype {typeName} = {{ bits: {baseName} }");
+  code.line("deftype {type-name} = {{ bits: {baseName} }");
 
   // We crack open a namespace to put some goodies inside
-  code.line("ns {typeName} {{");
+  code.line("ns {type-name} {{");
 
   // This actually gets captured by the lambda below
   let* bitIndex = 0;
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
-  let memberInfo: List[{ 
+  let memberInfo: list[{ 
     // mask: the positioned mask
     mask: usize,
     // typeWidth: the smallest type that can hold these bits; see `intWidthForBits`
@@ -50,7 +50,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     offset: size,
     // nameCap: the name of the field, capitalized
     nameCap: string
-  }] = List/fromMap(members, \member. {
+  }] = list/fromMap(members, \member. {
     let bits = member.bits;
     if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
     let rawValue = u64/bitmaskLow(bits);
@@ -59,14 +59,14 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     let mask = rawValue << bitIndex.*.as();
     let offset = bitIndex.*;
     let sizeMask = u64/bitmaskLow(typeWidth);
-    let invMask = mask.bitNot() & sizeMask;
+    let invMask = mask.bit-not() & sizeMask;
 
     bitIndex <- bitIndex.* + bits;
 
     { mask, typeWidth, invMask, rawValue, offset, nameCap }
   });
 
-  // The for loop works on any type that implements Iterable or Iterator
+  // The for loop works on any type that implements iterable or iterator
   // The item being iterated over is named `it` if no binding is supplied
   // `itIndex` is also given to us
   for members {
@@ -75,7 +75,7 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     code.line("  let {it.name}Mask: {baseName} = {info.mask};");
   };
 
-  code.line("  let zero: {typeName} = {{ bits: 0 };");
+  code.line("  let zero: {type-name} = {{ bits: 0 };");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure
@@ -87,11 +87,11 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     let fieldType = if isBool "bool" else "u{info.typeWidth}";
 
     // Getter
-    code.line("  fn get{nameCap}(self: {typeName}): {fieldType} {{");
+    code.line("  fn get{nameCap}(self: {type-name}): {fieldType} {{");
 
     code.line("    let bits: {baseName} = self.bits;");
-    code.line("    let shifted: {baseName} = bits.shiftRight({info.offset});");
-    code.line("    let cleared: {baseName} = shifted.bitAnd({info.rawValue});");
+    code.line("    let shifted: {baseName} = bits >> {info.offset};");
+    code.line("    let cleared: {baseName} = shifted & {info.rawValue};");
     if isBool {
       code.line("    cleared == 1")
     } else {
@@ -101,15 +101,15 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     code.line("  }"); // End Getter
 
     // Setter
-    code.line("  fn set{nameCap}(self: {typeName}, value: {fieldType}): {typeName} {{");
+    code.line("  fn set{nameCap}(self: {type-name}, value: {fieldType}): {type-name} {{");
     if isBool {
       code.line("    let maskedValue = (value.as_u8());")
     } else {
-      code.line("    let maskedValue: {baseName} = value.bitAnd({info.rawValue});")
+      code.line("    let maskedValue: {baseName} = value & {info.rawValue};")
     };
     let clearMask = info.invMask;
-    code.line("    let clearedBits: {baseName} = self.bits.bitAnd({clearMask});");
-    code.line("    let insertedBits: {baseName} = clearedBits.bitOr(maskedValue.shiftLeft({info.offset}));");
+    code.line("    let clearedBits: {baseName} = self.bits & {clearMask};");
+    code.line("    let insertedBits: {baseName} = clearedBits | (maskedValue << {info.offset});");
     code.line("    {{ bits: insertedBits }");
     code.line("  }"); // End setter
   };
@@ -122,9 +122,9 @@ fn define[Base](typeName: string, members: View[{ name: string, bits: size }]): 
     let getName = "get{info.nameCap}";
     let last = itIndex + 1 == members.len();
     let sep = if last "" else ",";
-    printBody.line(`    w.writeString("{it.name}={{self.{getName}()}{sep}");`);
+    printBody.line(`    w.write-string("{it.name}={{self.{getName}()}{sep}");`);
   };
-  code.implPrint(typeName, printBody.build(), indent = 0);
+  code.implPrint(type-name, printBody.build(), indent = 0);
 
   code.build()
 }

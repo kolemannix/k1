@@ -1,5 +1,5 @@
-fn unique(arr: Buffer[char]): bool {
-  let* seen: List[char]* = [];
+fn unique(arr: buffer[char]): bool {
+  let* seen: list[char]* = [];
   let ret = true;
   for c in arr {
     for s in seen.* {
@@ -17,7 +17,7 @@ fn solve(): int {
   for input {
     let i = itIndex;
     let sub = input.substring(i, i + 4);
-    if unique(sub.innerBuffer()) {
+    if unique(sub.innerbuffer()) {
       return(i + 4);
     };
   };
