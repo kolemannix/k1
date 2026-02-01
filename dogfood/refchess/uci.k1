@@ -10,7 +10,7 @@ deftype Command = either
   Go(string),
   Perft({ depth: u32 })
 
-fn parseCommand(cmd: string): Result[Command, string] {
+fn parseCommand(cmd: string): result[Command, string] {
   println("[debug] received: `{cmd}`");
   
   switch cmd {

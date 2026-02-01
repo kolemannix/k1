@@ -37,6 +37,10 @@ Non-major Ideas
 Syntax/elegance
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [ ] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
+  - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
+- [x] Rename `view` to `span`, once and for all
+- [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
+  - Allow users to capitalize domain types, but types like List/Opt/Buffer/Result should sink into the background
 - [x] Replace the builtin for ... yield with a userspace function taking a lambda
 - [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept

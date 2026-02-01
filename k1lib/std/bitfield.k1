@@ -103,7 +103,7 @@ fn define[Base](type-name: string, members: view[{ name: string, bits: size }]):
     // Setter
     code.line("  fn set{nameCap}(self: {type-name}, value: {fieldType}): {type-name} {{");
     if isBool {
-      code.line("    let maskedValue = (value.as_u8());")
+      code.line("    let maskedValue = (value.as-u8());")
     } else {
       code.line("    let maskedValue: {baseName} = value & {info.rawValue};")
     };

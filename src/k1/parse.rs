@@ -496,8 +496,9 @@ impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         use BinaryOpKind as B;
         match self {
-            B::Pipe => 103,
-            B::BitAnd | B::BitOr | B::BitXor | B::BitShiftLeft | B::BitShiftRight => 102,
+            B::Pipe => 104,
+            B::BitShiftLeft | B::BitShiftRight => 103,
+            B::BitAnd | B::BitOr | B::BitXor => 102,
             B::Rem => 101,
             B::Multiply | B::Divide => 100,
             B::Add | B::Subtract => 90,

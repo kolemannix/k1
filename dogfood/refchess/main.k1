@@ -68,7 +68,7 @@ fn indexToBit(index: u64): Bitboard {
 fn printBitboard(b: Bitboard) {
   let* l = list/empty[char]();
   writeBitboard(l, b);
-  println(string/wraplist(l))
+  println(string/wrapList(l))
 }
 
 fn writeBitboard[w: writer](writer: w, b: Bitboard) {
@@ -175,7 +175,8 @@ ns GameState {
         let enPassantTargetSquareIndex: u64 = self.enPassantFile.as[u8].as[u64] + 5*8;
         let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex);
         let enPassantTargetSquareOccupied = enPassantTargetSquareBit & self.bOccupied();
-        let enPassantAttackers = enPassantTargetSquareOccupied & ((enPassantTargetSquareBit << 1) & (enPassantTargetSquareBit >> 1);
+        let enPassantAttackers = 
+          enPassantTargetSquareOccupied & (enPassantTargetSquareBit << 1) & (enPassantTargetSquareBit >> 1);
         printBitboard(enPassantTargetSquareOccupied);
      };
      list/empty()
@@ -244,7 +245,7 @@ fn debugLog(context eng: Engine)(s: string) {
   }
 }
 
-fn run(args: view[string]): Result[i32, string] {
+fn run(args: view[string]): result[i32, string] {
   let context eng: Engine = { game: GameState/startPos() };
   loop {
     // TODO(dogfood): easy mapError before try

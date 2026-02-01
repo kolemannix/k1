@@ -86,8 +86,8 @@ fn eprintln(s: string) {
 ns io {
   // TODO: Add buffering
   deftype OutStream = { fileNo: i32 }
-  let stdout: OutStream = { fileNo: posix/stdin };
-  let stderr: OutStream = { fileNo: posix/stdout };
+  let stdout: OutStream = { fileNo: posix/stdout };
+  let stderr: OutStream = { fileNo: posix/stderr };
 
   impl writer for OutStream {
     fn write-byte(self: self, value: u8) {

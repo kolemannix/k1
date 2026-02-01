@@ -16,7 +16,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
 
     code.var("parts", parts.asView());
     switch schema {
-      .String -> {
+      .string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
         };
@@ -24,7 +24,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
         code.line("parts.get(0).printTo(w);");
         code.line("w.write-string(args);");
       },
-      .Struct({fields}) -> {
+      .struct({fields}) -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
         };
@@ -39,7 +39,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
         };
 
       },
-      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]}")
+      _ -> crash("Unsupported format arguments: {types/get-type-name[Args]}")
     };
     code.build()
   }

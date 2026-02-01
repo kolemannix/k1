@@ -42,7 +42,7 @@ ns meta {
 
   fn bakedValueExpr[T](value: T): string {
     let valueId = bake-static-value[T](value);
-    `core/meta/getStaticValue({valueId})`
+    `core/meta/get-static-value({valueId})`
   }
 
   fn bakedVariable[T](name: string, value: T): string {
