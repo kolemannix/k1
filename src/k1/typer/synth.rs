@@ -28,7 +28,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Equals_equals.with_span(span),
+            self.ast.idents.f.equals__equals.with_span(span),
             &[],
             &[lhs, rhs],
             ctx.with_no_expected_type(),
@@ -44,7 +44,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Add_add.with_span(span),
+            self.ast.idents.f.add__add.with_span(span),
             &[],
             &[lhs, rhs],
             ctx.with_no_expected_type(),
@@ -314,7 +314,7 @@ impl TypedProgram {
     pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
         self.synth_parsed_function_call(
-            self.ast.idents.f.bool_negated.with_span(span),
+            self.ast.idents.f.bool__negated.with_span(span),
             &[],
             &[base],
             false,

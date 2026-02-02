@@ -3155,12 +3155,14 @@ impl TypedProgram {
                 }
             }
             ParsedTypeExpr::Optional(opt) => {
-                // nocommit: Rewrite as a parsed Opt[<opt.base>] and eliminate the specialness here
-                let inner_ty =
-                    self.eval_type_expr_ext(opt.base, scope_id, context.descended_layout_direct())?;
-                let type_args = self.types.mem.pushn(&[inner_ty]);
-                let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, type_args);
-                Ok(optional_type)
+                // Rewrite the sugar and compile the parsed
+                let parsed_ty_app = ParsedTypeExpr::TypeApplication(parse::TypeApplication {
+                    span: opt.span,
+                    name: QIdent::naked(self.ast.idents.b.opt, opt.span),
+                    args: self.ast.p_type_args.add_slice_copy(&[opt.base]),
+                });
+                let parsed_ty_app_id = self.ast.type_exprs.add(parsed_ty_app);
+                self.eval_type_expr(parsed_ty_app_id, scope_id)
             }
             ParsedTypeExpr::Reference(r) => {
                 let mutable = match r.kind {
@@ -5275,7 +5277,9 @@ impl TypedProgram {
         //       Currently we'll just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
+        let static_block_scope = self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let static_eval_ctx = ctx.with_scope(static_block_scope);
+        let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
 
@@ -6773,21 +6777,21 @@ impl TypedProgram {
         );
         let result_block_ctx = ctx.with_scope(result_block.scope_id).with_no_expected_type();
         let is_ok_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_isOk.with_span(span),
+            self.ast.idents.f.try__is_ok.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
             false,
         )?;
         let get_ok_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
             false,
         )?;
         let get_error_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getError.with_span(span),
+            self.ast.idents.f.try__get_error.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
@@ -6835,7 +6839,7 @@ impl TypedProgram {
         let _try_impl =
             self.expect_ability_implementation(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[operand_expr],
             ctx,
@@ -7136,7 +7140,8 @@ impl TypedProgram {
                 let Some(defn_name) = ctx.global_defn_name else {
                     return failf!(*span, "builtin can only be used as a top-level expression");
                 };
-                if ctx.scope_id != self.get_k1_scope_id() {
+                let parent_scope_id = self.scopes.get_scope(ctx.scope_id).parent.unwrap();
+                if parent_scope_id != self.get_k1_scope_id() {
                     return failf!(*span, "All the known builtins constants live in the k1 scope");
                 }
                 match self.ident_str(defn_name) {
@@ -7414,7 +7419,7 @@ impl TypedProgram {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
             ContainerKind::View => self.synth_typed_call_typed_args(
-                self.ast.idents.f.View_wrapBuffer.with_span(span),
+                self.ast.idents.f.view_wrapBuffer.with_span(span),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
@@ -8174,16 +8179,16 @@ impl TypedProgram {
             _ => body_type,
         };
 
-        let encl_fn_id = self
+        let enclosing_fn_name = self
             .scopes
             .enclosing_functions
             .get(ctx.scope_id)
-            .function
-            .expect("lambda to be inside a function");
-        let encl_fn_name = self.get_function(encl_fn_id).name;
+            .function.map(|id| self.get_function(id).name);
         let name = self.build_ident_with(|k1, s| {
-            s.push_str(k1.ident_str(encl_fn_name));
-            s.push_str("_{lambda}_");
+            if let Some(fn_name) = enclosing_fn_name {
+                s.push_str(k1.ident_str(fn_name));
+            };
+            s.push_str("_lam_");
             write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
         });
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
@@ -9113,7 +9118,7 @@ impl TypedProgram {
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
-        let (target_is_iterator, item_type) = match self.expect_ability_implementation(
+        let (target_is_iterator, _item_type) = match self.expect_ability_implementation(
             iterable_type,
             ITERABLE_ABILITY_ID,
             ctx.scope_id,
@@ -9208,7 +9213,7 @@ impl TypedProgram {
         );
         #[allow(non_snake_case)]
         let next_getValue_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(iterable_span),
+            self.ast.idents.f.try__get_value.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
             ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
@@ -9237,12 +9242,12 @@ impl TypedProgram {
         consequent_block.statements.push(binding_variable.defn_stmt);
         consequent_block.statements.push(user_block_variable.defn_stmt);
 
-        let next_is_some_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Opt_isSome.with_span(body_span),
-            &[item_type],
-            &[next_variable.variable_expr],
-            loop_scope_ctx,
-            false,
+        let next_is_some_call = self.synth_enum_is_variant(
+           next_variable.variable_expr,
+           1,
+           false,
+           loop_scope_ctx.with_no_expected_type(),
+           None,
         )?;
         let empty_break = self.synth_empty_struct(body_span);
         let break_expr = self.exprs.add(
@@ -9769,20 +9774,20 @@ impl TypedProgram {
             | K::BitShiftLeft
             | K::BitShiftRight => {
                 let fn_ident = match binary_op.op_kind {
-                    K::Add => self.ast.idents.f.Add_add,
-                    K::Subtract => self.ast.idents.f.Sub_sub,
-                    K::Multiply => self.ast.idents.f.Mul_mul,
-                    K::Divide => self.ast.idents.f.Div_div,
-                    K::Rem => self.ast.idents.f.Rem_rem,
+                    K::Add => self.ast.idents.f.add__add,
+                    K::Subtract => self.ast.idents.f.sub__sub,
+                    K::Multiply => self.ast.idents.f.mul__mul,
+                    K::Divide => self.ast.idents.f.div__div,
+                    K::Rem => self.ast.idents.f.rem__rem,
                     K::Less => self.ast.idents.f.ScalarCmp_lt,
                     K::LessEqual => self.ast.idents.f.ScalarCmp_le,
                     K::Greater => self.ast.idents.f.ScalarCmp_gt,
                     K::GreaterEqual => self.ast.idents.f.ScalarCmp_ge,
-                    K::BitAnd => self.ast.idents.f.Bitwise_and,
-                    K::BitOr => self.ast.idents.f.Bitwise_or,
-                    K::BitXor => self.ast.idents.f.Bitwise_xor,
-                    K::BitShiftLeft => self.ast.idents.f.Bitwise_shl,
-                    K::BitShiftRight => self.ast.idents.f.Bitwise_shr,
+                    K::BitAnd => self.ast.idents.f.bitwise_and,
+                    K::BitOr => self.ast.idents.f.bitwise_or,
+                    K::BitXor => self.ast.idents.f.bitwise_xor,
+                    K::BitShiftLeft => self.ast.idents.f.bitwise_shl,
+                    K::BitShiftRight => self.ast.idents.f.bitwise_shr,
                     _ => unreachable!(),
                 };
                 self.synth_typed_call_parsed_args(
@@ -9830,14 +9835,14 @@ impl TypedProgram {
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
         let lhs_has_value = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_isOk.with_span(span),
+            self.ast.idents.f.try__is_ok.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
             false,
         )?;
         let lhs_get_expr = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
@@ -9860,7 +9865,7 @@ impl TypedProgram {
         };
 
         let parsed_equals_call = self.synth_parsed_function_call(
-            self.ast.idents.f.Equals_equals.with_span(binary_op.span),
+            self.ast.idents.f.equals__equals.with_span(binary_op.span),
             &[],
             &[binary_op.lhs, binary_op.rhs],
             false,
@@ -9871,7 +9876,7 @@ impl TypedProgram {
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
             BinaryOpKind::NotEquals => self.synth_typed_call_typed_args(
-                self.ast.idents.f.bool_negated.with_span(binary_op.span),
+                self.ast.idents.f.bool__negated.with_span(binary_op.span),
                 &[],
                 &[equality_result],
                 ctx.with_no_expected_type(),

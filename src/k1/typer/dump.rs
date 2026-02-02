@@ -171,10 +171,11 @@ impl TypedProgram {
         w: &mut W,
         spec_info: &GenericInstanceInfo,
         expand: bool,
+        visited: &mut Vec<TypeId>
     ) -> std::fmt::Result {
         w.write_str("[")?;
         for (index, t) in self.types.mem.getn(spec_info.type_args).iter().enumerate() {
-            self.display_type_id(w, *t, expand)?;
+            self.display_type_id_ext(w, *t, expand, visited)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
                 w.write_str(", ")?;
@@ -216,7 +217,7 @@ impl TypedProgram {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand)?;
+                        self.display_instance_info(w, spec_info, expand, visited)?;
                     }
                     if expand {
                         w.write_str("(")?;
@@ -236,10 +237,10 @@ impl TypedProgram {
                         &self.ast.idents,
                     )?;
                     w.write_str(".")?;
-                    w.write_str("$")?;
+                    w.write_str("'")?;
                     w.write_str(self.ident_str(tv.name))?;
                 } else {
-                    w.write_str("$")?;
+                    w.write_str("'")?;
                     w.write_str(self.ident_str(tv.name))?;
                 }
                 if let Some(static_constraint) = tv.static_constraint {
@@ -274,7 +275,7 @@ impl TypedProgram {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand)?;
+                        self.display_instance_info(w, spec_info, expand, visited)?;
                     }
                     if expand {
                         w.write_str("(")?;
@@ -282,7 +283,7 @@ impl TypedProgram {
                 }
                 let is_named = defn_info.is_some();
                 if !is_named || expand {
-                    w.write_str("enum ")?;
+                    w.write_str("either ")?;
                     for (idx, v) in self.types.mem.getn(e.variants).iter().enumerate() {
                         w.write_str(self.ast.idents.get_name(v.name))?;
                         if let Some(payload) = &v.payload {
@@ -292,7 +293,7 @@ impl TypedProgram {
                         }
                         let last = idx == e.variants.len() as usize - 1;
                         if !last {
-                            w.write_str(" | ")?;
+                            w.write_str(", ")?;
                         }
                     }
                     if is_named {
@@ -386,6 +387,10 @@ impl TypedProgram {
         expand: bool,
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
+        if struc.fields.is_empty() {
+            return writ.write_str("{}")
+        }
+
         writ.write_str("{ ")?;
         for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
             if index > 0 {

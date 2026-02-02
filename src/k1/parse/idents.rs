@@ -155,44 +155,37 @@ pub(crate) struct BuiltinFunctions {
     pub List_withCapacity: QIdent,
     pub List_push: QIdent,
     pub Iterator_next: QIdent,
-    pub Iterator_sizeHint: QIdent,
     pub Iterable_iterator: QIdent,
-    pub Opt_isSome: QIdent,
-    pub Opt_get: QIdent,
-    pub Try_isOk: QIdent,
-    pub Try_getValue: QIdent,
-    pub Try_getError: QIdent,
-    pub bool_negated: QIdent,
-    pub bool_and: QIdent,
-    pub bool_or: QIdent,
+    pub try__is_ok: QIdent,
+    pub try__get_value: QIdent,
+    pub try__get_error: QIdent,
+    pub bool__negated: QIdent,
     pub core_crash: QIdent,
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
-    pub core_phony: QIdent,
     pub core_Print_printTo: QIdent,
-    pub core_string_wrapList: QIdent,
     pub buffer__allocate: QIdent,
     pub buffer_set: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
-    pub View_wrapBuffer: QIdent,
-    pub Equals_equals: QIdent,
-    pub Add_add: QIdent,
-    pub Sub_sub: QIdent,
-    pub Mul_mul: QIdent,
-    pub Div_div: QIdent,
-    pub Rem_rem: QIdent,
+    pub view_wrapBuffer: QIdent,
+    pub equals__equals: QIdent,
+    pub add__add: QIdent,
+    pub sub__sub: QIdent,
+    pub mul__mul: QIdent,
+    pub div__div: QIdent,
+    pub rem__rem: QIdent,
     pub ScalarCmp_lt: QIdent,
     pub ScalarCmp_le: QIdent,
     pub ScalarCmp_gt: QIdent,
     pub ScalarCmp_ge: QIdent,
     pub StringBuilder_new: QIdent,
     pub StringBuilder_buildTmp: QIdent,
-    pub Bitwise_and: QIdent,
-    pub Bitwise_or: QIdent,
-    pub Bitwise_xor: QIdent,
-    pub Bitwise_shl: QIdent,
-    pub Bitwise_shr: QIdent,
+    pub bitwise_and: QIdent,
+    pub bitwise_or: QIdent,
+    pub bitwise_xor: QIdent,
+    pub bitwise_shl: QIdent,
+    pub bitwise_shr: QIdent,
 }
 
 // We use the default StringInterner, which uses a contiguous string as its backend
@@ -331,46 +324,38 @@ impl IdentPool {
         let List_withCapacity = make_fn!(&[b.core, b.list], b.withCapacity);
         let List_push = make_fn!(&[b.core, b.list], intern!("push"));
         let Iterator_next = make_fn!(&[b.iterator], b.next);
-        let iterator_size_hint = make_fn!(&[b.iterator], intern!("sizeHint"));
 
         let Iterable_iterator = make_fn!(&[b.iterable], intern!("iterator"));
 
-        let Opt_isSome = make_fn!(&[b.opt], intern!("isSome"));
-        let Opt_get = make_fn!(&[b.opt], b.get);
 
         let bool_negated = make_fn!(&[intern!("bool")], intern!("negated"));
-        let bool_and = make_fn!(&[intern!("bool")], intern!("_and"));
-        let bool_or = make_fn!(&[intern!("bool")], intern!("_or"));
 
         let core_crash = make_fn!(&[b.core], intern!("crash"));
         let core_crashBounds = make_fn!(&[b.core], intern!("crash-bounds"));
         let core_discard = make_fn!(&[b.core], intern!("discard"));
-        let core_phony = make_fn!(&[b.core], intern!("phony"));
 
         let core_Print_printTo = make_fn!(&[b.core, intern!("print")], intern!("printTo"));
 
-        let core_string_wrapList = make_fn!(&[b.core, intern!("string")], intern!("wrapList"));
-
-        let Try_isOk: QIdent = make_fn!(&[b.try_], intern!("is-ok"));
-        let Try_getValue: QIdent = make_fn!(&[b.try_], intern!("get-value"));
-        let Try_getError: QIdent = make_fn!(&[b.try_], intern!("get-error"));
+        let try__is_ok: QIdent = make_fn!(&[b.try_], intern!("is-ok"));
+        let try__get_value: QIdent = make_fn!(&[b.try_], intern!("get-value"));
+        let try__get_error: QIdent = make_fn!(&[b.try_], intern!("get-error"));
 
         let buffer__allocate: QIdent = make_fn!(&[b.core, b.buffer], intern!("_allocate"));
         let buffer_set: QIdent = make_fn!(&[b.core, b.buffer], intern!("set"));
 
-        let Array_set: QIdent = make_fn!(&[b.array], intern!("set"));
+        let array__set: QIdent = make_fn!(&[b.array], intern!("set"));
 
         let mem_zeroed: QIdent = make_fn!(&[b.mem], intern!("zeroed"));
 
         let View_wrapBuffer: QIdent = make_fn!(&[b.core, b.view], intern!("wrapBuffer"));
 
-        let Equals_equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
+        let equals__equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
 
-        let Add_add: QIdent = make_fn!(&[b.add], b.add);
-        let Sub_sub: QIdent = make_fn!(&[b.sub], b.sub);
-        let Mul_mul: QIdent = make_fn!(&[b.mul], b.mul);
-        let Div_div: QIdent = make_fn!(&[b.div], b.div);
-        let Rem_rem: QIdent = make_fn!(&[b.rem], b.rem);
+        let add__add: QIdent = make_fn!(&[b.add], b.add);
+        let sub__sub: QIdent = make_fn!(&[b.sub], b.sub);
+        let mul__mul: QIdent = make_fn!(&[b.mul], b.mul);
+        let div__div: QIdent = make_fn!(&[b.div], b.div);
+        let rem__rem: QIdent = make_fn!(&[b.rem], b.rem);
 
         let ScalarCmp_lt: QIdent = make_fn!(&[b.scalar_cmp], b.lt);
         let ScalarCmp_le: QIdent = make_fn!(&[b.scalar_cmp], b.le);
@@ -381,54 +366,47 @@ impl IdentPool {
         let StringBuilder_buildTmp: QIdent =
             make_fn!(&[b.core, b.StringBuilder], intern!("buildTmp"));
 
-        let Bitwise_and = make_fn!(&[b.core, b.bitwise], intern!("bit-and"));
-        let Bitwise_or = make_fn!(&[b.core, b.bitwise], intern!("bit-or"));
-        let Bitwise_xor = make_fn!(&[b.core, b.bitwise], intern!("xor"));
-        let Bitwise_shl = make_fn!(&[b.core, b.bitwise], intern!("shift-left"));
-        let Bitwise_shr = make_fn!(&[b.core, b.bitwise], intern!("shift-right"));
+        let bitwise_and = make_fn!(&[b.core, b.bitwise], intern!("bit-and"));
+        let bitwise_or = make_fn!(&[b.core, b.bitwise], intern!("bit-or"));
+        let bitwise_xor = make_fn!(&[b.core, b.bitwise], intern!("xor"));
+        let bitwise_shl = make_fn!(&[b.core, b.bitwise], intern!("shift-left"));
+        let bitwise_shr = make_fn!(&[b.core, b.bitwise], intern!("shift-right"));
 
         let f = BuiltinFunctions {
             List_withCapacity,
             List_push,
             Iterator_next,
-            Iterator_sizeHint: iterator_size_hint,
             Iterable_iterator,
-            Opt_isSome,
-            Opt_get,
-            Try_isOk,
-            Try_getValue,
-            Try_getError,
-            bool_negated,
-            bool_and,
-            bool_or,
+            try__is_ok,
+            try__get_value,
+            try__get_error,
+            bool__negated: bool_negated,
             core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,
-            core_phony,
             core_Print_printTo,
-            core_string_wrapList,
             buffer__allocate,
             buffer_set,
-            Array_set,
+            Array_set: array__set,
             mem_zeroed,
-            View_wrapBuffer,
-            Equals_equals,
-            Add_add,
-            Sub_sub,
-            Mul_mul,
-            Div_div,
-            Rem_rem,
+            view_wrapBuffer: View_wrapBuffer,
+            equals__equals,
+            add__add,
+            sub__sub,
+            mul__mul,
+            div__div,
+            rem__rem,
             ScalarCmp_lt,
             ScalarCmp_le,
             ScalarCmp_gt,
             ScalarCmp_ge,
             StringBuilder_new,
             StringBuilder_buildTmp,
-            Bitwise_and,
-            Bitwise_or,
-            Bitwise_xor,
-            Bitwise_shl,
-            Bitwise_shr,
+            bitwise_and,
+            bitwise_or,
+            bitwise_xor,
+            bitwise_shl,
+            bitwise_shr,
         };
 
         Self { intern_pool: pool, slices, b, f }

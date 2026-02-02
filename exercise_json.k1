@@ -1,44 +1,44 @@
-// nocommit global static blocks need their own scopes; this leaks m
-// let MODULE_INFO: core/k1/ModuleManifest = {
-//   let* m = core/mem/zeroed[core/k1/ModuleManifest]();
-//   m.multithreading* <- true;
-//   m.kind* <- .Executable;
-//   m.*
-// };
-use std/json/Json
+let MODULE_INFO: core/k1/module-manifest = {
+  let* m = core/mem/zeroed[core/k1/module-manifest]();
+  m.multithreading* <- true;
+  m.kind* <- .executable;
+  m.*
+};
+
+use std/json/json
 use std/json
 
 fn testBasicEnum() {
-  let size = core/types/size-of[Json]();
-  let align = core/types/align-of[Json]();
+  let size = core/types/size-of[json]();
+  let align = core/types/align-of[json]();
   assertEquals(size, 32);
   assertEquals(align, 8);
 
-  let obj: Json = .Str("hello");
-  let null: Json = .Null;
-  assert(obj is .Str("hello"));
-  assert(null is .Null);
+  let obj: json = .str("hello");
+  let null: json = .null;
+  assert(obj is .str("hello"));
+  assert(null is .null);
 
-  let obj2: Json = .Array([.Str("hello"), .Number("123")]);
-  assert(obj2.asArray().!.get(0) is .Str("hello"));
-  assert(obj2.asArray().!.get(1) is .Number("123"));
+  let obj2: json = .array([.str("hello"), .number("123")]);
+  assert(obj2.asArray().!.get(0) is .str("hello"));
+  assert(obj2.asArray().!.get(1) is .number("123"));
 }
 
 fn testParsing() {
-  // nocommit: "lambda to be inside a function"
-  testParse(`null`, \j. j is .Null);
-  testParse(`"asdf"`, \j. j is .Str("asdf"));
-  testParse(`"as\"df"`, \j. j is .Str("as\"df"));
-  testParse(`"as\\\\df"`, \j. j is .Str("as\\df"));
-  testParse(`""`, \j. j is .Str(""));
-  testParse(`  ""`, \j. j is .Str(""));
+  testParse(`null`      , \j. j is .null);
+  testParse(`"asdf"`    , \j. j is .str("asdf"));
+  testParse(`"as\"df"`  , \j. j is .str("as\"df"));
+  testParse(`"as\\\\df"`, \j. j is .str("as\\df"));
+  testParse(`""`        , \j. j is .str(""));
+  testParse(`  ""`      , \j. j is .str(""));
 
-  testParse(`false`, \j. j is .Bool(false));
-  testParse(`true`, \j. j is .Bool(true));
-  testParse(`{{}`, \j. j is .Object(m) and m.isEmpty());
+  testParse(`false`, \j. j is .bool(false));
+  testParse(`true`,  \j. j is .bool(true));
+  testParse(`{{}`,   \j. j is .object(m) and m.isEmpty());
   testParse(
     `{{ "foo": true, "baz": false }`,
-    \j. j is .Object(m) and (m.map(\f. f.key) == ["foo", "baz"] and m.map(\f. f.value) == [.Bool(true), .Bool(false)])
+    \j. j is .object(m) and
+        (m.map(\f. f.key) == ["foo", "baz"] and m.map(\f. f.value.asBool().!) == [true, false])
   );
   //testParse(`[]`, \j. j is .Array(_));
 }
@@ -47,14 +47,12 @@ fn main(): i32 {
   0
 }
 
-fn testParse(s: string, f: some \Json -> bool) {
-  switch json/parse(s) {
+fn testParse(s: string, f: some \json -> bool) {
+  switch json/parse-from-string(s) {
     .err(msg) -> crash("Failed '{s}': {msg}"),
-    .Ok(json) -> if not f(json) crash("Failed '{s}'")
+    .ok(json) -> if not f(json) crash("Failed '{s}'")
   }
 }
 
-#static { testParsing() }
-// nocommit: "lambda to be inside a function"
-//testParse(`"asdf"`, \j. j is .Str("asdf"));
+#static testParsing()
 

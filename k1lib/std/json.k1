@@ -1,20 +1,22 @@
 ns json;
 
-deftype Json = either
-  Null,
-  Str(string),
-  Number(string),
-  Bool(bool),
-  Array(list[Json]),
-  Object(list[{ key: string, value: Json }])
+use core/StringBuilder
 
-deftype Parser = {
+deftype json = either
+  null,
+  str   (string),
+  number(string),
+  bool  (bool),
+  array (list[json]),
+  object(list[{ key: string, value: json }])
+
+deftype parser = {
   input: string,
   cursor: size,
 }
-ns Parser {
-  fn peek(self: Parser): ?char { self.input.getOpt(self.cursor) }
-  fn next(self: *mut Parser): ?char {
+ns parser {
+  fn peek(self: parser): ?char { self.input.getOpt(self.cursor) }
+  fn next(self: *mut parser): ?char {
     switch self.peek() {
       .none -> .none,
       .some(c) -> {
@@ -23,9 +25,9 @@ ns Parser {
       }
     }
   }
-  fn advance(self: *mut Parser) { self.cursor* <- self.cursor + 1 }
-  fn advanceN(self: *mut Parser, n: size) { self.cursor* <- self.cursor + n }
-  fn expect(self: *mut Parser, c: char): bool {
+  fn advance(self: *mut parser) { self.cursor* <- self.cursor + 1 }
+  fn advanceN(self: *mut parser, n: size) { self.cursor* <- self.cursor + n }
+  fn expect(self: *mut parser, c: char): bool {
     switch self.peek() {
       .some(p) -> {
         let ok = p == c;
@@ -35,7 +37,7 @@ ns Parser {
       .none -> false
     }
   }
-  fn eatWhitespace(self: *mut Parser) {
+  fn eatWhitespace(self: *mut parser) {
     loop {
       switch self.peek() {
         .none -> break(),
@@ -52,14 +54,14 @@ ns Parser {
   }
 }
 
-fn nextOr(context p: *mut Parser)(msg: string): Result[char, string] {
+fn nextOr(context p: *mut parser)(msg: string): result[char, string] {
   switch p.next() {
     .none -> .err(msg),
     .some(c) -> .ok(c)
   }
 }
 
-fn _parseString(context p: *mut Parser)(): Result[Json, string] {
+fn _parseString(context p: *mut parser)(): result[json, string] {
   if not p.expect('"') { return(.err("expected string")) };
   let* sb = StringBuilder/new();
   loop {
@@ -73,26 +75,26 @@ fn _parseString(context p: *mut Parser)(): Result[Json, string] {
         _ -> return(.err("Unsupported escaped char: {c2}"))
       };
     } else if c1 == '"' {
-      break(.ok(.Str(sb.build())))
+      break(.ok(.str(sb.build())))
     } else {
       sb.write-char(c1);
     }
   }
 }
 
-fn _parseObject(context p: *mut Parser)(): Result[Json, string] {
+fn _parseObject(context p: *mut parser)(): result[json, string] {
   if not p.expect('{') { return(.err("expected {{")) };
   if p.peek() == .some('}') { 
     p.advance();
-    return(.ok(.Object([])))
+    return(.ok(.object([])))
   };
 
-  let* members = list/empty[{ key: string, value: Json }]();
+  let* members = list/empty[{ key: string, value: json }]();
 
   loop {
     eprintln("parseObject m={members.len()} {p.peek()}");
     p.eatWhitespace();
-    require _parseString().try is .Str(keyName) else {
+    require _parseString().try is .str(keyName) else {
       return(.err("expected string key in object"))
     };
 
@@ -105,7 +107,7 @@ fn _parseObject(context p: *mut Parser)(): Result[Json, string] {
     p.eatWhitespace();
     switch p.peek() {
       .none -> break(.err("Unexpected end of input in object")),
-      .some('}') -> break(.ok(.Object(members.*))),
+      .some('}') -> break(.ok(.object(members.*))),
       .some(',') -> {
         p.advance();
       },
@@ -114,29 +116,29 @@ fn _parseObject(context p: *mut Parser)(): Result[Json, string] {
   }
 }
 
-fn _parseNextValue(context p: *mut Parser)(): Result[Json, string] {
+fn _parseNextValue(context p: *mut parser)(): result[json, string] {
   println("pnv loop {p.cursor} {p.peek()}");
   p.eatWhitespace();
   if p.peek() is .some(c) {
     switch c {
       'n' -> {
         p.advanceN(4);
-        .ok(.Null)
+        .ok(.null)
       },
-      'f' -> { p.advanceN(5); .ok(.Bool(false)) },
-      't' -> { p.advanceN(4); .ok(.Bool(true)) },
+      'f' -> { p.advanceN(5); .ok(.bool(false)) },
+      't' -> { p.advanceN(4); .ok(.bool(true)) },
       '"' -> _parseString(),
       '{' -> _parseObject(),
       '[' -> crash("parse array"),
       _ if c.isAsciiDigit() -> crash("parse number"),
-      _ -> return(.err("Not valid Json"))
+      _ -> return(.err("Not valid json"))
     }
   } else {
     return(.err("No content"))
   }
 }
 
-fn parse(input: string): Result[Json, string] {
-  let* p: *mut Parser = { input, cursor: 0 };
+fn parse-from-string(input: string): result[json, string] {
+  let* p: *mut parser = { input, cursor: 0 };
   _parseNextValue(context p)()
 }
