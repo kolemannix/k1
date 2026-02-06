@@ -148,6 +148,7 @@ pub(crate) struct BuiltinIdents {
     pub arena: Ident,
     pub t: Ident,
     pub phony: Ident,
+    pub some: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -313,6 +314,7 @@ impl IdentPool {
             arena: intern!("arena"),
             t: intern!("t"),
             phony: intern!("phony"),
+            some: intern!("some"),
         };
 
         macro_rules! make_fn {

@@ -35,10 +35,12 @@ Non-major Ideas
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 
 Syntax/elegance
+- [ ] consider replacing `\` with 'fn' for lambda notation, one more character and we
+      can be similarly elegant, `\x.x` becomes `fn x.x`
+- [ ] Rename `view` to `span`
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
-- [ ] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
+- [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
   - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
-- [x] Rename `view` to `span`, once and for all
 - [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
   - Allow users to capitalize domain types, but types like List/Opt/Buffer/Result should sink into the background
 - [x] Replace the builtin for ... yield with a userspace function taking a lambda
@@ -49,6 +51,7 @@ Syntax/elegance
   - [x] Also: do safe integer coercions automatically
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
 - [x] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+ - Today: "hello {name}" -> string. Tomorrow: 
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing

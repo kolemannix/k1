@@ -121,9 +121,10 @@ impl TypedProgram {
         ty: TypeId,
         expand: bool,
     ) -> std::fmt::Result {
-        // nocommit: use scratch memory
-        let mut visited = vec![];
-        self.display_type_id_ext(writ, ty, expand, &mut visited)
+        let mut visited = self.buffers.visited_types.borrow_mut();
+        let res = self.display_type_id_ext(writ, ty, expand, &mut visited);
+        visited.clear();
+        res
     }
 
     pub fn display_type_id_rec<W: fmt::Write + ?Sized>(
@@ -131,7 +132,7 @@ impl TypedProgram {
         writ: &mut W,
         ty: TypeId,
         expand: bool,
-        visited: &mut Vec<TypeId>,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         self.display_type_id_ext(writ, ty, expand, visited)
     }
@@ -161,8 +162,9 @@ impl TypedProgram {
         // But I think its ok to allocate the string; idk its probably way too big of an allocation
         // for most types and we'd be better off using one of our arenas
         let mut s = String::with_capacity(1028);
-        let mut visited = vec![];
+        let mut visited = self.buffers.visited_types.borrow_mut();
         self.display_type_id_ext(&mut s, type_id, expand, &mut visited).unwrap();
+        visited.clear();
         s
     }
 
@@ -171,7 +173,7 @@ impl TypedProgram {
         w: &mut W,
         spec_info: &GenericInstanceInfo,
         expand: bool,
-        visited: &mut Vec<TypeId>
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
         for (index, t) in self.types.mem.getn(spec_info.type_args).iter().enumerate() {
@@ -190,17 +192,17 @@ impl TypedProgram {
         w: &mut W,
         type_id: TypeId,
         expand: bool,
-        visited: &mut Vec<TypeId>,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         let defn_info = self.types.get_defn_info(type_id);
-        if visited.contains(&type_id) {
+        if visited.contains_key(&type_id) {
             if let Some(defn_info) = defn_info {
                 self.write_ident(w, defn_info.name)?;
             }
-            return Ok(())
+            return Ok(());
         }
 
-        visited.push(type_id);
+        visited.insert(type_id, ());
         match self.types.get(type_id) {
             Type::Char => w.write_str("char"),
             Type::Integer(int_type) => {
@@ -343,8 +345,9 @@ impl TypedProgram {
                 self.display_type_id_rec(w, fp.function_type_id, expand, visited)?;
                 Ok(())
             }
-            Type::Lambda(lam) => {
+            Type::Lambda(lam_id) => {
                 write!(w, "lambda_{}(", type_id)?;
+                let lam = self.types.lambda_types.get(*lam_id);
                 self.display_type_id_rec(w, lam.function_type, expand, visited)?;
                 w.write_str(")")?;
                 Ok(())
@@ -365,12 +368,19 @@ impl TypedProgram {
                 w.write_str("]")?;
                 Ok(())
             }
-            Type::Unresolved(_u) => w.write_str("<unresolved>"),
+            Type::Unresolved(u) => {
+                let defn = self.ast.type_defns.get(*u);
+                w.write_str("<unresolved definition '")?;
+                self.write_ident(w, defn.name)?;
+                w.write_str("'>")?;
+                Ok(())
+            }
             Type::Array(array_type) => {
                 w.write_str("array[")?;
                 self.display_type_id_ext(w, array_type.element_type, expand, visited)?;
                 w.write_str(", ")?;
-                if let Some(size) = array_type.concrete_count {
+                let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
+                if let Some(size) = concrete_count {
                     write!(w, "{}", size)?;
                 } else {
                     self.display_type_id_rec(w, array_type.size_type, expand, visited)?;
@@ -385,10 +395,10 @@ impl TypedProgram {
         writ: &mut W,
         struc: &StructType,
         expand: bool,
-        visited: &mut Vec<TypeId>,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         if struc.fields.is_empty() {
-            return writ.write_str("{}")
+            return writ.write_str("{}");
         }
 
         writ.write_str("{ ")?;
@@ -702,7 +712,8 @@ impl TypedProgram {
             }
             TypedExpr::Lambda(lambda_expr) => {
                 w.write_char('\\')?;
-                let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let lambda_type_id = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let lambda_type = self.types.lambda_types.get(lambda_type_id);
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
@@ -1192,7 +1203,7 @@ impl TypedProgram {
                 }
                 self.write_ident(w, tp.name)?;
             }
-            for ftp in self.function_type_params.get_slice(signature.function_type_params).iter() {
+            for ftp in self.mem.getn(signature.function_type_params).iter() {
                 self.write_ident(w, ftp.name)?;
                 w.write_str(": ")?;
                 self.display_type_id(w, ftp.type_id, false)?;
@@ -1234,8 +1245,9 @@ impl TypedProgram {
             tvar_info.type_parameter_count, tvar_info.inference_variable_count
         )?;
         writeln!(w)?;
-        let mut visited = vec![];
+        let mut visited = self.buffers.visited_types.borrow_mut();
         self.display_type_id_ext(w, id, true, &mut visited)?;
+        visited.clear();
         Ok(())
     }
 
@@ -1304,6 +1316,24 @@ pub trait DepDisplay<Dep, Args> {
     fn fmt(&self, w: &mut dyn Write, dep: &Dep, args: &Args) -> std::fmt::Result;
 }
 
+impl<D, A> DepDisplay<D, A> for str {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl<D, A> DepDisplay<D, A> for Cow<'static, str> {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl<D, A> DepDisplay<D, A> for String {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
 impl<D, A, T> DepDisplay<D, A> for &T
 where
     T: DepDisplay<D, A> + ?Sized,
@@ -1338,12 +1368,6 @@ pub fn depfmt<'d, 'a, 'v, D, A, T: ?Sized>(
     DepFmt { value, dep, args }
 }
 
-impl<D, A> DepDisplay<D, A> for str {
-    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
-        f.write_str(self)
-    }
-}
-
 impl DepDisplay<TypedProgram, K1DisplayArgs> for MStr<MemTmp> {
     fn fmt(
         &self,
@@ -1363,8 +1387,10 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for Ident {
 
 impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
-        let mut visited = vec![];
-        k1.display_type_id_ext(f, *self, args.verbose, &mut visited)
+        let mut visited = k1.buffers.visited_types.borrow_mut();
+        let result = k1.display_type_id_ext(f, *self, args.verbose, &mut visited);
+        visited.clear();
+        result
     }
 }
 

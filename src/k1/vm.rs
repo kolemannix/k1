@@ -18,8 +18,8 @@ use crate::bc::{
 };
 use crate::parse::NumericWidth;
 use crate::typer::types::{
-    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, STRING_TYPE_ID,
-    ScalarType, Type, TypeId, TypePool,
+    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType,
+    PhysicalTypePacked, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
     FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
@@ -306,7 +306,7 @@ impl Vm {
                             Inst::Alloca { t, .. } => *t,
                             _ => physical_type,
                         };
-                        render_debug_value(w, self, k1, type_to_use, local).unwrap();
+                        render_debug_value(w, self, k1, type_to_use.unpack(), local).unwrap();
                         writeln!(w).unwrap()
                     }
                     InstKind::Void => {
@@ -591,8 +591,8 @@ pub fn execute_compiled_unit(
 
     let exit_code = exec_loop(k1, vm, unit)?;
 
-    let end = k1.timing.clock.raw();
-    k1.timing.total_vm_nanos += k1.timing.clock.delta_as_nanos(start, end);
+    let elapsed_nanos = k1.timing.elapsed_nanos(start);
+    k1.timing.total_vm_nanos += elapsed_nanos as i64;
 
     report_execution_messages(k1, vm, span, exit_code);
 
@@ -600,26 +600,30 @@ pub fn execute_compiled_unit(
         failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
         let expr_type = k1.exprs.get_type(expr_id);
-        let final_value = match top_ret_info.pt {
-            PhysicalType::Empty => Value(0),
-            PhysicalType::Scalar(scalar_type) => {
-                // Since we stored the return value to this location, we need to load it
-                // before invoking static conversion
-                let RetPlace::Addr { addr } = top_ret_info.place else {
-                    panic!("We set this to Addr")
-                };
-                let loaded = load_scalar(scalar_type, addr.cast_const());
-                loaded
-            }
-            PhysicalType::Agg(_) => {
-                let RetPlace::Addr { addr } = top_ret_info.place else {
-                    panic!("We set this to Addr")
-                };
-                Value::ptr(addr.cast_const())
-            }
-        };
-        let returned_value = vm_value_to_static_value(k1, expr_type, final_value, span)?;
-        Ok(returned_value)
+        if unit.fn_type.diverges {
+            Ok(k1.static_values.empty_id())
+        } else {
+            let vm_value = match top_ret_info.pt {
+                PhysicalType::Empty => Value(0),
+                PhysicalType::Scalar(scalar_type) => {
+                    // Since we stored the return value to this location, we need to load it
+                    // before invoking static conversion
+                    let RetPlace::Addr { addr } = top_ret_info.place else {
+                        panic!("We set this to Addr")
+                    };
+                    let loaded = load_scalar(scalar_type, addr.cast_const());
+                    loaded
+                }
+                PhysicalType::Agg(_) => {
+                    let RetPlace::Addr { addr } = top_ret_info.place else {
+                        panic!("We set this to Addr")
+                    };
+                    Value::ptr(addr.cast_const())
+                }
+            };
+            let returned_value = vm_value_to_static_value(k1, expr_type, vm_value, span)?;
+            Ok(returned_value)
+        }
     }
 }
 
@@ -662,6 +666,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
         vm.eval_span = *k1.bytecode.sources.get(inst_id);
         let inst_index = inst_to_index(inst_id, inst_offset);
+        k1.timing.total_vm_instrs += 1;
 
         // if debugger {
         //eprintln!(
@@ -738,7 +743,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let base_ptr = base_value.as_ptr();
                 let index_value = resolve_value!(element_index);
                 let index = index_value.bits();
-                let elem_layout = k1.types.get_pt_layout(element_t);
+                let elem_layout = k1.types.get_pt_layout(element_t.unpack());
 
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.offset_at_index(index as usize)) };
@@ -1624,7 +1629,7 @@ fn resolve_global(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     global_id: TypedGlobalId,
-    t: PhysicalType,
+    t_packed: PhysicalTypePacked,
 ) -> TyperResult<Value> {
     // ** If referencing, allocate layout and perform a store to produce a valid address
     // Case 1: It's a constant, already evaluated, stored in the global static space
@@ -1642,12 +1647,18 @@ fn resolve_global(
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
         None => {
+            // Run this global's body, subtracting the time from our vm exec time
+            let eval_start = k1.timing.raw();
             k1.eval_global_body(global.ast_id)?;
+            let eval_time = k1.timing.elapsed_nanos(eval_start);
+            k1.timing.total_vm_nanos -= eval_time as i64;
+
             let value_id = k1.globals.get(global_id).initial_value.unwrap();
             value_id
         }
         Some(value_id) => value_id,
     };
+    let t = t_packed.unpack();
     debug!(
         "shared global is: {}. the `t` of the instr is: {}",
         k1.static_value_to_string(initial_value_id),
@@ -1715,7 +1726,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
         StaticValue::Struct(static_struct) => {
-            let layout = k1.types.get_layout(static_struct.type_id);
+            let layout = k1.get_layout(static_struct.type_id);
             let struct_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, struct_base, static_value_id);
@@ -1723,24 +1734,25 @@ pub fn static_value_to_vm_value(
             Value::ptr(struct_base.cast_const())
         }
         StaticValue::Enum(e) => {
-            let layout = k1.types.get_layout(e.enum_type_id);
+            let layout = k1.get_layout(e.enum_type_id);
             let enum_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, enum_base, static_value_id);
 
             Value::ptr(enum_base.cast_const())
         }
-        StaticValue::LinearContainer(cont) => {
+        StaticValue::LinearContainer(container) => {
             let (element_type, _container_kind) =
-                k1.types.get_as_container_instance(cont.type_id).unwrap();
-            let kind = cont.kind;
-            let len = cont.len();
-            let layout = k1.types.get_layout(element_type);
-            let array_allocation_layout = layout.array_me(cont.len());
+                k1.types.get_as_container_instance(container.type_id).unwrap();
+            let kind = container.kind;
+            let len = container.len();
+            let container_elements = container.elements;
+            let layout = k1.get_layout(element_type);
+            let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = k1.vm_static_stack.push_layout_uninit(array_allocation_layout);
 
-            store_static_array_elements(k1, array_base_ptr, element_type, cont.elements);
+            store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
                 StaticContainerKind::View => {
@@ -1767,31 +1779,34 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
         StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
-            let string_pt = k1.types.get_physical_type(STRING_TYPE_ID).unwrap();
+            let string_pt = k1.get_physical_type(STRING_TYPE_ID).unwrap();
             store_value(&k1.types, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
-            let layout = k1.types.get_layout(*type_id);
+            let layout = k1.get_layout(*type_id);
             unsafe { std::ptr::write_bytes(dst, 0, layout.size as usize) };
         }
         StaticValue::Struct(static_struct) => {
-            let struct_layout = k1.types.get_struct_layout(static_struct.type_id);
+            let struct_fields = static_struct.fields;
+            let struct_layout = k1.get_struct_layout(static_struct.type_id);
 
             for (field, field_value_id) in
-                struct_layout.iter().zip(k1.static_values.mem.getn(static_struct.fields))
+                struct_layout.iter().zip(k1.static_values.mem.getn(struct_fields))
             {
                 let field_ptr = unsafe { dst.byte_add(field.offset as usize) };
                 store_static_value(k1, field_ptr, *field_value_id);
             }
         }
         StaticValue::Enum(e) => {
-            let enum_agg_id = k1.types.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+            let variant_index = e.variant_index;
+            let payload = e.payload;
+            let enum_agg_id = k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
             let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
-            let variant_pt = k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
+            let variant_pt = k1.types.mem.get_nth(enum_pt.variants, variant_index as usize);
 
             store_typed_int(dst, variant_pt.tag);
 
-            if let Some(payload_value_id) = e.payload {
+            if let Some(payload_value_id) = payload {
                 let Some(payload_offset) = enum_pt.payload_offset else {
                     panic!("enum variant has payload but enum has no payload offset")
                 };
@@ -1799,13 +1814,14 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                 store_static_value(k1, payload_ptr, payload_value_id);
             };
         }
-        StaticValue::LinearContainer(cont) => {
+        StaticValue::LinearContainer(container) => {
             let (element_type, _container_kind) =
-                k1.types.get_as_container_instance(cont.type_id).unwrap();
-            let kind = cont.kind;
-            let len = cont.len();
-            let layout = k1.types.get_layout(element_type);
-            let array_allocation_layout = layout.array_me(cont.len());
+                k1.types.get_as_container_instance(container.type_id).unwrap();
+            let kind = container.kind;
+            let len = container.len();
+            let container_elements = container.elements;
+            let layout = k1.get_layout(element_type);
+            let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = match kind {
                 StaticContainerKind::View => {
@@ -1814,7 +1830,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                 StaticContainerKind::Array => dst,
             };
 
-            store_static_array_elements(k1, array_base_ptr, element_type, cont.elements);
+            store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
                 StaticContainerKind::View => {
@@ -1836,7 +1852,7 @@ fn store_static_array_elements(
     elements: MSlice<StaticValueId, StaticValuePool>,
 ) {
     debug!("static_value_to_vm_value storing {} elements", elements.len());
-    let element_layout = k1.types.get_layout(element_type);
+    let element_layout = k1.get_layout(element_type);
 
     for index in 0..elements.len() {
         let elem_value_id = k1.static_values.mem.get_nth(elements, index as usize);
@@ -1858,8 +1874,8 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let k1_string = k1_types::K1ViewLike { len: s.len(), data: s.as_ptr() };
     if cfg!(debug_assertions) {
         let char_view_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
-        let string_layout = k1.types.get_layout(STRING_TYPE_ID);
-        debug_assert_eq!(string_layout, k1.types.get_layout(char_view_type_id));
+        let string_layout = k1.get_layout(STRING_TYPE_ID);
+        debug_assert_eq!(string_layout, k1.get_layout(char_view_type_id));
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
@@ -2225,7 +2241,7 @@ pub fn vm_value_to_static_value(
     span: SpanId,
 ) -> TyperResult<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
-    let Some(pt) = k1.types.get_physical_type(type_id) else {
+    let Some(pt) = k1.get_physical_type(type_id) else {
         return failf!(
             span,
             "Not a physical type, cannot bake to static: {}",
@@ -2257,12 +2273,13 @@ pub fn vm_value_to_static_value(
         }
         Type::Array(array_type) => {
             let element_type = array_type.element_type;
-            let Some(count) = array_type.concrete_count else {
+            let concrete_count = k1.get_concrete_count_of_array(array_type.size_type);
+            let Some(count) = concrete_count else {
                 return failf!(span, "Cannot convert array of unknown size to static value");
             };
             let count = count as usize;
             let mut elements = k1.static_values.mem.new_list(count as u32);
-            let Some(element_pt) = k1.types.get_physical_type(element_type) else {
+            let Some(element_pt) = k1.get_physical_type(element_type) else {
                 return failf!(
                     span,
                     "Element type is not physical: {}",
@@ -2301,7 +2318,7 @@ pub fn vm_value_to_static_value(
                     }
                     ContainerKind::View => {
                         let view: k1_types::K1ViewLike = value_as_view(vm_value);
-                        let element_pt = k1.types.get_physical_type(element_type).unwrap();
+                        let element_pt = k1.get_physical_type(element_type).unwrap();
                         let mut elements = k1.static_values.mem.new_list(view.len as u32);
                         for index in 0..view.len {
                             let elem_vm = get_view_element(k1, view.data, element_pt, index);
@@ -2321,7 +2338,7 @@ pub fn vm_value_to_static_value(
                 let struct_ptr = vm_value.as_ptr();
                 let struct_type_fields = struct_type.fields;
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
-                let struct_shape = k1.types.get_struct_layout(type_id);
+                let struct_shape = k1.get_struct_layout(type_id);
                 for (physical_field, k1_field) in
                     struct_shape.iter().zip(k1.types.mem.getn(struct_type_fields))
                 {
@@ -2342,7 +2359,7 @@ pub fn vm_value_to_static_value(
 
             let tag_type = typed_enum.tag_type;
             let variants = typed_enum.variants;
-            let enum_agg_id = k1.types.get_physical_type(type_id).unwrap().expect_agg();
+            let enum_agg_id = k1.get_physical_type(type_id).unwrap().expect_agg();
             let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
             let payload_offset = enum_pt.payload_offset;
 
@@ -2358,7 +2375,7 @@ pub fn vm_value_to_static_value(
             let payload = match variant.payload {
                 None => None,
                 Some(payload_type_id) => {
-                    let payload_pt = k1.types.get_physical_type(payload_type_id).unwrap();
+                    let payload_pt = k1.get_physical_type(payload_type_id).unwrap();
                     let payload_offset = payload_offset.unwrap();
                     let payload_ptr = unsafe { enum_ptr.byte_add(payload_offset as usize) };
 
@@ -2476,7 +2493,7 @@ fn render_debug_address(w: &mut impl std::fmt::Write, vm: &Vm, value: Value) -> 
 }
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
-    match k1.types.get_physical_type(type_id) {
+    match k1.get_physical_type(type_id) {
         None => ice_span!(
             k1,
             span,

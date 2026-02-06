@@ -59,19 +59,12 @@ ns buffer {
   fn filledIn[T](context mode: mem/alloc-mode)(size: size, value: T): buffer[T] {
     let buf: buffer[T] = _allocateIn[T](size);
 
-    // TODO: Make this specialization possible
-    //#if types/getTypeSchema[T]() is .Int(.U8) or .Int(.I8) {
-    //  let valueU8 = meta/typeAssert[T, u8](value);
-    //  println("specialized memset in buffer/filledIn");
-    //  mem/set(dst = buf.dataPtr(), value = value, count = size)
-    //} else {
-    //println("unspecialized buffer/filledIn");
-      let i = 0;
-      while i < size {
-        buf.getRefUnchecked(i) <- value;
-        i := i + 1;
-      };
-    //};
+    // nocommit: Use type patterns to specialize this on byte!
+    let i = 0;
+    while i < size {
+      buf.getRefUnchecked(i) <- value;
+      i := i + 1;
+    };
     buf
   }
 

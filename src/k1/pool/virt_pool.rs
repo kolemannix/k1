@@ -97,6 +97,9 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn add_expected_id(&mut self, t: T, expected_id: Index) -> Index {
         let id = self.next_id();
 
+        #[cfg(not(debug_assertions))]
+        let _ = expected_id;
+
         #[cfg(debug_assertions)]
         if id != expected_id {
             panic!("VPool add_expected_id: expected id {}, got {}", std::convert::Into::<NonZeroU32>::into(expected_id), id.into());
@@ -252,6 +255,10 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
             std::any::type_name::<T>(),
             std::mem::size_of::<T>()
         );
+    }
+
+    pub(crate) fn skip_next_n_slots(&mut self, to_skip: usize) {
+        self.set_len_checked(self.len + to_skip);
     }
 }
 

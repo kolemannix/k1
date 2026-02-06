@@ -186,10 +186,13 @@ pub struct MemWriter<Tag> {
 impl<Tag> std::fmt::Write for MemWriter<Tag> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         let mem = unsafe { &mut *self.mem };
+
         #[cfg(debug_assertions)]
         let start = mem.cursor;
 
+        #[cfg_attr(not(debug_assertions), allow(unused_variables))]
         let bytes = mem.pushn_raw(s.as_bytes());
+
         #[cfg(debug_assertions)]
         {
             let bytes_start = bytes.as_ptr();
@@ -571,14 +574,21 @@ macro_rules! k1_format_user {
 }
 
 #[macro_export]
-macro_rules! kbail {
+macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg: String = k1_format_user!($k1, $fmt, $($arg),*).to_string();
-        return Err(TyperError {
+        TyperError {
             span: $span,
             message: msg,
             level: MessageLevel::Error
-        })
+        }
+    }}
+}
+
+#[macro_export]
+macro_rules! kbail {
+    ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        return Err($crate::kerr!($k1, $span, $fmt, $($arg),*))
     }}
 }
 
@@ -652,9 +662,26 @@ impl<T, Tag> MList<T, Tag> {
         T: Copy,
     {
         let loc = std::panic::Location::caller();
+        // FIXME: arena, special case for growth when this list is the last thing in the arena,
+        // which it quite often will be
         if self.len == self.cap() {
-            let new_cap = self.cap() as u32 * 2;
-            eprintln!("{}:{} Growing from {} -> {}", loc.file(), loc.line(), self.cap(), new_cap);
+            // Growth doesnt invalidate the old pointers in our arena
+            let new_cap = if self.len == 0 {
+                let size_of_t = size_of::<T>();
+                let initial_cap = if size_of_t >= 1024 { 1 } else { 8 };
+                initial_cap
+            } else {
+                self.cap() as u32 * 2
+            };
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "{}:{} Growing from {} -> {}",
+                    loc.file(),
+                    loc.line(),
+                    self.cap(),
+                    new_cap
+                );
+            }
             let mut new_me = mem.new_list(new_cap);
             new_me.extend(self.as_slice());
             new_me.push_unchecked(val);
@@ -700,7 +727,7 @@ impl<T, Tag> MList<T, Tag> {
     pub fn extend_iter<I>(&mut self, vals: I)
     where
         T: Copy,
-        I: Iterator<Item = T>
+        I: Iterator<Item = T>,
     {
         for item in vals {
             self.push(item);
@@ -878,6 +905,17 @@ mod test {
     fn grow() {
         let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_list(2);
+        v.push_grow(&mut arena, 1);
+        v.push_grow(&mut arena, 2);
+        v.push_grow(&mut arena, 3);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn grow_from_zero() {
+        let mut arena: Mem<()> = Mem::make();
+        let mut v = arena.new_list(0);
         v.push_grow(&mut arena, 1);
         v.push_grow(&mut arena, 2);
         v.push_grow(&mut arena, 3);

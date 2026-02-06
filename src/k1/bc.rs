@@ -11,7 +11,7 @@ use crate::kmem::MList;
 use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
-use crate::{failf, mformat};
+use crate::{failf, static_assert_size};
 use crate::{
     kmem::{self, MSlice, MStr},
     lex::SpanId,
@@ -59,6 +59,7 @@ pub struct ProgramBytecode {
     pub exprs: FxHashMap<TypedExprId, CompiledUnit>,
     pub module_config: BcModuleConfig,
     pub calls: VPool<BcCall, BcCallId>,
+    pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
     b_blocks: Vec<Block>,
@@ -78,7 +79,7 @@ pub struct BcModuleConfig {}
 
 impl ProgramBytecode {
     pub fn make(instr_count_hint: usize) -> Self {
-        let function_count_hint = instr_count_hint / 32;
+        let function_count_hint = instr_count_hint / 16;
         ProgramBytecode {
             mem: kmem::Mem::make(),
             instrs: VPool::make_with_hint("bytecode_soa_instrs", instr_count_hint),
@@ -87,6 +88,7 @@ impl ProgramBytecode {
             debug_info: VPool::make_with_hint("bytecode_soa_debug_info", instr_count_hint),
             functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
             calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
+            phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: BcModuleConfig {},
             b_blocks: Vec::with_capacity(256),
@@ -211,16 +213,16 @@ pub enum Value {
     /// of the `k1` global declaration kind (referencing or not!)
     /// This greatly simplifies downstream code
     Global {
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         id: TypedGlobalId,
     },
     StaticValue {
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         id: StaticValueId,
     },
     FunctionAddr(FunctionId),
     FnParam {
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         index: u32,
     },
 
@@ -270,7 +272,7 @@ pub enum Inst {
 
     // Memory manipulation
     Alloca {
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         vm_layout: Layout,
     },
     Store {
@@ -285,7 +287,7 @@ pub enum Inst {
     Copy {
         dst: Value,
         src: Value,
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         vm_size: u32,
     },
     StructOffset {
@@ -295,7 +297,7 @@ pub enum Inst {
         vm_offset: u32,
     },
     ArrayOffset {
-        element_t: PhysicalType,
+        element_t: PhysicalTypePacked,
         base: Value,
         element_index: Value,
     },
@@ -321,7 +323,7 @@ pub enum Inst {
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
     CameFrom {
-        t: PhysicalType,
+        t: PhysicalTypePacked,
         incomings: MSlice<CameFromCase, ProgramBytecode>,
     },
     Ret(Value),
@@ -335,7 +337,7 @@ pub enum Inst {
     },
     BitCast {
         v: Value,
-        to: PhysicalType,
+        to: PhysicalTypePacked,
     },
     IntTrunc {
         v: Value,
@@ -499,6 +501,7 @@ pub enum Inst {
         value: Value,
     },
 }
+static_assert_size!(Inst, 32);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IntCmpPred {
@@ -560,9 +563,9 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
         Value::Data32 { t: scalar_type, data: _ } => {
-            InstKind::Value(PhysicalType::Scalar(*scalar_type))
+            InstKind::Value(PhysicalType::Scalar(*scalar_type).pack())
         }
-        Value::Empty => InstKind::Value(PhysicalType::Empty),
+        Value::Empty => InstKind::Value(PhysicalType::Empty.pack()),
     }
 }
 
@@ -580,7 +583,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
-        Inst::Call { id } => InstKind::Value(bc.calls.get(*id).ret_type),
+        Inst::Call { id } => InstKind::Value(bc.calls.get(*id).ret_type.pack()),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
@@ -628,32 +631,32 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
 
 #[derive(Clone, Copy)]
 pub enum InstKind {
-    Value(PhysicalType),
+    Value(PhysicalTypePacked),
     Void,
     Terminator,
 }
 
 impl InstKind {
-    pub const EMPTY: InstKind = Self::Value(PhysicalType::Empty);
+    pub const EMPTY: InstKind = Self::Value(PhysicalTypePacked::EMPTY);
     pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
-        InstKind::Value(PhysicalType::Scalar(st))
+        InstKind::Value(PhysicalType::Scalar(st).pack())
     }
 
     fn is_ptr(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)))
+        matches!(self, InstKind::Value(ptp) if ptp.is_ptr())
     }
     fn is_int(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(st)) if st.is_int())
+        matches!(self, InstKind::Value(ptp) if ptp.is_int())
     }
-    fn is_byte(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::U8)))
+    fn is_u8(&self) -> bool {
+        matches!(self, InstKind::Value(ptp) if ptp.is_u8())
     }
     fn is_aggregate(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Agg(_)))
+        matches!(self, InstKind::Value(ptp) if ptp.is_agg())
     }
     fn is_storage(&self) -> bool {
         self.is_ptr() || self.is_aggregate()
@@ -664,13 +667,13 @@ impl InstKind {
     #[track_caller]
     pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
-            InstKind::Value(t) => Ok(*t),
+            InstKind::Value(t) => Ok(t.unpack()),
             _ => Err(format!("Expected value, got {}", self.kind_str())),
         }
     }
     fn as_value(&self) -> Option<PhysicalType> {
         match self {
-            InstKind::Value(t) => Some(*t),
+            InstKind::Value(t) => Some(t.unpack()),
             _ => None,
         }
     }
@@ -683,9 +686,7 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            InstKind::Value(PhysicalType::Scalar(_)) => "scalar",
-            InstKind::Value(PhysicalType::Agg(_)) => "agg",
-            InstKind::Value(PhysicalType::Empty) => "empty",
+            InstKind::Value(_) => "value",
             InstKind::Void => "void",
             InstKind::Terminator => "terminator",
         }
@@ -701,8 +702,6 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let mut b = Builder::new(k1);
 
     debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
-    let name = b.k1.bytecode.mem.push_str("entry");
-    b.push_block(name);
     let f = b.k1.get_function(function_id);
     let intrinsic_type = f.intrinsic_type;
     let is_debug = f.compiler_debug;
@@ -730,7 +729,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
         let value = if t.is_empty() {
             Value::Empty
         } else {
-            let value = Value::FnParam { t, index: non_empty_index as u32 };
+            let value = Value::FnParam { t: t.pack(), index: non_empty_index as u32 };
             non_empty_index += 1;
             value
         };
@@ -741,6 +740,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
+        b.push_block("entry");
         compile_block_stmts(&mut b, None, body_block)?;
     };
 
@@ -764,7 +764,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed;
+    k1.timing.total_bytecode_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -783,14 +783,13 @@ pub fn compile_top_level_expr(
         let pt = b.get_physical_type(variable.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
             id: *variable_id,
-            value: Value::StaticValue { t: pt, id: *static_value_id },
+            value: Value::StaticValue { t: pt.pack(), id: *static_value_id },
             indirect: false,
         })
     }
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    let name = b.k1.bytecode.mem.push_str("expr_");
-    b.push_block(name);
+    b.push_block("expr_");
 
     let _result = compile_expr(&mut b, None, expr)?;
     let (return_type, diverges) = b.get_function_return_type(b.k1.exprs.get_type(expr));
@@ -805,10 +804,17 @@ pub fn compile_top_level_expr(
 
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
-    validate_unit(k1, CompilableUnitId::Expr(expr))?;
+    let unit_id = CompilableUnitId::Expr(expr);
+
+    validate_unit(k1, unit_id)?;
+
+    if is_debug {
+        let s = compiled_unit_to_string(k1, unit_id, true);
+        eprintln!("{s}");
+    }
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed;
+    k1.timing.total_bytecode_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -819,8 +825,9 @@ fn finalize_unit(
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
 ) -> CompiledUnit {
-    let compiled_blocks = b.bake_blocks();
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
+    let compiled_blocks = b.bake_blocks();
+    //b.k1.bytecode.mem.print_usage("after bake");
     let unit = CompiledUnit {
         unit_id,
         fn_type,
@@ -870,7 +877,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn reset_compilation_unit(&mut self) {
-        for b in &mut self.k1.bytecode.b_blocks {
+        for b in &mut self.k1.bytecode.b_blocks[0..self.block_count as usize] {
             b.instrs.clear();
         }
         self.block_count = 0;
@@ -879,9 +886,12 @@ impl<'k1> Builder<'k1> {
     }
 
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
-        let mut blocks = self.k1.bytecode.mem.new_list(self.k1.bytecode.b_blocks.len() as u32);
+        let mut blocks = self.k1.bytecode.mem.new_list(self.block_count);
         for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
             let instrs = self.k1.bytecode.mem.pushn(&b.instrs);
+            if instrs.is_empty() {
+                debug!("baking an empty basic block; wonder where it came from?");
+            }
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
@@ -922,8 +932,11 @@ impl<'k1> Builder<'k1> {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let inst_id =
-            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment.into(), debug_info);
+        let inst_id = self.make_inst(
+            Inst::Alloca { t: pt.pack(), vm_layout: layout },
+            comment.into(),
+            debug_info,
+        );
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
         inst_id
     }
@@ -1001,8 +1014,8 @@ impl<'k1> Builder<'k1> {
         if pt.is_empty() {
             None
         } else {
-            let copy_inst =
-                self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment);
+            let copy_inst = self
+                .push_inst(Inst::Copy { dst, src, t: pt.pack(), vm_size: layout.size }, comment);
             Some(copy_inst)
         }
     }
@@ -1043,17 +1056,20 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: BcStr) -> BlockId {
+    fn push_block(&mut self, name: impl Into<BcStr>) -> BlockId {
         let id = self.block_count;
         // Recycle builder blocks
         match self.k1.bytecode.b_blocks.get_mut(self.block_count as usize) {
             Some(recycled) => {
                 self.block_count += 1;
-                recycled.name = name;
+                recycled.name = name.into();
             }
             None => {
                 self.block_count += 1;
-                self.k1.bytecode.b_blocks.push(Block { name, instrs: Vec::with_capacity(256) });
+                self.k1
+                    .bytecode
+                    .b_blocks
+                    .push(Block { name: name.into(), instrs: Vec::with_capacity(256) });
             }
         }
 
@@ -1073,7 +1089,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
-        self.k1.types.get_physical_type(type_id).unwrap_or_else(|| {
+        self.k1.get_physical_type(type_id).unwrap_or_else(|| {
             b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string_ext(type_id, true))
         })
     }
@@ -1083,11 +1099,14 @@ impl<'k1> Builder<'k1> {
             InstKind::Terminator
         } else {
             let t = self.get_physical_type(type_id);
-            InstKind::Value(t)
+            InstKind::Value(t.pack())
         }
     }
 
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
+        if let Some(pt) = self.k1.bytecode.phys_fn_type_cache.get(&type_id) {
+            return *pt;
+        }
         let function_type = *self.k1.types.get(type_id).expect_function();
         let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
         for (index, param) in
@@ -1106,6 +1125,8 @@ impl<'k1> Builder<'k1> {
             return_type,
             abi_mode: function_type.abi_mode,
         };
+
+        self.k1.bytecode.phys_fn_type_cache.insert(type_id, fn_ty);
         fn_ty
     }
 
@@ -1191,7 +1212,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
             let var_name = b.k1.variables.get(let_stmt.variable_id).name;
-            let comment = b.k1.bytecode.mem.push_str("let");
             let debug_info = BcDebugInfo {
                 variable_info: Some(BcDebugVariableInfo {
                     name: var_name,
@@ -1211,7 +1231,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 });
                 Ok(Value::Empty)
             } else {
-                let variable_alloca = b.push_alloca_ext(var_pt, comment, debug_info);
+                let variable_alloca = b.push_alloca_ext(var_pt, "source let", debug_info);
                 // value_ptr means a pointer matching the type of the rhs
                 // For a referencing let, the original alloca a ptr
                 // So we need one for the inner type as well
@@ -1273,10 +1293,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
         }
         TypedStmt::Require(req) => {
             let req = req.clone();
-            let continue_name = mformat!(b.k1.bytecode.mem, "req_cont_{}", stmt.as_u32());
-            let require_continue_block = b.push_block(continue_name);
-            let else_name = mformat!(b.k1.bytecode.mem, "req_else_{}", stmt.as_u32());
-            let require_else_block = b.push_block(else_name);
+            let require_continue_block = b.push_block("require_continue");
+            let require_else_block = b.push_block("require_else");
 
             compile_matching_condition(
                 b,
@@ -1404,7 +1422,11 @@ fn compile_expr(
             let index = compile_expr(b, None, array_get.index)?;
 
             let element_ptr = b.push_inst(
-                Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
+                Inst::ArrayOffset {
+                    element_t: element_pt.pack(),
+                    base: array_base,
+                    element_index: index,
+                },
                 "array get offset",
             );
             let result_type = b.get_physical_type(expr_type);
@@ -1441,7 +1463,7 @@ fn compile_expr(
                         Some(r) => r.inner_type,
                     };
                     let value_pt = b.get_physical_type(value_type);
-                    let address = Value::Global { t: value_pt, id: global_id };
+                    let address = Value::Global { t: value_pt.pack(), id: global_id };
                     match value_pt {
                         PhysicalType::Empty => {
                             if is_reference {
@@ -1541,7 +1563,6 @@ fn compile_expr(
             let function_type_id = b.k1.get_callee_function_type(&call.callee);
             let phys_fn_type = b.get_physical_fn_type(function_type_id);
 
-            let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
             let maybe_function_id = call.callee.maybe_function_id();
             let (intrinsic_op, linkage) = match maybe_function_id {
                 None => (None, None),
@@ -1550,7 +1571,7 @@ fn compile_expr(
                     (f.intrinsic_type, Some(f.linkage))
                 }
             };
-            let callee = match (intrinsic_op, linkage) {
+            let (callee, first_arg) = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
                     let backend_builtin = match intrinsic_handler(intrinsic) {
                         BuiltinHandler::BcBakeStaticValue => {
@@ -1662,7 +1683,7 @@ fn compile_expr(
                                         // Note that this also covers Pointer to Pointer
                                         let bitcast = b.push_inst_anon(Inst::BitCast {
                                             v: from_value,
-                                            to: to_pt,
+                                            to: to_pt.pack(),
                                         });
                                         let stored = store_rich_if_dst(
                                             b,
@@ -1763,7 +1784,11 @@ fn compile_expr(
                                 let arg1 = *b.k1.mem.get_nth(call.args, 1);
                                 let element_index = compile_expr(b, None, arg1)?;
                                 let offset = b.push_inst(
-                                    Inst::ArrayOffset { element_t: elem_pt, base, element_index },
+                                    Inst::ArrayOffset {
+                                        element_t: elem_pt.pack(),
+                                        base,
+                                        element_index,
+                                    },
                                     "refAtIndex offest",
                                 );
                                 let stored = store_scalar_if_dst(b, dst, offset.as_value());
@@ -1776,7 +1801,7 @@ fn compile_expr(
                     let Some(function_id) = maybe_function_id else {
                         b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
                     };
-                    BcCallee::Builtin(function_id, backend_builtin)
+                    (BcCallee::Builtin(function_id, backend_builtin), None)
                 }
                 (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
@@ -1784,10 +1809,10 @@ fn compile_expr(
                         None => b.k1.get_function(function_id).name,
                         Some(fn_name) => fn_name,
                     };
-                    BcCallee::Extern(lib_name, fn_name, function_id)
+                    (BcCallee::Extern(lib_name, fn_name, function_id), None)
                 }
                 _ => match &call.callee {
-                    Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
+                    Callee::StaticFunction(function_id) => (BcCallee::Direct(*function_id), None),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
@@ -1798,8 +1823,7 @@ fn compile_expr(
                         // no stack-volatile things!
                         let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
-                        args.push(env_ptr);
-                        BcCallee::Direct(*function_id)
+                        (BcCallee::Direct(*function_id), Some(env_ptr))
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
                     Callee::DynamicLambda(dl) => {
@@ -1822,12 +1846,11 @@ fn compile_expr(
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
-                        args.push(env);
-                        BcCallee::Indirect(phys_fn_type, fn_ptr)
+                        (BcCallee::Indirect(phys_fn_type, fn_ptr), Some(env))
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        BcCallee::Indirect(phys_fn_type, callee_inst)
+                        (BcCallee::Indirect(phys_fn_type, callee_inst), None)
                     }
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "bc abstract call");
@@ -1854,6 +1877,12 @@ fn compile_expr(
                         }
                     }
                 }
+            }
+
+            let mut args =
+                b.k1.bytecode.mem.new_list(call.args.len() + first_arg.iter().count() as u32);
+            if let Some(first_arg) = first_arg {
+                args.push(first_arg)
             }
 
             for (index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
@@ -1915,25 +1944,20 @@ fn compile_expr(
             }
 
             let mut arm_blocks = b.k1.bytecode.mem.new_list(match_expr.arms.len());
-            for (arm_index, _arm) in b.k1.mem.getn(match_expr.arms).iter().enumerate() {
-                let name = mformat!(b.k1.bytecode.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
-                let name_cons =
-                    mformat!(b.k1.bytecode.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
-                let arm_block = b.push_block(name);
-                let arm_consequent_block = b.push_block(name_cons);
+            for _arm in b.k1.mem.getn(match_expr.arms).iter() {
+                let arm_block = b.push_block("arm_cond");
+                let arm_consequent_block = b.push_block("arm_cons");
                 arm_blocks.push((arm_block, arm_consequent_block));
             }
 
             let first_arm_block = arm_blocks[0].0;
             b.push_jump(first_arm_block, "enter match");
 
-            let fail_name = mformat!(b.k1.bytecode.mem, "match_fail__{}", expr.as_u32());
-            let fail_block = b.push_block(fail_name);
+            let fail_block = b.push_block("match_fail");
             b.goto_block(fail_block);
             b.push_inst_anon(Inst::Unreachable);
 
-            let end_name = mformat!(b.k1.bytecode.mem, "match_end__{}", expr.as_u32());
-            let match_end_block = b.push_block(end_name);
+            let match_end_block = b.push_block("match_end");
             b.goto_block(match_end_block);
             let result_inst_kind = b.type_to_inst_kind(match_result_type);
             let (result_came_from, is_empty) = match result_inst_kind {
@@ -2014,12 +2038,9 @@ fn compile_expr(
             }
         }
         TypedExpr::WhileLoop(w) => {
-            let cond_name = mformat!(b.k1.bytecode.mem, "while_cond__{}", expr.as_u32());
-            let cond_block = b.push_block(cond_name);
-            let body_name = mformat!(b.k1.bytecode.mem, "while_body__{}", expr.as_u32());
-            let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.k1.bytecode.mem, "while_end__{}", expr.as_u32());
-            let end_block = b.push_block(end_name);
+            let cond_block = b.push_block("while_loop_condition");
+            let loop_body_block = b.push_block("while_loop_body");
+            let end_block = b.push_block("while_loop_end");
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
             b.k1.bytecode.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
@@ -2039,12 +2060,8 @@ fn compile_expr(
             Ok(Value::Empty)
         }
         TypedExpr::LoopExpr(loop_expr) => {
-            // let start_block = self.builder.get_insert_block().unwrap();
-            // let current_fn = start_block.get_parent().unwrap();
-            let body_name = mformat!(b.k1.bytecode.mem, "loop_body__{}", expr.as_u32());
-            let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.k1.bytecode.mem, "loop_end__{}", expr.as_u32());
-            let loop_end_block = b.push_block(end_name);
+            let loop_body_block = b.push_block("loop_body");
+            let loop_end_block = b.push_block("loop_end");
 
             let break_pt_id = b.get_physical_type(expr_type);
 
@@ -2153,8 +2170,8 @@ fn compile_expr(
                     base_t.expect_reference().inner_type
                 }
             };
-            let enum_agg = b.k1.types.get_agg_for_type(enum_type_id);
-            let enum_pt = enum_agg.agg_type.expect_enum();
+            let enum_agg_id = b.k1.get_physical_type(enum_type_id).unwrap().expect_agg();
+            let enum_pt = b.k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
             let variants = enum_pt.variants;
             let enum_struct_repr = enum_pt.struct_repr;
             let payload_offset =
@@ -2194,7 +2211,8 @@ fn compile_expr(
             Ok(ret.as_value())
         }
         TypedExpr::Lambda(lam_expr) => {
-            let l = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let lambda_type_id = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
             b.k1.bytecode.b_units_pending_compile.push(function_id);
@@ -2244,7 +2262,7 @@ fn compile_expr(
                 | StaticValue::Struct(_)
                 | StaticValue::Enum(_)
                 | StaticValue::LinearContainer(_) => {
-                    let value = Value::StaticValue { t, id: stat.value_id };
+                    let value = Value::StaticValue { t: t.pack(), id: stat.value_id };
                     let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
                     Ok(stored)
                 }
@@ -2302,7 +2320,8 @@ fn compile_cast(
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
-            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
+            let casted =
+                b.push_inst(Inst::BitCast { v: base_noop, to: to_pt.pack() }, "cast signchange");
             let stored =
                 store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
             Ok(stored)
@@ -2342,7 +2361,7 @@ fn compile_cast(
             let to = to_pt.expect_scalar();
             let bitcast = b.push_inst_anon(Inst::BitCast {
                 v: base,
-                to: PhysicalType::Scalar(ScalarType::U8),
+                to: PhysicalType::Scalar(ScalarType::U8).pack(),
             });
             let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
             let stored = store_scalar_if_dst(b, dst, extend.as_value());
@@ -2390,11 +2409,12 @@ fn compile_cast(
             Ok(stored)
         }
         CastType::LambdaToLambdaObject => {
-            let lambda_type = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+            let lambda_type_id = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+            let lambda_type = b.k1.types.lambda_types.get(lambda_type_id);
             let lambda_function_id = lambda_type.function_id;
 
             let lambda_env_type = b.get_physical_type(lambda_type.env_type);
-            // It seems that representing the environment of lambda objects as a pointer
+            // Representing the environment of lambda objects as a pointer
             // is problematic since the lambda object will only be 'good' as long as that pointer
             // is 'good', and currently we use stack space for it. But it could be that the
             // environment itself is very stable, for example 2 integers and a pointer to the heap.
@@ -2605,15 +2625,14 @@ fn compile_matching_condition(
         b.push_jump(cons_block, "empty condition");
         return Ok(());
     }
-    for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
+    for inst in b.k1.mem.getn(mc.instrs).iter() {
         match inst {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
-                let continue_block = b.push_block(continue_name);
+                let continue_block = b.push_block("matching_cond_continue");
                 b.push_jump_if(
                     cond_value,
                     continue_block,
@@ -2751,7 +2770,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
                 }
                 Inst::BoolNegate { v } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type.is_byte() {
+                    if !inst_type.is_u8() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
@@ -3021,7 +3040,7 @@ pub fn display_inst(
         }
         Inst::Alloca { t, vm_layout } => {
             write!(w, "alloca ")?;
-            k1.types.display_pt(w, t)?;
+            k1.types.display_ptp(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value, t } => {
@@ -3044,7 +3063,7 @@ pub fn display_inst(
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            k1.types.display_pt(w, element_t)?;
+            k1.types.display_ptp(w, element_t)?;
             write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { id } => {
@@ -3096,7 +3115,7 @@ pub fn display_inst(
         }
         Inst::CameFrom { t, incomings } => {
             write!(w, "comefrom ")?;
-            k1.types.display_pt(w, t)?;
+            k1.types.display_ptp(w, t)?;
             write!(w, " [")?;
             for (i, incoming) in bc.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
@@ -3117,7 +3136,7 @@ pub fn display_inst(
         }
         Inst::BitCast { v, to } => {
             write!(w, "bitcast ")?;
-            k1.types.display_pt(w, to)?;
+            k1.types.display_ptp(w, to)?;
             write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
@@ -3255,7 +3274,7 @@ pub fn display_inst_kind(
     kind: InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => types.display_pt(w, t),
+        InstKind::Value(t) => types.display_ptp(w, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }

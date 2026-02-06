@@ -12,6 +12,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
+    let fmtString: string = fmtString.from-static();
     let parts = fmtString.splitByChar('?');
 
     code.var("parts", parts.asView());

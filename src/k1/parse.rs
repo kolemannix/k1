@@ -4,6 +4,7 @@
 use std::fmt::{Display, Formatter, Write};
 
 use crate::compiler::CompilerConfig;
+use crate::kmem::{self, MSlice};
 use crate::pool::{SliceHandle, VPool};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
@@ -62,8 +63,7 @@ impl<T: Clone> CanPush<T> for EcoVec<T> {
 nz_u32_id!(NamedTypeArgId);
 nz_u32_id!(CallArgId);
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedTypeDefnId(u32);
+nz_u32_id!(ParsedTypeDefnId);
 nz_u32_id!(ParsedFunctionId);
 nz_u32_id!(ParsedGlobalId);
 
@@ -1185,10 +1185,10 @@ impl ParsedTypeExpr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
 pub struct ParsedTypeParam {
     pub name: Ident,
-    pub constraints: EcoVec<ParsedTypeConstraintExpr>,
+    pub constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
     pub span: SpanId,
 }
 
@@ -1207,10 +1207,11 @@ impl ParsedTypeConstraintExpr {
     }
 
     pub fn single_static_constraint_or_fail(
-        constraints: &[ParsedTypeConstraintExpr],
+        mem: &kmem::Mem<ParsedProgram>,
+        constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
     ) -> Result<Option<ParsedTypeExprId>, &'static str> {
         let mut constraint: Option<ParsedTypeExprId> = None;
-        for c in constraints.iter() {
+        for c in mem.getn(constraints) {
             if let ParsedTypeConstraintExpr::Static(s) = c {
                 match &constraint {
                     None => constraint = Some(*s),
@@ -1313,25 +1314,25 @@ impl ParsedTypeDefnFlags {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedTypeDefn {
     pub name: Ident,
     pub value_expr: ParsedTypeExprId,
-    pub type_params: Vec<ParsedTypeParam>,
+    pub type_params: MSlice<ParsedTypeParam, ParsedProgram>,
     pub span: SpanId,
     pub id: ParsedTypeDefnId,
     pub flags: ParsedTypeDefnFlags,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedAbilityParameter {
     pub name: Ident,
     pub is_impl_param: bool,
-    pub constraints: EcoVec<ParsedTypeConstraintExpr>,
+    pub constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedAbility {
     pub name: Ident,
     pub functions: EcoVec<ParsedFunctionId>,
@@ -1349,7 +1350,7 @@ pub struct ParsedAbilityExpr {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedAbilityImplementation {
     pub ability_expr: ParsedAbilityExprId,
     pub generic_impl_params: EcoVec<ParsedTypeParam>,
@@ -1557,7 +1558,7 @@ pub struct ParsedProgram {
     pub spans: Spans,
     pub functions: VPool<ParsedFunction, ParsedFunctionId>,
     pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
-    pub type_defns: Vec<ParsedTypeDefn>,
+    pub type_defns: VPool<ParsedTypeDefn, ParsedTypeDefnId>,
     pub namespaces: VPool<ParsedNamespace, ParsedNamespaceId>,
     pub abilities: VPool<ParsedAbility, ParsedAbilityId>,
     pub ability_impls: Vec<ParsedAbilityImplementation>,
@@ -1575,6 +1576,8 @@ pub struct ParsedProgram {
     pub p_type_args: VPool<NamedTypeArg, NamedTypeArgId>,
     pub p_call_args: VPool<ParsedCallArg, CallArgId>,
     pub p_ability_exprs: VPool<ParsedAbilityExpr, ParsedAbilityExprId>,
+
+    pub mem: kmem::Mem<ParsedProgram>,
 }
 
 impl ParsedProgram {
@@ -1588,7 +1591,7 @@ impl ParsedProgram {
             spans: Spans::new(),
             functions: VPool::make_with_hint("functions", 16384),
             globals: VPool::make_with_hint("parsed_globals", 8192),
-            type_defns: Vec::new(),
+            type_defns: VPool::make_with_hint("parsed_type_defn", 2048),
             namespaces: VPool::make_with_hint("parsed_namespaces", 8192),
             abilities: VPool::make_with_hint("parsed_abilities", 2048),
             ability_impls: Vec::new(),
@@ -1604,6 +1607,8 @@ impl ParsedProgram {
             p_type_args: VPool::make_with_hint("parsed_named_type_args", 8192),
             p_call_args: VPool::make_with_hint("parsed_call_args", 8192),
             p_ability_exprs: VPool::make_with_hint("ability_exprs", 8192),
+
+            mem: kmem::Mem::make(),
         }
     }
 
@@ -1697,13 +1702,13 @@ impl ParsedProgram {
     }
 
     pub fn get_type_defn(&self, id: ParsedTypeDefnId) -> &ParsedTypeDefn {
-        &self.type_defns[id.0 as usize]
+        self.type_defns.get(id)
     }
 
-    pub fn add_typedefn(&mut self, mut type_defn: ParsedTypeDefn) -> ParsedTypeDefnId {
-        let id = ParsedTypeDefnId(self.type_defns.len() as u32);
+    pub fn add_type_defn(&mut self, mut type_defn: ParsedTypeDefn) -> ParsedTypeDefnId {
+        let id = self.type_defns.next_id();
         type_defn.id = id;
-        self.type_defns.push(type_defn);
+        self.type_defns.add_expected_id(type_defn, id);
         id
     }
 
@@ -4059,19 +4064,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(Some(ParsedBlock { stmts, kind, span }))
     }
 
-    fn parse_type_constraints(&mut self) -> ParseResult<EcoVec<ParsedTypeConstraintExpr>> {
-        let mut constraints = eco_vec![];
+    fn parse_type_constraints(
+        &mut self,
+    ) -> ParseResult<MSlice<ParsedTypeConstraintExpr, ParsedProgram>> {
         if self.maybe_consume_next(K::Colon).is_some() {
+            let mut constraints = self.ast.mem.new_list(8);
             loop {
-                constraints.push(self.expect_type_constraint_expr()?);
+                let constraint = self.expect_type_constraint_expr()?;
+                constraints.push_grow(&mut self.ast.mem, constraint);
                 if self.peek().kind != K::KeywordAnd {
                     break;
                 } else {
                     self.advance()
                 }
             }
+            Ok(self.ast.mem.list_to_handle(constraints))
+        } else {
+            Ok(MSlice::empty())
         }
-        Ok(constraints)
     }
 
     fn expect_type_param(&mut self) -> ParseResult<ParsedTypeParam> {
@@ -4418,27 +4428,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let name = self.expect_eat_token(K::Ident)?;
 
-        let type_params: Vec<ParsedTypeParam> = if let TokenKind::OpenBracket = self.peek().kind {
-            self.advance();
-            let (type_args, _type_arg_span) =
-                self.eat_delimited("Type arguments", K::Comma, &[K::CloseBracket], |p| {
-                    p.expect_type_param()
-                })?;
-            type_args
-        } else {
-            Vec::new()
+        let mut type_params: SV8<_> = smallvec![];
+        if let Some(_type_params_open) = self.maybe_consume_next(K::OpenBracket) {
+            self.eat_delimited_ext(
+                "Type arguments",
+                &mut type_params,
+                K::Comma,
+                &[K::CloseBracket],
+                Parser::expect_type_param,
+            )?;
         };
 
         let equals = self.expect_eat_token(K::Equals)?;
         let type_expr = Parser::expect("Type expression", equals, self.parse_type_expression())?;
         let span = self.extend_span(keyword_type.span, self.ast.get_type_expr_span(type_expr));
         let name = self.intern_ident_token(name);
-        let type_defn_id = self.ast.add_typedefn(ParsedTypeDefn {
+        let type_params_handle = self.ast.mem.pushn(&type_params);
+        let type_defn_id = self.ast.add_type_defn(ParsedTypeDefn {
             name,
             value_expr: type_expr,
             span,
-            type_params,
-            id: ParsedTypeDefnId(u32::MAX), // The id is set by add_typedefn
+            type_params: type_params_handle,
+            id: ParsedTypeDefnId::PENDING, // The id is set by add_typedefn
             flags,
         });
         Ok(Some(type_defn_id))

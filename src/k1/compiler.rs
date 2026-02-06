@@ -371,14 +371,14 @@ pub fn compile_program(
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
-    let total_elapsed_ms = start_time.elapsed().as_millis();
+    let total_elapsed_ns = start_time.elapsed().as_nanos();
     let warning_count = p.errors.iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
     p.print_timing_info(
         &src_path.to_string_lossy(),
-        total_elapsed_ms as u64,
+        total_elapsed_ns as u64,
         &mut std::io::stderr(),
     )
     .unwrap();

@@ -162,7 +162,8 @@ impl TypedProgram {
             TypedExpr::Return(ret) => recurse!(ret.value),
             TypedExpr::Break(brk) => recurse!(brk.value),
             TypedExpr::Lambda(lam) => {
-                let lambda_type = self.types.get(lam.lambda_type).as_lambda().unwrap();
+                let lambda_type_id = self.types.get(lam.lambda_type).as_lambda().unwrap();
+                let lambda_type = self.types.lambda_types.get(lambda_type_id);
                 let function = self.get_function(lambda_type.function_id);
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }

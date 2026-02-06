@@ -580,13 +580,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return Ok(*g);
         }
         let global = self.k1.globals.get(global_id).clone();
+        let layout = self.k1.get_layout(global.ty);
         let initial_static_value_id = global.initial_value.unwrap();
         let initializer_basic_value =
             self.codegen_static_value_as_const(initial_static_value_id, 0)?;
 
         let variable = self.k1.variables.get(global.variable_id);
 
-        let layout = self.k1.types.get_layout(global.ty);
         let llvm_linkage = match global.is_exported {
             false => LlvmLinkage::Private,
             true => LlvmLinkage::External,
@@ -1884,7 +1884,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Alloca { t, .. } => {
                 // task(di): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
-                let cg_type = self.codegen_type(t);
+                let cg_type = self.codegen_type(t.unpack());
 
                 // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
                 let instr = self.build_k1_alloca(&cg_type, "");
@@ -1923,7 +1923,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Copy { dst, src, t, .. } => {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
-                let layout = self.k1.types.get_pt_layout(t);
+                let layout = self.k1.types.get_pt_layout(t.unpack());
                 let _memcpy = self.memcpy_layout(
                     dst_value.into_pointer_value(),
                     src_value.into_pointer_value(),
@@ -1941,7 +1941,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::ArrayOffset { element_t, base, element_index } => {
-                let cg_elem_ty = self.codegen_type(element_t);
+                let cg_elem_ty = self.codegen_type(element_t.unpack());
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
                 let index_int = self.resolve_value(inst_mappings, element_index)?.into_int_value();
                 let gep = unsafe {
@@ -1983,7 +1983,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::CameFrom { t, incomings: _ } => {
                 // On this first pass, we do not evaluate the incomings, because we want to wait
                 // until all instructions are mapped
-                let phi_ty = self.pt_canon_type(t);
+                let phi_ty = self.pt_canon_type(t.unpack());
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
@@ -2032,7 +2032,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 // From agg to scalar -> handled by BC
                 // From scalar to agg -> handled by BC
-                match to {
+                match to.unpack() {
                     PhysicalType::Empty => panic!("BitCast on ZST"),
                     // From agg to agg -> canon type is ptr, nothing to do.
                     PhysicalType::Agg(_) => {
@@ -2905,7 +2905,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
-                let pt = self.k1.types.get_physical_type(*type_id).unwrap();
+                let pt = self.k1.get_physical_type(*type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero = cg_type.rich_type().const_zero();
                 zero.as_basic_value_enum()
@@ -2914,11 +2914,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 debug_assert!(!s.fields.is_empty());
                 // Always a packed struct, accounting for every byte.
                 let s_type_id = s.type_id;
-                let layout = self.k1.types.get_struct_layout(s.type_id);
+                let s_fields = s.fields;
+                let layout = self.k1.get_struct_layout(s.type_id);
                 let mut last_offset = 0;
                 let mut packed_values = self.tmp.new_list(8);
                 for (field, field_layout) in
-                    self.k1.static_values.mem.getn(s.fields).iter().zip(layout)
+                    self.k1.static_values.mem.getn(s_fields).iter().zip(layout)
                 {
                     let padding = field_layout.offset - last_offset;
                     if padding > 0 {
@@ -2937,7 +2938,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 debug_assert_eq!(
                     self.layout_per_llvm(&struct_value.get_type()).size,
-                    self.k1.types.get_layout(s_type_id).size,
+                    self.k1.get_layout(s_type_id).size,
                     "Checking Size of: {}",
                     struct_value
                 );
@@ -2948,7 +2949,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let mut packed_values = self.tmp.new_list(4);
 
                 let enum_agg_id =
-                    self.k1.types.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+                    self.k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
                 let enum_agg_record = self.k1.types.agg_types.get(enum_agg_id);
                 let enum_pt = enum_agg_record.agg_type.expect_enum();
                 let variant = self.k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
@@ -3014,7 +3015,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 match view.kind {
                     StaticContainerKind::View => {
-                        let element_type_layout = self.k1.types.get_layout(element_type);
+                        let element_type_layout = self.k1.get_layout(element_type);
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
@@ -3053,7 +3054,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
-        let element_layout = self.k1.types.get_layout(element_type);
+        let element_layout = self.k1.get_layout(element_type);
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
@@ -3081,7 +3082,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let struct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
         let type_id = self.k1.static_values.get(static_value_id).get_type();
-        let layout = self.k1.types.get_layout(type_id);
+        let layout = self.k1.get_layout(type_id);
         let global = self.make_global_from_value(
             struct_value,
             layout.align,
@@ -3135,7 +3136,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.as_basic_value_enum()
             }
             StaticValue::Zero(type_id) => {
-                let pt = self.k1.types.get_physical_type(*type_id).unwrap();
+                let pt = self.k1.get_physical_type(*type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero_rich = cg_type.rich_type().const_zero();
                 match pt.is_agg() {
@@ -3188,7 +3189,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         // Ensure the string layout is what we expect
         // deftype string = { private view: View[char] }
-        let string_pt = self.k1.types.get_physical_type(STRING_TYPE_ID).unwrap();
+        let string_pt = self.k1.get_physical_type(STRING_TYPE_ID).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();
         let string_wrapper_struct_type = string_type.struct_type;
 
@@ -3267,7 +3268,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .mem
             .get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0)
             .type_id;
-        let buffer_pt = self.k1.types.get_physical_type(buffer_type_id).unwrap();
+        let buffer_pt = self.k1.get_physical_type(buffer_type_id).unwrap();
         let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
         self.make_buffer_struct(buffer_cg_type.struct_type, len, data)
     }

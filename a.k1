@@ -1,0 +1,4 @@
+fn main(): i32 {
+  (#static { println("a"); "a" }).from-static().len();
+  0
+}
