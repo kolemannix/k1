@@ -674,13 +674,16 @@ impl<T, Tag> MList<T, Tag> {
                 self.cap() as u32 * 2
             };
             if cfg!(debug_assertions) {
-                eprintln!(
-                    "{}:{} Growing from {} -> {}",
-                    loc.file(),
-                    loc.line(),
-                    self.cap(),
-                    new_cap
-                );
+                // No need to log grows from 0
+                if self.len != 0 {
+                    eprintln!(
+                        "{}:{} Growing from {} -> {}",
+                        loc.file(),
+                        loc.line(),
+                        self.cap(),
+                        new_cap
+                    );
+                }
             }
             let mut new_me = mem.new_list(new_cap);
             new_me.extend(self.as_slice());

@@ -7104,7 +7104,6 @@ impl TypedProgram {
             ParsedExpr::Cast(cast) => {
                 let cast = *cast;
                 let dest_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
-                eprintln!("actual cast node");
                 self.eval_cast(cast.base_expr, dest_type, cast.span, ctx)
             }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),

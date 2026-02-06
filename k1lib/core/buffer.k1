@@ -42,7 +42,7 @@ ns buffer {
     wrapped
   }
 
-  fn copyFromarray[T, N: static size](array: *array[T, N]): buffer[T] {
+  fn copy-from-array[T, N: static size](array: *array[T, N]): buffer[T] {
     let wrapped = wrapArray[T, N](array.to-mut);
     wrapped.cloned();
   }
@@ -59,12 +59,22 @@ ns buffer {
   fn filledIn[T](context mode: mem/alloc-mode)(size: size, value: T): buffer[T] {
     let buf: buffer[T] = _allocateIn[T](size);
 
-    // nocommit: Use type patterns to specialize this on byte!
-    let i = 0;
-    while i < size {
-      buf.getRefUnchecked(i) <- value;
-      i := i + 1;
+    switch value {
+      type[u8](byte) -> {
+        buf.memset(byte)
+      },
+      type[i8](byte) -> {
+        buf.memset(byte as u8)
+      },
+      _ -> {
+        let i = 0;
+        while i < size {
+          buf.getRefUnchecked(i) <- value;
+          i := i + 1;
+        }
+      }
     };
+
     buf
   }
 

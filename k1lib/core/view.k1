@@ -33,8 +33,8 @@ ns view {
     { buffer: buffer/empty[T]() }
   }
 
-  fn copyFromarray[T, N: static size](array: *array[T, N]): view[T] {
-    let buffer = buffer/copyFromarray[T, N](array);
+  fn copy-from-array[T, N: static size](array: *array[T, N]): view[T] {
+    let buffer = buffer/copy-from-array[T, N](array);
     { buffer }
   }
 

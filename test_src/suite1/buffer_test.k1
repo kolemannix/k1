@@ -10,7 +10,7 @@ fn bufferEmpty() {
 }
 
 fn bufferFilled() {
-  let buf = buffer/filled(5, 42);
+  let buf = buffer/filled[i8](5, 42);
   assert(buf.len == 5);
   assert(not buf.isEmpty());
   assert(buf.nonEmpty());
