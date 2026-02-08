@@ -8,21 +8,21 @@ use core/sys
 deftype Color = either White, Black
 deftype alias Bitboard = u64
 
-let RANK_1 :    Bitboard = 0x00000000000000FF;
-let RANK_2 :    Bitboard = 0x000000000000FF00;
-let RANK_3 :    Bitboard = 0x0000000000FF0000;
-let RANK_4 :    Bitboard = 0x00000000FF000000;
-let RANK_5 :    Bitboard = 0x000000FF00000000;
-let RANK_6 :    Bitboard = 0x0000FF0000000000;
-let RANK_7 :    Bitboard = 0x00FF000000000000;
-let RANK_8 :    Bitboard = 0xFF00000000000000;
-let A_FILE: Bitboard = 0x0101010101010101;
-let B_FILE: Bitboard = 0x0202020202020202;
-let C_FILE: Bitboard = 0x0404040404040404;
+let RANK_1 : Bitboard = 0x00000000000000FF
+let RANK_2 : Bitboard = 0x000000000000FF00
+let RANK_3 : Bitboard = 0x0000000000FF0000
+let RANK_4 : Bitboard = 0x00000000FF000000
+let RANK_5 : Bitboard = 0x000000FF00000000
+let RANK_6 : Bitboard = 0x0000FF0000000000
+let RANK_7 : Bitboard = 0x00FF000000000000
+let RANK_8 : Bitboard = 0xFF00000000000000
+let A_FILE : Bitboard = 0x0101010101010101
+let B_FILE : Bitboard = 0x0202020202020202
+let C_FILE : Bitboard = 0x0404040404040404
 
-let H_FILE: Bitboard = 0x8080808080808080;
-let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE;
-let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F;
+let H_FILE    : Bitboard = 0x8080808080808080
+let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE
+let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F
 
 deftype GameState = {
   wPawns: Bitboard,

@@ -39,8 +39,8 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, STRING_TYPE_ID, ScalarType,
-    TypeDefnInfo, TypeId,
+    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, STRING_TYPE_ID,
+    ScalarType, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
@@ -554,7 +554,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         self.builder.unset_current_debug_location();
-        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
+        let entrypoint_fn_type =
+            self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
+        let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
         let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
         self.builder.position_at_end(entry_block);
         let params: Vec<BasicMetadataValueEnum<'ctx>> =
@@ -565,9 +567,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .unwrap()
             .try_as_basic_value()
             .basic();
-        // nocommit: Fix 0 return for void mains
         match res {
-            None => self.builder.build_return(None).unwrap(),
+            None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
             Some(v) => self.builder.build_return(Some(&v)).unwrap(),
         };
 
@@ -580,43 +581,41 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return Ok(*g);
         }
         let global = self.k1.globals.get(global_id).clone();
-        let layout = self.k1.get_layout(global.ty);
-        let initial_static_value_id = global.initial_value.unwrap();
-        let initializer_basic_value =
-            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
 
         let variable = self.k1.variables.get(global.variable_id);
-
-        let llvm_linkage = match global.is_exported {
-            false => LlvmLinkage::Private,
-            true => LlvmLinkage::External,
-        };
-        // For now let's just use the name, eventually we'll ask the user for a link name
-        let name = if global.is_exported {
+        let name = if global.is_exported || global.is_external {
+            // For now let's just use the name for externally linked symbols
+            // Eventually we'll need to ask the user for a link name
             self.k1.ident_str(variable.name).to_string()
         } else {
             self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
         };
-        let llvm_global = self.make_global_from_value(
-            initializer_basic_value,
-            layout.align,
-            &name,
-            global.is_constant,
-            llvm_linkage,
-        );
-        if self.k1.program_settings.multithreaded {
-            if global.is_tls {
-                llvm_global.set_thread_local(true);
-                let mode = if self.k1.program_settings.executable {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    // We don't yet support dynamic library as a target
-                    // So even libraries can use InitialExec
-                    ThreadLocalMode::InitialExecTLSModel
-                };
-                llvm_global.set_thread_local_mode(Some(mode));
-            }
-        }
+
+        let llvm_global = if global.is_external {
+            let Some(global_pt) = self.k1.get_physical_type(global.type_id) else {
+                return failf!(global.span, "ICE: Not physical; todo reject this in typer");
+            };
+            let basic_type = self.codegen_type(global_pt);
+            self.make_external_global(basic_type.rich_type(), &name, global.is_constant)
+        } else {
+            let initial_static_value_id = global.initial_value.unwrap();
+            let initializer_basic_value =
+                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+            let llvm_linkage = match global.is_exported {
+                false => LlvmLinkage::Private,
+                true => LlvmLinkage::External,
+            };
+            let layout = self.k1.get_layout(global.type_id);
+            self.make_global_from_value(
+                initializer_basic_value,
+                layout.align,
+                &name,
+                global.is_constant,
+                llvm_linkage,
+                global.is_tls,
+            )
+        };
+
         self.globals.insert(global_id, llvm_global);
         Ok(llvm_global)
     }
@@ -694,8 +693,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     // FIXME(newcodegen): CgType is too big to return by value
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.types.pt_to_string(pt));
-        match pt {
-            PhysicalType::Scalar(st) => {
+        match pt.to_enum() {
+            PhysicalTypeEnum::Scalar(st) => {
                 let layout = st.get_layout();
                 let (name, encoding): (&'static str, u32) = match st {
                     ScalarType::U8 => ("u8", Self::DW_ATE_UNSIGNED),
@@ -719,7 +718,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .as_type();
                 CgType::Scalar(LlvmScalarType { pt, basic_type, layout, di_type })
             }
-            PhysicalType::Agg(agg_id) => {
+            PhysicalTypeEnum::Agg(agg_id) => {
                 if let Some(k1) = self.llvm_types.get(&agg_id) {
                     return *k1;
                 }
@@ -845,7 +844,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     AggType::Enum(e) => {
                         let struct_repr_cg_type =
-                            self.codegen_type(PhysicalType::Agg(e.struct_repr));
+                            self.codegen_type(PhysicalType::agg(e.struct_repr));
 
                         struct_repr_cg_type
                     }
@@ -853,7 +852,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.llvm_types.insert(agg_id, cg_type);
                 cg_type
             }
-            PhysicalType::Empty => {
+            PhysicalTypeEnum::Empty => {
                 let struct_type = self.ctx.struct_type(&[], false);
                 let di_type = self
                     .debug
@@ -931,10 +930,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
-        match pt {
-            PhysicalType::Empty => self.builtin_types.empty.as_basic_type_enum(),
-            PhysicalType::Scalar(st) => self.scalar_basic_type(st),
-            PhysicalType::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
+        match pt.to_enum() {
+            PhysicalTypeEnum::Empty => self.builtin_types.empty.as_basic_type_enum(),
+            PhysicalTypeEnum::Scalar(st) => self.scalar_basic_type(st),
+            PhysicalTypeEnum::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
         }
     }
 
@@ -1884,7 +1883,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Alloca { t, .. } => {
                 // task(di): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
-                let cg_type = self.codegen_type(t.unpack());
+                let cg_type = self.codegen_type(t);
 
                 // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
                 let instr = self.build_k1_alloca(&cg_type, "");
@@ -1914,7 +1913,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Load { t, src } => {
-                let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
+                let cg_ty = self.codegen_type(PhysicalType::scalar(t));
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 inst_mappings.insert(inst_id, load);
@@ -1923,7 +1922,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::Copy { dst, src, t, .. } => {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
-                let layout = self.k1.types.get_pt_layout(t.unpack());
+                let layout = self.k1.types.get_pt_layout(t);
                 let _memcpy = self.memcpy_layout(
                     dst_value.into_pointer_value(),
                     src_value.into_pointer_value(),
@@ -1934,14 +1933,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::StructOffset { struct_t, base, field_index, .. } => {
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
 
-                let cg_struct_type = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
+                let cg_struct_type = self.codegen_type(PhysicalType::agg(struct_t)).expect_struct();
                 let gep =
                     self.build_struct_gep(base_ptr, cg_struct_type.struct_type, field_index, "");
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
             Inst::ArrayOffset { element_t, base, element_index } => {
-                let cg_elem_ty = self.codegen_type(element_t.unpack());
+                let cg_elem_ty = self.codegen_type(element_t);
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
                 let index_int = self.resolve_value(inst_mappings, element_index)?.into_int_value();
                 let gep = unsafe {
@@ -1983,7 +1982,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::CameFrom { t, incomings: _ } => {
                 // On this first pass, we do not evaluate the incomings, because we want to wait
                 // until all instructions are mapped
-                let phi_ty = self.pt_canon_type(t.unpack());
+                let phi_ty = self.pt_canon_type(t);
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
@@ -2032,15 +2031,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 // From agg to scalar -> handled by BC
                 // From scalar to agg -> handled by BC
-                match to.unpack() {
-                    PhysicalType::Empty => panic!("BitCast on ZST"),
+                match to.to_enum() {
+                    PhysicalTypeEnum::Empty => panic!("BitCast on ZST"),
                     // From agg to agg -> canon type is ptr, nothing to do.
-                    PhysicalType::Agg(_) => {
+                    PhysicalTypeEnum::Agg(_) => {
                         inst_mappings.insert(inst_id, input);
                         Ok(())
                     }
                     // From scalar to scalar -> do the llvm bitcast
-                    PhysicalType::Scalar(st) => {
+                    PhysicalTypeEnum::Scalar(st) => {
                         let llvm_ty = self.scalar_basic_type(st);
                         let bitcast = self.builder.build_bit_cast(input, llvm_ty, "").unwrap();
                         inst_mappings.insert(inst_id, bitcast);
@@ -2516,16 +2515,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
-        match pt {
-            PhysicalType::Empty => {
+        match pt.to_enum() {
+            PhysicalTypeEnum::Empty => {
                 if is_return {
                     AbiParamMapping::VoidReturnEmpty
                 } else {
                     panic!("Cannot have empty parameter type")
                 }
             }
-            PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
-            PhysicalType::Agg(agg_id) => {
+            PhysicalTypeEnum::Scalar(_) => AbiParamMapping::ScalarInRegister,
+            PhysicalTypeEnum::Agg(agg_id) => {
                 let agg_record = self.k1.types.agg_types.get(agg_id);
                 match agg_record.agg_type {
                     AggType::Enum(_)
@@ -2631,9 +2630,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             cur_bits: &mut u32,
             t: PhysicalType,
         ) {
-            match t {
-                PhysicalType::Empty => {}
-                PhysicalType::Scalar(st) => {
+            match t.to_enum() {
+                PhysicalTypeEnum::Empty => {}
+                PhysicalTypeEnum::Scalar(st) => {
                     let class = match st {
                         ScalarType::U8 => RegisterClass::Int,
                         ScalarType::U16 => RegisterClass::Int,
@@ -2649,7 +2648,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     };
                     append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
                 }
-                PhysicalType::Agg(agg_id) => {
+                PhysicalTypeEnum::Agg(agg_id) => {
                     let agg_record = c.k1.types.agg_types.get(agg_id);
                     match agg_record.agg_type {
                         AggType::Struct { fields } => {
@@ -2676,7 +2675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 class1,
                                 class2,
                                 cur_bits,
-                                PhysicalType::Agg(e.struct_repr),
+                                PhysicalType::agg(e.struct_repr),
                             )
                         }
                     }
@@ -2868,7 +2867,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
-        let cg_ty = self.codegen_type(PhysicalType::Scalar(float.get_scalar_type()));
+        let cg_ty = self.codegen_type(PhysicalType::scalar(float.get_scalar_type()));
         let llvm_float_ty = cg_ty.rich_type().into_float_type();
         let llvm_value = llvm_float_ty.const_float(float.as_f64());
         Ok(llvm_value.as_basic_value_enum())
@@ -2948,8 +2947,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let e = *e;
                 let mut packed_values = self.tmp.new_list(4);
 
-                let enum_agg_id =
-                    self.k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+                let enum_agg_id = self.k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
                 let enum_agg_record = self.k1.types.agg_types.get(enum_agg_id);
                 let enum_pt = enum_agg_record.agg_type.expect_enum();
                 let variant = self.k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
@@ -3022,6 +3020,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             &format!("static_elems_{}\0", static_value_id.as_u32()),
                             true,
                             LlvmLinkage::Private,
+                            false,
                         );
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
@@ -3089,9 +3088,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             &format!("static_{}\0", static_value_id.as_u32()),
             true,
             LlvmLinkage::Private,
+            false,
         );
         self.static_values_globals.insert(static_value_id, global);
         Ok(global)
+    }
+
+    fn make_external_global(
+        &mut self,
+        typ: BasicTypeEnum<'ctx>,
+        name: &str,
+        constant: bool,
+    ) -> GlobalValue<'ctx> {
+        let global = self.llvm_module.add_global(typ, None, name);
+        global.set_constant(constant);
+        global.set_linkage(LlvmLinkage::External);
+        global
     }
 
     fn make_global_from_value(
@@ -3101,6 +3113,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         name: &str,
         constant: bool,
         linkage: LlvmLinkage,
+        is_tls: bool,
     ) -> GlobalValue<'ctx> {
         let global = self.llvm_module.add_global(value.get_type(), None, name);
         global.set_alignment(align);
@@ -3108,6 +3121,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_initializer(&value);
         global.set_constant(constant);
         global.set_linkage(linkage);
+        if self.k1.program_settings.multithreaded {
+            if is_tls {
+                global.set_thread_local(true);
+                let mode = if self.k1.program_settings.executable {
+                    ThreadLocalMode::LocalExecTLSModel
+                } else {
+                    // We don't yet support dynamic library as a target
+                    // So even libraries can use InitialExec
+                    ThreadLocalMode::InitialExecTLSModel
+                };
+                global.set_thread_local_mode(Some(mode));
+            }
+        }
         global
     }
 

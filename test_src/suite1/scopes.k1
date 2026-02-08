@@ -14,7 +14,7 @@ ns scopes {
   }
   
   
-  let x: int = 3;
+  let x: int = 3
   fn scopeCollision(x: int): int {
     x;
     let x: int = 42;

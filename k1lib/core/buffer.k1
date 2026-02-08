@@ -28,17 +28,17 @@ ns buffer {
     { len: 0, data: ptr/null.as[*mut T] }
   }
 
-  fn fromPtrAndCount[T](pointer: ptr, count: size): buffer[T] {
-    { len: count, data: pointer.as[*mut T] }
+  fn fromPtrAndCount[T](ptr: ptr, count: size): buffer[T] {
+    { len: count, data: ptr.as[*mut T] }
   }
 
-  fn fromRefAndCount[T](len: size, data: *mut T): buffer[T] {
-    { len: len, data }
+  fn fromRefAndCount[T](data: *mut T, len: size): buffer[T] {
+    { len, data }
   }
 
   fn wrapArray[T, N: static size](array: *mut array[T, N]): buffer[T] {
     let l = array.len();
-    let wrapped = fromRefAndCount(l, array.get-base());
+    let wrapped = fromRefAndCount(array.get-base(), l);
     wrapped
   }
 
@@ -278,14 +278,14 @@ ns buffer {
   fn toCharBuffer(self: buffer[byte]): buffer[char] {
     buffer/fromPtrAndCount[char](
       count = self.len,
-      pointer = self.dataPtr()
+      ptr = self.dataPtr()
     );
   }
 
   fn asByteBuffer(self: buffer[char]): buffer[byte] {
     buffer/fromPtrAndCount[byte](
       count = self.len,
-      pointer = self.dataPtr()
+      ptr = self.dataPtr()
     );
   }
 

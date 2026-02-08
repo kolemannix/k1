@@ -53,7 +53,7 @@ deftype alias c-long   = i64
 ns compiler {
   deftype source-location = { filename: string, line: u64 }
   // Need some way to mark this and is-static as comptime only
-  let* capture-prints: *mut bool = true;
+  let* capture-prints: *mut bool = true
 }
 
 deftype ordering = either less, equal, greater
@@ -494,17 +494,17 @@ ns mem {
 // Compiler builtins
 ns k1 {
   // is-static is set to 'true' when executing K1 code statically, at compile-time
-  let is-static: bool = builtin;
+  let is-static: bool = builtin
 
-  let test: bool = builtin;
-  let no-std: bool = builtin;
-  let debug: bool = builtin;
+  let test: bool = builtin
+  let no-std: bool = builtin
+  let debug: bool = builtin
 
-  let os: string = builtin; // Possible values: 'linux', 'macos', 'wasm'
-  let os-macos: bool = os == "macos";
-  let os-posix: bool = os == "macos" or os == "linux";
+  let os: string = builtin // Possible values: 'linux', 'macos', 'wasm'
+  let os-macos: bool = os == "macos"
+  let os-posix: bool = os == "macos" or os == "linux"
 
-  let multithreading: bool = builtin;
+  let multithreading: bool = builtin
 
   intern fn emit-compiler-message(
     locn: compiler/source-location,
@@ -537,7 +537,7 @@ ns sys {
 }
 
 ns ptr {
-  let null: ptr = 0.as[ptr];
+  let null: ptr = 0.as[ptr]
 
   fn is-null(self: ptr): bool {
     self == null
@@ -660,35 +660,35 @@ ns array {
 
 #if k1/os-posix ns posix {
 
-  let stdin: i32 = 0;
-  let stdout: i32 = 1;
-  let stderr: i32 = 2;
+  let stdin: i32 = 0
+  let stdout: i32 = 1
+  let stderr: i32 = 2
 
   extern("read") fn read(file-no: c-int, buffer: ptr, count: c-sizet): i64
   extern("write") fn write(file-no: c-int, data: ptr, count: c-sizet): i64
 
   // These may only hold on macos; temporary until we have a bindings generation system
-  let MAP_FILE   : c-int = 0x0000;
-  let MAP_SHARED : c-int = 0x0001;
-  let MAP_PRIVATE: c-int = 0x0002;
-  let MAP_FIXED  : c-int = 0x0010;
+  let MAP_FILE   : c-int = 0x0000
+  let MAP_SHARED : c-int = 0x0001
+  let MAP_PRIVATE: c-int = 0x0002
+  let MAP_FIXED  : c-int = 0x0010
   // MAP_ANONYMOUS = 0x20 on Linux, but MAP_ANON = 0x1000 on macOS.
-  let MAP_ANON   : c-int = (if k1/os-macos 0x1000 else 0x20);
+  let MAP_ANON   : c-int = (if k1/os-macos 0x1000 else 0x20)
 
   // Pages may not be accessed.
-  let PROT_NONE: c-int = 0x0;
+  let PROT_NONE: c-int = 0x0
   // Pages may be read.
-  let PROT_READ: c-int = 0x1;
+  let PROT_READ: c-int = 0x1
   // Pages may be written.
-  let PROT_WRITE: c-int = 0x2;
+  let PROT_WRITE: c-int = 0x2
   // Pages may be executed.
-  let PROT_EXEC: c-int = 0x4;
-  let MAP_FAILED: i64 = -1;
+  let PROT_EXEC: c-int = 0x4
+  let MAP_FAILED: i64 = -1
   extern("mmap") fn mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
 
   extern("munmap") fn munmap(addr: ptr, len: size): i32
 
-  let MADV_SEQUENTIAL: i32 = 2;
+  let MADV_SEQUENTIAL: i32 = 2
   extern("posix_madvise") fn madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
 
   extern("backtrace") fn backtrace(buffer: ptr, size: c-int)
@@ -707,17 +707,22 @@ ns libc {
   extern("free") fn free(ptr: ptr)
   extern("realloc") fn realloc(ptr: ptr, size: size): ptr
 
+  let extern errno: c-int
   extern("perror") fn perror(msg: ptr)
 
   ns files {
-    let SEEK_END: i32 = 2;
-    let SEEK_SET: i32 = 0;
+    let SEEK_END: i32 = 2
+    let SEEK_SET: i32 = 0
     extern("fopen")  fn fopen(path-c-string: ptr, mode-c-string: ptr): ptr
     extern("fseek")  fn fseek(file-desc: ptr, offset: i64, whence: i32): i32
     extern("fread")  fn fread(buffer: ptr, size: size, num: size, stream: ptr): c-sizet
     extern("fclose") fn fclose(file-desc: ptr): c-int
     extern("ftell")  fn ftell(file-desc: ptr): c-long
   }
+
+  extern("strtod") fn strtod(nptr: ptr, endptr: *mut ptr): f64
+  extern("strtof") fn strtof(nptr: ptr, endptr: *mut ptr): f32
+  extern("strerror") fn strerror(errno: c-int): *char 
 
 }
 

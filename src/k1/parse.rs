@@ -1285,13 +1285,14 @@ impl FnArgDefModifiers {
 #[derive(Debug, Clone)]
 pub struct ParsedGlobal {
     pub name: Ident,
-    pub ty: ParsedTypeExprId,
-    pub value_expr: ParsedExprId,
+    pub type_expr: ParsedTypeExprId,
+    pub value_expr: Option<ParsedExprId>,
     pub span: SpanId,
     pub id: ParsedGlobalId,
     pub is_referencing: bool,
-    pub thread_local: bool,
-    pub export: bool,
+    pub is_thread_local: bool,
+    pub is_export: bool,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1905,10 +1906,9 @@ pub fn write_source_location(
     writeln!(w, "┌────────────────────────────────────────╴")?;
     writeln!(
         w,
-        "│{} at {}/{}:{}",
-        level_name,
-        source.directory,
-        source.filename,
+        "{}/{}:{}",
+        source.directory.color(color),
+        source.filename.color(color),
         line.line_index + 1,
     )?;
     writeln!(w, "├─────")?;
@@ -2141,7 +2141,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         } else if let Some(ns) = self.parse_namespace()? {
             Ok(Some(ParsedId::Namespace(ns)))
         } else if let Some(global_id) = self.parse_global()? {
-            self.expect_eat_token(K::Semicolon)?;
             Ok(Some(ParsedId::Global(global_id)))
         } else if let Some(function_id) = self.parse_function(condition)? {
             Ok(Some(ParsedId::Function(function_id)))
@@ -2292,7 +2291,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         // Loop for postfix operations
         #[allow(clippy::while_let_loop)] // Since we'll add more stuff later
         loop {
-            if let Some(asterisk) = self.maybe_consume_next(K::Asterisk) {
+            if let Some(asterisk) = self.maybe_consume(K::Asterisk) {
                 let inner_span = self.ast.get_pattern_span(pattern_id);
                 let span = self.extend_span(inner_span, asterisk.span);
                 pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Reference(
@@ -2465,7 +2464,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Parser::tok_chars(&self.ast.spans, self.source(), tok)
     }
 
-    fn maybe_consume_next(&mut self, target_token: TokenKind) -> Option<Token> {
+    fn maybe_consume(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
         if tok.kind == target_token {
             self.advance();
@@ -2770,7 +2769,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::Asterisk {
             // Reference/Pointer notation: *(mut)<ty>
             self.advance();
-            let reference_kind = if self.maybe_consume_next(K::KeywordMut).is_some() {
+            let reference_kind = if self.maybe_consume(K::KeywordMut).is_some() {
                 ReferenceKind::Mut
             } else {
                 ReferenceKind::Read
@@ -2902,7 +2901,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExprId> {
         let start = self.expect_eat_token(K::BackSlash)?;
         let mut params: SmallVec<[ParsedTypeExprId; 8]> = smallvec![];
-        let open_paren = self.maybe_consume_next(K::OpenParen).is_some();
+        let open_paren = self.maybe_consume(K::OpenParen).is_some();
         let loop_end_kind = if open_paren { K::CloseParen } else { K::RThinArrow };
         let no_params = open_paren && self.peek().kind == K::CloseParen;
         if no_params {
@@ -2996,7 +2995,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
         let name = self.expect_eat_token(K::Ident)?;
-        let expr = if let Some(_colon) = self.maybe_consume_next(K::Colon) {
+        let expr = if let Some(_colon) = self.maybe_consume(K::Colon) {
             Some(self.expect_expression()?)
         } else {
             None
@@ -3226,7 +3225,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_bracketed_type_args(&mut self) -> ParseResult<(SliceHandle<NamedTypeArgId>, SpanId)> {
-        let Some(open_bracket) = self.maybe_consume_next(K::OpenBracket) else {
+        let Some(open_bracket) = self.maybe_consume(K::OpenBracket) else {
             return Ok((SliceHandle::empty(), self.peek_back().span));
         };
 
@@ -3342,12 +3341,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     loop {
                         let arm_pattern_id = self.expect_parse_pattern()?;
                         arm_pattern_ids.push(arm_pattern_id);
-                        if self.maybe_consume_next(K::KeywordOr).is_none() {
+                        if self.maybe_consume(K::KeywordOr).is_none() {
                             break;
                         }
                     }
 
-                    let guard_condition_expr = if self.maybe_consume_next(K::KeywordIf).is_some() {
+                    let guard_condition_expr = if self.maybe_consume(K::KeywordIf).is_some() {
                         Some(self.expect_expression()?)
                     } else {
                         None
@@ -3651,7 +3650,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_lambda_arg_defn(&mut self) -> ParseResult<LambdaArgDefn> {
         let (binding_token, binding) = self.expect_ident()?;
-        let ty = if self.maybe_consume_next(K::Colon).is_some() {
+        let ty = if self.maybe_consume(K::Colon).is_some() {
             Some(self.expect_type_expression()?)
         } else {
             None
@@ -3661,7 +3660,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_lambda(&mut self) -> ParseResult<ParsedExprId> {
         let start = self.expect_eat_token(K::BackSlash)?;
-        let maybe_open_paren = self.maybe_consume_next(K::OpenParen);
+        let maybe_open_paren = self.maybe_consume(K::OpenParen);
         let mut arguments: EcoVec<LambdaArgDefn> = eco_vec![];
         let mut return_type: Option<ParsedTypeExprId> = None;
         loop {
@@ -3747,19 +3746,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_let(&mut self) -> ParseResult<Option<ParsedLet>> {
         trace!("parse_let");
-        let Some(eaten_keyword) = self.maybe_consume_next(K::KeywordLet) else { return Ok(None) };
+        let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let is_context = self.maybe_consume_next(K::KeywordContext).is_some();
+        let is_context = self.maybe_consume(K::KeywordContext).is_some();
         let name_token = self.expect_eat_token(K::Ident)?;
-        let typ = match self.maybe_consume_next(K::Colon) {
+        let typ = match self.maybe_consume(K::Colon) {
             None => Ok(None),
             Some(_) => self.parse_type_expression(),
         }?;
         self.expect_eat_token(K::Equals)?;
-        let next = self.peek();
-        let initializer_expression = if next.kind == K::Ident && self.token_chars(next) == "uninit"
-        {
-            self.advance();
+        let initializer_expression = if self.maybe_consume_ident_chars("uninit").is_some() {
             None
         } else {
             Some(self.expect_expression()?)
@@ -3775,7 +3771,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_require(&mut self) -> ParseResult<Option<ParsedRequire>> {
-        let Some(keyword_require_token) = self.maybe_consume_next(K::KeywordRequire) else {
+        let Some(keyword_require_token) = self.maybe_consume(K::KeywordRequire) else {
             return Ok(None);
         };
 
@@ -3790,36 +3786,43 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_global(&mut self) -> ParseResult<Option<ParsedGlobalId>> {
         trace!("parse_global");
-        let Some(keyword_let_token) = self.maybe_consume_next(K::KeywordLet) else {
+        let Some(keyword_let_token) = self.maybe_consume(K::KeywordLet) else {
             return Ok(None);
         };
         let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let mut thread_local = false;
-        let mut export = false;
+        let mut is_thread_local = false;
+        let mut is_export = false;
+        let mut is_external = false;
         let name_token = loop {
             let ident = self.expect_eat_token(K::Ident)?;
             let tok_chars = self.token_chars(ident);
             match tok_chars {
-                "tls" => thread_local = true,
-                "export" => export = true,
+                "tls" => is_thread_local = true,
+                "export" => is_export = true,
+                "extern" => is_external = true,
                 _ => break ident,
             }
         };
         let _colon = self.expect_eat_token(K::Colon)?;
-        let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        self.expect_eat_token(K::Equals)?;
-        let value_expr = Parser::expect("expression", self.peek(), self.parse_expression())?;
-        let span = self.extend_span(keyword_let_token.span, self.get_expression_span(value_expr));
+        let type_expr = self.expect_type_expression()?;
+        let value_expr = if is_external {
+            None
+        } else {
+            self.expect_eat_token(K::Equals)?;
+            Some(self.expect_expression()?)
+        };
+        let span = self.extend_to_here(keyword_let_token.span);
         let name = self.intern_ident_token(name_token);
         let global_id = self.ast.add_global(ParsedGlobal {
             name,
-            ty: typ,
+            type_expr,
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
             is_referencing,
-            thread_local,
-            export,
+            is_thread_local,
+            is_export,
+            is_external,
         });
         Ok(Some(global_id))
     }
@@ -3964,7 +3967,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.ast.spans.extend(start_span, terminator.span);
                 break Ok((span, terminator));
             }
-            let found_delim = self.maybe_consume_next(delim);
+            let found_delim = self.maybe_consume(delim);
             if found_delim.is_none() {
                 break Err(
                     self.error_here(format!("Expected delimiter '{delim}' while parsing {name}"))
@@ -3974,7 +3977,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_if_expr(&mut self, is_static: bool) -> ParseResult<Option<ParsedIfExpr>> {
-        let Some(if_keyword) = self.maybe_consume_next(TokenKind::KeywordIf) else {
+        let Some(if_keyword) = self.maybe_consume(TokenKind::KeywordIf) else {
             return Ok(None);
         };
         let condition_expr =
@@ -4047,7 +4050,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     pub fn parse_block(&mut self, kind: ParsedBlockKind) -> ParseResult<Option<ParsedBlock>> {
-        let Some(block_start) = self.maybe_consume_next(K::OpenBrace) else {
+        let Some(block_start) = self.maybe_consume(K::OpenBrace) else {
             return Ok(None);
         };
         let parse_statement =
@@ -4067,7 +4070,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn parse_type_constraints(
         &mut self,
     ) -> ParseResult<MSlice<ParsedTypeConstraintExpr, ParsedProgram>> {
-        if self.maybe_consume_next(K::Colon).is_some() {
+        if self.maybe_consume(K::Colon).is_some() {
             let mut constraints = self.ast.mem.new_list(8);
             loop {
                 let constraint = self.expect_type_constraint_expr()?;
@@ -4104,7 +4107,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let is_debug = self.parse_compiler_debug();
         let condition = match preexisting_condition {
             None => {
-                if self.maybe_consume_next(K::Hash).is_some() {
+                if self.maybe_consume(K::Hash).is_some() {
                     self.expect_eat_token(K::KeywordIf)?;
                     let condition_expr = self.expect_expression()?;
                     Some(condition_expr)
@@ -4115,15 +4118,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Some(condition) => Some(condition),
         };
         let initial_pos = self.cursor_position();
-        let is_intrinsic = self.maybe_consume_next(K::KeywordIntern).is_some();
+        let is_intrinsic = self.maybe_consume(K::KeywordIntern).is_some();
         let linkage = if is_intrinsic {
             Linkage::Intrinsic
-        } else if self.peek().kind == K::KeywordExtern {
-            self.advance();
+        } else if let Some((_extern_token, _)) = self.maybe_consume_ident_chars("extern") {
             let (lib_name, fn_name) = if self.peek().kind == K::OpenParen {
                 self.advance();
                 let ident1 = self.expect_dq_ident()?;
-                let ident2 = if let Some(_comma) = self.maybe_consume_next(K::Comma) {
+                let ident2 = if let Some(_comma) = self.maybe_consume(K::Comma) {
                     let ident2 = self.expect_dq_ident()?;
                     Some(ident2)
                 } else {
@@ -4153,7 +4155,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let func_name = self.expect_eat_token(K::Ident)?;
         let func_name_id = self.intern_ident_token(func_name);
         let type_arguments: EcoVec<ParsedTypeParam> =
-            if self.maybe_consume_next(K::OpenBracket).is_some() {
+            if self.maybe_consume(K::OpenBracket).is_some() {
                 let mut type_args = eco_vec![];
                 let _ = self.eat_delimited_ext(
                     "Type arguments",
@@ -4167,12 +4169,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 eco_vec![]
             };
         let (params, params_span) = self.eat_fn_params()?;
-        let ret_type = if let Some(_colon) = self.maybe_consume_next(K::Colon) {
+        let ret_type = if let Some(_colon) = self.maybe_consume(K::Colon) {
             Some(self.expect_type_expression()?)
         } else {
             None
         };
-        let additional_type_constraints = if self.maybe_consume_next(K::KeywordWhere).is_some() {
+        let additional_type_constraints = if self.maybe_consume(K::KeywordWhere).is_some() {
             // FIXME(brittle parsing): Has to backtrack to un-consume the next token in the fn call;
             // the open brace
             let mut additional_type_constraints = eco_vec![];
@@ -4292,24 +4294,49 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.expect_ident_ext(false, false)
     }
 
+    fn maybe_consume_ident_chars(&mut self, chars: &str) -> Option<(Token, Ident)> {
+        let next = self.peek();
+        if next.kind == K::Ident {
+            let tok_chars =
+                Parser::tok_chars(&self.ast.spans, self.ast.sources.get_source(self.file_id), next);
+            if tok_chars == chars {
+                self.advance();
+                let ident = self.intern_ident_token(next);
+                Some((next, ident))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    #[allow(unused)]
+    fn expect_ident_chars(&mut self, chars: &str) -> ParseResult<(Token, Ident)> {
+        match self.maybe_consume_ident_chars(chars) {
+            None => Err(error(format!("Expected '{chars}'"), self.peek())),
+            Some(p) => Ok(p),
+        }
+    }
+
     fn parse_ability_defn(&mut self) -> ParseResult<Option<ParsedAbilityId>> {
         fn expect_ability_type_param(p: &mut Parser) -> ParseResult<ParsedAbilityParameter> {
             let start = p.peek().span;
-            let is_impl_param = p.maybe_consume_next(K::KeywordImpl).is_some();
+            let is_impl_param = p.maybe_consume(K::KeywordImpl).is_some();
             let name_token = p.expect_eat_token(K::Ident)?;
             let name = p.intern_ident_token(name_token);
             let constraints = p.parse_type_constraints()?;
             let span = p.extend_span(start, name_token.span);
             Ok(ParsedAbilityParameter { name, is_impl_param, constraints, span })
         }
-        let keyword_ability = self.maybe_consume_next(K::KeywordAbility);
+        let keyword_ability = self.maybe_consume(K::KeywordAbility);
         let Some(keyword_ability) = keyword_ability else {
             return Ok(None);
         };
         let name_token = self.expect_eat_token(K::Ident)?;
         let name_identifier = self.intern_ident_token(name_token);
         let mut ability_params = eco_vec![];
-        if let Some(_params_open) = self.maybe_consume_next(K::OpenBracket) {
+        if let Some(_params_open) = self.maybe_consume(K::OpenBracket) {
             self.eat_delimited_ext(
                 "Ability Parameter",
                 &mut ability_params,
@@ -4369,7 +4396,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_ability_impl(&mut self) -> ParseResult<Option<ParsedAbilityImplId>> {
-        let Some(keyword_impl) = self.maybe_consume_next(K::KeywordImpl) else { return Ok(None) };
+        let Some(keyword_impl) = self.maybe_consume(K::KeywordImpl) else { return Ok(None) };
         let mut generic_impl_params = eco_vec![];
         self.eat_delimited_if_opener(
             "Generic implementation parameters",
@@ -4407,7 +4434,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_type_defn(&mut self) -> ParseResult<Option<ParsedTypeDefnId>> {
-        let keyword_type = self.maybe_consume_next(K::KeywordDefType);
+        let keyword_type = self.maybe_consume(K::KeywordDefType);
         let Some(keyword_type) = keyword_type else {
             return Ok(None);
         };
@@ -4429,7 +4456,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let name = self.expect_eat_token(K::Ident)?;
 
         let mut type_params: SV8<_> = smallvec![];
-        if let Some(_type_params_open) = self.maybe_consume_next(K::OpenBracket) {
+        if let Some(_type_params_open) = self.maybe_consume(K::OpenBracket) {
             self.eat_delimited_ext(
                 "Type arguments",
                 &mut type_params,
@@ -4490,7 +4517,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_use(&mut self) -> ParseResult<Option<ParsedUseId>> {
-        let Some(use_token) = self.maybe_consume_next(K::KeywordUse) else {
+        let Some(use_token) = self.maybe_consume(K::KeywordUse) else {
             return Ok(None);
         };
 
@@ -4533,7 +4560,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn parse_defer(&mut self) -> ParseResult<Option<ParsedDefer>> {
-        let Some(defer_token) = self.maybe_consume_next(K::KeywordDefer) else {
+        let Some(defer_token) = self.maybe_consume(K::KeywordDefer) else {
             return Ok(None);
         };
 

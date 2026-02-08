@@ -652,6 +652,36 @@ impl<T, Tag> MList<T, Tag> {
         }
     }
 
+    fn grow(&mut self, mem: &mut Mem<Tag>) -> Self
+    where
+        T: Copy,
+    {
+        let loc = std::panic::Location::caller();
+        // Growth doesnt invalidate the old pointers
+        let new_cap = if self.len == 0 {
+            let size_of_t = size_of::<T>();
+            let initial_cap = if size_of_t >= 1024 { 1 } else { 8 };
+            initial_cap
+        } else {
+            self.cap() as u32 * 2
+        };
+        if cfg!(debug_assertions) {
+            // No need to log grows from 0
+            if self.len != 0 {
+                eprintln!(
+                    "{}:{} Growing from {} -> {}",
+                    loc.file(),
+                    loc.line(),
+                    self.cap(),
+                    new_cap
+                );
+            }
+        }
+        let mut new_me = mem.new_list(new_cap);
+        new_me.extend(self.as_slice());
+        new_me
+    }
+
     // This doesn't have to be the same arena, actually.
     // For now we'll constrain the tag, but we should provide
     // a separate method that returns a new list in whatever
@@ -661,37 +691,12 @@ impl<T, Tag> MList<T, Tag> {
     where
         T: Copy,
     {
-        let loc = std::panic::Location::caller();
         // FIXME: arena, special case for growth when this list is the last thing in the arena,
         // which it quite often will be
-        if self.len == self.cap() {
-            // Growth doesnt invalidate the old pointers in our arena
-            let new_cap = if self.len == 0 {
-                let size_of_t = size_of::<T>();
-                let initial_cap = if size_of_t >= 1024 { 1 } else { 8 };
-                initial_cap
-            } else {
-                self.cap() as u32 * 2
-            };
-            if cfg!(debug_assertions) {
-                // No need to log grows from 0
-                if self.len != 0 {
-                    eprintln!(
-                        "{}:{} Growing from {} -> {}",
-                        loc.file(),
-                        loc.line(),
-                        self.cap(),
-                        new_cap
-                    );
-                }
-            }
-            let mut new_me = mem.new_list(new_cap);
-            new_me.extend(self.as_slice());
-            new_me.push_unchecked(val);
-            *self = new_me;
-        } else {
-            self.push_unchecked(val)
+        if self.len >= self.cap() {
+            *self = self.grow(mem);
         }
+        self.push_unchecked(val)
     }
 
     // Inserts `val` at index `index`, shifting all elements to the right as needed
@@ -699,11 +704,31 @@ impl<T, Tag> MList<T, Tag> {
     where
         T: Copy,
     {
-        if self.len == self.cap() {
-            panic!("MList is full {}", self.buf.len());
-        }
         if index > self.len {
             panic!("MList insert index out of bounds: {} > {}", index, self.len);
+        }
+        if self.len == self.cap() {
+            panic!("MList.insert is full {}", self.buf.len());
+        }
+        unsafe {
+            let slice = &mut *self.buf;
+            slice.copy_within(index..self.len, index + 1);
+            slice[index] = val;
+        }
+        self.len += 1;
+    }
+
+    // Inserts `val` at index `index`, shifting all elements to the right as needed
+    // And growing the allocation if needed
+    pub fn insert_grow(&mut self, mem: &mut Mem<Tag>, index: usize, val: T)
+    where
+        T: Copy,
+    {
+        if index > self.len {
+            panic!("MList insert index out of bounds: {} > {}", index, self.len);
+        }
+        if self.len >= self.cap() {
+            *self = self.grow(mem)
         }
         unsafe {
             let slice = &mut *self.buf;

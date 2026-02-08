@@ -180,7 +180,6 @@ pub enum TokenKind {
     KeywordLoop,
     KeywordNamespace,
     KeywordIntern,
-    KeywordExtern,
     KeywordFor,
     KeywordIn,
     KeywordDo,
@@ -281,7 +280,6 @@ impl TokenKind {
             K::KeywordLoop => "loop",
             K::KeywordNamespace => "ns",
             K::KeywordIntern => "intern",
-            K::KeywordExtern => "extern",
             K::KeywordFor => "for",
             K::KeywordIn => "in",
             K::KeywordDo => "do",
@@ -424,7 +422,6 @@ impl TokenKind {
             "loop" => Some(K::KeywordLoop),
             "ns" => Some(K::KeywordNamespace),
             "intern" => Some(K::KeywordIntern),
-            "extern" => Some(K::KeywordExtern),
             "for" => Some(K::KeywordFor),
             "in" => Some(K::KeywordIn),
             "do" => Some(K::KeywordDo),
@@ -460,7 +457,6 @@ impl TokenKind {
             K::KeywordLoop => true,
             K::KeywordNamespace => true,
             K::KeywordIntern => true,
-            K::KeywordExtern => true,
             K::KeywordFor => true,
             K::KeywordIn => true,
             K::KeywordDo => true,
@@ -1147,7 +1143,7 @@ mod test {
     #[test]
     fn extern_fn_name() -> anyhow::Result<()> {
         let input = r#"extern(printf)"#;
-        expect_token_kinds(input, vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen])
+        expect_token_kinds(input, vec![K::Ident, K::OpenParen, K::Ident, K::CloseParen])
     }
 
     #[test]

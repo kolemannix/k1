@@ -1,7 +1,7 @@
 ns zst_test;
 
-let g: {} = {};
-let* g2: *{} = {};
+let g: {} = {}
+let* g2: *{} = {}
 
 fn testGlobal(): empty {
   assertEquals(0, types/size-of[typeOf(g)]);

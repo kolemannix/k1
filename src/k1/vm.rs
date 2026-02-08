@@ -18,8 +18,8 @@ use crate::bc::{
 };
 use crate::parse::NumericWidth;
 use crate::typer::types::{
-    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType,
-    PhysicalTypePacked, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
+    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
+    STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
     FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
@@ -306,7 +306,7 @@ impl Vm {
                             Inst::Alloca { t, .. } => *t,
                             _ => physical_type,
                         };
-                        render_debug_value(w, self, k1, type_to_use.unpack(), local).unwrap();
+                        render_debug_value(w, self, k1, type_to_use, local).unwrap();
                         writeln!(w).unwrap()
                     }
                     InstKind::Void => {
@@ -565,14 +565,14 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_ret_place = match unit.fn_type.return_type {
-        PhysicalType::Empty => RetPlace::Empty,
-        ret_pt @ PhysicalType::Agg(_) | ret_pt @ PhysicalType::Scalar(_) => {
-            let pt_layout = k1.types.get_pt_layout(ret_pt);
+    let top_ret_place = match unit.fn_type.return_type.to_enum() {
+        PhysicalTypeEnum::Empty => RetPlace::Empty,
+        PhysicalTypeEnum::Agg(_) | PhysicalTypeEnum::Scalar(_) => {
+            let pt_layout = k1.types.get_pt_layout(unit.fn_type.return_type);
             let ret_addr = vm.stack.push_layout_uninit(pt_layout);
             debug!(
                 "Pushing ret place for type {} at addr: {:p}",
-                k1.types.pt_to_string(ret_pt),
+                k1.types.pt_to_string(unit.fn_type.return_type),
                 ret_addr
             );
             RetPlace::Addr { addr: ret_addr }
@@ -603,9 +603,9 @@ pub fn execute_compiled_unit(
         if unit.fn_type.diverges {
             Ok(k1.static_values.empty_id())
         } else {
-            let vm_value = match top_ret_info.pt {
-                PhysicalType::Empty => Value(0),
-                PhysicalType::Scalar(scalar_type) => {
+            let vm_value = match top_ret_info.pt.to_enum() {
+                PhysicalTypeEnum::Empty => Value(0),
+                PhysicalTypeEnum::Scalar(scalar_type) => {
                     // Since we stored the return value to this location, we need to load it
                     // before invoking static conversion
                     let RetPlace::Addr { addr } = top_ret_info.place else {
@@ -614,7 +614,7 @@ pub fn execute_compiled_unit(
                     let loaded = load_scalar(scalar_type, addr.cast_const());
                     loaded
                 }
-                PhysicalType::Agg(_) => {
+                PhysicalTypeEnum::Agg(_) => {
                     let RetPlace::Addr { addr } = top_ret_info.place else {
                         panic!("We set this to Addr")
                     };
@@ -743,7 +743,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let base_ptr = base_value.as_ptr();
                 let index_value = resolve_value!(element_index);
                 let index = index_value.bits();
-                let elem_layout = k1.types.get_pt_layout(element_t.unpack());
+                let elem_layout = k1.types.get_pt_layout(element_t);
 
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.offset_at_index(index as usize)) };
@@ -756,16 +756,17 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let ret_pt = call.ret_type;
                 // Figure out where we're returning to
                 let return_frame_index = vm.stack.current_frame_index();
-                let ret_place = match call.ret_type {
-                    PhysicalType::Empty => RetPlace::Empty,
-                    PhysicalType::Scalar(_) | PhysicalType::Agg(_) => match call.dst {
+                let ret_place = if call.ret_type.is_empty() {
+                    RetPlace::Empty
+                } else {
+                    match call.dst {
                         Some(bc_dst) => {
                             RetPlace::Addr { addr: resolve_value!(bc_dst).as_ptr().cast_mut() }
                         }
                         None => {
                             RetPlace::ScalarCallInst { inst_index, frame_index: return_frame_index }
                         }
-                    },
+                    }
                 };
                 let ret_info = RetInfo { pt: ret_pt, place: ret_place, ip: ip + 1, block: b };
 
@@ -1629,7 +1630,7 @@ fn resolve_global(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     global_id: TypedGlobalId,
-    t_packed: PhysicalTypePacked,
+    t: PhysicalType,
 ) -> TyperResult<Value> {
     // ** If referencing, allocate layout and perform a store to produce a valid address
     // Case 1: It's a constant, already evaluated, stored in the global static space
@@ -1658,7 +1659,6 @@ fn resolve_global(
         }
         Some(value_id) => value_id,
     };
-    let t = t_packed.unpack();
     debug!(
         "shared global is: {}. the `t` of the instr is: {}",
         k1.static_value_to_string(initial_value_id),
@@ -1925,12 +1925,12 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
-    match t {
-        PhysicalType::Empty => {
+    match t.to_enum() {
+        PhysicalTypeEnum::Empty => {
             eprintln!("Storing Empty; should probably be illegal")
         }
-        PhysicalType::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
-        PhysicalType::Agg(pt_id) => {
+        PhysicalTypeEnum::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
+        PhysicalTypeEnum::Agg(pt_id) => {
             let record = types.agg_types.get(pt_id);
             let src = value.as_ptr();
             memmove(src, dst, record.layout.size as usize)
@@ -1970,13 +1970,13 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
 }
 
 pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
-    match t {
-        PhysicalType::Empty => {
+    match t.to_enum() {
+        PhysicalTypeEnum::Empty => {
             eprintln!("load_value on Empty");
             Value(0)
         }
-        PhysicalType::Scalar(st) => load_scalar(st, ptr),
-        PhysicalType::Agg(_) => Value::ptr(ptr),
+        PhysicalTypeEnum::Scalar(st) => load_scalar(st, ptr),
+        PhysicalTypeEnum::Agg(_) => Value::ptr(ptr),
     }
 }
 
@@ -2440,9 +2440,9 @@ fn render_debug_value(
     pt: PhysicalType,
     value: Value,
 ) -> std::fmt::Result {
-    match pt {
-        PhysicalType::Empty => w.write_str("empty")?,
-        PhysicalType::Scalar(scalar_type) => match scalar_type {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Empty => w.write_str("empty")?,
+        PhysicalTypeEnum::Scalar(scalar_type) => match scalar_type {
             ScalarType::U8 => write!(w, "u8 {}", value.bits() as u8)?,
             ScalarType::U16 => write!(w, "u16 {}", value.bits() as u16)?,
             ScalarType::U32 => write!(w, "u32 {}", value.bits() as u32)?,
@@ -2455,7 +2455,7 @@ fn render_debug_value(
             ScalarType::F64 => write!(w, "f64 {}", value.as_f64())?,
             ScalarType::Pointer => render_debug_address(w, vm, value)?,
         },
-        PhysicalType::Agg(_) => {
+        PhysicalTypeEnum::Agg(_) => {
             write!(w, "agg ")?;
             render_debug_address(w, vm, value)?;
             w.write_str(" ")?;
@@ -2500,14 +2500,17 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
             "not a value type; zeroed() for type {} is undefined",
             k1.types.get(type_id).kind_name()
         ),
-        Some(PhysicalType::Scalar(_) | PhysicalType::Empty) => Value(0),
-        Some(PhysicalType::Agg(agg_id)) => {
-            let layout = k1.types.agg_types.get(agg_id).layout;
-            let data: *mut u8 = k1.vm_static_stack.push_layout_uninit(layout);
-            unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
+        Some(pt) => match pt.to_enum() {
+            PhysicalTypeEnum::Scalar(_) => Value(0),
+            PhysicalTypeEnum::Agg(agg_id) => {
+                let layout = k1.types.agg_types.get(agg_id).layout;
+                let data: *mut u8 = k1.vm_static_stack.push_layout_uninit(layout);
+                unsafe { std::ptr::write_bytes(data, 0, layout.size as usize) };
 
-            Value::ptr(data.cast_const())
-        }
+                Value::ptr(data.cast_const())
+            }
+            PhysicalTypeEnum::Empty => Value(0),
+        },
     }
 }
 

@@ -14,7 +14,7 @@
 
 // Demonstrates that the defaults of
 // Library, no dependencies, not multithreaded work
-let MODULE_INFO: core/k1/module-manifest = core/mem/zeroed();
+let MODULE_INFO: core/k1/module-manifest = core/mem/zeroed()
 
 deftype Entry[V] = ?{ key: string, value: V, deleted: bool }
 deftype HashMap[V] = {

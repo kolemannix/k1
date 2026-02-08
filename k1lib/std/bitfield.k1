@@ -72,10 +72,10 @@ fn define[Base](type-name: string, members: view[{ name: string, bits: size }]):
   for members {
     let info = memberInfo.get(itIndex);
     // Emit globals, or constants, for each field's mask
-    code.line("  let {it.name}Mask: {baseName} = {info.mask};");
+    code.line("  let {it.name}Mask: {baseName} = {info.mask}");
   };
 
-  code.line("  let zero: {type-name} = {{ bits: 0 };");
+  code.line("  let zero: {type-name} = {{ bits: 0 }");
 
   // Now let's do a getter and setter for each bitfield. If the width is 1,
   // we'll use bool since that's what the people likely want. Note that we could configure

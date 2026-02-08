@@ -86,8 +86,8 @@ fn eprintln(s: string) {
 ns io {
   // TODO: Add buffering
   deftype OutStream = { fileNo: i32 }
-  let stdout: OutStream = { fileNo: posix/stdout };
-  let stderr: OutStream = { fileNo: posix/stderr };
+  let stdout: OutStream = { fileNo: posix/stdout }
+  let stderr: OutStream = { fileNo: posix/stderr }
 
   impl writer for OutStream {
     fn write-byte(self: self, value: u8) {
@@ -128,7 +128,7 @@ ns sys {
   fn parseMainArgs(argCount: u32, args: ptr): view[string] {
     let buf = buffer/fromPtrAndCount[CString](
       count = argCount.as[size],
-      pointer = args
+      ptr = args
     );
     let strings = list/fromMap(buf, \cstr. string/wrapCString(cstr));
     strings.asView()
@@ -169,7 +169,7 @@ ns files {
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
     libc/files/fread(buf, fileSizeBytes, 1, file);
     let string = string/wrapBuffer(
-      buffer/fromPtrAndCount(count = fileSizeBytes, pointer = buf)
+      buffer/fromPtrAndCount(count = fileSizeBytes, ptr = buf)
     );
 
     string
@@ -190,7 +190,7 @@ ns char {
   fn as_u8(self: char): u8 { self.as[u8] }
 
   // mask to convert ASCII letters to uppercase
-  let ASCII_CASE_MASK: u8 = 0b0010_0000;
+  let ASCII_CASE_MASK: u8 = 0b0010_0000
   // Ported from Rust core library; todo wrapping_sub
   //fn asDigit(self: char, radix: u32): ?u32 {
   //  assert(radix >= 2 and radix <= 36);
@@ -436,18 +436,18 @@ ns u8 {
 }
 
 ns u32 {
-  let minValue: u32 = 0x00000000;
-  let maxValue: u32 = 0xFFFFFFFF;
+  let minValue: u32 = 0x00000000
+  let maxValue: u32 = 0xFFFFFFFF
 }
 
 ns i32 {
-  let maxValue: i32 = 0x7FFFFFFF;
-  let minValue: i32 = -0x80000000;
+  let maxValue: i32 = 0x7FFFFFFF
+  let minValue: i32 = -0x80000000
 }
 
 ns i64 {
-  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF;
-  let minValue: i64 = -0x8000000000000000;
+  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF
+  let minValue: i64 = -0x8000000000000000
   fn nextPow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/nextPow2: value must be positive") else
@@ -504,6 +504,20 @@ ns f64 {
     if writtenLen <= 0 crash("snprintf_f32 returned {writtenLen}");
     w.write-bytes(stackBuf.as-view().slice(0, writtenLen.as[size]))
   }
+
+  fn from-string(s: string): result[{ value: f64, len: size }, string] {
+    let* end-ptr: *mut ptr = ptr/null;
+    let value: f64 = libc/strtod(s.dataPtr(), end-ptr);
+    if end-ptr.* == s.dataPtr() {
+      let msg-c = libc/strerror(libc/errno);
+      let msg = string/from-c(msg-c.as[ptr]);
+      .err("Could not parse '{s}' as f64: {msg}")
+    } else {
+      let len-parsed = end-ptr.*.diff(s.dataPtr());
+      .ok({ value, len: len-parsed })
+    }
+  }
+
 }
 
 impl equals for f32 { intern fn equals(self: f32, other: f32): bool }

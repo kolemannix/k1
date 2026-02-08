@@ -1,0 +1,30 @@
+#if k1/os-macos ns macos-time {
+  deftype mach_timebase_info_data_t = { numer: u32, denom: u32 }
+
+  extern("mach_absolute_time") fn mach_absolute_time(): u64
+  extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
+
+  let* timebase: *mut mach_timebase_info_data_t = { numer: 0, denom: 0 }
+
+  fn counter-to-nanos(counter: u64): u64 {
+    if (timebase.denom == 0) {
+      mach_timebase_info(timebase);
+    };
+    eprintln("timebase is {timebase.numer} / {timebase.denom}");
+    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64]);
+  }
+
+}
+
+ns time {
+  fn read-cpu-counter(): u64 {
+    #if k1/os-macos macos-time/mach_absolute_time()
+    else #static crash("Unimplemented: cpu-counter for platform")
+  }
+  fn counter-to-nanos(counter: u64): u64 {
+    #if k1/os-macos macos-time/counter-to-nanos(counter)
+    else #static crash("Unimplemented: counter-to-nanos for platform")
+  }
+}
+
+

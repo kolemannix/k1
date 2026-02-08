@@ -3,7 +3,7 @@ let MODULE_INFO: core/k1/ModuleManifest = {
   deps: [],
   multithreading: false,
   libs: ["raylib"]
-};
+}
 ns raylib {
   deftype Color = {
     r: u8, g: u8, b: u8, a: u8

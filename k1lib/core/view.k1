@@ -21,6 +21,10 @@ ns view {
     { buffer }
   }
 
+  fn from-raw[T](ptr: ptr, len: size): view[T] {
+    { buffer: buffer/fromPtrAndCount(ptr, len) }
+  }
+
   fn innerBuffer[T](self: view[T]): buffer[T] {
     self.buffer
   }

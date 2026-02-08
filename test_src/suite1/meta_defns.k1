@@ -1,7 +1,7 @@
 ns meta_defns;
 
-#meta "let n: u64 = 255;"
-#meta "let x: u64 = 256;"
+#meta "let n: u64 = 255"
+#meta "let x: u64 = 256"
 
 #meta "fn isPow2(x: u64): bool {{ (x - 1) || bitwise/bit-and(x) == 0 }"
 

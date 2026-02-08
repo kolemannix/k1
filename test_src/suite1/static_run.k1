@@ -1,18 +1,18 @@
 ns static_run;
-let INT_VIEW: view[int] = [1,2,3,4,5];
+let INT_VIEW: view[int] = [1,2,3,4,5]
 
-let i2: 12 = { 3 * 4 };
-let i3: 12 = #static { 3 * 4 };
-let i4: 12 = #static 3 * 4;
+let i2: 12 = { 3 * 4 }
+let i3: 12 = #static { 3 * 4 }
+let i4: 12 = #static 3 * 4
 
 let s1: string = #static {
   let a = "asd";
   a.concat("f")
-};
+}
 let s2: "asdf" = #static {
   let a = "asd";
   a.concat("f")
-};
+}
 
 fn staticsAndCoercion(): i32 {
    let _i: "a" = #static "a";

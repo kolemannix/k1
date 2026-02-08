@@ -48,7 +48,7 @@ ns foo {
   ns core {
     deftype Test = either A, B
     ns Test {
-      let default: Test = .A;
+      let default: Test = .A
     }
   }
 }

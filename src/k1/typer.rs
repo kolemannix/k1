@@ -1602,14 +1602,15 @@ impl Variable {
 #[derive(Debug, Clone)]
 pub struct TypedGlobal {
     pub variable_id: VariableId,
-    pub parsed_expr: ParsedExprId,
+    pub parsed_expr: Option<ParsedExprId>,
     pub initial_value: Option<StaticValueId>,
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub span: SpanId,
     pub is_constant: bool,
     pub is_referencing: bool,
     pub is_tls: bool,
     pub is_exported: bool,
+    pub is_external: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
 }
@@ -4299,9 +4300,12 @@ impl TypedProgram {
             return Ok(None);
         };
         let manifest_global = self.ast.get_global(manifest_function).clone();
-        let type_id = self.eval_type_expr(manifest_global.ty, Scopes::ROOT_SCOPE_ID)?;
+        let type_id = self.eval_type_expr(manifest_global.type_expr, Scopes::ROOT_SCOPE_ID)?;
+        let Some(value_expr) = manifest_global.value_expr else {
+            return failf!(manifest_global.span, "Missing value");
+        };
         let manifest_result = self.execute_static_expr(
-            manifest_global.value_expr,
+            value_expr,
             EvalExprContext {
                 scope_id: Scopes::ROOT_SCOPE_ID,
                 expected_type_id: Some(type_id),
@@ -5368,10 +5372,11 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
-        let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
+        let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
 
         let is_referencing = parsed_global.is_referencing;
-        let is_exported = parsed_global.export;
+        let is_exported = parsed_global.is_export;
+        let is_external = parsed_global.is_external;
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
@@ -5397,12 +5402,13 @@ impl TypedProgram {
             variable_id,
             initial_value: None,
             parsed_expr: value_expr_id,
-            ty: type_id,
+            type_id,
             span: global_span,
             is_referencing,
             is_constant: !is_mutable,
-            is_tls: parsed_global.thread_local,
+            is_tls: parsed_global.is_thread_local,
             is_exported,
+            is_external,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -5414,6 +5420,7 @@ impl TypedProgram {
         };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
         self.scopes.add_variable(scope_id, global_name, variable_id);
+
         Ok(variable_id)
     }
 
@@ -5426,8 +5433,22 @@ impl TypedProgram {
             return Ok(());
         };
         let typed_global = self.globals.get(global_id);
+        let is_external = typed_global.is_external;
+        let value_expr_id = if is_external {
+            match typed_global.parsed_expr {
+                None => return Ok(()),
+                Some(_id) => {
+                    return failf!(parsed_global.span, "External globals cannot have initializers");
+                }
+            }
+        } else {
+            match typed_global.parsed_expr {
+                None => return failf!(parsed_global.span, "Global has no initializer"),
+                Some(id) => id,
+            }
+        };
         let scope_id = typed_global.parent_scope;
-        let declared_type = typed_global.ty;
+        let declared_type = typed_global.type_id;
 
         let is_referencing = parsed_global.is_referencing;
         let expected_rhs_type = if is_referencing {
@@ -5440,7 +5461,6 @@ impl TypedProgram {
         };
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
-        let value_expr_id = parsed_global.value_expr;
 
         let expected_type_for_execution =
             match self.types.get_static_type_of_type(expected_rhs_type) {
@@ -7583,7 +7603,7 @@ impl TypedProgram {
                             generated_filename,
                             content.clone(),
                         ));
-                    // nocommit: Write #meta source files asynchronously
+                    // TODO: Write #meta source files asynchronously
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
                             "Failed to write out generated metaprogram at {}. {e}",
@@ -12608,9 +12628,9 @@ impl TypedProgram {
                         let defer_stmt_id =
                             self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
                         if terminating {
-                            stmts.insert(stmts.len() - 1, defer_stmt_id);
+                            stmts.insert_grow(&mut self.mem, stmts.len() - 1, defer_stmt_id);
                         } else {
-                            stmts.push(defer_stmt_id)
+                            stmts.push_grow(&mut self.mem, defer_stmt_id)
                         }
                     }
                 };

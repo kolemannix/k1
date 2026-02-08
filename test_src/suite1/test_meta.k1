@@ -11,7 +11,7 @@
 #meta pre/makePoint("MyMetaPoint")
 
 ns pre {
-  let pi: f32 = 3.14;
+  let pi: f32 = 3.14
   fn makePoint(name: string): string {
     "deftype {name} = {{ x: i32, y: i32 }";
   }

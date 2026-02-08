@@ -150,14 +150,14 @@ ns mem {
 
   fn new[T](t: T): *mut T { alloc-mode.Current.new(t) }
 
-  let* tls arena: *mut Arena = zeroed();
+  let* tls arena: *mut Arena = zeroed()
 
   deftype alias ALLOC_STACK_MAX = 128
   let* tls allocStack: *mut FixList[alloc-mode, ALLOC_STACK_MAX] = { 
     let* s = zeroed[FixList[alloc-mode, ALLOC_STACK_MAX]]();
     s.push(.Arena);
     s
-  };
+  }
 
   fn pushMode(mode: alloc-mode) {
     allocStack.push(mode)

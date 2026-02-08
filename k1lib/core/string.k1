@@ -31,6 +31,10 @@ ns string {
     { view }
   }
 
+  fn fromRaw(ptr: ptr, len: size): string {
+    fromView(view/from-raw(ptr, len))
+  }
+
   fn fromBytes(view: view[byte]): string {
     { view: view.toCharView() }
   }
@@ -169,12 +173,12 @@ ns string {
     };
     let buffer = buffer/fromPtrAndCount[char](
       count = i,
-      pointer = cString
+      ptr = cString
     );
     wrapBuffer(buffer)
   }
 
-  fn fromCString(cString: ptr): string {
+  fn from-c(cString: ptr): string {
     let* chars = list/empty[char]();
     let i = 0;
     loop {

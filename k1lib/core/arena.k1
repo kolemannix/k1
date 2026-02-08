@@ -11,9 +11,9 @@ deftype Arena = {
   maxAddr: ptr
 }
 ns Arena {
-  let kb: size = 1024;
-  let mb: size = 1048576;
-  let gb: size = 1073741824;
+  let kb: size = 1024
+  let mb: size = 1048576
+  let gb: size = 1073741824
 
   fn regionSizeBytes(self: Arena): size {
     self.maxAddr.diff(self.basePtr)

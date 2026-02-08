@@ -1,8 +1,8 @@
 ns condcomp;
 
 
-let MY_VALUE: bool = true;
-let MY_VALUE_NEG: bool = not MY_VALUE;
+let MY_VALUE: bool = true
+let MY_VALUE_NEG: bool = not MY_VALUE
 
 fn test() {
   use core/k1;

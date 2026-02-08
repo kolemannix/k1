@@ -334,7 +334,7 @@ impl IntegerType {
     }
 
     pub fn get_pt(&self) -> PhysicalType {
-        PhysicalType::Scalar(self.get_scalar_type())
+        PhysicalType::scalar(self.get_scalar_type())
     }
 }
 
@@ -964,17 +964,29 @@ impl ScalarType {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Clone, Copy)]
-pub struct PhysicalTypePacked(u32);
+pub struct PhysicalType(u32);
 
-impl PhysicalTypePacked {
-    pub const EMPTY: PhysicalTypePacked = PhysicalTypePacked(0);
-    pub const U8: PhysicalTypePacked = PhysicalTypePacked(ScalarType::U8 as u32);
+impl PhysicalType {
+    pub const EMPTY: PhysicalType = PhysicalType(0);
+    pub const U8: PhysicalType = PhysicalType(ScalarType::U8 as u32);
+    pub const PTR: PhysicalType = PhysicalType(ScalarType::Pointer as u32);
+
+    const MIN_AGG_ID: u32 = 16;
 
     pub const fn as_scalar(self) -> Option<ScalarType> {
         match self.0 {
             1..=11 => Some(ScalarType::from_tag(self.0)),
             _ => None,
         }
+    }
+
+    pub const fn expect_scalar(&self) -> ScalarType {
+        self.as_scalar().unwrap()
+    }
+
+    pub const fn expect_agg(&self) -> AggregateTypeId {
+        debug_assert!(self.is_agg());
+        AggregateTypeId::from_u32(self.0).unwrap()
     }
 
     pub const fn is_ptr(self) -> bool {
@@ -986,7 +998,7 @@ impl PhysicalTypePacked {
     }
 
     pub const fn is_agg(self) -> bool {
-        self.0 >= 16
+        self.0 >= Self::MIN_AGG_ID
     }
 
     pub const fn is_int(self) -> bool {
@@ -994,60 +1006,64 @@ impl PhysicalTypePacked {
     }
 
     pub fn is_empty(self) -> bool {
-        self.0 == 0
+        self == Self::EMPTY
     }
 
-    pub const fn pack(pt: PhysicalType) -> PhysicalTypePacked {
+    pub const fn pack(pt: PhysicalTypeEnum) -> PhysicalType {
         match pt {
-            PhysicalType::Scalar(st) => PhysicalTypePacked(st.to_tag() as u32),
-            PhysicalType::Agg(agg_id) => {
-                let u32_value = agg_id.as_u32();
-                debug_assert!(u32_value >= 16);
-                PhysicalTypePacked(u32_value)
-            }
-            PhysicalType::Empty => Self::EMPTY,
+            PhysicalTypeEnum::Scalar(st) => Self::scalar(st),
+            PhysicalTypeEnum::Agg(agg_id) => Self::agg(agg_id),
+            PhysicalTypeEnum::Empty => Self::EMPTY,
         }
     }
-    pub fn unpack(self) -> PhysicalType {
+    pub fn to_enum(self) -> PhysicalTypeEnum {
         match self.0 {
-            0 => PhysicalType::Empty,
-            t @ 1..=11 => PhysicalType::Scalar(ScalarType::from_tag(t)),
-            agg_id => PhysicalType::Agg(AggregateTypeId::from_u32(agg_id).unwrap()),
+            0 => PhysicalTypeEnum::Empty,
+            t @ 1..=11 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
+            agg_id => PhysicalTypeEnum::Agg(AggregateTypeId::from_u32(agg_id).unwrap()),
         }
+    }
+
+    pub const fn scalar(st: ScalarType) -> PhysicalType {
+        PhysicalType(st.to_tag() as u32)
+    }
+
+    pub const fn agg(agg_id: AggregateTypeId) -> PhysicalType {
+        debug_assert!(agg_id.as_u32() >= Self::MIN_AGG_ID);
+        PhysicalType(agg_id.as_u32())
     }
 }
 
 #[derive(Clone, Copy)]
-// nocommit(3): Consolidate PhysicalType and *Packed
-pub enum PhysicalType {
+pub enum PhysicalTypeEnum {
     Scalar(ScalarType),
     Agg(AggregateTypeId),
-    /// All zero-sized type ids should compile to the Empty variant, so zero-sized behavior is
+    /// All zero-sized type ids compile to the Empty variant, so zero-sized behavior is
     /// handled consistently everywhere
     Empty,
 }
 
-impl PhysicalType {
-    pub const fn pack(self) -> PhysicalTypePacked {
-        PhysicalTypePacked::pack(self)
+impl PhysicalTypeEnum {
+    pub const fn pack(self) -> PhysicalType {
+        PhysicalType::pack(self)
     }
 
     pub fn kind_name(&self) -> &'static str {
         match self {
-            PhysicalType::Scalar(_) => "scalar",
-            PhysicalType::Agg(_) => "agg",
-            PhysicalType::Empty => "empty",
+            PhysicalTypeEnum::Scalar(_) => "scalar",
+            PhysicalTypeEnum::Agg(_) => "agg",
+            PhysicalTypeEnum::Empty => "empty",
         }
     }
 
     pub fn is_agg(&self) -> bool {
-        matches!(self, PhysicalType::Agg(_))
+        matches!(self, PhysicalTypeEnum::Agg(_))
     }
 
     #[track_caller]
     pub fn expect_agg(&self) -> AggregateTypeId {
         match self {
-            PhysicalType::Agg(id) => *id,
+            PhysicalTypeEnum::Agg(id) => *id,
             _ => panic!("Expected agg on {}", self.kind_name()),
         }
     }
@@ -1055,23 +1071,23 @@ impl PhysicalType {
     #[track_caller]
     pub fn expect_scalar(&self) -> ScalarType {
         match self {
-            PhysicalType::Scalar(s) => *s,
+            PhysicalTypeEnum::Scalar(s) => *s,
             _ => panic!("Expected scalar"),
         }
     }
     pub fn as_scalar(&self) -> Option<ScalarType> {
         match self {
-            PhysicalType::Scalar(s) => Some(*s),
+            PhysicalTypeEnum::Scalar(s) => Some(*s),
             _ => None,
         }
     }
 
     pub fn is_scalar(&self) -> bool {
-        matches!(self, PhysicalType::Scalar(_))
+        matches!(self, PhysicalTypeEnum::Scalar(_))
     }
 
     pub fn is_empty(&self) -> bool {
-        matches!(self, PhysicalType::Empty)
+        matches!(self, PhysicalTypeEnum::Empty)
     }
 }
 
@@ -1185,7 +1201,7 @@ impl TypePool {
         const EXPECTED_TYPE_COUNT: usize = 65536;
         let mut agg_types = VPool::make_with_hint("phys_types", EXPECTED_TYPE_COUNT / 2);
         // Reserve the lower values so they dont conflict with scalars once packed
-        agg_types.skip_next_n_slots(16);
+        agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
 
         TypePool {
             types: VPool::make_with_hint("types", EXPECTED_TYPE_COUNT),
@@ -1690,10 +1706,10 @@ impl TypePool {
     // PHYSICAL TYPE STUFF /////////////////////////////////////////////////////
 
     pub fn get_pt_layout(&self, pt: PhysicalType) -> Layout {
-        match pt {
-            PhysicalType::Empty => Layout::ZERO_SIZED,
-            PhysicalType::Scalar(s) => s.get_layout(),
-            PhysicalType::Agg(agg_id) => self.agg_types.get(agg_id).layout,
+        match pt.to_enum() {
+            PhysicalTypeEnum::Empty => Layout::ZERO_SIZED,
+            PhysicalTypeEnum::Scalar(s) => s.get_layout(),
+            PhysicalTypeEnum::Agg(agg_id) => self.agg_types.get(agg_id).layout,
         }
     }
 
@@ -1727,23 +1743,23 @@ impl TypePool {
         type_id: TypeId,
     ) -> Option<PhysicalType> {
         match self.get(type_id) {
-            Type::Char | Type::Bool => Some(PhysicalType::Scalar(ScalarType::U8)),
+            Type::Char | Type::Bool => Some(PhysicalType::U8),
 
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
-                Some(PhysicalType::Scalar(st))
+                Some(PhysicalType::scalar(st))
             }
 
-            Type::Float(FloatType::F32) => Some(PhysicalType::Scalar(ScalarType::F32)),
-            Type::Float(FloatType::F64) => Some(PhysicalType::Scalar(ScalarType::F64)),
+            Type::Float(FloatType::F32) => Some(PhysicalType::scalar(ScalarType::F32)),
+            Type::Float(FloatType::F64) => Some(PhysicalType::scalar(ScalarType::F64)),
             Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
-                Some(PhysicalType::Scalar(ScalarType::Pointer))
+                Some(PhysicalType::scalar(ScalarType::Pointer))
             }
             Type::Array(array) => {
                 let count = self.get_type_as_i64(static_values, array.size_type);
                 match count {
                     None => None,
-                    Some(0) => Some(PhysicalType::Empty),
+                    Some(0) => Some(PhysicalType::EMPTY),
                     Some(len) => match self.get_physical_type(static_values, array.element_type) {
                         None => None,
                         Some(element_t) => {
@@ -1754,7 +1770,7 @@ impl TypePool {
                                 layout: elem_layout.array_me(len as usize),
                             };
                             let id = self.agg_types.add(record);
-                            Some(PhysicalType::Agg(id))
+                            Some(PhysicalType::agg(id))
                         }
                     },
                 }
@@ -1787,7 +1803,7 @@ impl TypePool {
                     None
                 } else {
                     if layout.size == 0 {
-                        Some(PhysicalType::Empty)
+                        Some(PhysicalType::EMPTY)
                     } else {
                         let fields_handle = self.mem.list_to_handle(fields);
                         let agg_id = self.agg_types.add(AggregateTypeRecord {
@@ -1795,7 +1811,7 @@ impl TypePool {
                             origin_type_id: type_id,
                             layout,
                         });
-                        Some(PhysicalType::Agg(agg_id))
+                        Some(PhysicalType::agg(agg_id))
                     }
                 }
             }
@@ -1835,12 +1851,12 @@ impl TypePool {
                 if is_physical {
                     let members_handle = self.mem.list_to_handle(union_members);
                     let union_id = self.make_union_type(type_id, members_handle);
-                    let union_layout = self.get_pt_layout(PhysicalType::Agg(union_id));
+                    let union_layout = self.get_pt_layout(PhysicalType::agg(union_id));
 
                     let mut struct_layout = tag_layout;
                     let tag_field = StructField {
                         offset: 0,
-                        field_t: PhysicalType::Scalar(tag_scalar),
+                        field_t: PhysicalType::scalar(tag_scalar),
                         name: self.idents.tag,
                     };
                     let (struct_fields, union_offset) = if members_handle.is_empty() {
@@ -1849,7 +1865,7 @@ impl TypePool {
                         let union_offset = struct_layout.append_to_aggregate(union_layout);
                         let payload_field = StructField {
                             offset: union_offset,
-                            field_t: PhysicalType::Agg(union_id),
+                            field_t: PhysicalType::agg(union_id),
                             name: self.idents.payload,
                         };
                         let fields = self.mem.pushn(&[tag_field, payload_field]);
@@ -1871,7 +1887,7 @@ impl TypePool {
                         origin_type_id: type_id,
                         layout: struct_layout,
                     });
-                    Some(PhysicalType::Agg(enum_agg_id))
+                    Some(PhysicalType::agg(enum_agg_id))
                 } else {
                     None
                 }
@@ -1883,7 +1899,7 @@ impl TypePool {
             Type::LambdaObject(lam_obj) => {
                 self.add_physical_duplicate(static_values, type_id, lam_obj.struct_representation)
             }
-            Type::Static(_stat) => Some(PhysicalType::Empty),
+            Type::Static(_stat) => Some(PhysicalType::EMPTY),
             Type::Never => None,
             Type::Function(_)
             | Type::Generic(_)
@@ -1902,10 +1918,10 @@ impl TypePool {
     ) -> Option<PhysicalType> {
         match self.get_physical_type(static_values, other) {
             None => None,
-            Some(other_pt) => match other_pt {
-                pt @ PhysicalType::Empty => Some(pt),
-                pt @ PhysicalType::Scalar(_) => Some(pt),
-                PhysicalType::Agg(agg_id) => {
+            Some(other_pt) => match other_pt.to_enum() {
+                PhysicalTypeEnum::Empty => Some(other_pt),
+                PhysicalTypeEnum::Scalar(_) => Some(other_pt),
+                PhysicalTypeEnum::Agg(agg_id) => {
                     let r = self.agg_types.get(agg_id);
                     let r_new = AggregateTypeRecord {
                         agg_type: r.agg_type,
@@ -1913,7 +1929,7 @@ impl TypePool {
                         layout: r.layout,
                     };
                     let new_id = self.agg_types.add(r_new);
-                    Some(PhysicalType::Agg(new_id))
+                    Some(PhysicalType::agg(new_id))
                 }
             },
         }
@@ -2116,22 +2132,18 @@ impl TypePool {
         s
     }
 
-    pub fn display_ptp(
-        &self,
-        w: &mut impl std::fmt::Write,
-        ptp: PhysicalTypePacked,
-    ) -> std::fmt::Result {
-        self.display_pt(w, ptp.unpack())
+    pub fn display_ptp(&self, w: &mut impl std::fmt::Write, ptp: PhysicalType) -> std::fmt::Result {
+        self.display_pt(w, ptp)
     }
 
     pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {
-        match t {
-            PhysicalType::Empty => w.write_str("{}"),
-            PhysicalType::Scalar(st) => write!(w, "{}", st),
-            PhysicalType::Agg(agg) => match self.agg_types.get(agg).agg_type {
+        match t.to_enum() {
+            PhysicalTypeEnum::Empty => w.write_str("{}"),
+            PhysicalTypeEnum::Scalar(st) => write!(w, "{}", st),
+            PhysicalTypeEnum::Agg(agg) => match self.agg_types.get(agg).agg_type {
                 AggType::Enum(e) => {
                     w.write_str("enum ")?;
-                    self.display_pt(w, PhysicalType::Agg(e.struct_repr))?;
+                    self.display_pt(w, PhysicalType::agg(e.struct_repr))?;
                     Ok(())
                 }
                 AggType::Struct { fields } => {

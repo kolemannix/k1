@@ -213,16 +213,16 @@ pub enum Value {
     /// of the `k1` global declaration kind (referencing or not!)
     /// This greatly simplifies downstream code
     Global {
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         id: TypedGlobalId,
     },
     StaticValue {
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         id: StaticValueId,
     },
     FunctionAddr(FunctionId),
     FnParam {
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         index: u32,
     },
 
@@ -272,7 +272,7 @@ pub enum Inst {
 
     // Memory manipulation
     Alloca {
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         vm_layout: Layout,
     },
     Store {
@@ -287,7 +287,7 @@ pub enum Inst {
     Copy {
         dst: Value,
         src: Value,
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         vm_size: u32,
     },
     StructOffset {
@@ -297,7 +297,7 @@ pub enum Inst {
         vm_offset: u32,
     },
     ArrayOffset {
-        element_t: PhysicalTypePacked,
+        element_t: PhysicalType,
         base: Value,
         element_index: Value,
     },
@@ -323,7 +323,7 @@ pub enum Inst {
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
     CameFrom {
-        t: PhysicalTypePacked,
+        t: PhysicalType,
         incomings: MSlice<CameFromCase, ProgramBytecode>,
     },
     Ret(Value),
@@ -337,7 +337,7 @@ pub enum Inst {
     },
     BitCast {
         v: Value,
-        to: PhysicalTypePacked,
+        to: PhysicalType,
     },
     IntTrunc {
         v: Value,
@@ -563,9 +563,9 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> 
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
         Value::Data32 { t: scalar_type, data: _ } => {
-            InstKind::Value(PhysicalType::Scalar(*scalar_type).pack())
+            InstKind::Value(PhysicalType::scalar(*scalar_type))
         }
-        Value::Empty => InstKind::Value(PhysicalType::Empty.pack()),
+        Value::Empty => InstKind::Value(PhysicalType::EMPTY),
     }
 }
 
@@ -583,7 +583,7 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
-        Inst::Call { id } => InstKind::Value(bc.calls.get(*id).ret_type.pack()),
+        Inst::Call { id } => InstKind::Value(bc.calls.get(*id).ret_type),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
@@ -631,19 +631,19 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
 
 #[derive(Clone, Copy)]
 pub enum InstKind {
-    Value(PhysicalTypePacked),
+    Value(PhysicalType),
     Void,
     Terminator,
 }
 
 impl InstKind {
-    pub const EMPTY: InstKind = Self::Value(PhysicalTypePacked::EMPTY);
+    pub const EMPTY: InstKind = Self::Value(PhysicalType::EMPTY);
     pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
-        InstKind::Value(PhysicalType::Scalar(st).pack())
+        InstKind::Value(PhysicalType::scalar(st))
     }
 
     fn is_ptr(&self) -> bool {
@@ -667,13 +667,13 @@ impl InstKind {
     #[track_caller]
     pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
-            InstKind::Value(t) => Ok(t.unpack()),
+            InstKind::Value(t) => Ok(*t),
             _ => Err(format!("Expected value, got {}", self.kind_str())),
         }
     }
     fn as_value(&self) -> Option<PhysicalType> {
         match self {
-            InstKind::Value(t) => Some(t.unpack()),
+            InstKind::Value(t) => Some(*t),
             _ => None,
         }
     }
@@ -729,7 +729,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
         let value = if t.is_empty() {
             Value::Empty
         } else {
-            let value = Value::FnParam { t: t.pack(), index: non_empty_index as u32 };
+            let value = Value::FnParam { t, index: non_empty_index as u32 };
             non_empty_index += 1;
             value
         };
@@ -783,7 +783,7 @@ pub fn compile_top_level_expr(
         let pt = b.get_physical_type(variable.type_id);
         b.k1.bytecode.b_variables.push(BuilderVariable {
             id: *variable_id,
-            value: Value::StaticValue { t: pt.pack(), id: *static_value_id },
+            value: Value::StaticValue { t: pt, id: *static_value_id },
             indirect: false,
         })
     }
@@ -932,11 +932,8 @@ impl<'k1> Builder<'k1> {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let inst_id = self.make_inst(
-            Inst::Alloca { t: pt.pack(), vm_layout: layout },
-            comment.into(),
-            debug_info,
-        );
+        let inst_id =
+            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment.into(), debug_info);
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
         inst_id
     }
@@ -1014,8 +1011,8 @@ impl<'k1> Builder<'k1> {
         if pt.is_empty() {
             None
         } else {
-            let copy_inst = self
-                .push_inst(Inst::Copy { dst, src, t: pt.pack(), vm_size: layout.size }, comment);
+            let copy_inst =
+                self.push_inst(Inst::Copy { dst, src, t: pt, vm_size: layout.size }, comment);
             Some(copy_inst)
         }
     }
@@ -1099,7 +1096,7 @@ impl<'k1> Builder<'k1> {
             InstKind::Terminator
         } else {
             let t = self.get_physical_type(type_id);
-            InstKind::Value(t.pack())
+            InstKind::Value(t)
         }
     }
 
@@ -1132,7 +1129,7 @@ impl<'k1> Builder<'k1> {
 
     fn get_function_return_type(&mut self, type_id: TypeId) -> (PhysicalType, bool) {
         if type_id == NEVER_TYPE_ID {
-            (PhysicalType::Empty, true)
+            (PhysicalType::EMPTY, true)
         } else {
             let t = self.get_physical_type(type_id);
             (t, false)
@@ -1422,11 +1419,7 @@ fn compile_expr(
             let index = compile_expr(b, None, array_get.index)?;
 
             let element_ptr = b.push_inst(
-                Inst::ArrayOffset {
-                    element_t: element_pt.pack(),
-                    base: array_base,
-                    element_index: index,
-                },
+                Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
                 "array get offset",
             );
             let result_type = b.get_physical_type(expr_type);
@@ -1463,16 +1456,16 @@ fn compile_expr(
                         Some(r) => r.inner_type,
                     };
                     let value_pt = b.get_physical_type(value_type);
-                    let address = Value::Global { t: value_pt.pack(), id: global_id };
-                    match value_pt {
-                        PhysicalType::Empty => {
+                    let address = Value::Global { t: value_pt, id: global_id };
+                    match value_pt.to_enum() {
+                        PhysicalTypeEnum::Empty => {
                             if is_reference {
                                 Ok(Value::PTR_ZERO)
                             } else {
                                 Ok(Value::Empty)
                             }
                         }
-                        PhysicalType::Scalar(_) => {
+                        PhysicalTypeEnum::Scalar(_) => {
                             // We have a scalar type, but do we have a pointer to it or just
                             // a value?
                             if is_reference {
@@ -1492,7 +1485,7 @@ fn compile_expr(
                                 Ok(stored)
                             }
                         }
-                        PhysicalType::Agg(_) => {
+                        PhysicalTypeEnum::Agg(_) => {
                             if is_reference {
                                 let stored = store_scalar_if_dst(b, dst, address);
                                 Ok(stored)
@@ -1599,9 +1592,10 @@ fn compile_expr(
                         BuiltinHandler::BcZeroed => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                match b.get_physical_type(type_id) {
-                                    PhysicalType::Empty => Ok(Value::Empty),
-                                    pt @ PhysicalType::Agg(agg_id) => {
+                                let pt = b.get_physical_type(type_id);
+                                match pt.to_enum() {
+                                    PhysicalTypeEnum::Empty => Ok(Value::Empty),
+                                    PhysicalTypeEnum::Agg(agg_id) => {
                                         let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
                                         let dst = match dst {
                                             None => b.push_alloca(pt, "zeroed no dst").as_value(),
@@ -1623,7 +1617,7 @@ fn compile_expr(
                                         };
                                         let memset_call = BcCall {
                                             dst: None,
-                                            ret_type: PhysicalType::Empty,
+                                            ret_type: PhysicalType::EMPTY,
                                             callee: BcCallee::Builtin(
                                                 memset_function_id,
                                                 BackendBuiltin::MemSet,
@@ -1634,7 +1628,7 @@ fn compile_expr(
                                         b.push_inst(Inst::Call { id: call_id }, "zeroed memset");
                                         Ok(dst)
                                     }
-                                    PhysicalType::Scalar(st) => {
+                                    PhysicalTypeEnum::Scalar(st) => {
                                         let zero_value = zero(st);
                                         let stored = store_scalar_if_dst(b, dst, zero_value);
                                         Ok(stored)
@@ -1672,18 +1666,18 @@ fn compile_expr(
 
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let from_value = compile_expr(b, None, arg0)?;
-                                match (from_pt, to_pt) {
-                                    (PhysicalType::Empty, _) | (_, PhysicalType::Empty) => {
+                                match (from_pt.to_enum(), to_pt.to_enum()) {
+                                    (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
                                         return failf!(
                                             b.cur_span,
                                             "Cannot bitcast to or from empty type"
                                         );
                                     }
-                                    (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
+                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
                                         // Note that this also covers Pointer to Pointer
                                         let bitcast = b.push_inst_anon(Inst::BitCast {
                                             v: from_value,
-                                            to: to_pt.pack(),
+                                            to: to_pt,
                                         });
                                         let stored = store_rich_if_dst(
                                             b,
@@ -1694,7 +1688,7 @@ fn compile_expr(
                                         );
                                         Ok(stored)
                                     }
-                                    (PhysicalType::Scalar(_), PhysicalType::Agg(_)) => {
+                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Agg(_)) => {
                                         // We need a place, so its alloca time
                                         let locn = match dst {
                                             Some(dst) => dst,
@@ -1711,7 +1705,7 @@ fn compile_expr(
                                         );
                                         Ok(locn)
                                     }
-                                    (PhysicalType::Agg(_), PhysicalType::Scalar(_)) => {
+                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
                                         // Perform a 'load' of the scalar type _from_ the
                                         // aggregate's memory
                                         let loaded = load_or_copy(
@@ -1724,7 +1718,7 @@ fn compile_expr(
                                         );
                                         Ok(loaded)
                                     }
-                                    (PhysicalType::Agg(_), PhysicalType::Agg(_)) => {
+                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
                                         // Make a copy to a definitely-aligned destination.
                                         let locn = match dst {
                                             Some(dst) => dst,
@@ -1785,7 +1779,7 @@ fn compile_expr(
                                 let element_index = compile_expr(b, None, arg1)?;
                                 let offset = b.push_inst(
                                     Inst::ArrayOffset {
-                                        element_t: elem_pt.pack(),
+                                        element_t: elem_pt,
                                         base,
                                         element_index,
                                     },
@@ -1905,15 +1899,15 @@ fn compile_expr(
             debug_assert_eq!(phys_fn_type.params.len(), args.len() as u32);
             let call_dst = match dst {
                 Some(dst) => Some(dst),
-                None => match phys_fn_type.return_type {
-                    PhysicalType::Agg(_) => {
+                None => match phys_fn_type.return_type.to_enum() {
+                    PhysicalTypeEnum::Agg(_) => {
                         let return_agg_dst = b
                             .push_alloca(phys_fn_type.return_type, "call return agg storage")
                             .as_value();
                         Some(return_agg_dst)
                     }
-                    PhysicalType::Scalar(_) => None,
-                    PhysicalType::Empty => None,
+                    PhysicalTypeEnum::Scalar(_) => None,
+                    PhysicalTypeEnum::Empty => None,
                 },
             };
             let args_handle = b.k1.bytecode.mem.list_to_handle(args);
@@ -2262,7 +2256,7 @@ fn compile_expr(
                 | StaticValue::Struct(_)
                 | StaticValue::Enum(_)
                 | StaticValue::LinearContainer(_) => {
-                    let value = Value::StaticValue { t: t.pack(), id: stat.value_id };
+                    let value = Value::StaticValue { t, id: stat.value_id };
                     let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
                     Ok(stored)
                 }
@@ -2320,8 +2314,7 @@ fn compile_cast(
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
-            let casted =
-                b.push_inst(Inst::BitCast { v: base_noop, to: to_pt.pack() }, "cast signchange");
+            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
             let stored =
                 store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
             Ok(stored)
@@ -2361,7 +2354,7 @@ fn compile_cast(
             let to = to_pt.expect_scalar();
             let bitcast = b.push_inst_anon(Inst::BitCast {
                 v: base,
-                to: PhysicalType::Scalar(ScalarType::U8).pack(),
+                to: PhysicalType::scalar(ScalarType::U8),
             });
             let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
             let stored = store_scalar_if_dst(b, dst, extend.as_value());
@@ -2558,8 +2551,8 @@ fn load_value(
     make_copy: bool,
     comment: impl Into<BcStr>,
 ) -> Value {
-    match pt {
-        PhysicalType::Agg(_) => {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Agg(_) => {
             if make_copy {
                 let comment = comment.into();
                 let dst = b.push_alloca(pt, comment);
@@ -2569,8 +2562,8 @@ fn load_value(
                 src
             }
         }
-        PhysicalType::Scalar(st) => b.push_load(st, src, comment).as_value(),
-        PhysicalType::Empty => Value::Empty,
+        PhysicalTypeEnum::Scalar(st) => b.push_load(st, src, comment).as_value(),
+        PhysicalTypeEnum::Empty => Value::Empty,
     }
 }
 
@@ -2581,19 +2574,19 @@ fn store_value(
     value: Value,
     comment: impl Into<BcStr>,
 ) -> Option<InstId> {
-    match pt {
-        PhysicalType::Agg(_) => {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Agg(_) => {
             // Rename to `src` shows that, since we have an aggregate, `value` is a location.
             let src = value;
             let copy_inst = b.push_copy(dst, src, pt, comment);
             debug_assert!(copy_inst.is_some(), "We know its not the Empty type");
             copy_inst
         }
-        PhysicalType::Scalar(_) => {
+        PhysicalTypeEnum::Scalar(_) => {
             let store_inst = b.push_store(dst, value, comment);
             Some(store_inst)
         }
-        PhysicalType::Empty => None,
+        PhysicalTypeEnum::Empty => None,
     }
 }
 
@@ -3058,7 +3051,7 @@ pub fn display_inst(
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            k1.types.display_pt(w, PhysicalType::Agg(struct_t))?;
+            k1.types.display_pt(w, PhysicalType::agg(struct_t))?;
             write!(w, ".{}, {} ({})", field_index, base, vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {

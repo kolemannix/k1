@@ -14,6 +14,7 @@ unset MallocScribble
 
 export RUST_LOG=info
 target/debug/k1 --write-llvm check dogfood/refchess
+target/debug/k1 --write-llvm check dogfood/profiling
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .
 then
