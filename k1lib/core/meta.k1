@@ -54,7 +54,7 @@ ns meta {
   // Note: If we had an interface for "growable collection", we could implement it here.
   //       len, get, empty, (push)
   fn defineSoA[T](name: string): string {
-    let structTypeId = types/type-id[T]();
+    let structTypeId = types/type-id[T];
     let tt = "typeFromId({structTypeId})";
     require types/type-schema(structTypeId) is .struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");

@@ -9672,6 +9672,8 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
+        // 10 is x and x == 10 and x == 10;
+        eprintln!("standalone {}", self.ast.expr_id_to_string(expr_id));
         let condition_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
@@ -9714,6 +9716,7 @@ impl TypedProgram {
                     ParsedExpr::Is(_) => true,
                     _ => false,
                 };
+                eprintln!("lhs_is: {lhs_is}");
                 if lhs_is {
                     self.eval_standalone_matching_condition(binary_op_id, ctx)
                 } else {

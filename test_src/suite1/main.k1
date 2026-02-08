@@ -81,7 +81,6 @@ fn coreLib() {
   list_test/test();
   range_test/test();
   string_interp_test/test();
-  json_test/test();
   lib_compiler_test/test();
 }
 

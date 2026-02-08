@@ -492,6 +492,12 @@ impl Display for BinaryOpKind {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssocDir {
+    Left,
+    Right,
+}
+
 impl BinaryOpKind {
     pub fn precedence(&self) -> usize {
         use BinaryOpKind as B;
@@ -506,6 +512,33 @@ impl BinaryOpKind {
             B::And => 70,
             B::Or => 66,
             B::OptionalElse => 65,
+        }
+    }
+
+    pub fn assoc_dir(&self) -> AssocDir {
+        match self {
+            // I changed just this one for now to fix `is ... and ...` chains
+            BinaryOpKind::And => AssocDir::Right,
+
+            BinaryOpKind::Add => AssocDir::Left,
+            BinaryOpKind::Subtract => AssocDir::Left,
+            BinaryOpKind::Multiply => AssocDir::Left,
+            BinaryOpKind::Divide => AssocDir::Left,
+            BinaryOpKind::Rem => AssocDir::Left,
+            BinaryOpKind::Less => AssocDir::Left,
+            BinaryOpKind::LessEqual => AssocDir::Left,
+            BinaryOpKind::Greater => AssocDir::Left,
+            BinaryOpKind::GreaterEqual => AssocDir::Left,
+            BinaryOpKind::Or => AssocDir::Left,
+            BinaryOpKind::BitAnd => AssocDir::Left,
+            BinaryOpKind::BitOr => AssocDir::Left,
+            BinaryOpKind::BitXor => AssocDir::Left,
+            BinaryOpKind::BitShiftLeft => AssocDir::Left,
+            BinaryOpKind::BitShiftRight => AssocDir::Left,
+            BinaryOpKind::Equals => AssocDir::Left,
+            BinaryOpKind::NotEquals => AssocDir::Left,
+            BinaryOpKind::OptionalElse => AssocDir::Left,
+            BinaryOpKind::Pipe => AssocDir::Left,
         }
     }
 
@@ -3171,7 +3204,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let rhs = expr_stack.pop().unwrap().expect_expr();
                     let (op_kind, op_span) = expr_stack.pop().unwrap().expect_operator();
                     last_precedence = op_kind.precedence();
-                    if last_precedence < precedence {
+
+                    let bind_left = last_precedence < precedence
+                        || (last_precedence == precedence
+                            && op_kind.assoc_dir() == AssocDir::Right);
+                    if bind_left {
                         expr_stack.push(ExprStackMember::Operator(op_kind, op_span));
                         expr_stack.push(ExprStackMember::Expr(rhs));
                         break;

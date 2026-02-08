@@ -3,13 +3,10 @@ fn testAll() {
   testFixList();
   testBitfield();
   testFormat();
+  json_test/test();
 }
 fn main(): i32 {
-
   #static testAll();
   testAll();
-
-
-
   0
 }

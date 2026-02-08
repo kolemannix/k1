@@ -1,10 +1,4 @@
-let MODULE_INFO: core/k1/module-manifest = {
-  let* m = core/mem/zeroed[core/k1/module-manifest]();
-  m.multithreading* <- true;
-  m.kind* <- .executable;
-  m.*
-};
-
+ns json_test;
 use std/json/json
 use std/json
 
@@ -19,9 +13,9 @@ fn testBasicEnum() {
   assert(obj is .str("hello"));
   assert(null is .null);
 
-  let obj2: json = .array([.str("hello"), .number("123")]);
+  let obj2: json = .array([.str("hello"), .number(123.0)]);
   assert(obj2.asArray().!.get(0) is .str("hello"));
-  assert(obj2.asArray().!.get(1) is .number("123"));
+  assert(obj2.asArray().!.get(1) is .number(123.0));
 }
 
 fn testParsing() {
@@ -38,21 +32,55 @@ fn testParsing() {
   testParse(
     `{{ "foo": true, "baz": false }`,
     \j. j is .object(m) and
-        (m.map(\f. f.key) == ["foo", "baz"] and m.map(\f. f.value.asBool().!) == [true, false])
+        m.map(\f. f.key) == ["foo", "baz"] and
+        m.map(\f. f.value.asBool().!) == [true, false]
   );
+
+  testParse(" [ ] ", \j. j is .array(es) and es.isEmpty());
   //testParse(`[]`, \j. j is .Array(_));
 }
 
-fn main(): i32 {
-  0
+fn test() {
+  testBasicEnum();
+  testParsing();
+  testParse(example-json, \o. {
+    o is .object(members)
+    and members.len() == 5
+  });
 }
 
 fn testParse(s: string, f: some \json -> bool) {
   switch json/parse-from-string(s) {
-    .err(msg) -> crash("Failed '{s}': {msg}"),
+    .err(msg) -> crash("Failed: {msg}"),
     .ok(json) -> if not f(json) crash("Failed '{s}'")
   }
 }
 
-#static testParsing()
+let example-json: string =
+`{{
+  "school": "Greenwood High",
+  "location": {{
+    "city": "New York",
+    "state": "NY"
+  },
+  "students": [
+    {{
+      "name": "Emma",
+      "age": 15,
+      "grade": "10"
+    },
+    {{
+      "name": "Liam",
+      "age": 14,
+      "grade": "9"
+    },
+    {{
+      "name": "Olivia",
+      "age": 16,
+      "grade": "11"
+    }
+  ],
+  "active": true,
+  "principal": null
+}`
 
