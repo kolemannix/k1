@@ -156,7 +156,7 @@ fn if_no_else() -> ParseResult<()> {
     let input = "if x a";
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
-    let _result = parser.parse_expression()?.unwrap();
+    let _result = parser.expect_expression()?;
     Ok(())
 }
 
@@ -261,7 +261,7 @@ fn cmp_operators() -> Result<(), ParseError> {
     let input = "a < b <= c > d >= e";
     let mut module = make_test_module();
     let mut parser = set_up(input, &mut module);
-    let _result = parser.parse_expression()?.unwrap();
+    let _result = parser.expect_expression()?;
     Ok(())
 }
 
@@ -301,10 +301,7 @@ fn char_value() -> ParseResult<()> {
 fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (mut parser, result) = test_single_expr(input)?;
-    let ParsedExpr::Call(fn_call) = result else {
-        dbg!(result);
-        panic!("not fncall")
-    };
+    let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
     assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(fn_call.name.path, 0)), "foo");
     assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(fn_call.name.path, 1)), "bar");
     assert_eq!(fn_call.name.name, parser.idents.intern("baz"));
@@ -315,10 +312,7 @@ fn namespaced_fncall() -> ParseResult<()> {
 fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
     let (mut parser, result) = test_single_expr(input)?;
-    let ParsedExpr::Variable(variable) = result else {
-        dbg!(result);
-        panic!("not variable")
-    };
+    let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
     assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(variable.name.path, 0)), "foo");
     assert_eq!(parser.idents.get_name(*parser.idents.slices.get_nth(variable.name.path, 1)), "bar");
     assert_eq!(variable.name.name, parser.idents.intern("baz"));
@@ -388,7 +382,6 @@ fn when_pattern() -> ParseResult<()> {
 fn empty_struct() -> ParseResult<()> {
     let input = r#"{}"#;
     let (_module, expr, _expr_id) = test_single_expr_with_id(input)?;
-    eprintln!("{:?}", &expr);
     assert!(matches!(expr, ParsedExpr::Struct(_)));
     Ok(())
 }

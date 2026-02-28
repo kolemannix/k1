@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{MHandle, MList, MSlice, MStr, Mem};
+use crate::kmem::{MHandle, MList, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -3131,7 +3131,7 @@ impl TypedProgram {
                         );
                     }
                     let ty = self.eval_type_expr_ext(
-                        ast_field.ty,
+                        ast_field.type_expr,
                         scope_id,
                         context.descended_layout_direct(),
                     )?;
@@ -7090,20 +7090,20 @@ impl TypedProgram {
                     None,
                 );
                 let true_case = parse::ParsedMatchCase {
-                    patterns: smallvec![is_expr.pattern],
+                    patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
                     expression: true_expression,
                 };
                 let wildcard_pattern =
                     self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(is_expr.span));
                 let false_case = parse::ParsedMatchCase {
-                    patterns: smallvec![wildcard_pattern],
+                    patterns: MSpillSlice::one(wildcard_pattern),
                     guard_condition_expr: None,
                     expression: false_expression,
                 };
                 let as_match_expr = parse::ParsedMatchExpression {
                     match_subject: is_expr.target_expression,
-                    cases: vec![true_case, false_case],
+                    cases: self.ast.mem.pushn(&[true_case, false_case]),
                     span: is_expr.span,
                 };
                 let match_expr_id = self.ast.exprs.add_expression(
@@ -7695,10 +7695,10 @@ impl TypedProgram {
         let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
-        let mut field_values = self.mem.new_list(parsed_struct.fields.len() as u32);
-        let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len() as u32);
+        let mut field_values = self.mem.new_list(parsed_struct.fields.len());
+        let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len());
         let ast_struct = parsed_struct.clone();
-        for ast_field in ast_struct.fields.iter() {
+        for ast_field in self.ast.mem.getn(ast_struct.fields) {
             let parsed_expr = match ast_field.expr.as_ref() {
                 None => self.ast.exprs.add_expression(
                     ParsedExpr::Variable(parse::ParsedVariable {
@@ -7752,7 +7752,7 @@ impl TypedProgram {
         let struct_span = ast_struct.span;
         for expected_field in self.types.mem.getn(expected_struct.fields).iter() {
             let Some(passed_field) =
-                &ast_struct.fields.iter().find(|f| f.name == expected_field.name)
+                self.ast.mem.getn(ast_struct.fields).iter().find(|f| f.name == expected_field.name)
             else {
                 return failf!(
                     struct_span,
@@ -7773,9 +7773,11 @@ impl TypedProgram {
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
         }
 
-        if let Some(unknown_field) = ast_struct.fields.iter().find(|passed_field| {
-            original_expected_struct.find_field(&self.types.mem, passed_field.name).is_none()
-        }) {
+        if let Some(unknown_field) =
+            self.ast.mem.getn(ast_struct.fields).iter().find(|passed_field| {
+                original_expected_struct.find_field(&self.types.mem, passed_field.name).is_none()
+            })
+        {
             return failf!(
                 struct_span,
                 "Struct has an unexpected field '{}'",
@@ -8421,25 +8423,29 @@ impl TypedProgram {
         let match_expr_span = match_parsed_expr.span;
         let arms_ctx = ctx.with_scope(match_scope_id);
 
-        let parsed_cases = &match_parsed_expr.cases;
-        let parsed_pattern_count: usize =
-            parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
+        let parsed_cases = match_parsed_expr.cases;
+        let parsed_pattern_count: u32 = self
+            .ast
+            .mem
+            .getn(parsed_cases)
+            .iter()
+            .map(|parsed_case| parsed_case.patterns.len())
+            .sum();
 
-        let mut typed_arms: MList<TypedMatchArm, _> =
-            self.mem.new_list(parsed_pattern_count as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_list(parsed_pattern_count + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
         let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
-            self.tmp.new_list(parsed_pattern_count as u32);
+            self.tmp.new_list(parsed_pattern_count);
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
         // Core loop to build up the typed, compiled match arms
-        for parsed_case in parsed_cases.iter() {
+        for parsed_case in self.ast.mem.getn(parsed_cases) {
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
-            for parsed_pattern_id in parsed_case.patterns.iter() {
+            for parsed_pattern_id in parsed_case.patterns.as_slice(&self.ast.mem).iter() {
                 let pattern = self.eval_pattern(
                     *parsed_pattern_id,
                     target_expr_type,
@@ -9672,8 +9678,6 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        // 10 is x and x == 10 and x == 10;
-        eprintln!("standalone {}", self.ast.expr_id_to_string(expr_id));
         let condition_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
@@ -9716,7 +9720,6 @@ impl TypedProgram {
                     ParsedExpr::Is(_) => true,
                     _ => false,
                 };
-                eprintln!("lhs_is: {lhs_is}");
                 if lhs_is {
                     self.eval_standalone_matching_condition(binary_op_id, ctx)
                 } else {

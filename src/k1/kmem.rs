@@ -13,8 +13,8 @@
 ///
 /// My main use case for this Arena is to allocate all the tiny
 /// Vecs and EcoVecs that never need to be mutated here and avoid
-/// all their issues; we should be able to go from 192 bytes to 64 per collection
-/// if our slice handle is 64 bytes, which it should be, if I'm willing to
+/// all their issues; we should be able to go from 24 bytes to 8 per collection
+/// if our slice handle is 8 bytes, which it should be, if I'm willing to
 /// address less than 4GB in here and can use a 32-bit offset. Actually I can use
 /// 48 bits for the offset and 16 for the length
 use smallvec::SmallVec;
@@ -28,10 +28,12 @@ macro_rules! fuckit {
 
 use core::{
     fmt,
-    mem::{align_of, size_of},
+    mem::{MaybeUninit, align_of, size_of},
+    slice,
 };
 use std::{
     marker::PhantomData,
+    mem::ManuallyDrop,
     num::NonZeroU32,
     ops::{Deref, DerefMut},
 };
@@ -106,7 +108,8 @@ impl<T, Tag> MSlice<T, Tag> {
         if new_len == 0 {
             Self { offset: self.offset, count: 0, _data: PhantomData, _tag: PhantomData }
         } else {
-            let new_offset = self.offset.checked_add(n as u32 * size_of::<T>() as u32).unwrap();
+            let byte_advance = (n * size_of::<T>()) as u32;
+            let new_offset = self.offset.checked_add(byte_advance).unwrap();
             Self { offset: new_offset, count: new_len, _data: PhantomData, _tag: PhantomData }
         }
     }
@@ -141,7 +144,7 @@ impl<Tag> MStr<Tag> {
     }
 
     fn from_parts(data: *const u8, len: usize) -> Self {
-        let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+        let bytes = unsafe { slice::from_raw_parts(data, len) };
         Self { bytes, _tag: PhantomData }
     }
 
@@ -253,12 +256,21 @@ impl<Tag> Mem<Tag> {
         self.mmap.as_ptr()
     }
 
+    pub fn end_ptr(&self) -> *const u8 {
+        self.mmap.as_ptr_range().end
+    }
+
     fn ptr_to_offset<T: ?Sized>(&self, ptr: *const T) -> NonZeroU32 {
-        let Some(result) = NonZeroU32::new(ptr.addr() as u32 - self.base_ptr().addr() as u32)
-        else {
-            panic!("Attempted to create a null handle");
-        };
-        result
+        let base = self.base_ptr().addr();
+        let p = ptr.addr();
+        let diff = p - base;
+        if diff > u32::MAX as usize {
+            panic!("Offset exceeds 32-bit handle")
+        }
+        if diff == 0 {
+            panic!("Attempted to use index 0 (we reserve 0..8)")
+        }
+        NonZeroU32::new(diff as u32).unwrap()
     }
 
     fn offset_to_ptr<T>(&self, offset: NonZeroU32) -> *const T {
@@ -282,8 +294,11 @@ impl<Tag> Mem<Tag> {
     #[track_caller]
     #[inline]
     fn check_in_bounds(&self, ptr: usize) {
-        if ptr >= self.mmap.as_ptr_range().end.addr() {
-            panic!("Address out of bounds: {}", ptr,);
+        if ptr < self.base_ptr().addr() + 8 {
+            panic!("Address before start+8: {}", ptr);
+        }
+        if ptr >= self.end_ptr().addr() {
+            panic!("Address beyond end: {}", ptr);
         }
     }
 
@@ -293,7 +308,7 @@ impl<Tag> Mem<Tag> {
         if ptr < self.base_ptr().addr() {
             panic!("Address not mine (less than base): {} < {}", ptr, self.base_ptr().addr());
         }
-        if ptr > self.cursor.addr() {
+        if ptr >= self.cursor.addr() {
             panic!("Address is beyond cursor: {} > {}", ptr, self.cursor.addr());
         }
     }
@@ -328,6 +343,10 @@ impl<Tag> Mem<Tag> {
 
     pub fn align_to_bytes(&mut self, align: usize) {
         unsafe {
+            debug_assert!(
+                align.is_power_of_two() && align != 0,
+                "Alignment must be a power of two"
+            );
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align));
             self.set_cursor_checked(dst);
@@ -336,6 +355,10 @@ impl<Tag> Mem<Tag> {
 
     pub fn push_layout_uninit(&mut self, size: u32, align: u32) -> *mut u8 {
         unsafe {
+            debug_assert!(
+                align.is_power_of_two() && align != 0,
+                "Alignment must be a power of two"
+            );
             let dst = self.cursor_mut();
             let dst = dst.byte_add(dst.align_offset(align as usize));
 
@@ -363,7 +386,7 @@ impl<Tag> Mem<Tag> {
         unsafe {
             let dst = self.push_slice_uninit::<T>(ts.len());
 
-            let dst: &mut [T] = std::slice::from_raw_parts_mut(dst, ts.len());
+            let dst: &mut [T] = slice::from_raw_parts_mut(dst, ts.len());
             dst.copy_from_slice(ts);
             dst
         }
@@ -394,7 +417,7 @@ impl<Tag> Mem<Tag> {
 
     pub fn dupn<T: Copy>(&mut self, h: MSlice<T, Tag>) -> MSlice<T, Tag> {
         let (ptr, count) = self.get_slice_raw(h);
-        let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
+        let slice = unsafe { slice::from_raw_parts(ptr, count) };
         self.pushn(slice)
     }
 
@@ -412,7 +435,7 @@ impl<Tag> Mem<Tag> {
     }
 
     pub fn push_str_raw(&mut self, ptr: *const u8, len: usize) -> MStr<Tag> {
-        let s = str::from_utf8(unsafe { core::slice::from_raw_parts(ptr, len) }).unwrap();
+        let s = str::from_utf8(unsafe { slice::from_raw_parts(ptr, len) }).unwrap();
         self.push_str(s)
     }
 
@@ -469,7 +492,9 @@ impl<Tag> Mem<Tag> {
     pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
-            self.check_mine(ptr.addr())
+            if size_of::<T>() != 0 {
+                self.check_mine(ptr.addr())
+            }
         }
         unsafe { &*ptr }
     }
@@ -477,15 +502,17 @@ impl<Tag> Mem<Tag> {
     pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
         let ptr: *const T = self.offset_to_ptr(handle.offset);
         if cfg!(debug_assertions) {
-            self.check_mine(ptr.addr())
+            if handle.count != 0 {
+                self.check_mine(ptr.addr())
+            }
         }
         (ptr, handle.count as usize)
     }
 
-    pub fn getn_lt<T>(&self, handle: MSlice<T, Tag>) -> &'_ [T] {
+    pub fn getn_lt<T>(&self, handle: MSlice<T, Tag>) -> &[T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
-            let src: &[T] = std::slice::from_raw_parts(ptr, count);
+            let src: &[T] = slice::from_raw_parts(ptr, count);
             src
         }
     }
@@ -493,9 +520,23 @@ impl<Tag> Mem<Tag> {
     pub fn getn<T>(&self, handle: MSlice<T, Tag>) -> &'static [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
-            let src: &[T] = std::slice::from_raw_parts(ptr, count);
+            let src: &[T] = slice::from_raw_parts(ptr, count);
             src
         }
+    }
+
+    pub fn iter<T>(&self, handle: MSlice<T, Tag>) -> slice::Iter<'_, T> {
+        self.getn_lt(handle).iter()
+    }
+
+    pub fn iter_with_is_last<'a, T: 'a>(
+        &'a self,
+        handle: MSlice<T, Tag>,
+    ) -> impl Iterator<Item = (bool, &'a T)> + 'a {
+        self.getn_lt(handle).iter().enumerate().map(move |(index, i)| {
+            let is_last = index + 1 == handle.len() as usize;
+            (is_last, i)
+        })
     }
 
     pub fn getn_sv<T: Copy, const N: usize>(&self, handle: MSlice<T, Tag>) -> SmallVec<[T; N]>
@@ -503,7 +544,7 @@ impl<Tag> Mem<Tag> {
         [T; N]: smallvec::Array<Item = T>,
     {
         let (ptr, count) = self.get_slice_raw(handle);
-        let slice = unsafe { core::slice::from_raw_parts(ptr, count) };
+        let slice = unsafe { slice::from_raw_parts(ptr, count) };
         SmallVec::from_slice(slice)
     }
 
@@ -515,10 +556,10 @@ impl<Tag> Mem<Tag> {
         self.getn_sv(handle)
     }
 
-    pub fn getn_mut<T>(&self, handle: MSlice<T, Tag>) -> &'static mut [T] {
+    pub fn getn_mut<T>(&mut self, handle: MSlice<T, Tag>) -> &'static mut [T] {
         let (ptr, count) = self.get_slice_raw(handle);
         fuckit! {
-            let src: &mut [T] = std::slice::from_raw_parts_mut(ptr.cast_mut(), count);
+            let src: &mut [T] = slice::from_raw_parts_mut(ptr.cast_mut(), count);
             src
         }
     }
@@ -663,7 +704,12 @@ impl<T, Tag> MList<T, Tag> {
             let initial_cap = if size_of_t >= 1024 { 1 } else { 8 };
             initial_cap
         } else {
-            self.cap() as u32 * 2
+            let new_cap_usize = self.cap() * 2;
+            #[cfg(debug_assertions)]
+            if new_cap_usize > u32::MAX as usize {
+                panic!("MList capacity exceeds 32-bit handle limit: {}", new_cap_usize);
+            }
+            new_cap_usize as u32
         };
         if cfg!(debug_assertions) {
             // No need to log grows from 0
@@ -828,6 +874,306 @@ impl<T, Tag> DerefMut for MList<T, Tag> {
     }
 }
 
+////////////////////////////// MSpillList //////////////////////////////
+/// Top bit of `len_flags` indicates whether we've spilled to the arena.
+/// Low 31 bits are the logical length.
+const SPILLED_BIT: u32 = 0x8000_0000;
+const LEN_MASK: u32 = 0x7fff_ffff;
+
+/// A SmallVec-like pushable list that stores up to `N` items inline,
+/// then spills into `Mem<Tag>` as an `MList<T, Tag>` on overflow.
+///
+/// - `len_flags`: low 31 bits = len, top bit = spilled
+/// - MSpillListStorage is a union of inline buffer vs spilled `MList`.
+/// - No Drop glue required; `T: Copy` and `MList` doesn't own heap memory.
+///
+/// *Clanker helped with this one, hence the SAFETY annotations
+pub struct MSpillList<T: Copy, const N: usize, Tag> {
+    len_flags: u32,
+    storage: MSpillListStorage<T, Tag, N>,
+}
+pub type MSL2<T, Tag = ()> = MSpillList<T, 2, Tag>;
+pub type MSL4<T, Tag = ()> = MSpillList<T, 4, Tag>;
+pub type MSL8<T, Tag = ()> = MSpillList<T, 8, Tag>;
+
+static_assert_size!(MSL8<i32>, 4 + 4 + (8 * 4));
+
+union MSpillListStorage<T: Copy, Tag, const N: usize> {
+    inline: [MaybeUninit<T>; N],
+    spill: ManuallyDrop<MList<T, Tag>>,
+}
+
+impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
+    #[inline]
+    pub fn new() -> Self {
+        assert!(N > 0);
+
+        // SAFETY: MaybeUninit<T> array does not require initialization.
+        let inline = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
+        Self { len_flags: 0, storage: MSpillListStorage { inline } }
+    }
+
+    #[inline]
+    pub fn is_spilled(&self) -> bool {
+        (self.len_flags & SPILLED_BIT) != 0
+    }
+
+    #[inline]
+    pub fn len(&self) -> u32 {
+        self.len_flags & LEN_MASK
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    fn set_len(&mut self, new_len: u32) {
+        debug_assert_eq!(new_len & SPILLED_BIT, 0);
+        self.len_flags = (self.len_flags & SPILLED_BIT) | new_len;
+    }
+
+    #[inline]
+    fn mark_spilled(&mut self) {
+        self.len_flags |= SPILLED_BIT;
+    }
+
+    /// Pushes into inline storage if possible, spills into `mem` otherwise.
+    #[inline]
+    pub fn push(&mut self, mem: &mut Mem<Tag>, val: T) {
+        let len = self.len() as usize;
+        debug_assert!((len as u32) < LEN_MASK, "MSpillList length exceeds 31-bit limit");
+
+        if !self.is_spilled() {
+            if len < N {
+                // SAFETY: inline variant is active when not spilled.
+                unsafe { self.storage.inline[len].write(val) };
+                self.set_len((len as u32) + 1);
+                return;
+            }
+            self.spill(mem);
+        }
+
+        debug_assert!(self.is_spilled());
+
+        unsafe {
+            let list: &mut MList<T, Tag> = &mut self.storage.spill;
+            list.push_grow(mem, val);
+        }
+        self.set_len((len as u32) + 1);
+    }
+
+    #[inline]
+    pub fn as_slice<'a>(&'a self, _mem: &'a Mem<Tag>) -> &'a [T] {
+        let len = self.len() as usize;
+
+        if self.is_spilled() {
+            // SAFETY: spilled variant is active when spilled bit is set.
+            unsafe {
+                let list: &MList<T, Tag> = &self.storage.spill;
+                list.as_slice()
+            }
+        } else {
+            // SAFETY: inline variant active; first `len` elements were written.
+            unsafe {
+                let ptr = self.storage.inline.as_ptr() as *const T;
+                slice::from_raw_parts(ptr, len)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn iter<'a>(&'a self, mem: &'a Mem<Tag>) -> slice::Iter<'a, T> {
+        self.as_slice(mem).iter()
+    }
+
+    #[inline]
+    fn spill(&mut self, mem: &mut Mem<Tag>) {
+        debug_assert!(!self.is_spilled());
+        let len = self.len() as usize;
+
+        let cap = {
+            let size = core::mem::size_of::<T>();
+            if size >= 1024 { len.max(1) } else { len.max(8) }
+        };
+
+        let mut list = mem.new_list::<T>(cap as u32);
+
+        // Move/copy inline data into list.
+        for i in 0..len {
+            // SAFETY: inline active; 0..len initialized.
+            let v = unsafe { self.storage.inline[i].assume_init() };
+            list.push(v);
+        }
+
+        // Overwrite union with spilled list and set flag.
+        self.storage = MSpillListStorage { spill: ManuallyDrop::new(list) };
+        self.mark_spilled();
+    }
+
+    /// Convert to an arena-backed immutable handle.
+    ///
+    /// - If spilled: reuses spilled buffer (no copy).
+    /// - If inline: allocates exactly `len` elements in the arena and copies.
+    #[inline]
+    pub fn into_slice(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
+        let len = self.len() as usize;
+
+        if self.is_spilled() {
+            // SAFETY: spilled variant active. We consume self, so we can move the list out.
+            let list: MList<T, Tag> = unsafe { ManuallyDrop::into_inner(self.storage.spill) };
+            mem.list_to_handle(list)
+        } else {
+            if len == 0 {
+                return MSlice::empty();
+            }
+            // SAFETY: inline active; first `len` initialized.
+            let slice: &[T] = unsafe {
+                let ptr = self.storage.inline.as_ptr() as *const T;
+                slice::from_raw_parts(ptr, len)
+            };
+            mem.pushn(slice)
+        }
+    }
+
+    pub fn into_spill_slice(self, mem: &mut Mem<Tag>) -> MSpillSlice<T, N, Tag> {
+        let len = self.len();
+        if self.is_spilled() {
+            let mslice =
+                unsafe { mem.list_to_handle(ManuallyDrop::into_inner(self.storage.spill)) };
+            MSpillSlice::spilled(len, mslice)
+        } else {
+            let array = unsafe { self.storage.inline };
+            MSpillSlice::inline(len, array)
+        }
+    }
+}
+
+impl<T: Copy, Tag, const N: usize> Default for MSpillList<T, N, Tag> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct MSpillSlice<T: Copy, const N: usize, Tag> {
+    len_flags: u32,
+    storage: MSpillSliceStorage<T, Tag, N>,
+}
+impl<T: Copy, Tag, const N: usize> Copy for MSpillSlice<T, N, Tag> {}
+impl<T: Copy, Tag, const N: usize> Clone for MSpillSlice<T, N, Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+union MSpillSliceStorage<T: Copy, Tag, const N: usize> {
+    inline: [MaybeUninit<T>; N],
+    spill: MSlice<T, Tag>,
+}
+impl<T: Copy, Tag, const N: usize> Copy for MSpillSliceStorage<T, Tag, N> {}
+impl<T: Copy, Tag, const N: usize> Clone for MSpillSliceStorage<T, Tag, N> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+pub type MSS1<T, Tag = ()> = MSpillSlice<T, 1, Tag>;
+pub type MSS2<T, Tag = ()> = MSpillSlice<T, 2, Tag>;
+pub type MSS4<T, Tag = ()> = MSpillSlice<T, 4, Tag>;
+pub type MSS8<T, Tag = ()> = MSpillSlice<T, 8, Tag>;
+
+impl<T: Copy, Tag, const N: usize> Default for MSpillSlice<T, N, Tag> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
+    pub fn new() -> Self {
+        assert!(N > 0);
+
+        // SAFETY: MaybeUninit<T> array does not require initialization.
+        let inline = unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() };
+        Self { len_flags: 0, storage: MSpillSliceStorage { inline } }
+    }
+
+    fn spilled(len: u32, data: MSlice<T, Tag>) -> Self {
+        debug_assert!(len <= LEN_MASK);
+        Self { len_flags: len | SPILLED_BIT, storage: MSpillSliceStorage { spill: data } }
+    }
+
+    fn inline(len: u32, data: [MaybeUninit<T>; N]) -> Self {
+        debug_assert!(len <= LEN_MASK);
+        Self { len_flags: len, storage: MSpillSliceStorage { inline: data } }
+    }
+
+    pub fn is_spilled(&self) -> bool {
+        (self.len_flags & SPILLED_BIT) != 0
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len_flags & LEN_MASK
+    }
+
+    pub fn as_slice(&self, mem: &Mem<Tag>) -> &'static [T] {
+        let len = self.len();
+
+        if self.is_spilled() {
+            // SAFETY: spilled variant active when spilled bit is set.
+            unsafe { mem.getn(self.storage.spill) }
+        } else {
+            // SAFETY: inline variant active; first `len` elements were written.
+            unsafe {
+                let ptr = self.storage.inline.as_ptr() as *const T;
+                slice::from_raw_parts(ptr, len as usize)
+            }
+        }
+    }
+
+    // Similar to MSpillList::into_handle but returns MSlice directly.
+    pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
+        let len = self.len();
+
+        if self.is_spilled() {
+            // SAFETY: spilled variant active. We consume self, so we can move the slice out.
+            let slice: MSlice<T, Tag> = unsafe { self.storage.spill };
+            slice
+        } else {
+            if len == 0 {
+                return MSlice::empty();
+            }
+            // SAFETY: inline active; first `len` initialized.
+            let slice: &[T] = unsafe {
+                let ptr = self.storage.inline.as_ptr() as *const T;
+                slice::from_raw_parts(ptr, len as usize)
+            };
+            mem.pushn(slice)
+        }
+    }
+
+    pub fn one(t: T) -> MSpillSlice<T, N, Tag> {
+        Self::from_slice(&[t])
+    }
+
+    pub fn from_slice(ts: &[T]) -> MSpillSlice<T, N, Tag> {
+        assert!(N >= ts.len());
+        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        for (i, t) in ts.iter().enumerate() {
+            inline[i].write(*t);
+        }
+        Self::inline(ts.len() as u32, inline)
+    }
+
+    pub fn from_array<const M: usize>(ts: [T; M]) -> MSpillSlice<T, N, Tag> {
+        debug_assert!(N >= M);
+        let mut inline = [MaybeUninit::<T>::uninit(); N];
+        for (i, t) in ts.iter().enumerate() {
+            inline[i].write(*t);
+        }
+        Self::inline(ts.len() as u32, inline)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -949,5 +1295,77 @@ mod test {
         v.push_grow(&mut arena, 3);
         assert_eq!(v.len(), 3);
         assert_eq!(v.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn spill_list_inline_and_spill() {
+        let mut arena: Mem<()> = Mem::make();
+
+        // Inline path (N=2): 0, 1, 2 elements
+        let mut a: MSL2<u32> = MSpillList::new();
+        assert!(!a.is_spilled() && a.is_empty() && a.as_slice(&arena).is_empty());
+        a.push(&mut arena, 10);
+        assert!(!a.is_spilled() && a.len() == 1 && a.as_slice(&arena) == [10]);
+        a.push(&mut arena, 20);
+        assert!(!a.is_spilled() && a.len() == 2 && a.as_slice(&arena) == [10, 20]);
+
+        // First overflow triggers spill; order preserved
+        a.push(&mut arena, 30);
+        assert!(a.is_spilled() && a.len() == 3 && a.as_slice(&arena) == [10, 20, 30]);
+
+        // Further pushes go to spilled list
+        a.push(&mut arena, 40);
+        a.push(&mut arena, 50);
+        assert!(a.is_spilled() && a.len() == 5 && a.as_slice(&arena) == [10, 20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn spill_list_into_handle_both_paths() {
+        let mut arena: Mem<()> = Mem::make();
+
+        // Inline -> handle allocates exactly and matches contents
+        let mut inl: MSL2<u32> = MSpillList::new();
+        inl.push(&mut arena, 1);
+        inl.push(&mut arena, 2);
+        assert!(!inl.is_spilled());
+        let h_inl = inl.into_slice(&mut arena);
+        assert_eq!(h_inl.len(), 2);
+        assert_eq!(arena.getn(h_inl), &[1, 2]);
+
+        // Spilled -> handle should reuse underlying buffer (offset should match list buf)
+        let mut sp: MSL2<u32> = MSpillList::new();
+        sp.push(&mut arena, 7);
+        sp.push(&mut arena, 8);
+        sp.push(&mut arena, 9); // spill
+        assert!(sp.is_spilled());
+        let before_ptr = sp.as_slice(&arena).as_ptr().addr();
+        let h_sp = sp.into_slice(&mut arena);
+        let after_ptr = arena.getn(h_sp).as_ptr().addr();
+        assert_eq!(arena.getn(h_sp), &[7, 8, 9]);
+        assert_eq!(before_ptr, after_ptr);
+    }
+
+    #[test]
+    fn spill_list_many_pushes_growth_smoke() {
+        let mut arena: Mem<()> = Mem::make();
+
+        // Ensure spill + repeated pushes stays correct across grows
+        let mut v: MSL2<u32> = MSpillList::new();
+        for i in 0..10 {
+            v.push(&mut arena, i);
+        }
+        assert!(v.is_spilled() && v.len() == 10);
+        let s = v.as_slice(&arena);
+        assert_eq!(s.len(), 10);
+        assert_eq!(s[0], 0);
+        assert_eq!(s[1], 1);
+        assert_eq!(s[2], 2);
+        assert_eq!(s[5], 5);
+        assert_eq!(s[9], 9);
+
+        let h = v.into_slice(&mut arena);
+        assert_eq!(h.len(), 10);
+        assert_eq!(arena.get_nth(h, 0), &0);
+        assert_eq!(arena.get_nth(h, 9), &9);
     }
 }
