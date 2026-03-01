@@ -1,8 +1,5 @@
 fn main() {
-  let x: result[i32, {}] = .err({});
-  switch x {
-    .err(e) -> {},
-    .ok(i) -> {},
-  };
+  let s = f64/parse-string("-1235.0 hello world", false);
+  printIt("{s.!.value} (len={s.!.len})\n");
   {}
 }

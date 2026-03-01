@@ -26,3 +26,6 @@ void _k1_print_backtrace(int max_count) {
   }
   return;
 }
+
+#define FFC_IMPL
+#include "ffc.h"

@@ -165,9 +165,7 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
 }
 
 fn _parseNumber(context p: *mut parser)(): result[json, string] {
-  // nocommit(3): destructuring: (requires fallibility)
-  //require f64/from-string(p.remaining-input()).try is { len, value };
-  let result = f64/from-string(p.remaining-input()).try;
+  let result = f64/parse-string(s = p.remaining-input(), require-total = false).try;
   p.advance-n(result.len);
   .ok(.number(result.value))
 }

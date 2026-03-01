@@ -707,8 +707,15 @@ ns libc {
   extern("free") fn free(ptr: ptr)
   extern("realloc") fn realloc(ptr: ptr, size: size): ptr
 
+  extern("strlen") fn strlen(c-str: ptr): size
+
   let extern errno: c-int
+  extern("strerror") fn strerror(errno: c-int): *char 
   extern("perror") fn perror(msg: ptr)
+  fn errno-k1-string(): string {
+    let msg-c = strerror(errno);
+    string/wrap-c(msg-c.as[ptr])
+  }
 
   ns files {
     let SEEK_END: i32 = 2
@@ -722,7 +729,6 @@ ns libc {
 
   extern("strtod") fn strtod(nptr: ptr, endptr: *mut ptr): f64
   extern("strtof") fn strtof(nptr: ptr, endptr: *mut ptr): f32
-  extern("strerror") fn strerror(errno: c-int): *char 
 
 }
 

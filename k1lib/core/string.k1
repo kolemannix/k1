@@ -2,9 +2,7 @@
 // All rights reserved.
 
 // TODO: CString type
-deftype alias CString = ptr
-ns CString { 
-}
+deftype alias c-string = ptr
 
 ns string {
   
@@ -161,38 +159,18 @@ ns string {
     else                               { ptr: self.appendCharIn('\0').dataPtr(), len: self.len() }
   }
 
-  fn wrapCString(cString: ptr): string {
-    let i = 0;
-    loop {
-      let c = cString.ref-at-index[char](i);
-      if c.* == '\0' {
-        break();
-      } else {
-        i := i + 1;
-      }
-    };
-    let buffer = buffer/fromPtrAndCount[char](
-      count = i,
-      ptr = cString
-    );
-    wrapBuffer(buffer)
+  fn wrap-c(cString: ptr): string {
+    let len = libc/strlen(cString);
+    fromRaw(ptr = cString, len = len)
   }
 
   fn from-c(cString: ptr): string {
-    let* chars = list/empty[char]();
-    let i = 0;
-    loop {
-      let c = cString.ref-at-index[char](i);
-      if c.* == '\0' {
-        break();
-      } else {
-        chars.push(c);
-        i := i + 1;
-      }
-    };
-    wrapList(chars)
+    let wrapped = wrap-c(cString);
+    let copy = wrapped.cloned();
+    copy
   }
 
+  // TODO(stdlib perf): use snprintf for string to int
   fn toInt(self: string): ?int {
     if self.isEmpty() { return(.none) };
 
