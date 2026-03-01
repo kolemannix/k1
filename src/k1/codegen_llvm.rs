@@ -3344,12 +3344,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.llvm_module.strip_debug_info();
         }
         self.llvm_module.verify().map_err(|err| {
-            let llvm_text = self.output_llvm_ir_text();
+            let llvm_text = self.emit_llvm_ir_text();
             let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
                 .expect("Failed to create .ll file");
             std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
             anyhow::anyhow!(
-                "Module '{}' failed validation NEW: {}",
+                "Module '{}' failed validation: {}",
                 self.name(),
                 err.to_string_lossy()
             )
@@ -3379,23 +3379,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    #[allow(unused)]
-    pub fn emit_object_file(&self, rel_destination_dir: &str) -> anyhow::Result<()> {
-        let filename = format!("{}.o", self.name());
+    pub fn emit_object_file(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let machine = &self.llvm_machine;
-        let path = Path::new(rel_destination_dir).join(Path::new(&filename));
-        log::info!("Outputting object file to {}", path.to_str().unwrap());
+        let path = path.as_ref();
+        log::info!("Outputting object file to {}", path.display());
         machine
-            .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, &path)
+            .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, path)
             .unwrap();
         Ok(())
     }
 
-    pub fn output_llvm_ir_text(&self) -> String {
+    pub fn emit_llvm_ir_text(&self) -> String {
         self.llvm_module.print_to_string().to_string()
     }
 
-    pub fn write_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {
+    pub fn emit_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {
         self.llvm_module.write_bitcode_to_path(path)
     }
 

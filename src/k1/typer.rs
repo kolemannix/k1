@@ -15358,96 +15358,105 @@ impl TypedProgram {
                     }
                     _ => {
                         let field_count = struc.fields.len();
-                        for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
-                            let prev_len = dst.len();
-                            self.generate_constructors_for_type(
-                                field.type_id,
-                                dst,
-                                field_ctors_buf,
-                                ancestors,
-                                span_id,
-                            );
-                            match field_ctors_buf.get_mut(index) {
-                                None => field_ctors_buf.push(Vec::with_capacity(128)),
-                                Some(buf) => buf.clear(),
-                            };
-                            for field_ctor in dst[prev_len..].iter() {
-                                field_ctors_buf[index].push((field.name, field_ctor.ctor));
-                            }
-                            debug!(
-                                "Pushed {} constructors for field {}; resetting dst to {prev_len}",
-                                field_ctors_buf[index].len(),
-                                self.ident_str(field.name)
-                            );
-                            dst.truncate(prev_len);
-                        }
-                        let final_count = field_ctors_buf[0..field_count as usize]
-                            .iter()
-                            .map(|v| v.len())
-                            .reduce(|t, v| t * v)
-                            .unwrap_or(0);
-
-                        debug!(
-                            "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
-                            field_ctors_buf.len(),
-                            self.type_id_to_string(type_id)
-                        );
-                        let dst_start = dst.len();
-                        for _ in 0..final_count {
-                            let primed_struct_ctor_id =
-                                self.pattern_ctors.add(PatternCtor::Struct {
-                                    fields: SmallVec::with_capacity(field_count as usize),
-                                });
-                            dst.push(alive(primed_struct_ctor_id));
-                        }
-                        let result_struct_ids = &mut dst[dst_start..];
-
-                        // This entire loop is just about taking the cross-product of all the fields'
-                        // respective constructors in an efficient way; by populating slots in
-                        // a pre-allocated table, and doing a bit of math to decide how many times
-                        // a pattern should repeat or cycle. Example
-                        // {  a: bool, b: bool, c: either A, B, C }
-                        // 0  f        f        A
-                        // 1  f        f        B
-                        // 2  f        f        C
-                        // 3  f        t        A
-                        // 4  f        t        B
-                        // 5  f        t        C
-                        // 6  t        f        A
-                        // 7  t        f        B
-                        // 8  t        f        C
-                        // 9  t        t        A
-                        // 10 t        t        B
-                        // 11 t        t        C
-                        // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
-                        // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
-                        // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
-                        let mut field_index_w_multi_ctor = 0;
-                        for ctors in field_ctors_buf[0..field_count as usize].iter() {
-                            if ctors.len() == 1 {
-                                for result_struct in result_struct_ids.iter_mut() {
-                                    self.pattern_ctors
-                                        .get_mut(result_struct.ctor)
-                                        .push_field(ctors[0]);
-                                }
-                            } else {
-                                // multiplier = 2 ^ field_index but only for fields that have more than
-                                // 1 pattern
-                                let multiplier = if field_index_w_multi_ctor == 0 {
-                                    1
-                                } else {
-                                    field_index_w_multi_ctor * 2
+                        if field_count == 0 {
+                            dst.push(alive(
+                                self.pattern_ctors.add(PatternCtor::Struct { fields: smallvec![] }),
+                            ));
+                        } else {
+                            for (index, field) in
+                                self.types.mem.getn(struc.fields).iter().enumerate()
+                            {
+                                let prev_len = dst.len();
+                                self.generate_constructors_for_type(
+                                    field.type_id,
+                                    dst,
+                                    field_ctors_buf,
+                                    ancestors,
+                                    span_id,
+                                );
+                                match field_ctors_buf.get_mut(index) {
+                                    None => field_ctors_buf.push(Vec::with_capacity(128)),
+                                    Some(buf) => buf.clear(),
                                 };
-                                let repeat_count = final_count / (ctors.len() * multiplier);
-                                for (row, result_struct) in result_struct_ids.iter_mut().enumerate()
-                                {
-                                    let pattern_index = (row / repeat_count) % ctors.len();
-                                    let pattern = ctors[pattern_index];
-                                    self.pattern_ctors
-                                        .get_mut(result_struct.ctor)
-                                        .push_field(pattern);
+                                for field_ctor in dst[prev_len..].iter() {
+                                    field_ctors_buf[index].push((field.name, field_ctor.ctor));
                                 }
-                                field_index_w_multi_ctor += 1;
+                                debug!(
+                                    "Pushed {} constructors for field {}; resetting dst to {prev_len}",
+                                    field_ctors_buf[index].len(),
+                                    self.ident_str(field.name)
+                                );
+                                dst.truncate(prev_len);
+                            }
+                            let final_count = field_ctors_buf[0..field_count as usize]
+                                .iter()
+                                .map(|v| v.len())
+                                .reduce(|t, v| t * v)
+                                .unwrap_or(0);
+
+                            debug!(
+                                "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
+                                field_ctors_buf.len(),
+                                self.type_id_to_string(type_id)
+                            );
+                            let dst_start = dst.len();
+                            for _ in 0..final_count {
+                                let primed_struct_ctor_id =
+                                    self.pattern_ctors.add(PatternCtor::Struct {
+                                        fields: SmallVec::with_capacity(field_count as usize),
+                                    });
+                                dst.push(alive(primed_struct_ctor_id));
+                            }
+                            let result_struct_ids = &mut dst[dst_start..];
+
+                            // This entire loop is just about taking the cross-product of all the fields'
+                            // respective constructors in an efficient way; by populating slots in
+                            // a pre-allocated table, and doing a bit of math to decide how many times
+                            // a pattern should repeat or cycle. Example
+                            // {  a: bool, b: bool, c: either A, B, C }
+                            // 0  f        f        A
+                            // 1  f        f        B
+                            // 2  f        f        C
+                            // 3  f        t        A
+                            // 4  f        t        B
+                            // 5  f        t        C
+                            // 6  t        f        A
+                            // 7  t        f        B
+                            // 8  t        f        C
+                            // 9  t        t        A
+                            // 10 t        t        B
+                            // 11 t        t        C
+                            // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
+                            // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
+                            // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
+                            let mut field_index_w_multi_ctor = 0;
+                            for ctors in field_ctors_buf[0..field_count as usize].iter() {
+                                if ctors.len() == 1 {
+                                    for result_struct in result_struct_ids.iter_mut() {
+                                        self.pattern_ctors
+                                            .get_mut(result_struct.ctor)
+                                            .push_field(ctors[0]);
+                                    }
+                                } else {
+                                    // multiplier = 2 ^ field_index but only for fields that have more than
+                                    // 1 pattern
+                                    let multiplier = if field_index_w_multi_ctor == 0 {
+                                        1
+                                    } else {
+                                        field_index_w_multi_ctor * 2
+                                    };
+                                    let repeat_count = final_count / (ctors.len() * multiplier);
+                                    for (row, result_struct) in
+                                        result_struct_ids.iter_mut().enumerate()
+                                    {
+                                        let pattern_index = (row / repeat_count) % ctors.len();
+                                        let pattern = ctors[pattern_index];
+                                        self.pattern_ctors
+                                            .get_mut(result_struct.ctor)
+                                            .push_field(pattern);
+                                    }
+                                    field_index_w_multi_ctor += 1;
+                                }
                             }
                         }
                     }

@@ -1,5 +1,8 @@
 fn main() {
-  10 is x and x == 10 and x == 10;
-  
+  let x: result[i32, {}] = .err({});
+  switch x {
+    .err(e) -> {},
+    .ok(i) -> {},
+  };
   {}
 }

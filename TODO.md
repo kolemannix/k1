@@ -33,6 +33,7 @@ Non-major Ideas
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
+- [ ] Incorporate ffc.h for int and number parsing
 - [ ] Inspired by fast_float, char to digit lookup table
 
 Syntax/elegance
@@ -53,19 +54,20 @@ Syntax/elegance
   - [x] Also: do safe integer coercions automatically
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
 - [x] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
- - Today: "hello {name}" -> string. Tomorrow: 
+      Let's just call it 'fmt' and make it a special construct
+ - Today: "hello {name}" -> string. Tomorrow: fmt("hello {name} {}", 1234)
  - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing
-- [ ] Decide if overflow traps or not (in debug and release, if those are even different)
-- [ ] Get an addr2line implementation linked in for better backtraces, likely (https://github.com/gimli-rs/addr2line)
-- [x] Support ability constraints on generics
-- [ ] Support explicit type args in AnonEnumConstructor syntax 
-- [ ] implement iterator for Array
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-
+- [ ] decide if overflow traps or not (in debug and release, if those are even different)
+- [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
+- [x] support ability constraints on generics
+- [ ] support explicit type args in AnonEnumConstructor syntax 
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
+      currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
+- [ ] implement iterator for array
 
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
@@ -95,7 +97,7 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
 - [ ] Rename `Enum` -> `Sum` or `DUnion` in the code
-- [ ] Think about optimizing no-payload enums into non-aggregates, but at the typer level.
+- [ ] Optimize no-payload enums into non-aggregates, at the typer level.
 
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
@@ -105,6 +107,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
 - [-] Real layouts, in a mem pool, to save roundtripping and increase locality
         -> Kinda done, we now re-use the values in a global 'static stack'
+- [ ] We'll want to skip the id-based repr entirely for heavy heavy static data I think
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals

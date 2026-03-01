@@ -20,6 +20,13 @@ ns list {
   fn len[T](self: list[T]): size { self.len }
   fn cap[T](self: list[T]): size { self.buffer.len }
 
+  // pointer to the underlying buffer
+  // Use at your own risk; the region past
+  // len is not initialized
+  fn base-ptr[T](self: list[T]): ptr {
+    self.buffer.data.as[ptr]
+  }
+
   fn filled[T](size: size, value: T): list[T] {
     let buffer = buffer/filled(size, value);
     { len: size, buffer: buffer }
