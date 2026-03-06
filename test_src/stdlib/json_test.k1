@@ -19,37 +19,37 @@ fn testBasicEnum() {
 }
 
 fn testParsing() {
-  testParse(`null`      , \j. j is .null);
-  testParse(`"asdf"`    , \j. j is .str("asdf"));
-  testParse(`"as\"df"`  , \j. j is .str("as\"df"));
-  testParse(`"as\\\\df"`, \j. j is .str("as\\df"));
-  testParse(`""`        , \j. j is .str(""));
-  testParse(`  ""`      , \j. j is .str(""));
+  testParse(`null`      , fn j. j is .null);
+  testParse(`"asdf"`    , fn j. j is .str("asdf"));
+  testParse(`"as\"df"`  , fn j. j is .str("as\"df"));
+  testParse(`"as\\\\df"`, fn j. j is .str("as\\df"));
+  testParse(`""`        , fn j. j is .str(""));
+  testParse(`  ""`      , fn j. j is .str(""));
 
-  testParse(`false`, \j. j is .bool(false));
-  testParse(`true`,  \j. j is .bool(true));
-  testParse(`{{}`,   \j. j is .object(m) and m.isEmpty());
+  testParse(`false`, fn j. j is .bool(false));
+  testParse(`true`,  fn j. j is .bool(true));
+  testParse(`{{}`,   fn j. j is .object(m) and m.isEmpty());
   testParse(
     `{{ "foo": true, "baz": false }`,
-    \j. j is .object(m) and
-        m.map(\f. f.key) == ["foo", "baz"] and
-        m.map(\f. f.value.asBool().!) == [true, false]
+    fn j. j is .object(m) and
+        m.map(fn f. f.key) == ["foo", "baz"] and
+        m.map(fn f. f.value.asBool().!) == [true, false]
   );
 
-  testParse(" [ ] ", \j. j is .array(es) and es.isEmpty());
-  //testParse(`[]`, \j. j is .Array(_));
+  testParse(" [ ] ", fn j. j is .array(es) and es.isEmpty());
+  //testParse(`[]`, fn j. j is .Array(_));
 }
 
 fn test() {
   testBasicEnum();
   testParsing();
-  testParse(example-json, \o. {
+  testParse(example-json, fn o. {
     o is .object(members)
     and members.len() == 5
   });
 }
 
-fn testParse(s: string, f: some \json -> bool) {
+fn testParse(s: string, f: some fn json -> bool) {
   switch json/parse-from-string(s) {
     .err(msg) -> crash("Failed: {msg}"),
     .ok(json) -> if not f(json) crash("Failed '{s}'")

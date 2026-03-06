@@ -33,13 +33,14 @@ Non-major Ideas
       base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
-- [ ] Incorporate ffc.h for int and number parsing
+- [x] Incorporate ffc.h for int and float parsing
 - [ ] Inspired by fast_float, char to digit lookup table
 
 Syntax/elegance
-- [ ] consider replacing `\` with 'fn' for lambda notation, one more character and we
+- [x] consider replacing `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`
 - [ ] Rename `view` to `span`
+- [ ] Rename 'static' types to 'value' types
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`

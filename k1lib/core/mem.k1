@@ -5,10 +5,10 @@ ns mem {
 
   // For now here's all I can do until I have dyn traits
   deftype Allocator = {
-    malloc:  *(\(size, size) -> ptr),
-    zalloc:  *(\(size, size) -> ptr),
-    realloc: *(\(ptr, size, size, size) -> ptr),
-    free:    *(\(ptr, size, size) -> empty),
+    malloc:  *(fn(size, size) -> ptr),
+    zalloc:  *(fn(size, size) -> ptr),
+    realloc: *(fn(ptr, size, size, size) -> ptr),
+    free:    *(fn(ptr, size, size) -> empty),
   }
 
   fn virtualAlloc(size: size): ptr {

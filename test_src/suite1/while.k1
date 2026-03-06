@@ -28,7 +28,7 @@ fn whileNested(): int {
 
 fn whileReturnClosure(): int {
   while true {
-    let s = \(-> int) { return(5) };
+    let s = fn(-> int) { return(5) };
     return(s())
   };
   4

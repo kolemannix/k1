@@ -281,7 +281,7 @@ ns list {
     b.build()
   }
 
-  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some \T -> U): list[U]
+  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some fn T -> U): list[U]
   where Iter: iterator[item = T], Iterable: iterable[item = T, i = Iter]
   {
     let* iter = input.iterator();
@@ -293,19 +293,19 @@ ns list {
     us.*
   }
 
-  fn map[T, U](self: list[T], f: some \T -> U): list[U] {
+  fn map[T, U](self: list[T], f: some fn T -> U): list[U] {
     let* us = list/withCapacity[U](self.len);
     for i in self { us.push[U](f(i)) };
     us.*
   }
   
-  fn flatMap[T, U](self: list[T], f: some \T -> list[U]): list[U] {
+  fn flatMap[T, U](self: list[T], f: some fn T -> list[U]): list[U] {
     let* us = list/empty[U]();
     for i in self { us.appendList[U](f(i)) };
     us.*
   }
   
-  fn filter[T](self: list[T], f: some \T -> bool): list[T] {
+  fn filter[T](self: list[T], f: some fn T -> bool): list[T] {
     let* keep = list/empty[T]();
     for i in self { if f(i) keep.push(i) };
     keep

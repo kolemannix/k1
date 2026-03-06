@@ -648,16 +648,16 @@ pub struct ParsedCast {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct LambdaArgDefn {
     pub binding: Ident,
     pub ty: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedLambda {
-    pub arguments: EcoVec<LambdaArgDefn>,
+    pub arguments: ParsedSlice<LambdaArgDefn>,
     pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExprId,
     pub span: SpanId,
@@ -1128,7 +1128,7 @@ pub struct ParsedNumericType {
 
 #[derive(Debug, Clone)]
 pub struct ParsedFunctionType {
-    pub params: SmallVec<[ParsedTypeExprId; 8]>,
+    pub params: SV8<ParsedTypeExprId>,
     pub return_type: ParsedTypeExprId,
     pub span: SpanId,
 }
@@ -2813,7 +2813,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let opt_id =
                 self.ast.type_exprs.add(ParsedTypeExpr::Optional(ParsedOptional { base, span }));
             Ok(Some(opt_id))
-        } else if first.kind == K::BackSlash {
+        } else if first.kind == K::KeywordFn {
             let fun = self.expect_function_type()?;
             Ok(Some(fun))
         } else if first.kind == K::KeywordBuiltin {
@@ -2907,8 +2907,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_function_type(&mut self) -> ParseResult<ParsedTypeExprId> {
-        let start = self.expect_kind(K::BackSlash)?;
-        let mut params: SmallVec<[ParsedTypeExprId; 8]> = smallvec![];
+        let start = self.expect_kind(K::KeywordFn)?;
+        let mut params: SV8<ParsedTypeExprId> = smallvec![];
         let open_paren = self.maybe_consume(K::OpenParen).is_some();
         let loop_end_kind = if open_paren { K::CloseParen } else { K::RThinArrow };
         let no_params = open_paren && self.peek().kind == K::CloseParen;
@@ -3235,7 +3235,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return Ok((SliceHandle::empty(), self.peek_back().span));
         };
 
-        let mut type_args: SmallVec<[NamedTypeArg; 8]> = SmallVec::new();
+        let mut type_args: SV8<NamedTypeArg> = smallvec![];
         let (args_span, _terminator) = self.eat_delimited_ext(
             "Type Arguments",
             &mut type_args,
@@ -3321,6 +3321,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(expr))
             }
             K::BackSlash => Ok(Some(self.expect_lambda()?)),
+            K::KeywordFn => Ok(Some(self.expect_lambda()?)),
             K::KeywordWhile => {
                 let while_result = self.expect_while_loop()?;
                 let expr_id = self.add_expression(ParsedExpr::While(while_result));
@@ -3673,9 +3674,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_lambda(&mut self) -> ParseResult<ParsedExprId> {
-        let start = self.expect_kind(K::BackSlash)?;
+        let start = self.peek();
+        match start.kind {
+            K::KeywordFn => Ok(()),
+            _ => Err(error_expected("lambda starting with \\ or fn", start)),
+        }?;
+        self.advance();
+
         let maybe_open_paren = self.maybe_consume(K::OpenParen);
-        let mut arguments: EcoVec<LambdaArgDefn> = eco_vec![];
+        let mut arguments: SV4<LambdaArgDefn> = smallvec![];
         let mut return_type: Option<ParsedTypeExprId> = None;
         loop {
             let next = self.peek();
@@ -3726,15 +3733,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
-        let lambda = ParsedLambda { arguments, return_type, body, span };
+        let lambda = ParsedLambda { arguments: self.ast.mem.pushn(&arguments), return_type, body, span };
         Ok(self.add_expression(ParsedExpr::Lambda(lambda)))
     }
 
-    fn expect_fn_call_args(&mut self) -> ParseResult<(SmallVec<[ParsedCallArg; 8]>, SpanId)> {
+    fn expect_fn_call_args(&mut self) -> ParseResult<(SV8<ParsedCallArg>, SpanId)> {
         let (first, second) = self.tokens.peek_two();
         let is_context = second.kind == K::KeywordContext;
 
-        let mut args: SmallVec<[ParsedCallArg; 8]> = smallvec![];
+        let mut args: SV8<ParsedCallArg> = smallvec![];
         if is_context {
             self.expect_kind(K::OpenParen)?;
             self.expect_kind(K::KeywordContext)?;
@@ -3868,7 +3875,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn eat_fn_params(&mut self) -> ParseResult<(SV8<FnArgDef>, SpanId)> {
         let (first, next) = self.tokens.peek_two();
         let is_context = next.kind == K::KeywordContext;
-        let mut params: SmallVec<[FnArgDef; 8]> = smallvec![];
+        let mut params: SV8<FnArgDef> = smallvec![];
         if is_context {
             self.expect_kind(K::OpenParen)?;
             self.expect_kind(K::KeywordContext)?;
@@ -4700,13 +4707,13 @@ impl ParsedProgram {
             }
             ParsedExpr::Lambda(lambda) => {
                 w.write_char('\\')?;
-                for (index, arg) in lambda.arguments.iter().enumerate() {
+                for (index, arg) in self.mem.getn(lambda.arguments).iter().enumerate() {
                     w.write_str(self.idents.get_name(arg.binding))?;
                     if let Some(ty) = arg.ty {
                         w.write_str(": ")?;
                         self.display_type_expr_id(ty, w)?;
                     }
-                    let last = index == lambda.arguments.len() - 1;
+                    let last = index == lambda.arguments.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
                     }

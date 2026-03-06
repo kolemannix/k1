@@ -52,7 +52,7 @@ ns Range {
     }
   };
 
-  let fresh = ing.filter(\i. {
+  let fresh = ing.filter(fn i. {
     for range in ranges {
       let fresh = range.start <= i and range.end >= i;
       if fresh return(true)

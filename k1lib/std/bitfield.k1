@@ -50,7 +50,7 @@ fn define[Base](type-name: string, members: view[{ name: string, bits: size }]):
     offset: size,
     // nameCap: the name of the field, capitalized
     nameCap: string
-  }] = list/fromMap(members, \member. {
+  }] = list/fromMap(members, fn member. {
     let bits = member.bits;
     if bitIndex.* + bits > totalBits crash("Too big: {bitIndex.* + bits}");
     let rawValue = u64/bitmaskLow(bits);

@@ -325,8 +325,7 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Function(fun) => {
-                w.write_str("\\")?;
-                w.write_str("(")?;
+                w.write_str("fn(")?;
                 for (idx, param) in self.types.mem.getn(fun.physical_params).iter().enumerate() {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
@@ -346,7 +345,7 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Lambda(lam_id) => {
-                write!(w, "lambda_{}(", type_id)?;
+                write!(w, "fnlam(")?;
                 let lam = self.types.lambda_types.get(*lam_id);
                 self.display_type_id_rec(w, lam.function_type, expand, visited)?;
                 w.write_str(")")?;

@@ -28,7 +28,7 @@ ns opt {
     }
   }
 
-  fn map[T, U](self: opt[T], f: some \T -> U): opt[U] {
+  fn map[T, U](self: opt[T], f: some fn T -> U): opt[U] {
     switch self {
       .none -> .none,
       .some(t) -> .some(f(t))

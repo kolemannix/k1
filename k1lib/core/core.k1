@@ -9,7 +9,7 @@ fn assertEquals[T: print and equals](context locn: compiler/source-location)(a: 
 
 ns iter {
 
-  fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some \T -> bool): ?T {
+  fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): ?T {
     for iterable {
       if pred(it) return(.some(it))
     };
@@ -27,12 +27,12 @@ ns iter {
     position(iterable, needle).isSome()
   }
 
-  fn forall[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some \T -> bool): bool {
+  fn forall[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
     for iterable { if not pred(it) return(false) };
     true
   }
 
-  fn exists[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some \T -> bool): bool {
+  fn exists[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
     for iterable {
       if pred(it) return(true)
     };
@@ -130,7 +130,7 @@ ns sys {
       count = argCount.as[size],
       ptr = args
     );
-    let strings = list/fromMap(buf, \cstr. string/wrap-c(cstr));
+    let strings = list/fromMap(buf, fn cstr. string/wrap-c(cstr));
     strings.asView()
   }
 

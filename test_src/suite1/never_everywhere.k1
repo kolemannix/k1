@@ -5,7 +5,7 @@ fn callArguments(): never {
   // We're going to do stuff in call arguments that ultimately crash, and ensure that
   // they do run in order up to the 'never' typed one
   let* counter = 0;
-  let incr = \() { counter <- counter.* + 1 };
+  let incr = fn() { counter <- counter.* + 1 };
   // This should get compiled to:
   // { incr(); incr(), incr(), { if i.* == 3 core/sys/exit(0) else crash("i wasnt incremented") } }
   // No 'call' is even emitted

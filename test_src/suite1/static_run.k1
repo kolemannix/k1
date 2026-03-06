@@ -137,7 +137,7 @@ fn test() {
 
   // lists
   let listLast = #static {
-    let inced = [1,2,3,4,5].map(\it. it+1);
+    let inced = [1,2,3,4,5].map(fn it. it+1);
     inced.last()
   };
   assertEquals[?int](listLast, some(6));
@@ -157,7 +157,7 @@ fn test() {
   }, "Hello");
 
   assertEquals[?string](
-    testCompile( #static assert(false) ).map(\(s) s.take(38)),
+    testCompile( #static assert(false) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
   );
 
@@ -180,7 +180,7 @@ fn test() {
 
   // Simple lambda
   assertEquals[int](#static {
-    let lam = \(x: int) x * 2;
+    let lam = fn(x: int) x * 2;
     lam(1)
   }, 2);
 

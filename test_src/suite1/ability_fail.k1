@@ -11,6 +11,6 @@ fn test() {
   assertEquals(result, .some(
 `Call to num/num with self := Tool does not work
 No matching implementations found
-Function type: \('self) -> i32`
+Function type: fn('self) -> i32`
   ))
 }

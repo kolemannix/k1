@@ -50,7 +50,7 @@ fn checkInvalidPart1(value: i64): bool {
   let groups = valueStr.chunks(valueStr.len() / 2);
   if groups.len() > 1 {
     let h = groups.first().!;
-    let allEqual = forall(groups.drop(1), \g. g == h);
+    let allEqual = forall(groups.drop(1), fn g. g == h);
     //println("allEqual? {groups}: {allEqual}");
     allEqual
   } else false;
@@ -65,7 +65,7 @@ fn checkInvalidPart2(value: i64): bool {
     let groups = valueStr.chunks(it);
     if groups.len() > 1 {
       let h = groups.first().!;
-      let allEqual = forall(groups.drop(1), \g. g == h);
+      let allEqual = forall(groups.drop(1), fn g. g == h);
       //println("allEqual? {groups}: {allEqual}");
       if allEqual return(true);
     }

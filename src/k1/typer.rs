@@ -8071,11 +8071,11 @@ impl TypedProgram {
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
         let lambda_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, None, None);
-        let lambda_arguments = lambda.arguments.clone();
+        let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
-        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() as u32 + 1);
+        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() + 1);
         if let Some(t) = ctx.expected_type_id {
             debug!(
                 "lambda expected type is {} {}",
@@ -8104,7 +8104,7 @@ impl TypedProgram {
             },
         );
 
-        for (index, arg) in lambda_arguments.iter().enumerate() {
+        for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
                 None => {
@@ -8135,10 +8135,10 @@ impl TypedProgram {
             });
         }
 
-        let mut param_variables = self.mem.new_list(lambda_arguments.len() as u32 + 1);
+        let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
-        for (typed_arg, parsed_arg) in typed_params.iter().zip(lambda_arguments.iter()) {
+        for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments)) {
             let name = typed_arg.name;
             let variable_id = self.variables.add(Variable {
                 name,

@@ -112,7 +112,7 @@ ns string {
       ranges.push(r);
     };
 
-    ranges.map(\range. {
+    ranges.map(fn range. {
       let end = range.start + range.len;
       self.substring(range.start, end)
     })

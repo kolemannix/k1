@@ -30,7 +30,7 @@ fn run(): result[i32, Error] {
   let result: int = ({ a: true }: Foo).try;
   assert(result == 3);
 
-  let c = \(-> result[bool, Error]) {
+  let c = fn(-> result[bool, Error]) {
     let i = fails().try;
     .ok(not i)
   };
