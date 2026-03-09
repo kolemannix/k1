@@ -29,7 +29,7 @@ use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
-use std::io::stderr;
+use std::io::{IsTerminal};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use synth::synth_static_option;
@@ -1919,8 +1919,18 @@ pub fn write_error(
     message: impl AsRef<str>,
     level: MessageLevel,
     span: SpanId,
+    use_color: bool,
 ) -> std::io::Result<()> {
-    parse::write_source_location(w, spans, sources, span, level, 6, Some(message.as_ref()))?;
+    parse::write_source_location(
+        w,
+        spans,
+        sources,
+        span,
+        level,
+        6,
+        Some(message.as_ref()),
+        use_color,
+    )?;
     Ok(())
 }
 
@@ -6029,19 +6039,20 @@ impl TypedProgram {
                 let constraint_signature = self
                     .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
                     .unwrap();
-                if let Err(mut e) = self.check_type_constraint(
+                if let Err(e) = self.check_type_constraint(
                     solution.type_id,
                     constraint_signature,
                     parsed_param.name,
                     constraint_checking_scope,
                     span,
                 ) {
-                    e.message = format!(
-                        "Blanket impl almost matched but a constraint was unsatisfied; {}",
-                        e.message
+                    self.report_hint(
+                        e.span,
+                        format!(
+                            "Blanket impl almost matched but a constraint was unsatisfied; {}",
+                            e.message
+                        ),
                     );
-                    e.level = MessageLevel::Info;
-                    self.write_error(&mut std::io::stderr(), &e).unwrap();
                     return None;
                 }
             }
@@ -7962,11 +7973,11 @@ impl TypedProgram {
         let part_count = interpolated_string.parts.len();
         if part_count == 1 {
             let parse::InterpolatedStringPart::String(string_id) =
-                interpolated_string.parts.first().unwrap().clone()
+                interpolated_string.parts.first().unwrap()
             else {
                 self.ice_with_span("String had only one part that was not a string", span)
             };
-            let e = self.synth_string_literal(string_id, span);
+            let e = self.synth_string_literal(*string_id, span);
             Ok(e)
         } else {
             let interpolated_string = interpolated_string.clone();
@@ -8011,7 +8022,7 @@ impl TypedProgram {
                             self.push_expr_id_to_block(&mut block, print_literal_call);
                         }
                     }
-                    parse::InterpolatedStringPart::Expr(expr_id) => {
+                    parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
                         let typed_expr_to_stringify = self.eval_expr(expr_id, block_ctx)?;
                         let print_expr_call = self.synth_printto_call(
                             typed_expr_to_stringify,
@@ -8019,6 +8030,9 @@ impl TypedProgram {
                             ctx,
                         )?;
                         self.push_expr_id_to_block(&mut block, print_expr_call);
+                    }
+                    parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
+                        return failf!(span, "No holes of this kind allowed here");
                     }
                 };
             }
@@ -8138,7 +8152,8 @@ impl TypedProgram {
         let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
-        for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments)) {
+        for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments))
+        {
             let name = typed_arg.name;
             let variable_id = self.variables.add(Variable {
                 name,
@@ -15070,7 +15085,6 @@ impl TypedProgram {
             };
         }
 
-        let mut err_writer = stderr();
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         check_for_errors!("namespace declaration");
@@ -15145,7 +15159,7 @@ impl TypedProgram {
         check_for_errors!("typechecking");
 
         debug!(">> Pass 6 specialize function bodies");
-        self.specialize_pending_function_bodies(&mut err_writer)?;
+        self.specialize_pending_function_bodies()?;
         check_for_errors!("body specialization");
 
         Ok(())
@@ -15232,10 +15246,7 @@ impl TypedProgram {
         }
     }
 
-    fn specialize_pending_function_bodies(
-        &mut self,
-        err_writer: &mut impl std::io::Write,
-    ) -> anyhow::Result<()> {
+    fn specialize_pending_function_bodies(&mut self) -> anyhow::Result<()> {
         let mut function_ids: Vec<FunctionId> =
             Vec::with_capacity(self.functions_pending_body_specialization.len());
         while !self.functions_pending_body_specialization.is_empty() {
@@ -15244,8 +15255,7 @@ impl TypedProgram {
             for function_id in &function_ids {
                 let result = self.specialize_function_body(*function_id);
                 if let Err(e) = result {
-                    self.write_error(err_writer, &e)?;
-                    self.errors.push(e);
+                    self.report(e)
                 }
             }
             function_ids.clear()
@@ -15469,16 +15479,13 @@ impl TypedProgram {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
             Type::Static(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Static))),
-            _ => self
-                .write_error(
-                    &mut stderr(),
-                    &errf!(
-                        span_id,
-                        "unhandled type in generate_constructors_for_type {}",
-                        self.type_id_to_string(type_id)
-                    ),
-                )
-                .unwrap(),
+            _ => self.report_hint(
+                span_id,
+                format!(
+                    "INTERNAL COMPILER ERROR: unhandled type in generate_constructors_for_type {}",
+                    self.type_id_to_string(type_id)
+                ),
+            ),
         };
         let popped = ancestors.pop();
         debug_assert_eq!(popped, Some(type_id));
@@ -16202,7 +16209,8 @@ impl TypedProgram {
         };
 
         if !skip_print {
-            self.write_error(&mut std::io::stderr(), &e).unwrap();
+            let use_color = std::io::stderr().is_terminal();
+            self.write_error(&mut std::io::stderr(), &e, use_color).unwrap();
         }
         self.errors.push(e);
     }
@@ -16216,20 +16224,30 @@ impl TypedProgram {
     }
 
     pub fn log_hint(&self, span: SpanId, message: impl AsRef<str>) {
+        let use_color = std::io::stderr().is_terminal();
         let hint =
             TyperError { message: message.as_ref().to_string(), span, level: MessageLevel::Hint };
-        self.write_error(&mut std::io::stderr(), &hint).unwrap();
+        self.write_error(&mut std::io::stderr(), &hint, use_color).unwrap();
     }
 
     pub fn write_error(
         &self,
         w: &mut impl std::io::Write,
         error: &TyperError,
+        use_color: bool,
     ) -> std::io::Result<()> {
-        write_error(w, &self.ast.spans, &self.ast.sources, &error.message, error.level, error.span)
+        write_error(
+            w,
+            &self.ast.spans,
+            &self.ast.sources,
+            &error.message,
+            error.level,
+            error.span,
+            use_color,
+        )
     }
 
-    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) {
+    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
         parse::write_source_location(
             w,
             &self.ast.spans,
@@ -16238,11 +16256,12 @@ impl TypedProgram {
             MessageLevel::Info,
             6,
             None,
+            use_color,
         )
         .unwrap()
     }
 
-    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId) {
+    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
         parse::write_source_location(
             w,
             &self.ast.spans,
@@ -16251,27 +16270,31 @@ impl TypedProgram {
             MessageLevel::Error,
             6,
             None,
+            use_color,
         )
         .unwrap()
     }
 
     #[track_caller]
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span);
+        let use_color = std::io::stderr().is_terminal();
+        self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
     #[track_caller]
     pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperError>) -> ! {
+        let use_color = std::io::stderr().is_terminal();
         if let Some(error) = error {
-            self.write_error(&mut std::io::stderr(), error).unwrap();
+            self.write_error(&mut std::io::stderr(), error, use_color).unwrap();
         }
         panic!("Internal Compiler Error at: {}", msg.as_ref())
     }
 
     #[track_caller]
     pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span);
+        let use_color = std::io::stderr().is_terminal();
+        self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("not yet implemented: {}", msg.as_ref())
     }
 

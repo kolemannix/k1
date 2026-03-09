@@ -2,6 +2,7 @@
 // All rights reserved.
 
 use std::fmt::{Display, Formatter, Write};
+use std::io::IsTerminal;
 
 use crate::compiler::CompilerConfig;
 use crate::kmem::{self, MSL2, MSS2, MSlice, MSpillList};
@@ -663,14 +664,21 @@ pub struct ParsedLambda {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
-pub enum InterpolatedStringPart {
-    // TODO: Put spans on each string part
-    String(StringId),
-    Expr(ParsedExprId),
+#[derive(Clone, Copy, Default)]
+pub struct ParsedFmtSettings {
+    pub precision: u8,
+    pub pretty: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Copy)]
+pub enum InterpolatedStringPart {
+    // we could put spans on each string part if we need them
+    String(StringId),
+    Expr(ParsedExprId, ParsedFmtSettings),
+    Hole { fmt_settings: ParsedFmtSettings, span: SpanId },
+}
+
+#[derive(Clone)]
 pub struct ParsedInterpolatedString {
     pub parts: Vec<InterpolatedStringPart>,
     pub span: SpanId,
@@ -1837,6 +1845,7 @@ pub fn get_span_source_line<'sources>(
 
 pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
     let mut stderr = std::io::stderr();
+    let use_color = stderr.is_terminal();
 
     match parse_error {
         ParseError::Lex(lex_error) => {
@@ -1848,6 +1857,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 MessageLevel::Error,
                 6,
                 Some(&lex_error.message),
+                use_color
             )
             .unwrap();
         }
@@ -1873,6 +1883,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 MessageLevel::Error,
                 6,
                 Some(&format!("{message} at '{}'\n", got_str)),
+                use_color
             )
             .unwrap();
             eprintln!();
@@ -1888,6 +1899,7 @@ pub fn write_source_location(
     level: MessageLevel,
     context_lines: usize,
     message: Option<&str>,
+    use_color: bool
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
@@ -1903,28 +1915,33 @@ pub fn write_source_location(
         MessageLevel::Info => Color::Yellow,
         MessageLevel::Hint => Color::Yellow,
     };
-    let _level_name = match level {
-        MessageLevel::Error => "Error",
-        MessageLevel::Warn => "Warning",
-        MessageLevel::Info => "Info",
-        MessageLevel::Hint => "Hint",
+    macro_rules! colored {
+        ($e: expr) => { { if use_color { $e.color(color) } else { $e.normal() } } }
     }
-    .color(color);
+    let level_name = colored!(match level {
+        MessageLevel::Error => "error",
+        MessageLevel::Warn => "warning",
+        MessageLevel::Info => "info",
+        MessageLevel::Hint => "hint",
+    });
 
-    // If the span is longer than the line, just highlight the whole line
+    // If the span is longer than the line, just highlight the whole first line
     let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
     let thingies = "^".repeat(highlight_length).color(color);
+    let column = span.start - line.start_char;
     let spaces = " ".repeat((span.start - line.start_char) as usize);
     let line_start = line.line_index as i32 - context_lines as i32 / 2;
     let line_end = line_start + context_lines as i32;
-    let red_arrow = "->".color(color);
+    let arrow = colored!("->");
     writeln!(w, "┌────────────────────────────────────────╴")?;
     writeln!(
         w,
-        "{}/{}:{}",
-        source.directory.color(color),
-        source.filename.color(color),
+        "{}/{}:{}:{}: {}",
+        colored!(source.directory),
+        colored!(source.filename),
         line.line_index + 1,
+        column,
+        level_name
     )?;
     writeln!(w, "├─────")?;
     for line_index in line_start..line_end {
@@ -1932,7 +1949,7 @@ pub fn write_source_location(
             if let Some(this_line) = source.get_line(line_index as usize) {
                 let line_content = source.get_line_content(this_line);
                 if line_index == line.line_index as i32 {
-                    writeln!(w, "│ {red_arrow}{}\n│   {spaces}{thingies}", line_content).unwrap();
+                    writeln!(w, "│ {arrow}{}\n│   {spaces}{thingies}", line_content).unwrap();
                 } else {
                     writeln!(w, "│   {}", line_content).unwrap();
                 }
@@ -2625,18 +2642,35 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("expect_string");
 
         let mut buf = std::mem::take(&mut self.string_buffer);
+
+        // nocommit we can optimize this by checking if the first is terminated
         let mut parts: Vec<InterpolatedStringPart> = Vec::new();
         let mut first_segment = true;
+
+        // First we transform a series of lexer tokens into a sequence of parts
+        // Where each part is either a string constant, a hole expecting a postfix fmt arg, or an expression
         loop {
             let current_token = self.tokens.next();
             match current_token.kind {
                 // Interpolation case
                 K::OpenBrace => {
-                    let expr_id = self.expect_expression()?;
-                    parts.push(InterpolatedStringPart::Expr(expr_id));
-                    self.expect_kind(K::CloseBrace)?;
+                    if let Some(close) = self.maybe_consume(K::CloseBrace) {
+                        let span = self.extend_token_span(current_token, close);
+                        parts.push(InterpolatedStringPart::Hole {
+                            fmt_settings: ParsedFmtSettings::default(),
+                            span,
+                        });
+                    } else {
+                        let expr_id = self.expect_expression()?;
+                        parts.push(InterpolatedStringPart::Expr(
+                            expr_id,
+                            ParsedFmtSettings::default(),
+                        ));
+                        self.expect_kind(K::CloseBrace)?;
+                    }
                 }
-                K::StringUnterminated { delim } | K::String { delim } => {
+                K::StringUnterminated { delim, interp_exprs }
+                | K::String { delim, interp_exprs } => {
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
@@ -2647,11 +2681,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     buf.clear();
                     let mut chars = text.chars().peekable();
                     if first_segment {
-                        // Skip opening " or `
+                        // Skip opening " or ` or p" or p`
+                        // nocommit: Maybe we just lex the actual strings (with tok_buf)
+                        // because this is very duplicative
                         let c = chars.next();
+                        let c = if c == Some('p') { chars.next() } else { c };
                         if c != Some('"') && c != Some('`') {
                             return Err(error(
-                                "Internal Error: should start with a \" or a `",
+                                format!(
+                                    "Internal Error: should start with p\" or p` or \" or `; got {:?}",
+                                    c
+                                ),
                                 first,
                             ));
                         }
@@ -2659,13 +2699,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let is_terminated = matches!(current_token.kind, K::String { .. });
                     while let Some(c) = chars.next() {
-                        if c == '{' {
+                        if c == '{' && interp_exprs {
                             let Some(next) = chars.next() else {
                                 return Err(error("String ended with '{'", first));
                             };
                             if next == '{' {
                                 buf.push('{');
                             } else {
+                                // If this were a {} hole, then it'd would have been lexed
+                                // as brace tokens, not chars
+                                // So that means the lexer decided just to push it, so it means no
+                                // interp
                                 return Err(error(
                                     "Internal Compiler Error: contains non-escaped '{'",
                                     first,
@@ -3733,7 +3777,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let body = self.expect_expression()?;
         let span = self.extend_span(start.span, self.get_expression_span(body));
-        let lambda = ParsedLambda { arguments: self.ast.mem.pushn(&arguments), return_type, body, span };
+        let lambda =
+            ParsedLambda { arguments: self.ast.mem.pushn(&arguments), return_type, body, span };
         Ok(self.add_expression(ParsedExpr::Lambda(lambda)))
     }
 
@@ -4219,7 +4264,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_dq_ident(&mut self) -> ParseResult<Ident> {
-        let external_name_token = self.expect_kind(K::STRING_DQ)?;
+        let external_name_token = self.expect_kind(K::STRING_DQ_INTERP)?;
         // Accessing the token chars this way achieves a partial borrow of self
         // allowing us to intern the identifier
         let string_text = Parser::tok_chars(
@@ -4599,10 +4644,13 @@ impl ParsedProgram {
                 for part in &is.parts {
                     match part {
                         InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
-                        InterpolatedStringPart::Expr(expr_id) => {
+                        InterpolatedStringPart::Expr(expr_id, _) => {
                             w.write_char('{')?;
                             self.display_expr_id(w, *expr_id)?;
                             w.write_char('{')?;
+                        }
+                        InterpolatedStringPart::Hole { fmt_settings: _, span: _ } => {
+                            w.write_str("{}")?;
                         }
                     }
                 }

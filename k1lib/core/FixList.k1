@@ -1,15 +1,28 @@
-// Represents a 'pushable' contiguous collection of Ts, with a fixed capacity,
-// and inline storage. 
+// Represents an inline, 'pushable' contiguous collection of Ts, with a fixed capacity.
+// Storage is inline!
 //  
 // For example, A FixList[byte, 10] is 14 bytes long, and looks like:
 // +----+----------+
 // |used|10 items  |
 // +----+----------+
 // 0    4
-deftype FixList[T, N: static size] = { used: u32, data: array[T, N] }
+deftype FixList[T, N: static size] = { data: array[T, N], used: u32 }
 ns FixList {
   fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
+
+  // Note: Since the zeroed() value is constructed
+  //       directly in the return slot, we get rvo
+  //       But if we had a let first, it would have to be copied
+  //       until we have an explicit rvo feature
+  fn zeroed[T, N: static size](): FixList[T, N] {
+    zeroed()
+  }
+
+  // TODO: Replace with RVO once implemented
+  // fn uninit[T, N: static size](out: *mut FixList[T, N]) {
+  //   result.used = 0;
+  // }
 
   fn clear[T, N: static size](self: *mut FixList[T, N]): empty {
     #if k1/debug self.data*.memset(0xCD);
@@ -92,6 +105,10 @@ ns FixList {
        },
        .none -> .none
     }
+  }
+
+  fn reverse[T, N: static size](self: *mut FixList[T, N]) {
+    self.asBuffer().reverse()
   }
 
 }

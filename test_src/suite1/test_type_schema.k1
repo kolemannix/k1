@@ -72,7 +72,7 @@ ns type_schema {
       and size == .some(5)
       else crash("");
 
-    assertEquals(printStructShape[Point3[u8]], "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
+    assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
     let isZeroPtr: *fn(int) -> bool = isZero.toRef();
     require get-type-schema[typeOf(isZeroPtr)]

@@ -23,7 +23,7 @@ fn test() {
   let p2: PointAlias = { x: 0, y: 0 };
   assertEquals(
     testCompile(p2.sum()),
-    opt.some("Method 'sum' does not exist on type: '{{ x: i64, y: i64 }'")
+    opt.some(p"Method 'sum' does not exist on type: '{ x: i64, y: i64 }'")
   );
 
   {}

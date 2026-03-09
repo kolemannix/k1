@@ -220,7 +220,7 @@ ns list {
     if indexA >= self.len {
       crash("list index out of bounds: {indexB} >= {self.len}")
     };
-    self.buffer*.swap[T](indexA, indexB);
+    self.buffer.swap[T](indexA, indexB);
   }
 
   fn sort[T](input: *mut list[T]) where T: comparable {

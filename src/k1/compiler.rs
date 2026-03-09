@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
@@ -513,6 +513,7 @@ pub fn codegen_module<'ctx, 'module>(
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_program() {
+        let use_color = std::io::stderr().is_terminal();
         write_source_location(
             &mut std::io::stderr(),
             &codegen.k1.ast.spans,
@@ -521,6 +522,7 @@ pub fn codegen_module<'ctx, 'module>(
             MessageLevel::Error,
             6,
             Some(&e.message),
+            use_color,
         )
         .unwrap();
         write_program_dump(codegen.k1);

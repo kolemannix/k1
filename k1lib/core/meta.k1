@@ -18,7 +18,7 @@ ns meta {
       self.line("impl print for {type-name} {{");
 
       self.indent(indent + 1);
-      self.line("fn printTo[w: writer](self: self, w: w) {{");
+      self.line(p"fn printTo[w: writer](self: self, w: w) {");
       self.write-string(body);
       self.indent(indent + 1);
       self.line("}");
@@ -51,7 +51,7 @@ ns meta {
     `let {name}: typeFromId({type-id}) = {bakedValueExpr};\n`
   }
 
-  // Note: If we had an interface for "growable collection", we could implement it here.
+  // Note: If we had an ability for "growable collection", we could implement it.
   //       len, get, empty, (push)
   fn defineSoA[T](name: string): string {
     let structTypeId = types/type-id[T];

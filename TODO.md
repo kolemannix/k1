@@ -1,18 +1,14 @@
 "C with typeclasses and tagged unions"
 
 GOOD IDEAS 11/13
-Put lambda environments in the arena
-Implement inlining in typer or bc
-AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
-- let context(impl Alloc) temp = mem/AllocMode.Arena;
-- let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+- When converting a lambda to a dyn lambda, put its environments in the current allocator instead of on the stack
+- AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
+  - let context(impl Alloc) temp = mem/AllocMode.Arena;
+  - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [X] Specialization solution (when types are known by the function)
-      A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
-A let* that goes to the heap, mark/reset on function return. (function arenas)
-Support ".c" sources; compiles your c and adds it to the main compilation unit
-- definitions #c "void foo() { }"
-- #cfile "asm.c"
+-     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
+- Return value binding, or named return values, for guaranteed RVO
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -22,15 +18,10 @@ More optimal final programs
 
 Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
-- [ ] userland: CCompatString which is a valid c string with prefixed length
+- [ ] userland: CCompatString which is a valid c string with length in front of the allocation
 - [ ] User-defined implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc): ImplicitAs?
 - [ ] [design/flags_in_tags.md]
-- [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
-      if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
-      either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
-  - [ ] First-class data-oriented design features for struct/enum setups?
-      base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 - [x] Incorporate ffc.h for int and float parsing
@@ -43,6 +34,10 @@ Syntax/elegance
 - [ ] Rename 'static' types to 'value' types
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+      Let's just call it 'fmt' and make it a special construct
+ - Today: "hello {name}" -> string. Tomorrow: f"hello {name}" -> string. fmt(<writer>, f"hello {name} {}", 1234)
+ - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
   - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
 - [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
@@ -54,10 +49,6 @@ Syntax/elegance
   - [x] Ok now I'm really thinking about `size` and it being signed.
   - [x] Also: do safe integer coercions automatically
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
-- [x] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
-      Let's just call it 'fmt' and make it a special construct
- - Today: "hello {name}" -> string. Tomorrow: fmt("hello {name} {}", 1234)
- - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)

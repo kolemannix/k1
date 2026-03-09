@@ -1,5 +1,27 @@
 fn main() {
-  let s = f64/parse-string("-1235.0 hello world", false);
+  let world = "world";
+  // Interpolated string
+  "hello {world}";
+  // regular string
+  "hello {world}";
+
+  // write
+  write(w, f"hello {world} %{} %{}", 42, 10);
+
+  // produce a string
+  format("hello {world} {a} {b}", { a: 42, b: 10 });
+  formatArgs(); // produces the struct, use for metaprogramming
+
+  // OR, the compiler turns "s {expr}" into a struct of
+  // { stringParts: view[string], expr1: A, expr2: B, expr3: C }...
+  // where A, B, C : Write, and there are exactly one fewer
+  // exprs than string parts. Above, 2 string parts and 1 expr
+  // fmt("s {expr} {}", t) becomes the same but with 1 more expr, t
+
+  // There is no FmtArgs type, but its a type of type, a shape of struct
+  // containing a format string of N parts and N - 1 format specifiers
+  // We can optimize out the empty string pushes when generating the write code
+
   printIt("{s.!.value} (len={s.!.len})\n");
   {}
 }

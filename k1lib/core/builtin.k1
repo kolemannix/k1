@@ -621,10 +621,6 @@ ns array {
     mem/zeroed[array[t, n]]
   }
 
-  fn bytes[n: static int](): array[u8, n] {
-    mem/zeroed[array[u8, n]]
-  }
-
   fn allocate[t, n: static int](context alloc: mem/alloc-mode)(): *mut array[t, n] {
     alloc.allocT[array[t, n]]()
   }

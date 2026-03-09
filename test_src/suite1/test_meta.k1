@@ -42,7 +42,7 @@ use types/type-schema
 fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, type-id: u64) {
   switch type-schema(type-id) {
     .struct(s) -> {
-      code.line("w.write-char('{{');");
+      code.line(p"w.write-char('{');");
       for f in s.fields {
 
         let fieldLetName = `_{name}{f.name}`;
@@ -94,7 +94,7 @@ fn toJson[T](t: T): string {
 fn testToJson() {
   assertEquals(toJson(true), "true");
   let json1 = toJson({ x: 1, y: 2, z: {}, d: false });
-  assertEquals(json1, `{{"x":1,"y":2,"z":{{},"d":false}`);
+  assertEquals(json1, p`{"x":1,"y":2,"z":{},"d":false}`);
 
   {}
 }

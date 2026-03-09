@@ -260,7 +260,7 @@ ns buffer {
     new
   }
 
-  fn swap[T](self: *mut buffer[T], indexA: size, indexB: size): empty {
+  fn swap[T](self: buffer[T], indexA: size, indexB: size): empty {
     if indexA == indexB { return() };
     let aRef = self.getRef(indexA);
     let bRef = self.getRef(indexB);
@@ -273,6 +273,15 @@ ns buffer {
     let* list = list/wrapBuffer(self);
     list.sort();
     list.asBuffer()
+  }
+
+  fn reverse[t](self: buffer[t]) {
+    let i = 0;
+    while (i < (self.len / 2)) {
+      let j = self.len - i - 1;
+      self.swap(i, j);
+      i := i + 1;
+    }
   }
 
   fn toCharBuffer(self: buffer[byte]): buffer[char] {
