@@ -94,7 +94,9 @@ impl TypedProgram {
         match self.exprs.get(expr) {
             TypedExpr::Struct(s) => {
                 for f in self.mem.getn(s.fields).iter() {
-                    recurse!(f.expr);
+                    if let Some(expr) = f.expr {
+                        recurse!(expr);
+                    }
                 }
             }
             TypedExpr::StructFieldAccess(field_access) => {

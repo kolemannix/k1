@@ -102,7 +102,11 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
 
         #[cfg(debug_assertions)]
         if id != expected_id {
-            panic!("VPool add_expected_id: expected id {}, got {}", std::convert::Into::<NonZeroU32>::into(expected_id), id.into());
+            panic!(
+                "VPool add_expected_id: expected id {}, got {}",
+                std::convert::Into::<NonZeroU32>::into(expected_id),
+                id.into()
+            );
         }
 
         self.set(id, t);
@@ -192,6 +196,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         }
     }
 
+    #[inline]
     pub fn get_nth(&self, handle: SliceHandle<Index>, index: usize) -> &T {
         debug_assert!(index < handle.len());
         let Some(id) = handle.index() else {
@@ -201,6 +206,14 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         self.bounds_check(slice_start_index + handle.len as usize - 1);
         let elem_index = slice_start_index + index;
         self.get_index(elem_index)
+    }
+
+    #[inline]
+    pub fn get_nth_opt(&self, handle: SliceHandle<Index>, index: usize) -> Option<&T> {
+        if index >= handle.len() {
+            return None;
+        }
+        Some(self.get_nth(handle, index))
     }
 
     pub fn get_n(&self, index: Index, count: u32) -> &[T] {

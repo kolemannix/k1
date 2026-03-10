@@ -592,11 +592,20 @@ pub struct FieldAccess {
 }
 
 #[derive(Clone, Copy)]
+pub enum StructValueFieldKind {
+    // { x: "hello" }
+    Expr(ParsedExprId),
+    // { x }
+    VarShorthand,
+    // { x: uninit }
+    Uninit,
+}
+
+#[derive(Clone, Copy)]
 pub struct StructValueField {
     pub name: Ident,
     pub span: SpanId,
-    /// expr is optional due to shorthand syntax
-    pub expr: Option<ParsedExprId>,
+    pub value: StructValueFieldKind,
 }
 
 #[derive(Clone)]
@@ -607,6 +616,7 @@ pub struct ParsedStruct {
     pub fields: ParsedSlice<StructValueField>,
     pub span: SpanId,
 }
+impl_copy_if_small!(16, ParsedStruct);
 
 #[derive(Debug, Clone)]
 pub struct AnonEnumConstructor {
@@ -678,9 +688,9 @@ pub enum InterpolatedStringPart {
     Hole { fmt_settings: ParsedFmtSettings, span: SpanId },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ParsedInterpolatedString {
-    pub parts: Vec<InterpolatedStringPart>,
+    pub parts: ParsedSlice<InterpolatedStringPart>,
     pub span: SpanId,
 }
 
@@ -1857,7 +1867,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 MessageLevel::Error,
                 6,
                 Some(&lex_error.message),
-                use_color
+                use_color,
             )
             .unwrap();
         }
@@ -1883,7 +1893,7 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
                 MessageLevel::Error,
                 6,
                 Some(&format!("{message} at '{}'\n", got_str)),
-                use_color
+                use_color,
             )
             .unwrap();
             eprintln!();
@@ -1899,7 +1909,7 @@ pub fn write_source_location(
     level: MessageLevel,
     context_lines: usize,
     message: Option<&str>,
-    use_color: bool
+    use_color: bool,
 ) -> std::io::Result<()> {
     let span = spans.get(span_id);
     let source = sources.source_by_span(span);
@@ -1916,7 +1926,7 @@ pub fn write_source_location(
         MessageLevel::Hint => Color::Yellow,
     };
     macro_rules! colored {
-        ($e: expr) => { { if use_color { $e.color(color) } else { $e.normal() } } }
+        ($e: expr) => {{ if use_color { $e.color(color) } else { $e.normal() } }};
     }
     let level_name = colored!(match level {
         MessageLevel::Error => "error",
@@ -2643,8 +2653,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let mut buf = std::mem::take(&mut self.string_buffer);
 
-        // nocommit we can optimize this by checking if the first is terminated
-        let mut parts: Vec<InterpolatedStringPart> = Vec::new();
+        let mut parts: SV8<InterpolatedStringPart> = smallvec![];
         let mut first_segment = true;
 
         // First we transform a series of lexer tokens into a sequence of parts
@@ -2763,7 +2772,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             Ok(self.add_expression(ParsedExpr::Literal(literal)))
         } else {
             let span = self.extend_to_here(first.span);
-            let string_interp = ParsedInterpolatedString { parts, span };
+            let string_interp =
+                ParsedInterpolatedString { parts: self.ast.mem.pushn(&parts), span };
             Ok(self.add_expression(ParsedExpr::InterpolatedString(string_interp)))
         };
         self.string_buffer = buf;
@@ -3047,14 +3057,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
         let name = self.expect_kind(K::Ident)?;
-        let expr = if let Some(_colon) = self.maybe_consume(K::Colon) {
-            Some(self.expect_expression()?)
+        let value = if let Some(_colon) = self.maybe_consume(K::Colon) {
+            if let Some(_) = self.maybe_consume_ident_chars("uninit") {
+                StructValueFieldKind::Uninit
+            } else {
+                let expr = self.expect_expression()?;
+                StructValueFieldKind::Expr(expr)
+            }
         } else {
-            None
+            StructValueFieldKind::VarShorthand
         };
-        let span =
-            self.extend_span_maybe(name.span, expr.map(|expr| self.get_expression_span(expr)));
-        Ok(StructValueField { name: self.intern_ident_token(name), expr, span })
+        let span = self.extend_to_here(name.span);
+
+        Ok(StructValueField { name: self.intern_ident_token(name), value, span })
     }
 
     fn parse_struct_value(&mut self) -> ParseResult<Option<ParsedStruct>> {
@@ -4641,7 +4656,7 @@ impl ParsedProgram {
             ParsedExpr::Literal(lit) => self.display_literal(w, lit),
             ParsedExpr::InterpolatedString(is) => {
                 w.write_char('"')?;
-                for part in &is.parts {
+                for part in self.mem.getn(is.parts) {
                     match part {
                         InterpolatedStringPart::String(s) => w.write_str(self.get_string(*s))?,
                         InterpolatedStringPart::Expr(expr_id, _) => {
@@ -4687,21 +4702,24 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedExpr::Struct(struc) => {
-                w.write_str("struct {")?;
+                w.write_str("struct({")?;
                 for (is_last, f) in self.mem.iter_with_is_last(struc.fields) {
                     w.write_str(self.idents.get_name(f.name))?;
-                    match f.expr {
-                        None => {}
-                        Some(expr) => {
+                    match f.value {
+                        StructValueFieldKind::VarShorthand => {}
+                        StructValueFieldKind::Expr(expr) => {
                             w.write_str(": ")?;
                             self.display_expr_id(w, expr)?;
+                        }
+                        StructValueFieldKind::Uninit => {
+                            w.write_str(": uninit")?;
                         }
                     };
                     if !is_last {
                         w.write_str(", ")?;
                     }
                 }
-                w.write_str("}")?;
+                w.write_str("})")?;
                 Ok(())
             }
             ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),

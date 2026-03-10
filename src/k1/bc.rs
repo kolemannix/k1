@@ -1388,13 +1388,20 @@ fn compile_expr(
                 None => b.push_alloca(struct_pt, "struct literal").as_value(),
             };
             for (field_index, field) in b.k1.mem.getn(struct_literal.fields).iter().enumerate() {
-                let struct_offset = b.push_struct_offset(
-                    struct_agg_id,
-                    struct_base,
-                    field_index as u32,
-                    "struct lit field ptr",
-                );
-                compile_expr(b, Some(struct_offset), field.expr)?;
+                match field.expr {
+                    None => {
+                        // uninitialized field
+                    }
+                    Some(expr) => {
+                        let struct_offset = b.push_struct_offset(
+                            struct_agg_id,
+                            struct_base,
+                            field_index as u32,
+                            "struct lit field ptr",
+                        );
+                        compile_expr(b, Some(struct_offset), expr)?;
+                    }
+                }
             }
             Ok(struct_base)
         }
@@ -1778,11 +1785,7 @@ fn compile_expr(
                                 let arg1 = *b.k1.mem.get_nth(call.args, 1);
                                 let element_index = compile_expr(b, None, arg1)?;
                                 let offset = b.push_inst(
-                                    Inst::ArrayOffset {
-                                        element_t: elem_pt,
-                                        base,
-                                        element_index,
-                                    },
+                                    Inst::ArrayOffset { element_t: elem_pt, base, element_index },
                                     "refAtIndex offest",
                                 );
                                 let stored = store_scalar_if_dst(b, dst, offset.as_value());

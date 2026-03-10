@@ -239,7 +239,7 @@ impl StaticValuePool {
         }
     }
 
-    pub fn empty_id(&mut self) -> StaticValueId {
+    pub fn empty_id(&self) -> StaticValueId {
         self.empty_id
     }
 

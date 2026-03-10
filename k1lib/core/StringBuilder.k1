@@ -1,6 +1,6 @@
 use core/SpillList
 
-deftype StringBuilder = { list: SpillList[u8, 64] }
+deftype StringBuilder = { list: SpillList[u8, 96] }
 ns StringBuilder {
   fn new(): StringBuilder {
     { list: SpillList/new() }

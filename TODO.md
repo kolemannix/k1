@@ -2,13 +2,9 @@
 
 GOOD IDEAS 11/13
 - When converting a lambda to a dyn lambda, put its environments in the current allocator instead of on the stack
-- AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
-  - let context(impl Alloc) temp = mem/AllocMode.Arena;
-  - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [X] Specialization solution (when types are known by the function)
 -     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
-- Return value binding, or named return values, for guaranteed RVO
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -28,16 +24,14 @@ Non-major Ideas
 - [ ] Inspired by fast_float, char to digit lookup table
 
 Syntax/elegance
-- [x] consider replacing `\` with 'fn' for lambda notation, one more character and we
+- [x] replace `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`
 - [ ] Rename `view` to `span`
 - [ ] Rename 'static' types to 'value' types
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
-- [ ] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
+- [x] Need a way to write an interpolated string to a Writer that you already have
       Let's just call it 'fmt' and make it a special construct
- - Today: "hello {name}" -> string. Tomorrow: f"hello {name}" -> string. fmt(<writer>, f"hello {name} {}", 1234)
- - [ ] Also need positional format args as well (probably just our userland printf finished out)
 - [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
   - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
 - [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
@@ -68,6 +62,19 @@ Simple but missing
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
+## [ ] Writergate
+- [x] Allow using expr-interpolated strings directly into a writer
+- [ ] Allow for named non-interpolated args into holes with a struct
+- [ ] Implement at least one format specifier (precision, pretty)
+
+- [ ] Return value binding, or named return values, for guaranteed RVO
+- [ ] Uninit in struct fields - just don't store there
+
+## [ ] Context ability types
+- [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
+  - let context(impl Alloc) temp = mem/AllocMode.Arena;
+  - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+
 ## Project: Optimize the bytecode a bit
 - [ ] Function inlining
 - [ ] Prune unreachable blocks
@@ -77,6 +84,9 @@ Simple but missing
 - [ ] Annotate U8s with boolean somehow where they are actually booleans
 
 ## Project: Recursive types take 2
+- [x] Remove RecursiveReference; make visitors detect cycles
+- [x] add test with co-recursion and infinite recursion
+- [ ] Support deeper pattern matching on recursive types
 
 ## VM Profiler: Instrument the vm itself
 

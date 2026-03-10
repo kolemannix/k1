@@ -29,7 +29,7 @@ use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
-use std::io::{IsTerminal};
+use std::io::IsTerminal;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use synth::synth_static_option;
@@ -51,14 +51,14 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, NamedTypeArg, NamedTypeArgId,
-    NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind,
-    ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
-    ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
-    ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
-    ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, QIdent,
-    Sources, StringId, StructValueField,
+    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, InterpolatedStringPart, NamedTypeArg,
+    NamedTypeArgId, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
+    ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
+    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -1021,7 +1021,8 @@ pub struct Call {
 #[derive(Clone, Copy)]
 pub struct StructLiteralField {
     pub name: Ident,
-    pub expr: TypedExprId,
+    // None means uninitialized
+    pub expr: Option<TypedExprId>,
 }
 
 #[derive(Clone)]
@@ -6734,7 +6735,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let scope_id = ctx.scope_id;
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
-        let block_try_impl = self.expect_ability_implementation(
+        let block_try_impl = self.expect_ability_impl(
                     block_return_type,
                     TRY_ABILITY_ID,
                     scope_id,
@@ -6746,7 +6747,7 @@ impl TypedProgram {
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
         let try_value_type = self.exprs.get_type(try_value_original_expr);
         let value_try_impl =
-            self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
+            self.expect_ability_impl(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
@@ -6844,7 +6845,7 @@ impl TypedProgram {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
         let operand_type = self.exprs.get_type(operand_expr);
         let _try_impl =
-            self.expect_ability_implementation(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
+            self.expect_ability_impl(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
         self.synth_typed_call_typed_args(
             self.ast.idents.f.try__get_value.with_span(span),
             &[],
@@ -7139,7 +7140,7 @@ impl TypedProgram {
             }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(_is) => {
-                let res = self.eval_interpolated_string(expr_id, ctx)?;
+                let res = self.synth_interpolated_string(expr_id, ctx, None)?;
                 Ok(res)
             }
             ParsedExpr::Builtin(span) => {
@@ -7703,22 +7704,27 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let mut field_values = self.mem.new_list(parsed_struct.fields.len());
         let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len());
-        let ast_struct = parsed_struct.clone();
-        for ast_field in self.ast.mem.getn(ast_struct.fields) {
-            let parsed_expr = match ast_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(
-                    ParsedExpr::Variable(parse::ParsedVariable {
-                        name: QIdent::naked(ast_field.name, ast_field.span),
-                    }),
-                    false,
-                    None,
-                ),
-                Some(expr) => *expr,
+        for ast_field in self.ast.mem.getn(parsed_struct.fields) {
+            let parsed_expr = match ast_field.value {
+                StructValueFieldKind::VarShorthand => {
+                    let variable_expr = self.ast.exprs.add_expression(
+                        ParsedExpr::Variable(parse::ParsedVariable {
+                            name: QIdent::naked(ast_field.name, ast_field.span),
+                        }),
+                        false,
+                        None,
+                    );
+                    variable_expr
+                }
+                StructValueFieldKind::Expr(parsed_expr) => parsed_expr,
+                StructValueFieldKind::Uninit => {
+                    return failf!(ast_field.span, "uninit is not allowed in anonymous structs");
+                }
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get_type(expr);
@@ -7726,13 +7732,13 @@ impl TypedProgram {
                 return failf!(ast_field.span, "never is not allowed in struct literals");
             }
             field_defns.push(StructTypeField { name: ast_field.name, type_id: expr_type });
-            field_values.push(StructLiteralField { name: ast_field.name, expr });
+            field_values.push(StructLiteralField { name: ast_field.name, expr: Some(expr) });
         }
 
         let struct_type = StructType { fields: self.types.mem.list_to_handle(field_defns) };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, ast_struct.span))
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
     }
 
     fn eval_expected_struct(
@@ -7740,7 +7746,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let original_expected_struct_id = ctx.expected_type_id.unwrap();
@@ -7753,17 +7759,20 @@ impl TypedProgram {
         let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
-        let ast_struct = parsed_struct.clone();
+        let mut passed_fields_aligned: SV8<(
+            Option<ParsedExprId>,
+            &StructValueField,
+            &StructTypeField,
+        )> = smallvec![];
 
-        // Try to use just stack space for this scratch data structure
-        let mut passed_fields_aligned: SmallVec<
-            [(ParsedExprId, &StructValueField, &StructTypeField); 8],
-        > = SmallVec::with_capacity(field_count as usize);
-
-        let struct_span = ast_struct.span;
+        let struct_span = parsed_struct.span;
         for expected_field in self.types.mem.getn(expected_struct.fields).iter() {
-            let Some(passed_field) =
-                self.ast.mem.getn(ast_struct.fields).iter().find(|f| f.name == expected_field.name)
+            let Some(passed_field) = self
+                .ast
+                .mem
+                .getn(parsed_struct.fields)
+                .iter()
+                .find(|f| f.name == expected_field.name)
             else {
                 return failf!(
                     struct_span,
@@ -7771,21 +7780,25 @@ impl TypedProgram {
                     self.ident_str(expected_field.name)
                 );
             };
-            let parsed_expr = match passed_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(
-                    ParsedExpr::Variable(parse::ParsedVariable {
-                        name: QIdent::naked(passed_field.name, passed_field.span),
-                    }),
-                    false,
-                    None,
-                ),
-                Some(expr) => *expr,
+            let parsed_expr = match passed_field.value {
+                StructValueFieldKind::VarShorthand => {
+                    let variable_expr = self.ast.exprs.add_expression(
+                        ParsedExpr::Variable(parse::ParsedVariable {
+                            name: QIdent::naked(passed_field.name, passed_field.span),
+                        }),
+                        false,
+                        None,
+                    );
+                    Some(variable_expr)
+                }
+                StructValueFieldKind::Expr(parsed_expr) => Some(parsed_expr),
+                StructValueFieldKind::Uninit => None,
             };
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
         }
 
         if let Some(unknown_field) =
-            self.ast.mem.getn(ast_struct.fields).iter().find(|passed_field| {
+            self.ast.mem.getn(parsed_struct.fields).iter().find(|passed_field| {
                 original_expected_struct.find_field(&self.types.mem, passed_field.name).is_none()
             })
         {
@@ -7801,26 +7814,43 @@ impl TypedProgram {
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
-            let expr = self
-                .eval_expr_with_coercion(
-                    *passed_expr,
-                    ctx.with_expected_type(Some(expected_field.type_id)),
-                    true,
-                )
-                .map_err(|e| {
-                    errf!(
-                        passed_field.span,
-                        "Field '{}' has an issue\n    {}",
-                        self.ident_str(passed_field.name),
-                        e.message
-                    )
-                })?;
-            let expr_type = self.exprs.get_type(expr);
-            if expr_type == NEVER_TYPE_ID {
-                return failf!(passed_field.span, "never is not allowed in struct literals");
-            }
-            field_types.push(StructTypeField { name: expected_field.name, type_id: expr_type });
-            field_values.push(StructLiteralField { name: expected_field.name, expr });
+            match passed_expr {
+                None => {
+                    // Uninitialized field
+                    field_values.push(StructLiteralField { name: expected_field.name, expr: None });
+                    field_types.push(StructTypeField {
+                        name: expected_field.name,
+                        type_id: expected_field.type_id,
+                    });
+                }
+                Some(passed_expr) => {
+                    let expr = self
+                        .eval_expr_with_coercion(
+                            *passed_expr,
+                            ctx.with_expected_type(Some(expected_field.type_id)),
+                            true,
+                        )
+                        .map_err(|e| {
+                            errf!(
+                                passed_field.span,
+                                "Field '{}' has an issue\n{}",
+                                self.ident_str(passed_field.name),
+                                e.message
+                            )
+                        })?;
+                    let expr_type = self.exprs.get_type(expr);
+                    if expr_type == NEVER_TYPE_ID {
+                        return failf!(
+                            passed_field.span,
+                            "never is not allowed in struct literals"
+                        );
+                    }
+                    field_types
+                        .push(StructTypeField { name: expected_field.name, type_id: expr_type });
+                    field_values
+                        .push(StructLiteralField { name: expected_field.name, expr: Some(expr) });
+                }
+            };
         }
 
         let output_instance_info = match self.types.get_instance_info(expected_struct_id).cloned() {
@@ -7886,7 +7916,11 @@ impl TypedProgram {
         );
 
         let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), output_struct_type_id, ast_struct.span))
+        Ok(self.exprs.add(
+            TypedExpr::Struct(typed_struct),
+            output_struct_type_id,
+            parsed_struct.span,
+        ))
     }
 
     fn eval_while_loop(
@@ -7957,96 +7991,6 @@ impl TypedProgram {
 
         let break_type = loop_info.break_type.unwrap_or(self.types.builtins.empty);
         Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), break_type, loop_expr.span))
-    }
-
-    fn eval_interpolated_string(
-        &mut self,
-        expr_id: ParsedExprId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
-        let span = self.ast.exprs.get_span(expr_id);
-        let ParsedExpr::InterpolatedString(interpolated_string) = self.ast.exprs.get(expr_id)
-        else {
-            panic!()
-        };
-
-        let part_count = interpolated_string.parts.len();
-        if part_count == 1 {
-            let parse::InterpolatedStringPart::String(string_id) =
-                interpolated_string.parts.first().unwrap()
-            else {
-                self.ice_with_span("String had only one part that was not a string", span)
-            };
-            let e = self.synth_string_literal(*string_id, span);
-            Ok(e)
-        } else {
-            let interpolated_string = interpolated_string.clone();
-            let mut block = self.synth_block(
-                ctx.scope_id,
-                ScopeType::LexicalBlock,
-                span,
-                part_count as u32 + 2,
-            );
-            let block_scope = block.scope_id;
-            let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-            if self.ast.config.no_std {
-                return failf!(span, "Interpolated strings are not supported in no_std mode");
-            }
-            let new_string_builder = self.synth_typed_call_typed_args(
-                self.ast.idents.f.StringBuilder_new.with_span(span),
-                &[],
-                &[],
-                block_ctx,
-                false,
-            )?;
-            let string_builder_var = self.synth_variable_defn(
-                get_ident!(self, "sb"),
-                new_string_builder,
-                false,
-                true, // is_mutable
-                true, // is_referencing
-                block.scope_id,
-            );
-            self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
-            for part in interpolated_string.parts.into_iter() {
-                match part {
-                    parse::InterpolatedStringPart::String(string_id) => {
-                        let rust_str = self.ast.strings.get_string(string_id);
-                        if !rust_str.is_empty() {
-                            let string_expr = self.synth_string_literal(string_id, span);
-                            let print_literal_call = self.synth_printto_call(
-                                string_expr,
-                                string_builder_var.variable_expr,
-                                block_ctx,
-                            )?;
-                            self.push_expr_id_to_block(&mut block, print_literal_call);
-                        }
-                    }
-                    parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
-                        let typed_expr_to_stringify = self.eval_expr(expr_id, block_ctx)?;
-                        let print_expr_call = self.synth_printto_call(
-                            typed_expr_to_stringify,
-                            string_builder_var.variable_expr,
-                            ctx,
-                        )?;
-                        self.push_expr_id_to_block(&mut block, print_expr_call);
-                    }
-                    parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
-                        return failf!(span, "No holes of this kind allowed here");
-                    }
-                };
-            }
-            let build_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
-                &[],
-                &[string_builder_var.variable_expr],
-                block_ctx,
-                false,
-            )?;
-            self.push_expr_id_to_block(&mut block, build_call);
-            let build_call_type = self.exprs.get_type(build_call);
-            Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
-        }
     }
 
     fn eval_lambda(
@@ -8262,7 +8206,7 @@ impl TypedProgram {
                 v.type_id,
                 span,
             );
-            env_exprs.push(StructLiteralField { name: v.name, expr: var_expr });
+            env_exprs.push(StructLiteralField { name: v.name, expr: Some(var_expr) });
         }
         let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
         let environment_struct_type =
@@ -9130,14 +9074,14 @@ impl TypedProgram {
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
-        let (target_is_iterator, _item_type) = match self.expect_ability_implementation(
+        let (target_is_iterator, _item_type) = match self.expect_ability_impl(
             iterable_type,
             ITERABLE_ABILITY_ID,
             ctx.scope_id,
             iterable_span,
         ) {
             Err(_not_iterable) => {
-                match self.expect_ability_implementation(
+                match self.expect_ability_impl(
                     iterable_type,
                     ITERATOR_ABILITY_ID,
                     ctx.scope_id,
@@ -9366,7 +9310,7 @@ impl TypedProgram {
         Ok(block_id)
     }
 
-    fn expect_ability_implementation(
+    fn expect_ability_impl(
         &mut self,
         type_id: TypeId,
         base_ability_id: AbilityId,
@@ -9824,7 +9768,7 @@ impl TypedProgram {
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
         let try_impl = self
-            .expect_ability_implementation(lhs_type, TRY_ABILITY_ID, ctx.scope_id, span)
+            .expect_ability_impl(lhs_type, TRY_ABILITY_ID, ctx.scope_id, span)
             .map_err(|e| {
                 errf!(
                     span,
@@ -10199,6 +10143,12 @@ impl TypedProgram {
     ) -> TyperResult<Option<TypedExprId>> {
         let call_span = fn_call.span;
         let calling_scope = ctx.scope_id;
+        if !fn_call.name.path.is_empty() {
+            return Ok(None);
+        }
+        if fn_call.is_method {
+            return Ok(None);
+        }
         match self.ident_str(fn_call.name.name) {
             "return" => {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
@@ -10305,6 +10255,56 @@ impl TypedProgram {
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
                 Ok(Some(expr))
+            }
+            "writef" => {
+                if fn_call.args.len() < 2 {
+                    return failf!(call_span, "write requires 2 arguments");
+                }
+                let writer_arg = self.ast.p_call_args.get_nth(fn_call.args, 0);
+                let writer = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
+                self.expect_ability_impl(
+                    self.exprs.get_type(writer),
+                    WRITER_ABILITY_ID,
+                    ctx.scope_id,
+                    self.exprs.get_span(writer),
+                )?;
+                let fmt_string_arg = self.ast.p_call_args.get_nth(fn_call.args, 1);
+                let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
+                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
+                        kbail!(self, call_span, "String has no format slots; lets not use write")
+                    }
+                    ParsedExpr::InterpolatedString(is) => is.parts,
+                    _ => kbail!(self, call_span, "Expected a format string first"),
+                };
+                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 2) {
+                    None => self.synth_empty_struct(call_span),
+                    Some(args_arg) => {
+                        self.eval_expr(args_arg.value, ctx.with_no_expected_type())?
+                    }
+                };
+                let format_block =
+                    self.synth_format_calls(writer, fmt_string, args, call_span, ctx)?;
+                Ok(Some(format_block))
+            }
+            "stringf" => {
+                if fn_call.args.is_empty() {
+                    return failf!(call_span, "format needs a format string");
+                }
+                let fmt_string_arg = *self.ast.p_call_args.get_nth(fn_call.args, 0);
+                match self.ast.exprs.get(fmt_string_arg.value) {
+                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
+                        kbail!(self, call_span, "String has no format slots; lets not use format")
+                    }
+                    ParsedExpr::InterpolatedString(is) => is.parts,
+                    _ => kbail!(self, call_span, "Expected a format string first"),
+                };
+                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 1) {
+                    None => self.synth_empty_struct(call_span),
+                    Some(arg) => self.eval_expr(arg.value, ctx.with_no_expected_type())?,
+                };
+                let string =
+                    self.synth_interpolated_string(fmt_string_arg.value, ctx, Some(args))?;
+                Ok(Some(string))
             }
             _ => Ok(None),
         }
@@ -10736,10 +10736,10 @@ impl TypedProgram {
         );
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
-            expr: self.function_to_reference(dyn_function_id, call_span),
+            expr: Some(self.function_to_reference(dyn_function_id, call_span)),
         };
         let env_ptr_field =
-            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: null_ptr_expr };
+            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(null_ptr_expr) };
         let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
         let lambda_object_struct_literal = self.exprs.add(
             TypedExpr::Struct(StructLiteral { fields }),
@@ -15665,6 +15665,7 @@ impl TypedProgram {
             core!("div"),
             core!("rem"),
             core!("scalar-cmp"),
+            core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
         ];
         for qid in idents_to_use.into_iter() {

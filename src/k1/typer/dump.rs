@@ -552,7 +552,10 @@ impl TypedProgram {
                     w.write_str(&"  ".repeat(indentation + 1))?;
                     w.write_str(self.ident_str(field.name))?;
                     w.write_str(": ")?;
-                    self.display_expr_id(field.expr, w, indentation)?;
+                    match field.expr {
+                        None => w.write_str("uninit")?,
+                        Some(expr) => self.display_expr_id(expr, w, indentation)?,
+                    }
                 }
                 w.write_str("\n")?;
                 w.write_str(&"  ".repeat(indentation))?;
