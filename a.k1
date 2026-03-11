@@ -1,5 +1,6 @@
 #debug
 fn main() {
+
   let world = "Budapest";
   let getWorld = fn. world;
 

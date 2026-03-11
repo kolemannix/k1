@@ -8,8 +8,8 @@ extern("fork") fn fork(): i32
 extern("execve") fn execve(path: ptr, argv: ptr, envp: ptr): i32
 extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
 
-// Convert view[string] to null-terminated *char array for execve  
-fn make-argv(context alloc: mem/alloc-mode)(program: string, args: view[string]): list[ptr] {
+// Convert span[string] to null-terminated *char array for execve  
+fn make-argv(context alloc: mem/alloc-mode)(program: string, args: span[string]): list[ptr] {
     let array-len = 1 + args.len() + 1; // program + args + null terminator
     let* argv = list/withCapacity[ptr](array-len);
     
@@ -27,7 +27,7 @@ fn make-argv(context alloc: mem/alloc-mode)(program: string, args: view[string])
     argv
 }
 
-fn run-command(context alloc: mem/alloc-mode)(program: string, args: view[string]): result[i32, {}] {
+fn run-command(context alloc: mem/alloc-mode)(program: string, args: span[string]): result[i32, {}] {
     let argv = make-argv(program, args);
     let envp = ptr/null;
     

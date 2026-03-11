@@ -37,10 +37,10 @@ deftype f64 = builtin
 
 deftype buffer[t] = { len: size, data: *mut t }
 
-deftype view[t] = { buffer: buffer[t] }
+deftype span[t] = { buffer: buffer[t] }
 
 deftype list[t] = { len: size, buffer: buffer[t] }
-deftype string = { view: view[char] }
+deftype string = { span: span[char] }
 
 deftype opt[t] = either none, some(t)
 
@@ -117,7 +117,7 @@ ns types {
       size: ?int
     }),
     struct({
-      fields: view[{
+      fields: span[{
         name: string,
         type-id: u64,
         offset: size
@@ -125,14 +125,14 @@ ns types {
     }),
     either({
       tag-type: int-kind,
-      variants: view[{
+      variants: span[{
         name: string,
         tag: int-value,
         payload: ?{ type-id: u64, offset: size }
       }],
     }),
     function({
-      params: view[{ name: string, type-id: u64 }],
+      params: span[{ name: string, type-id: u64 }],
       return-type-id: u64,
     }),
     function-pointer({ function-type-id: u64 }),
@@ -151,12 +151,12 @@ ns types {
 
 
   fn make-any[t](t: *t): any {
-    { type-id: type-id[t](), value: t.as[ptr] }
+    { type-id: type-id[t], value: t.as[ptr] }
   }
 
   fn assert-wrapper-type[wrapper, inner]() {
-    let schemaA = types/get-type-schema[wrapper]();
-    let bTypeId = types/type-id[inner]();
+    let schemaA = types/get-type-schema[wrapper];
+    let bTypeId = types/type-id[inner];
     require schemaA is .struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
     require fields.first() is .some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
     let equal = field.type-id == bTypeId;
@@ -192,10 +192,10 @@ ability equals {
 // TODO(dogfood): Allow Error = never for infallible writes
 ability writer {
   fn write-byte(self: self, value: u8)
-  fn write-bytes(self: self, bytes: view[byte])
+  fn write-bytes(self: self, bytes: span[byte])
 
   fn write-char(self: self, value: char) { self.write-byte(value.as[u8]) }
-  fn write-string(self: self, value: string) { self.write-bytes(value.viewBytes()) }
+  fn write-string(self: self, value: string) { self.write-bytes(value.span-bytes()) }
 
   fn repeat(self: self, value: string, n: size) {
     let i = 0;
@@ -391,8 +391,8 @@ ns buffer {
   }
 }
 
-ns view {
-  fn equals-bits[t](self: view[t], other: view[t]): bool {
+ns span {
+  fn equals-bits[t](self: span[t], other: span[t]): bool {
     self.buffer.equals-bits(other.buffer)
   }
 }
@@ -421,33 +421,33 @@ impl equals for buffer[bool] {
   }
 }
 
-impl equals for view[u8] {
-  fn equals(self: view[u8], other: view[u8]): bool {
+impl equals for span[u8] {
+  fn equals(self: span[u8], other: span[u8]): bool {
     self.equals-bits(other)
   }
 }
 
-impl equals for view[char] {
-  fn equals(self: view[char], other: view[char]): bool {
+impl equals for span[char] {
+  fn equals(self: span[char], other: span[char]): bool {
     self.equals-bits(other)
   }
 }
 
-impl equals for view[int] {
-  fn equals(self: view[int], other: view[int]): bool {
+impl equals for span[int] {
+  fn equals(self: span[int], other: span[int]): bool {
     self.equals-bits(other)
   }
 }
 
-impl equals for view[bool] {
-  fn equals(self: view[bool], other: view[bool]): bool {
+impl equals for span[bool] {
+  fn equals(self: span[bool], other: span[bool]): bool {
     self.equals-bits(other)
   }
 }
 
 impl equals for string {
   fn equals(self: string, that: string): bool {
-    self.view == that.view
+    self.span == that.span
   }
 }
 
@@ -516,11 +516,11 @@ ns k1 {
 
   deftype module-manifest = {
     kind: module-kind,
-    deps: view[string],
+    deps: span[string],
 
     // Primary module settings
     multithreading: bool,
-    libs: view[string],
+    libs: span[string],
   }
 
 }
@@ -647,9 +647,9 @@ ns array {
     { len: array.len(), data: array.get-base() }
   }
 
-  fn as-view[t, n](array: *array[t, n]): view[t] where n: static int {
+  fn as-span[t, n](array: *array[t, n]): span[t] where n: static int {
     let temp = array.to-mut.as-buffer();
-    view/wrapBuffer(temp)
+    span/wrapBuffer(temp)
   }
 
 }
@@ -742,8 +742,8 @@ fn crash(context locn: compiler/source-location)(msg: string): never {
     let s = "exiting (nostd)\n\0";
     posix/write(
       file-no = 1,
-      data = s.view().dataPtr(),
-      count = (s.view().len() - 1).as[c-sizet],
+      data = s.span().dataPtr(),
+      count = (s.span().len() - 1).as[c-sizet],
     );
     sys/exit(1)
   } else if k1/is-static {

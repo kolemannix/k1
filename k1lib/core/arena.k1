@@ -81,7 +81,7 @@ ns Arena {
     ref
   }
 
-  fn pushN[T](self: *mut Arena, ts: view[T]): buffer[T] {
+  fn pushN[T](self: *mut Arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
     let align = types/align-of[T]();
     let base = self.pushLayout(size, align);
@@ -91,7 +91,7 @@ ns Arena {
   }
 
   fn pushString(self: *mut Arena, s: string): string {
-    let data: buffer[char] = self.pushN(s.view());
+    let data: buffer[char] = self.pushN(s.span());
     string/wrapBuffer(data)
   }
 

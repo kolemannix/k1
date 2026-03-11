@@ -38,7 +38,7 @@ fn testFormat() {
 // also coupled if you do want a string for convenience
 
 //deftype Expr = either FmtString(Parts), Other(string)
-//macro fmt(writer: Expr, s: Expr, args: view[Expr]) {
+//macro fmt(writer: Expr, s: Expr, args: span[Expr]) {
 //fn fmt[w: writer, S: static FmtString, Args](writer: w, fmtString: S, args: Args) {
 //  let* sb = StringBuilder/new();
 //  let argsCount = 

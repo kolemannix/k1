@@ -47,8 +47,8 @@ ns buffer {
     wrapped.cloned();
   }
 
-  fn copyFromView[T](view: view[T]): buffer[T] {
-    view.innerBuffer().cloned()
+  fn copyFrom-span[T](span: span[T]): buffer[T] {
+    span.innerBuffer().cloned()
   }
 
   fn cloned[T](self: buffer[T]): buffer[T] {
@@ -196,8 +196,8 @@ ns buffer {
   fn take[T](self: buffer[T], count: size): buffer[T] { self.slice(0,     count) }
   fn drop[T](self: buffer[T], count: size): buffer[T] { self.slice(count, self.len) }
 
-  fn chunks[T](self: buffer[T], size: size): view[buffer[T]] {
-    if size == 0 return(view/empty());
+  fn chunks[T](self: buffer[T], size: size): span[buffer[T]] {
+    if size == 0 return(span/empty());
     let rem = self.len() % size != 0;
     let div = self.len() / size;
     let* results = list/withCapacity[buffer[T]](div + (rem.as[size]));
@@ -210,7 +210,7 @@ ns buffer {
       i := i + size;
       j := j + 1;
     };
-    results.asView()
+    results.as-span()
   }
 
   fn isEmpty[T](self: buffer[T]): bool {

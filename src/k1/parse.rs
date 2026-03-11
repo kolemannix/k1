@@ -2321,13 +2321,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         self.ast.spans.extend(span1, span2)
     }
 
-    fn extend_span_maybe(&mut self, span1: SpanId, span2: Option<SpanId>) -> SpanId {
-        match span2 {
-            None => span1,
-            Some(span2) => self.extend_span(span1, span2),
-        }
-    }
-
     fn expect_parse_pattern(&mut self) -> ParseResult<ParsedPatternId> {
         let mut pattern_id: ParsedPatternId = self.expect_pattern_base()?;
         // Loop for postfix operations

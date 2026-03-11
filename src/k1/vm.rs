@@ -121,15 +121,15 @@ pub mod k1_types {
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct K1SourceLocation {
-        pub filename: K1ViewLike,
+        pub filename: K1BufferLike,
         pub line: u64,
     }
 
     #[repr(C)]
     #[derive(Clone, Copy)]
     /// Encompasses all 3 'core' contiguous buffer types in k1:
-    /// - Buffer, View, and string, same layout
-    pub struct K1ViewLike {
+    /// - buffer, span, and string, same layout
+    pub struct K1BufferLike {
         pub len: usize,
         pub data: *const u8,
     }
@@ -141,7 +141,7 @@ pub mod k1_types {
         Error = 2,
     }
 
-    impl K1ViewLike {
+    impl K1BufferLike {
         ///# Safety
         /// None of this is safe
         pub unsafe fn to_slice<'a, T>(self) -> &'a [T] {
@@ -155,7 +155,7 @@ pub mod k1_types {
                 if self.len == 0 {
                     Ok("")
                 } else {
-                    Err("Null, non-empty K1 view cannot be converted to Rust str")
+                    Err("Null, non-empty K1 span cannot be converted to Rust str")
                 }
             } else {
                 unsafe {
@@ -1755,11 +1755,12 @@ pub fn static_value_to_vm_value(
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
-                StaticContainerKind::View => {
-                    let rust_view = k1_types::K1ViewLike { len, data: array_base_ptr.cast_const() };
-                    let view_struct_ptr = k1.vm_static_stack.push_t(rust_view);
+                StaticContainerKind::Span => {
+                    let rust_span =
+                        k1_types::K1BufferLike { len, data: array_base_ptr.cast_const() };
+                    let span_struct_ptr = k1.vm_static_stack.push_t(rust_span);
 
-                    Value::ptr(view_struct_ptr)
+                    Value::ptr(span_struct_ptr)
                 }
                 StaticContainerKind::Array => Value::ptr(array_base_ptr.cast_const()),
             }
@@ -1824,7 +1825,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = match kind {
-                StaticContainerKind::View => {
+                StaticContainerKind::Span => {
                     k1.vm_static_stack.push_layout_uninit(array_allocation_layout)
                 }
                 StaticContainerKind::Array => dst,
@@ -1833,11 +1834,12 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
 
             match kind {
-                StaticContainerKind::View => {
+                StaticContainerKind::Span => {
                     // Store the struct to dst
-                    let rust_view = k1_types::K1ViewLike { len, data: array_base_ptr.cast_const() };
+                    let rust_span =
+                        k1_types::K1BufferLike { len, data: array_base_ptr.cast_const() };
 
-                    unsafe { *(dst as *mut k1_types::K1ViewLike) = rust_view };
+                    unsafe { *(dst as *mut k1_types::K1BufferLike) = rust_span };
                 }
                 StaticContainerKind::Array => {}
             }
@@ -1871,15 +1873,15 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let s = k1.get_string(string_id);
     // This just points into the Rust memory for the string's data. Teehee uwuu
     // I need to guarantee it can't re-allocate because that's still sadly using the library
-    let k1_string = k1_types::K1ViewLike { len: s.len(), data: s.as_ptr() };
+    let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr() };
     if cfg!(debug_assertions) {
-        let char_view_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
+        let char_span_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
         let string_layout = k1.get_layout(STRING_TYPE_ID);
-        debug_assert_eq!(string_layout, k1.get_layout(char_view_type_id));
+        debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id));
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
-    let string_stack_addr = k1.vm_static_stack.mem.push(k1_string) as *mut k1_types::K1ViewLike;
+    let string_stack_addr = k1.vm_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
     Value::ptr(string_stack_addr.cast())
 }
 
@@ -2208,9 +2210,9 @@ impl Stack {
 /// Please don't hang on to this reference for very long
 pub fn value_to_rust_str<'a>(value: Value) -> Result<&'a str, &'static str> {
     let ptr = value.as_ptr();
-    let view_ptr = ptr as *const k1_types::K1ViewLike;
-    let k1_view_like = unsafe { view_ptr.read() };
-    unsafe { k1_view_like.to_str() }
+    let span_ptr = ptr as *const k1_types::K1BufferLike;
+    let k1_buffer_like = unsafe { span_ptr.read() };
+    unsafe { k1_buffer_like.to_str() }
 }
 
 pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> Result<StringId, &'static str> {
@@ -2287,7 +2289,7 @@ pub fn vm_value_to_static_value(
                 );
             };
             for index in 0..count {
-                let elem_result = get_view_element(k1, vm_value.as_ptr(), element_pt, index);
+                let elem_result = get_span_element(k1, vm_value.as_ptr(), element_pt, index);
                 let elem_static = vm_value_to_static_value(k1, element_type, elem_result, span)?;
                 elements.push(elem_static);
             }
@@ -2312,16 +2314,16 @@ pub fn vm_value_to_static_value(
                     ContainerKind::List | ContainerKind::Buffer => {
                         return failf!(
                             span,
-                            "{} cannot be converted to static value; convert to a View first",
+                            "{} cannot be converted to static value; convert to a span first",
                             k1.type_id_to_string(type_id)
                         );
                     }
-                    ContainerKind::View => {
-                        let view: k1_types::K1ViewLike = value_as_view(vm_value);
+                    ContainerKind::Span => {
+                        let k1_span: k1_types::K1BufferLike = value_as_span(vm_value);
                         let element_pt = k1.get_physical_type(element_type).unwrap();
-                        let mut elements = k1.static_values.mem.new_list(view.len as u32);
-                        for index in 0..view.len {
-                            let elem_vm = get_view_element(k1, view.data, element_pt, index);
+                        let mut elements = k1.static_values.mem.new_list(k1_span.len as u32);
+                        for index in 0..k1_span.len {
+                            let elem_vm = get_span_element(k1, k1_span.data, element_pt, index);
                             let elem_static =
                                 vm_value_to_static_value(k1, element_type, elem_vm, span)?;
                             elements.push(elem_static);
@@ -2329,7 +2331,7 @@ pub fn vm_value_to_static_value(
                         let elements_slice = elements.into_handle(&mut k1.static_values.mem);
                         k1.static_values.add(StaticValue::LinearContainer(StaticContainer {
                             elements: elements_slice,
-                            kind: StaticContainerKind::View,
+                            kind: StaticContainerKind::Span,
                             type_id,
                         }))
                     }
@@ -2404,7 +2406,7 @@ pub fn vm_value_to_static_value(
         }
         Type::Function(_)
         | Type::Never
-        | Type::Static(_)
+        | Type::StaticValue(_)
         | Type::Generic(_)
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)
@@ -2414,15 +2416,15 @@ pub fn vm_value_to_static_value(
     Ok(static_value_id)
 }
 
-pub fn value_as_view(view_value: Value) -> k1_types::K1ViewLike {
-    let ptr = view_value.as_ptr();
-    let buffer_ptr = ptr as *const k1_types::K1ViewLike;
-    let k1_view_like = unsafe { buffer_ptr.read() };
-    k1_view_like
+pub fn value_as_span(span_value: Value) -> k1_types::K1BufferLike {
+    let ptr = span_value.as_ptr();
+    let buffer_ptr = ptr as *const k1_types::K1BufferLike;
+    let k1_span_like = unsafe { buffer_ptr.read() };
+    k1_span_like
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn get_view_element(
+pub fn get_span_element(
     k1: &TypedProgram,
     data_ptr: *const u8,
     elem_pt: PhysicalType,

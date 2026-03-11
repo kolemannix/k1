@@ -31,7 +31,7 @@ fn compile(programText: string): *TfObj {
 fn main(argc: u32, argv: ptr): i32 {
   let context alloc: mem/alloc-mode = { kind: .SystemHeap };
 
-  let args: view[string] = core/sys/parseMainArgs(argc, argv);
+  let args: span[string] = core/sys/parseMainArgs(argc, argv);
   if args.len() != 2 {
     eprintln("Usage: {args.get(0)} <fname>");
     return(1);

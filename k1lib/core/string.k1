@@ -6,10 +6,10 @@ deftype alias c-string = ptr
 
 ns string {
   
-  fn view(self: string): view[char] { self.view }
+  fn span(self: string): span[char] { self.span }
 
   fn get(self: string, index: size): char {
-    self.view.get(index)
+    self.span.get(index)
   }
 
   fn getOpt(self: string, index: size): ?char {
@@ -17,36 +17,36 @@ ns string {
     else .some(self.get(index))
   }
 
-  fn viewBytes(self: string): view[byte] {
-    self.view().asByteView()
+  fn span-bytes(self: string): span[byte] {
+    self.span().as-byte-span()
   }
 
   fn cloned(self: string): string {
-    fromView(self.view.cloned())
+    from-span(self.span.cloned())
   }
 
-  fn fromView(view: view[char]): string {
-    { view }
+  fn from-span(span: span[char]): string {
+    { span }
   }
 
   fn fromRaw(ptr: ptr, len: size): string {
-    fromView(view/from-raw(ptr, len))
+    from-span(span/from-raw(ptr, len))
   }
 
-  fn fromBytes(view: view[byte]): string {
-    { view: view.toCharView() }
+  fn fromBytes(span: span[byte]): string {
+    { span: span.as-char-span() }
   }
 
   fn wrapList(list: list[char]): string {
-    { view: list.asView() }
+    { span: list.as-span() }
   }
 
   fn wrapBuffer(buffer: buffer[char]): string {
-    { view: view/wrapBuffer(buffer) }
+    { span: span/wrapBuffer(buffer) }
   }
 
   fn wrapByteBuffer(buffer: buffer[byte]): string {
-    { view: view/wrapBuffer(buffer.toCharBuffer()) }
+    { span: span/wrapBuffer(buffer.toCharBuffer()) }
   }
 
   fn copyFromBytes(buffer: buffer[byte]): string {
@@ -59,7 +59,7 @@ ns string {
     wrapBuffer(copied)
   }
 
-  fn len(self: string): size { self.view.len() }
+  fn len(self: string): size { self.span.len() }
 
   fn isEmpty(self: string): bool { self.len() == 0 }
   fn nonEmpty(self: string): bool { self.len() != 0 }
@@ -73,19 +73,19 @@ ns string {
   }
 
   fn indexOf(self: string, c: char): i64 {
-    for self.view {
+    for self.span {
       if it == c return(itIndex)
     };
     -1
   }
 
   fn concat(self: string, other: string): string {
-    fromView(self.view.concat(other.view))
+    from-span(self.span.concat(other.span))
   }
 
   fn appendCharIn(context alloc: mem/alloc-mode)(self: string, c: char): string {
     let newLength = self.len() + 1;
-    let newBuffer = self.view.innerBuffer()._enlargedCloneIn(newLength);
+    let newBuffer = self.span.innerBuffer()._enlargedCloneIn(newLength);
     newBuffer.set(self.len(), c);
     wrapBuffer(newBuffer)
   }
@@ -119,7 +119,7 @@ ns string {
   }
 
   fn indexOfString(self: string, target: string): ?size {
-    for self.view {
+    for self.span {
       let i = itIndex;
       if i + target.len() >= self.len() {
         return(.none)
@@ -131,18 +131,18 @@ ns string {
   }
 
   fn substring(self: string, start: size, end: size): string {
-    { view: self.view.slice(start, end) }
+    { span: self.span.slice(start, end) }
   }
   fn slice(self: string, start: size, end: size): string {
-    { view: self.view.slice(start, end) }
+    { span: self.span.slice(start, end) }
   }
 
   fn take(self: string, count: size): string { self.substring(0,     count) }
   fn drop(self: string, count: size): string { self.substring(count, self.len()) }
 
-  fn chunks(self: string, size: size): view[string] {
-    let charViews: view[view[char]] = self.view.chunks(size);
-    mem/bitcast[view[view[char]], view[string]](charViews)
+  fn chunks(self: string, size: size): span[string] {
+    let char-spans: span[span[char]] = self.span.chunks(size);
+    mem/bitcast[span[span[char]], span[string]](char-spans)
   }
 
   fn startsWith(self: string, other: string): bool {
@@ -150,7 +150,7 @@ ns string {
   }
 
   fn dataPtr(self: string): ptr {
-    self.view.dataPtr()
+    self.span.dataPtr()
   }
 
   fn toCString(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
@@ -193,7 +193,7 @@ ns string {
 
   fn capitalizeAscii(self: string): string {
     if self.first() is .some(c) and c.isAsciiLower() {
-      let cloneChars: buffer[char] = self.view.buffer.cloned();
+      let cloneChars: buffer[char] = self.span.buffer.cloned();
       cloneChars.set(0, c.toAsciiUpper());
       wrapBuffer(cloneChars)
     } else self
@@ -221,7 +221,7 @@ impl show for string {
 }
 
 impl iterable[item = char, i = BufferIterator[char]] for string {
-  fn iterator(self: string): i { self.view().iterator() }
+  fn iterator(self: string): i { self.span().iterator() }
 }
 
 impl iterable[item = char, i = BufferIterator[char]] for *string {

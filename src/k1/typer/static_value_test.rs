@@ -115,25 +115,25 @@ fn test_enum() {
 }
 
 #[test]
-fn test_view() {
+fn test_span() {
     let mut system = StaticValuePool::make_with_hint(512);
 
     let elem1 = system.add(StaticValue::Int(TypedIntValue::I32(1)));
     let elem2 = system.add(StaticValue::Int(TypedIntValue::I32(2)));
     let elem3 = system.add(StaticValue::Int(TypedIntValue::I32(1)));
 
-    let view1_items = system.mem.pushn(&[elem1, elem2]);
-    let view1 = system.add_view(TYPE1, view1_items);
+    let span1_items = system.mem.pushn(&[elem1, elem2]);
+    let span1 = system.add_span(TYPE1, span1_items);
 
-    let view2_items = system.mem.pushn(&[elem3, elem2]);
-    let view2 = system.add_view(TYPE1, view2_items);
+    let span2_items = system.mem.pushn(&[elem3, elem2]);
+    let span2 = system.add_span(TYPE1, span2_items);
 
-    let view3_items = system.mem.pushn(&[elem2, elem1]);
-    let view3 = system.add_view(TYPE1, view3_items);
+    let span3_items = system.mem.pushn(&[elem2, elem1]);
+    let span3 = system.add_span(TYPE1, span3_items);
 
     assert_eq!(elem1, elem3, "Elements should deduplicate first");
-    assert_eq!(view1, view2, "Views with equivalent elements should deduplicate");
-    assert_ne!(view1, view3, "Views with different element order should be different");
+    assert_eq!(span1, span2, "spans with equivalent elements should deduplicate");
+    assert_ne!(span1, span3, "spans with different element order should be different");
 }
 
 #[test]
@@ -149,10 +149,10 @@ fn test_recurse() {
         payload: Some(int_val),
     }));
 
-    let view_items = system.mem.pushn(&[enum_val, enum_val]);
-    let view_val = system.add_view(TYPE2, view_items);
+    let span_items = system.mem.pushn(&[enum_val, enum_val]);
+    let span_val = system.add_span(TYPE2, span_items);
 
-    let struct_val1 = system.add_struct_from_slice(TYPE3, &[view_val]);
+    let struct_val1 = system.add_struct_from_slice(TYPE3, &[span_val]);
 
     // Recreate identical nested structure - should deduplicate at every level
     let int_val2 = system.add(StaticValue::Int(TypedIntValue::I32(99)));
@@ -163,14 +163,14 @@ fn test_recurse() {
         payload: Some(int_val2),
     }));
 
-    let view2_items = system.mem.pushn(&[enum_val2, enum_val2]);
-    let view_val2 = system.add_view(TYPE2, view2_items);
+    let span2_items = system.mem.pushn(&[enum_val2, enum_val2]);
+    let span_val2 = system.add_span(TYPE2, span2_items);
 
-    let struct_val2 = system.add_struct_from_slice(TYPE3, &[view_val2]);
+    let struct_val2 = system.add_struct_from_slice(TYPE3, &[span_val2]);
 
     assert_eq!(int_val, int_val2, "Deep int values should deduplicate");
     assert_eq!(enum_val, enum_val2, "Deep enum values should deduplicate");
-    assert_eq!(view_val, view_val2, "Deep view values should deduplicate");
+    assert_eq!(span_val, span_val2, "Deep span values should deduplicate");
     assert_eq!(struct_val1, struct_val2, "Deep struct values should deduplicate");
 
     // 3 values are builtin

@@ -23,7 +23,7 @@ pub struct StaticEnum {
 
 #[derive(Clone, Copy)]
 pub enum StaticContainerKind {
-    View,
+    Span,
     Array,
 }
 
@@ -78,7 +78,7 @@ impl StaticValue {
             StaticValue::Struct(_) => "struct",
             StaticValue::Enum(_) => "enum",
             StaticValue::LinearContainer(c) => match c.kind {
-                StaticContainerKind::View => "view",
+                StaticContainerKind::Span => "span",
                 StaticContainerKind::Array => "array",
             },
         }
@@ -115,7 +115,7 @@ impl StaticValue {
 
     pub fn as_container(&self) -> Option<&StaticContainer> {
         match self {
-            StaticValue::LinearContainer(view) => Some(view),
+            StaticValue::LinearContainer(cont) => Some(cont),
             _ => None,
         }
     }
@@ -305,10 +305,10 @@ impl StaticValuePool {
         self.add(StaticValue::Int(TypedIntValue::I64(size)))
     }
 
-    pub fn add_view(&mut self, view_type_id: TypeId, elements: StaticValueSlice) -> StaticValueId {
+    pub fn add_span(&mut self, span_type_id: TypeId, elements: StaticValueSlice) -> StaticValueId {
         self.add(StaticValue::LinearContainer(StaticContainer {
-            type_id: view_type_id,
-            kind: StaticContainerKind::View,
+            type_id: span_type_id,
+            kind: StaticContainerKind::Span,
             elements,
         }))
     }

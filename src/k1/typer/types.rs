@@ -165,7 +165,7 @@ pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 pub const BUFFER_DATA_FIELD_NAME: &str = "data";
 pub const BUFFER_TYPE_ID: TypeId = TypeId(NonZeroU32::new(16).unwrap());
 
-pub const VIEW_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
+pub const SPAN_TYPE_ID: TypeId = TypeId(NonZeroU32::new(17).unwrap());
 
 pub const LIST_TYPE_ID: TypeId = TypeId(NonZeroU32::new(18).unwrap());
 pub const STRING_TYPE_ID: TypeId = TypeId(NonZeroU32::new(19).unwrap());
@@ -418,7 +418,7 @@ pub struct LambdaObjectType {
 }
 
 #[derive(Clone, Copy)]
-pub struct StaticType {
+pub struct StaticValueType {
     pub family_type_id: TypeId,
     pub value_id: Option<StaticValueId>,
 }
@@ -454,7 +454,7 @@ pub enum Type {
     Lambda(LambdaTypeId),
     LambdaObject(LambdaObjectType),
 
-    Static(StaticType),
+    StaticValue(StaticValueType),
 
     // Not-so-physical types
     Generic(GenericType),
@@ -559,7 +559,7 @@ impl TypePool {
                 }
             }
             (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
-            (Type::Static(stat1), Type::Static(stat2)) => stat1.value_id == stat2.value_id,
+            (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
             (Type::Unresolved(ur1), Type::Unresolved(ur2)) => ur1 == ur2,
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
@@ -647,9 +647,9 @@ impl TypePool {
                 co.function_type.hash(state);
                 co.struct_representation.hash(state);
             }
-            Type::Static(stat) => {
-                stat.family_type_id.hash(state);
-                stat.value_id.hash(state)
+            Type::StaticValue(svt) => {
+                svt.family_type_id.hash(state);
+                svt.value_id.hash(state)
             }
             Type::Unresolved(id) => {
                 id.hash(state);
@@ -683,7 +683,7 @@ impl Type {
             Type::FunctionPointer(_) => "function_ptr",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
-            Type::Static(_) => "static",
+            Type::StaticValue(_) => "value",
             Type::Unresolved(_) => "unresolved",
             Type::Array(_) => "array",
         }
@@ -711,9 +711,9 @@ impl Type {
         }
     }
 
-    pub fn as_static(&self) -> Option<&StaticType> {
+    pub fn as_value_type(&self) -> Option<&StaticValueType> {
         match self {
-            Type::Static(s) => Some(s),
+            Type::StaticValue(v) => Some(v),
             _ => None,
         }
     }
@@ -1374,12 +1374,12 @@ impl TypePool {
         })
     }
 
-    pub fn add_static_type(
+    pub fn add_value_type(
         &mut self,
         family_type_id: TypeId,
         value_id: Option<StaticValueId>,
     ) -> TypeId {
-        self.add_anon(Type::Static(StaticType { family_type_id, value_id }))
+        self.add_anon(Type::StaticValue(StaticValueType { family_type_id, value_id }))
     }
 
     pub fn add_anon(&mut self, typ: Type) -> TypeId {
@@ -1389,32 +1389,32 @@ impl TypePool {
     /// The two types of types that we need to treat as 'static' types are Static types themselves
     /// and type parameters with a constraint to a specific static, which is basically the same
     /// thing since it can have no other constraints
-    pub fn get_static_type_id_of_type(&self, type_id: TypeId) -> Option<TypeId> {
+    pub fn get_value_type_id_of_type(&self, type_id: TypeId) -> Option<TypeId> {
         match self.get(type_id) {
-            Type::Static(_st) => Some(type_id),
+            Type::StaticValue(_vt) => Some(type_id),
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 let t = tp.static_constraint.unwrap();
-                debug_assert!(self.get(t).as_static().is_some());
+                debug_assert!(self.get(t).as_value_type().is_some());
                 Some(t)
             }
             Type::InferenceHole(ih) if ih.static_type.is_some() => {
                 let t = ih.static_type.unwrap();
-                debug_assert!(self.get(t).as_static().is_some());
+                debug_assert!(self.get(t).as_value_type().is_some());
                 Some(t)
             }
             _ => None,
         }
     }
 
-    pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<StaticType> {
-        match self.get_static_type_id_of_type(type_id) {
+    pub fn get_static_type_of_type(&self, type_id: TypeId) -> Option<StaticValueType> {
+        match self.get_value_type_id_of_type(type_id) {
             None => None,
-            Some(type_id) => Some(*self.get(type_id).as_static().unwrap()),
+            Some(type_id) => Some(*self.get(type_id).as_value_type().unwrap()),
         }
     }
 
     pub fn is_static(&self, type_id: TypeId) -> bool {
-        self.get_static_type_id_of_type(type_id).is_some()
+        self.get_value_type_id_of_type(type_id).is_some()
     }
 
     #[inline]
@@ -1436,7 +1436,7 @@ impl TypePool {
 
     pub fn get_static_family_id_if_static(&self, type_id: TypeId) -> TypeId {
         match self.get(type_id) {
-            Type::Static(stat) => stat.family_type_id,
+            Type::StaticValue(svt) => svt.family_type_id,
             _ => type_id,
         }
     }
@@ -1680,8 +1680,8 @@ impl TypePool {
             }
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => self.count_type_variables_rec(co.function_type, visited),
-            Type::Static(stat) => {
-                let this = if stat.value_id.is_none() {
+            Type::StaticValue(svt) => {
+                let this = if svt.value_id.is_none() {
                     TypeVariableInfo {
                         inference_variable_count: 0,
                         type_parameter_count: 0,
@@ -1690,7 +1690,7 @@ impl TypePool {
                 } else {
                     EMPTY
                 };
-                let inner = self.count_type_variables_rec(stat.family_type_id, visited);
+                let inner = self.count_type_variables_rec(svt.family_type_id, visited);
                 this.add(inner)
             }
             Type::Unresolved(_) => EMPTY,
@@ -1719,7 +1719,7 @@ impl TypePool {
         type_id: TypeId,
     ) -> Option<&'a StaticValue> {
         match self.get(type_id) {
-            Type::Static(StaticType { value_id: Some(value_id), .. }) => {
+            Type::StaticValue(StaticValueType { value_id: Some(value_id), .. }) => {
                 Some(static_values.get(*value_id))
             }
             _ => None,
@@ -1899,7 +1899,7 @@ impl TypePool {
             Type::LambdaObject(lam_obj) => {
                 self.add_physical_duplicate(static_values, type_id, lam_obj.struct_representation)
             }
-            Type::Static(_stat) => Some(PhysicalType::EMPTY),
+            Type::StaticValue(_vt) => Some(PhysicalType::EMPTY),
             Type::Never => None,
             Type::Function(_)
             | Type::Generic(_)
@@ -2023,31 +2023,6 @@ impl TypePool {
         }
     }
 
-    pub fn is_aggregate(&self, type_id: TypeId) -> bool {
-        match self.get(type_id) {
-            Type::Struct(_) => true,
-            Type::Enum(_) => true,
-            Type::Lambda(_) => true,
-            Type::LambdaObject(_) => true,
-            Type::Static(stat) => self.is_aggregate(stat.family_type_id),
-            Type::Array(_) => true,
-            Type::Char => false,
-            Type::Integer(_) => false,
-            Type::Float(_) => false,
-            Type::Bool => false,
-            Type::Pointer => false,
-            Type::Reference(_) => false,
-            Type::Never => false,
-            Type::Function(_) => false,
-            Type::FunctionPointer(_) => false,
-            Type::Generic(_) => false,
-            Type::TypeParameter(_) => false,
-            Type::FunctionTypeParameter(_) => false,
-            Type::InferenceHole(_) => false,
-            Type::Unresolved(_) => false,
-        }
-    }
-
     pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == LIST_TYPE_ID {
@@ -2068,9 +2043,9 @@ impl TypePool {
         })
     }
 
-    pub fn get_as_view_instance(&self, type_id: TypeId) -> Option<TypeId> {
+    pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
         self.instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == VIEW_TYPE_ID {
+            if spec_info.generic_parent == SPAN_TYPE_ID {
                 Some(*self.mem.get_nth(spec_info.type_args, 0))
             } else {
                 None
@@ -2084,8 +2059,8 @@ impl TypePool {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::List))
             } else if info.generic_parent == BUFFER_TYPE_ID {
                 Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Buffer))
-            } else if info.generic_parent == VIEW_TYPE_ID {
-                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::View))
+            } else if info.generic_parent == SPAN_TYPE_ID {
+                Some((*self.mem.get_nth(info.type_args, 0), ContainerKind::Span))
             } else {
                 None
             }
@@ -2188,6 +2163,6 @@ impl TypePool {
 pub enum ContainerKind {
     Array(TypeId),
     Buffer,
-    View,
+    Span,
     List,
 }

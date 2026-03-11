@@ -12,7 +12,7 @@ fn test() {
     bytes.push(108);
     bytes.push(111);
     bytes.push(33);
-    string/fromBytes(bytes.asView())
+    string/fromBytes(bytes.as-span())
   };
 
   {}

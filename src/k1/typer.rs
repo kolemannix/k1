@@ -321,7 +321,7 @@ impl PatternCtorId {
     pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
     pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
     pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
-    pub const VIEW: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
+    pub const SPAN: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
 }
 
 /// Used for analyzing pattern matching
@@ -344,9 +344,9 @@ pub enum PatternCtor {
     TypeVariable,
     FunctionPointer,
     LambdaObject,
-    Static,
+    ValueType,
     Buffer,
-    View,
+    Span,
     /// In the future, we should do real array patterns since length is statically known
     Array,
     Reference(PatternCtorId),
@@ -2508,7 +2508,7 @@ impl TypedProgram {
         pattern_ctors.add(PatternCtor::FunctionPointer);
         pattern_ctors.add(PatternCtor::LambdaObject);
         pattern_ctors.add(PatternCtor::Buffer);
-        pattern_ctors.add(PatternCtor::View);
+        pattern_ctors.add(PatternCtor::Span);
 
         let init_start = std::time::Instant::now();
         let clock = if cfg!(feature = "profile") {
@@ -3223,11 +3223,11 @@ impl TypedProgram {
                                 scope_id,
                                 Some(I64_TYPE_ID),
                             )?;
-                        let static_type = StaticType {
+                        let value_type = StaticValueType {
                             family_type_id: inner_type_id,
                             value_id: Some(static_value_id),
                         };
-                        self.types.add_anon(Type::Static(static_type))
+                        self.types.add_anon(Type::StaticValue(value_type))
                     }
                     _ => {
                         // For other expressions, evaluate normally
@@ -3549,14 +3549,14 @@ impl TypedProgram {
                     scope_id,
                     EvalTypeExprContext { is_inside_static_type: true, ..context },
                 )?;
-                if let Type::Static(_) = self.types.get(inner_type_id) {
+                if let Type::StaticValue(_) = self.types.get(inner_type_id) {
                     return failf!(
                         parsed_static.span,
-                        "Static type cannot be nested inside another static type"
+                        "Value type cannot be nested inside another value type"
                     );
                 };
-                let static_type = StaticType { family_type_id: inner_type_id, value_id: None };
-                let static_type_id = self.types.add_anon(Type::Static(static_type));
+                let value_type = StaticValueType { family_type_id: inner_type_id, value_id: None };
+                let static_type_id = self.types.add_anon(Type::StaticValue(value_type));
                 Ok(static_type_id)
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
@@ -3564,7 +3564,7 @@ impl TypedProgram {
                 let (static_value_id, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
                 let static_type_id =
-                    self.types.add_static_type(inner_type_id, Some(static_value_id));
+                    self.types.add_value_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
             }
         }?;
@@ -3969,7 +3969,6 @@ impl TypedProgram {
                 //if specialized_type == inner {
                 //    panic!("Instantiate should never no-op")
                 //}
-                // let is_sl = self.ident_str(defn_info.name) == "SpillList";
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
                         self.types.get_instance_info(specialized_type).unwrap().type_args;
@@ -4250,18 +4249,18 @@ impl TypedProgram {
                     type_id
                 }
             }
-            Type::Static(stat) => {
-                if stat.value_id.is_some() {
+            Type::StaticValue(value_type) => {
+                if value_type.value_id.is_some() {
                     // Can't substitute inside the type "static[string; "hello"]"
                     // But you can inside type "static[T; _]"
                     type_id
                 } else {
-                    let inner_type = stat.family_type_id;
-                    let new_inner_type = self.substitute_in_type(inner_type, substitution_pairs);
-                    if new_inner_type == inner_type {
+                    let family_type = value_type.family_type_id;
+                    let new_inner_type = self.substitute_in_type(family_type, substitution_pairs);
+                    if new_inner_type == family_type {
                         type_id
                     } else {
-                        self.types.add_anon(Type::Static(StaticType {
+                        self.types.add_anon(Type::StaticValue(StaticValueType {
                             family_type_id: new_inner_type,
                             value_id: None,
                         }))
@@ -4443,7 +4442,9 @@ impl TypedProgram {
                     },
                     ParsedLiteral::String(string_id, span) => {
                         match self.types.get(target_type_id) {
-                            Type::Static(s) if s.family_type_id == STRING_TYPE_ID => Ok(()),
+                            Type::StaticValue(svt) if svt.family_type_id == STRING_TYPE_ID => {
+                                Ok(())
+                            }
                             _ if target_type_id == STRING_TYPE_ID => Ok(()),
                             _ => failf!(
                                 self.ast.get_pattern_span(pat_expr),
@@ -4691,8 +4692,8 @@ impl TypedProgram {
             }
             // If we failed typechecking, and we expected a static, and we passed a non-static
             // Try to lift it
-            (Type::Static(expected_static), None) => {
-                if expected_static.family_type_id == actual_type_id {
+            (Type::StaticValue(expected_value_type), None) => {
+                if expected_value_type.family_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
                         let static_lifted_type = self.exprs.get_type(static_lifted);
                         return match self.check_types(expected, static_lifted_type, scope_id) {
@@ -4968,8 +4969,8 @@ impl TypedProgram {
             self.type_id_to_string(expected).blue(),
         );
 
-        let expected = self.types.get_static_type_id_of_type(expected).unwrap_or(expected);
-        let actual = self.types.get_static_type_id_of_type(actual).unwrap_or(actual);
+        let expected = self.types.get_value_type_id_of_type(expected).unwrap_or(expected);
+        let actual = self.types.get_value_type_id_of_type(actual).unwrap_or(actual);
 
         debug!(
             "typecheck resolved: {} <: {}",
@@ -5095,9 +5096,9 @@ impl TypedProgram {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
-            (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
-                if exp_static_type.family_type_id == act_static_type.family_type_id {
-                    match (exp_static_type.value_id, act_static_type.value_id) {
+            (Type::StaticValue(exp_value_type), Type::StaticValue(act_value_type)) => {
+                if exp_value_type.family_type_id == act_value_type.family_type_id {
+                    match (exp_value_type.value_id, act_value_type.value_id) {
                         (None, None) => Ok(()),    // Both unresolved
                         (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
                         (Some(exp_value_id), Some(act_value_id)) => {
@@ -5114,7 +5115,7 @@ impl TypedProgram {
                         }
                         (Some(_), None) => Err(k1_format_user!(
                             self,
-                            "Expected a specific static but got an unresolved one: {} vs {}",
+                            "Expected a specific value but got a general family: {} vs {}",
                             expected,
                             actual,
                         )),
@@ -5122,7 +5123,7 @@ impl TypedProgram {
                 } else {
                     Err(k1_format_user!(
                         self,
-                        "Expected static {} but got static {}",
+                        "Expected value type {} but got value type {}",
                         expected,
                         actual
                     ))
@@ -6024,7 +6025,7 @@ impl TypedProgram {
             );
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
-                let static_type = self.types.get(static_constraint).as_static().unwrap();
+                let static_type = self.types.get(static_constraint).as_value_type().unwrap();
                 if static_type.family_type_id != solution.type_id {
                     eprintln!(
                         "Blanket impl almost matched but a static constraint failed: {} != {}",
@@ -6653,12 +6654,12 @@ impl TypedProgram {
         }
         //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
         match self.types.get(base_type_id) {
-            Type::Static(st) => {
-                let Some(struct_type) = self.types.get(st.family_type_id).as_struct() else {
+            Type::StaticValue(svt) => {
+                let Some(struct_type) = self.types.get(svt.family_type_id).as_struct() else {
                     kbail!(
                         self,
                         span,
-                        "Field {} not found on static type {}",
+                        "Field {} not found on value type {}",
                         field_access.field_name,
                         base_type_id
                     )
@@ -6673,7 +6674,7 @@ impl TypedProgram {
                             self.type_id_to_string(base_type_id)
                         )
                     })?;
-                match st.value_id {
+                match svt.value_id {
                     None => {
                         // Abstract case
                         kbail!(self, span, "Can't work with abstract static structs yet")
@@ -6681,7 +6682,7 @@ impl TypedProgram {
                     Some(value_id) => {
                         let StaticValue::Struct(static_struct) = self.static_values.get(value_id)
                         else {
-                            ice_span!(self, span, "Expected static struct")
+                            ice_span!(self, span, "Expected struct value type")
                         };
                         let field_value_id =
                             self.static_values.mem.get_nth(static_struct.fields, field_index);
@@ -7020,7 +7021,7 @@ impl TypedProgram {
                     },
                 };
                 let type_to_use = if should_type_as_static {
-                    self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id))
+                    self.types.add_value_type(STRING_TYPE_ID, Some(static_value_id))
                 } else {
                     STRING_TYPE_ID
                 };
@@ -7263,7 +7264,7 @@ impl TypedProgram {
 
     fn add_static_value_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let inner_type_id = self.static_values.get(value_id).get_type();
-        let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
+        let static_type_id = self.types.add_value_type(inner_type_id, Some(value_id));
         self.exprs.add_static(value_id, static_type_id, true, span)
     }
 
@@ -7358,7 +7359,7 @@ impl TypedProgram {
                 list_lit_ctx,
                 false,
             )?,
-            ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
+            ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
                 self.ast.idents.f.buffer__allocate.with_span(span),
                 &[element_type],
                 &[count_expr],
@@ -7376,7 +7377,7 @@ impl TypedProgram {
         };
         let is_referencing_let = match list_kind {
             ContainerKind::Array(_) => true,
-            ContainerKind::Buffer | ContainerKind::View => false,
+            ContainerKind::Buffer | ContainerKind::Span => false,
             ContainerKind::List => true,
         };
         let dest_coll_variable = self.synth_variable_defn(
@@ -7399,7 +7400,7 @@ impl TypedProgram {
                     list_lit_ctx,
                     false,
                 )?,
-                ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
+                ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
                     self.ast.idents.f.buffer_set.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
@@ -7425,8 +7426,8 @@ impl TypedProgram {
         let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
-            ContainerKind::View => self.synth_typed_call_typed_args(
-                self.ast.idents.f.view_wrapBuffer.with_span(span),
+            ContainerKind::Span => self.synth_typed_call_typed_args(
+                self.ast.idents.f.span_wrapBuffer.with_span(span),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
@@ -7487,24 +7488,24 @@ impl TypedProgram {
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get_type(variable_expr);
             match self.types.get(variable_type) {
-                Type::Static(stat) => {
-                    if let Some(value_id) = stat.value_id {
+                Type::StaticValue(svt) => {
+                    if let Some(value_id) = svt.value_id {
                         static_parameters.push((variable_id, value_id));
                     } else {
                         return failf!(
                             span,
-                            "Static parameter `{}` is unresolved",
+                            "Value type parameter `{}` is unresolved",
                             self.ident_str(param)
                         );
                     }
                 }
                 Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                     let static_type =
-                        self.types.get(tp.static_constraint.unwrap()).as_static().unwrap();
+                        self.types.get(tp.static_constraint.unwrap()).as_value_type().unwrap();
                     let Some(value_id) = static_type.value_id else {
                         return failf!(
                             span,
-                            "Expected a resolved static type for argument {}",
+                            "Expected a value type for argument {}, got a value family",
                             self.ident_str(param),
                         );
                     };
@@ -7513,7 +7514,7 @@ impl TypedProgram {
                 _ => {
                     return failf!(
                         span,
-                        "Non-static parameters aren't supported: {}: {}",
+                        "Non-value parameters aren't supported: {}: {}",
                         self.ident_str(param),
                         self.type_id_to_string(variable_type)
                     );
@@ -10373,7 +10374,7 @@ impl TypedProgram {
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get_type(static_index_expr);
                     if let Some(index_size) = self
-                        .get_value_of_static_type(static_index_type)
+                        .get_value_from_value_type(static_index_type)
                         .and_then(|sv| self.static_values.get(sv).as_size())
                     {
                         if let Some(concrete_size) = concrete_count {
@@ -11730,7 +11731,7 @@ impl TypedProgram {
         };
         if let Ok(result) = result {
             debug_assert_eq!(
-                self.types.get(self.exprs.get_type(result)).as_static().unwrap().family_type_id,
+                self.types.get(self.exprs.get_type(result)).as_value_type().unwrap().family_type_id,
                 self.exprs.get_type(expr_id)
             );
         }
@@ -11769,19 +11770,19 @@ impl TypedProgram {
                 Ok(self.exprs.add_static(static_value_id, value.get_type(), false, span))
             }
             Builtin::StaticTypeToValue => {
-                // intern fn staticTypeToValue[T, ST: static T](): T
+                // intern fn staticTypeToValue[T, ST: value T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
-                let static_type_arg = self.named_types.get_nth(call.type_args, 1);
+                let value_type_arg = self.named_types.get_nth(call.type_args, 1);
 
                 let return_type = call.return_type;
-                let Type::Static(static_type) = self.types.get(static_type_arg.type_id) else {
+                let Type::StaticValue(value_type) = self.types.get(value_type_arg.type_id) else {
                     return failf!(
                         span,
-                        "Internal Error: 2nd type arg should be static: {}",
-                        self.type_id_to_string(static_type_arg.type_id)
+                        "Internal Error: 2nd type arg should be a value type: {}",
+                        self.type_id_to_string(value_type_arg.type_id)
                     );
                 };
-                if let Some(static_value_id) = static_type.value_id {
+                if let Some(static_value_id) = value_type.value_id {
                     Ok(self.add_static_constant_expr(static_value_id, span))
                 } else {
                     // Since the static type has no value, we know this is generic code
@@ -15185,7 +15186,7 @@ impl TypedProgram {
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
             // debug_assert_eq!(
             //     self.types.get_layout(BUFFER_TYPE_ID),
-            //     Layout::from_rust_type::<vm::k1_types::K1ViewLike>()
+            //     Layout::from_rust_type::<vm::k1_types::K1BufferLike>()
             // );
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
@@ -15363,8 +15364,8 @@ impl TypedProgram {
                     Some((_, ContainerKind::Buffer)) => {
                         dst.push(alive(PatternCtorId::BUFFER));
                     }
-                    Some((_, ContainerKind::View)) => {
-                        dst.push(alive(PatternCtorId::VIEW));
+                    Some((_, ContainerKind::Span)) => {
+                        dst.push(alive(PatternCtorId::SPAN));
                     }
                     _ => {
                         let field_count = struc.fields.len();
@@ -15478,7 +15479,7 @@ impl TypedProgram {
             Type::LambdaObject(_) => {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
-            Type::Static(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Static))),
+            Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
             _ => self.report_hint(
                 span_id,
                 format!(
@@ -15561,9 +15562,9 @@ impl TypedProgram {
         self.types.get_type_as_i64(&self.static_values, size_type)
     }
 
-    pub fn get_value_of_static_type(&self, type_id: TypeId) -> Option<StaticValueId> {
+    pub fn get_value_from_value_type(&self, type_id: TypeId) -> Option<StaticValueId> {
         match self.types.get(type_id) {
-            Type::Static(StaticType { value_id: Some(value_id), .. }) => Some(*value_id),
+            Type::StaticValue(StaticValueType { value_id: Some(value_id), .. }) => Some(*value_id),
             _ => None,
         }
     }
@@ -15626,7 +15627,7 @@ impl TypedProgram {
             core!("f32"),
             core!("f64"),
             core!("buffer"),
-            core!("view"),
+            core!("span"),
             core!("array"),
             core!("list"),
             core!("string"),
@@ -15738,15 +15739,15 @@ impl TypedProgram {
             Type::Struct(struct_type) => {
                 let struct_schema_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "struct")).payload.unwrap();
-                // { fields: View[{}] }
+                // { fields: span[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
-                // { fields: View[{ ... }] }
+                // { fields: span[{ ... }] }
                 let struct_type_fields = struct_type.fields;
-                let struct_schema_fields_view_type_id =
+                let struct_schema_fields_span_type_id =
                     self.types.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
-                    self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
+                    self.types.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
                 // { name: string), typeId: u64, offset: size }
                 let struct_layout = self.get_struct_layout(type_id);
                 let mut field_values: MList<StaticValueId, StaticValuePool> =
@@ -15778,11 +15779,11 @@ impl TypedProgram {
                     );
                 }
                 let values_slice = self.static_values.mem.list_to_handle(field_values);
-                let view =
-                    self.static_values.add_view(struct_schema_fields_view_type_id, values_slice);
+                let span_value_id =
+                    self.static_values.add_span(struct_schema_fields_span_type_id, values_slice);
                 let payload = self
                     .static_values
-                    .add_struct_from_slice(struct_schema_payload_type_id, &[view]);
+                    .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
                 make_variant(self, get_ident!(self, "struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
@@ -15837,10 +15838,10 @@ impl TypedProgram {
                 let target_enum_variants = typed_enum.variants;
                 let either_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "either")).payload.unwrap();
-                let variants_view_type_id =
+                let variants_span_type_id =
                     self.types.get_struct_field(either_payload_type_id, 1).type_id;
                 let variant_struct_type_id =
-                    self.types.get_as_view_instance(variants_view_type_id).unwrap();
+                    self.types.get_as_span_instance(variants_span_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
                 let tag_type_value_id =
                     self.static_values.add(StaticValue::Enum(TypedProgram::make_int_kind(
@@ -15915,11 +15916,11 @@ impl TypedProgram {
                     ))
                 }
                 let variant_values_slice = self.static_values.mem.list_to_handle(variant_values);
-                let variants_view_value_id =
-                    self.static_values.add_view(variants_view_type_id, variant_values_slice);
+                let variants_span_value_id =
+                    self.static_values.add_span(variants_span_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     either_payload_type_id,
-                    &[tag_type_value_id, variants_view_value_id],
+                    &[tag_type_value_id, variants_span_value_id],
                 );
                 make_variant(self, get_ident!(self, "either"), Some(payload_value_id))
             }
@@ -15929,16 +15930,16 @@ impl TypedProgram {
                 let function_schema_payload_type_id =
                     get_schema_variant(self, get_ident!(self, "function")).payload.unwrap();
                 //Function({
-                //  params: View[{ name: string, typeId: u64 }],
+                //  params: span[{ name: string, typeId: u64 }],
                 //  returnTypeId: u64,
                 //}),
                 let function_schema_payload_struct =
                     self.types.get(function_schema_payload_type_id).expect_struct();
-                let function_params_view_field =
+                let function_params_span_field =
                     self.types.mem.get_nth(function_schema_payload_struct.fields, 0);
-                let function_params_view_type_id = function_params_view_field.type_id;
+                let function_params_span_type_id = function_params_span_field.type_id;
                 let function_param_struct_type_id =
-                    self.types.get_as_view_instance(function_params_view_type_id).unwrap();
+                    self.types.get_as_span_instance(function_params_span_type_id).unwrap();
 
                 let mut params_value_ids =
                     self.static_values.mem.new_list(fn_type.logical_params().len());
@@ -15969,9 +15970,9 @@ impl TypedProgram {
 
                 let params_value_ids_slice =
                     self.static_values.mem.list_to_handle(params_value_ids);
-                let params_view_value_id = self
+                let params_span_value_id = self
                     .static_values
-                    .add_view(function_params_view_type_id, params_value_ids_slice);
+                    .add_span(function_params_span_type_id, params_value_ids_slice);
 
                 self.register_type_metainfo(fn_type.return_type, span);
                 let return_type_id_value_id =
@@ -15981,7 +15982,7 @@ impl TypedProgram {
                     function_schema_payload_type_id,
                     &[
                         // params
-                        params_view_value_id,
+                        params_span_value_id,
                         // returnTypeId
                         return_type_id_value_id,
                     ],
@@ -16014,8 +16015,8 @@ impl TypedProgram {
             | Type::Unresolved(_) => {
                 ice_span!(self, span, "type-schema on {}", typ.kind_name())
             }
-            Type::Static(_) => self.ice_with_span(
-                format!("type-schema on static type should be unreachable {}", typ.kind_name()),
+            Type::StaticValue(_) => self.ice_with_span(
+                format!("type-schema on value type should be unreachable {}", typ.kind_name()),
                 span,
             ),
         };

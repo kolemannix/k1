@@ -13,7 +13,7 @@ fn intWidthForBits(bits: size): size {
 fn bn(name: string, bits: size): { name: string, bits: size } { { name, bits } }
 fn b1(name: string): { name: string, bits: size } { bn(name = name, bits = 1) }
 fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
-fn define[Base](type-name: string, members: view[{ name: string, bits: size }]): string {
+fn define[Base](type-name: string, members: span[{ name: string, bits: size }]): string {
   use core/StringBuilder; use meta/CodeWriter;
 
   let baseTypeId: u64 = types/type-id[Base]();

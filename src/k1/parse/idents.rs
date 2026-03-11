@@ -121,7 +121,7 @@ pub(crate) struct BuiltinIdents {
     pub mem: Ident,
     pub sys: Ident,
     pub libc: Ident,
-    pub view: Ident,
+    pub span: Ident,
     pub Equals: Ident,
     pub add: Ident,
     pub sub: Ident,
@@ -170,7 +170,7 @@ pub(crate) struct BuiltinFunctions {
     pub buffer_set: QIdent,
     pub Array_set: QIdent,
     pub mem_zeroed: QIdent,
-    pub view_wrapBuffer: QIdent,
+    pub span_wrapBuffer: QIdent,
     pub equals__equals: QIdent,
     pub add__add: QIdent,
     pub sub__sub: QIdent,
@@ -286,7 +286,7 @@ impl IdentPool {
             mem: intern!("mem"),
             sys: intern!("sys"),
             libc: intern!("libc"),
-            view: intern!("view"),
+            span: intern!("span"),
             Equals: intern!("equals"),
             add: intern!("add"),
             sub: intern!("sub"),
@@ -351,7 +351,7 @@ impl IdentPool {
 
         let mem_zeroed: QIdent = make_fn!(&[b.mem], intern!("zeroed"));
 
-        let View_wrapBuffer: QIdent = make_fn!(&[b.core, b.view], intern!("wrapBuffer"));
+        let span_wrapBuffer: QIdent = make_fn!(&[b.core, b.span], intern!("wrapBuffer"));
 
         let equals__equals: QIdent = make_fn!(&[b.core, b.Equals], b.equals);
 
@@ -393,7 +393,7 @@ impl IdentPool {
             buffer_set,
             Array_set: array__set,
             mem_zeroed,
-            view_wrapBuffer: View_wrapBuffer,
+            span_wrapBuffer,
             equals__equals,
             add__add,
             sub__sub,

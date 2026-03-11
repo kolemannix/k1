@@ -304,8 +304,7 @@ impl TypedProgram {
                 self.type_id_to_string(solution_type_id),
                 self.type_id_to_string(static_type),
             );
-            let Some(solution_static_type) =
-                self.types.get_static_type_id_of_type(solution_type_id)
+            let Some(solution_static_type) = self.types.get_value_type_id_of_type(solution_type_id)
             else {
                 error!(
                     "The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it"
@@ -1088,22 +1087,24 @@ impl TypedProgram {
                     passed_lambda.function_type,
                     param_lambda.function_type,
                 ),
-            (Type::Static(passed_static), Type::Static(param_static)) => self
+            (Type::StaticValue(passed_value_type), Type::StaticValue(param_value_type)) => self
                 .unify_and_find_substitutions_rec(
-                    passed_static.family_type_id,
-                    param_static.family_type_id,
+                    passed_value_type.family_type_id,
+                    param_value_type.family_type_id,
                 ),
-            (Type::Static(passed_static), _non_static) => {
+            (Type::StaticValue(passed_static), _non_static) => {
                 // We infer 'through' statics, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
                 self.unify_and_find_substitutions_rec(passed_static.family_type_id, slot_type)
             }
-            (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
-                // We infer 'through' statics, even though they'll fail typecheck without a cast.
+            (_non_value_passed, Type::StaticValue(value_type_slot))
+                if value_type_slot.value_id.is_none() =>
+            {
+                // We infer 'through' value types, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
-                self.unify_and_find_substitutions_rec(passed_type, static_slot.family_type_id)
+                self.unify_and_find_substitutions_rec(passed_type, value_type_slot.family_type_id)
             }
 
             // --------------- MISS CASES: we detect further explicit cases for better error message ---------------------

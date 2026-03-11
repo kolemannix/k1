@@ -357,10 +357,10 @@ impl TypedProgram {
                 w.write_str(")")?;
                 Ok(())
             }
-            Type::Static(stat) => {
+            Type::StaticValue(svt) => {
                 w.write_str("static[")?;
-                self.display_type_id_rec(w, stat.family_type_id, expand, visited)?;
-                if let Some(value_id) = stat.value_id {
+                self.display_type_id_rec(w, svt.family_type_id, expand, visited)?;
+                if let Some(value_id) = svt.value_id {
                     w.write_str(", ")?;
                     self.display_static_value(w, value_id)?;
                 }
@@ -830,7 +830,7 @@ impl TypedProgram {
             }
             StaticValue::LinearContainer(cont) => {
                 match cont.kind {
-                    StaticContainerKind::View => write!(w, "view")?,
+                    StaticContainerKind::Span => write!(w, "span")?,
                     StaticContainerKind::Array => write!(w, "array")?,
                 }
                 self.display_static_items(w, self.static_values.get_slice(cont.elements))?;
@@ -901,9 +901,9 @@ impl TypedProgram {
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
             PatternCtor::FunctionPointer => writ.write_str("fn*"),
             PatternCtor::LambdaObject => writ.write_str("dyn[fn ...]"),
-            PatternCtor::Static => writ.write_str("static[...]"),
+            PatternCtor::ValueType => writ.write_str("static[...]"),
             PatternCtor::Buffer => writ.write_str("buffer"),
-            PatternCtor::View => writ.write_str("view"),
+            PatternCtor::Span => writ.write_str("span"),
             PatternCtor::Array => writ.write_str("<array>"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;

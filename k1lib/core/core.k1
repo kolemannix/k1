@@ -52,7 +52,7 @@ fn printIt[T: print](value: T) {
 }
 
 fn print(s: string) {
-  // TODO: Instead of this hack, make write(Sink, view[byte]) the intrinsic.
+  // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and compiler/capture-prints.* {
     k1/emit-compiler-message(compiler/location(), .info, s)
   } else {
@@ -95,7 +95,7 @@ ns io {
       posix/write(file-no = self.fileNo, data = valueRef.as[ptr], count = 1);
       {}
     }
-    fn write-bytes(self: self, bytes: view[byte]) {
+    fn write-bytes(self: self, bytes: span[byte]) {
       posix/write(
         file-no = self.fileNo,
         data = bytes.dataPtr(),
@@ -125,13 +125,13 @@ ns sys {
     else crash("unreachable os")
   }
 
-  fn parseMainArgs(argCount: u32, args: ptr): view[string] {
+  fn parseMainArgs(argCount: u32, args: ptr): span[string] {
     let buf = buffer/fromPtrAndCount[c-string](
       count = argCount.as[size],
       ptr = args
     );
     let strings = list/fromMap(buf, fn cstr. string/wrap-c(cstr));
-    strings.asView()
+    strings.as-span()
   }
 
   fn readLine(maxLengthBytes: size): result[string, string] {
@@ -302,7 +302,7 @@ fn formatUInt[w: writer](context w: w)(value: u64, base: u64) {
 
     digits.reverse();
 
-    w.write-bytes(digits.asView().asByteView());
+    w.write-bytes(digits.as-span().as-byte-span());
 
     {}
   }
@@ -502,7 +502,7 @@ ns f64 {
     let* stackBuf = array/zeroed[u8, 32]();
     let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.get-base().as[ptr], 32, f, places);
     if writtenLen <= 0 crash("snprintf_f32 returned {writtenLen}");
-    w.write-bytes(stackBuf.as-view().slice(0, writtenLen.as[size]))
+    w.write-bytes(stackBuf.as-span().slice(0, writtenLen.as[size]))
   }
 
   fn from-string(s: string): result[{ value: f64, len: size }, string] {

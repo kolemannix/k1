@@ -67,8 +67,8 @@ ns list {
     self.buffer.slice(0, self.len)
   }
 
-  fn asView[T](self: list[T]): view[T] {
-    view/wrapBuffer(self.asBuffer[T]())
+  fn as-span[T](self: list[T]): span[T] {
+    span/wrapBuffer(self.asBuffer[T]())
   }
 
   fn copyToBuffer[T](self: list[T]): buffer[T] {
@@ -208,7 +208,7 @@ ns list {
     self.len* <- self.len + other.len;
   }
 
-  fn appendView[T](self: *mut list[T], other: view[T]) {
+  fn append-span[T](self: *mut list[T], other: span[T]) {
     self.appendBuffer(other.innerBuffer())
   }
 
@@ -315,13 +315,13 @@ ns list {
 
 impl writer for *mut list[char] {
   fn write-byte(self: self, value: u8) { self.push(value.as[char]) }
-  fn write-bytes(self: self, bytes: view[byte]) { self.appendView(bytes.toCharView()) }
+  fn write-bytes(self: self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
 }
 
 impl writer for *mut list[u8] {
   fn write-byte(self: self, value: u8) { self.push(value) }
-  fn write-bytes(self: self, bytes: view[byte]) {
-    self.appendView(bytes)
+  fn write-bytes(self: self, bytes: span[byte]) {
+    self.append-span(bytes)
   }
 }
 

@@ -3003,16 +3003,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 );
                 struct_value.as_basic_value_enum()
             }
-            StaticValue::LinearContainer(view) => {
-                let view = *view;
+            StaticValue::LinearContainer(cont) => {
+                let cont = *cont;
                 let (element_type, _) =
-                    self.k1.types.get_as_container_instance(view.type_id).unwrap();
-                let view_elements = self.k1.static_values.mem.getn(view.elements);
+                    self.k1.types.get_as_container_instance(cont.type_id).unwrap();
+                let span_elements = self.k1.static_values.mem.getn(cont.elements);
                 let array_value =
-                    self.codegen_static_elements_array(element_type, view_elements, depth)?;
+                    self.codegen_static_elements_array(element_type, span_elements, depth)?;
 
-                match view.kind {
-                    StaticContainerKind::View => {
+                match cont.kind {
+                    StaticContainerKind::Span => {
                         let element_type_layout = self.k1.get_layout(element_type);
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
@@ -3025,14 +3025,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
                         data_global.set_initializer(&array_value);
-                        let view_struct = self
-                            .make_view_struct(
-                                view.type_id,
-                                view.len() as u64,
+                        let span_struct = self
+                            .make_span_struct(
+                                cont.type_id,
+                                cont.len() as u64,
                                 data_global.as_pointer_value(),
                             )
                             .unwrap();
-                        view_struct.as_basic_value_enum()
+                        span_struct.as_basic_value_enum()
                     }
                     StaticContainerKind::Array => array_value.as_basic_value_enum(),
                 }
@@ -3214,13 +3214,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global_str_data.set_constant(true);
 
         // Ensure the string layout is what we expect
-        // deftype string = { private view: View[char] }
+        // deftype string = { private span: span[char] }
         let string_pt = self.k1.get_physical_type(STRING_TYPE_ID).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();
         let string_wrapper_struct_type = string_type.struct_type;
 
-        let char_view_struct = self.mem.get_nth_lt(string_type.fields, 0).expect_struct();
-        let char_buffer_cg_type = self.mem.get_nth_lt(char_view_struct.fields, 0).expect_struct();
+        let char_span_struct = self.mem.get_nth_lt(string_type.fields, 0).expect_struct();
+        let char_buffer_cg_type = self.mem.get_nth_lt(char_span_struct.fields, 0).expect_struct();
         debug_assert!(
             char_buffer_cg_type
                 .struct_type
@@ -3240,11 +3240,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             str_len as u64,
             global_str_data.as_pointer_value(),
         )?;
-        let char_view_struct_value = char_view_struct
+        let char_span_struct_value = char_span_struct
             .struct_type
             .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
         let string_wrapper_struct = string_wrapper_struct_type
-            .const_named_struct(&[char_view_struct_value.as_basic_value_enum()]);
+            .const_named_struct(&[char_span_struct_value.as_basic_value_enum()]);
 
         let global_str_struct =
             self.llvm_module.add_global(string_wrapper_struct_type, None, name.unwrap_or(""));
@@ -3282,9 +3282,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(buffer_struct_value)
     }
 
-    fn make_view_struct(
+    fn make_span_struct(
         &mut self,
-        view_type_id: TypeId,
+        span_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
     ) -> TyperResult<StructValue<'ctx>> {
@@ -3292,7 +3292,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .k1
             .types
             .mem
-            .get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0)
+            .get_nth_lt(self.k1.types.get(span_type_id).expect_struct().fields, 0)
             .type_id;
         let buffer_pt = self.k1.get_physical_type(buffer_type_id).unwrap();
         let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();

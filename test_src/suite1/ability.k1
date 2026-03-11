@@ -14,16 +14,16 @@ impl Num for Point {
 
 ability Codec {
   fn aConst(): u8
-  fn write(self: self): view[u8]
-  fn read(buffer: view[u8]): self
+  fn write(self: self): span[u8]
+  fn read(buffer: span[u8]): self
 }
 
 impl Codec for string {
   fn aConst(): u8 { 10 }
-  fn write(self: string): view[u8] {
-    self.view().asByteView()
+  fn write(self: string): span[u8] {
+    self.span().as-byte-span()
   }
-  fn read(buffer: view[u8]): string {
+  fn read(buffer: span[u8]): string {
     string/fromBytes(buffer)
   }
 }
@@ -80,7 +80,7 @@ fn test() {
   let p = { x: 1, y: 2 }: Point;
   assert(p.num() == 3);
 
-  let buf: view[u8] = [104: u8, 101, 108, 108, 111].asView();
+  let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span();
   let x: string = Codec/read(buf);
   assertEquals(x, "hello");
   assertEquals[string]("asdf", Codec/read("asdf".write()));

@@ -14,10 +14,10 @@ More optimal final programs
 
 Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
-- [ ] userland: CCompatString which is a valid c string with length in front of the allocation
+- [ ] userland: CCompatString which is a valid c string with length in front of the allocation (ill call it antirez strings)
 - [ ] User-defined implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc): ImplicitAs?
-- [ ] [design/flags_in_tags.md]
+- [ ] [design/flags_in_tags.k1]
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
 - [x] Incorporate ffc.h for int and float parsing
@@ -26,8 +26,9 @@ Non-major Ideas
 Syntax/elegance
 - [x] replace `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`
+- [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
 - [ ] Rename `view` to `span`
-- [ ] Rename 'static' types to 'value' types
+- [x] Rename 'static' types to 'static value' types
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [x] Need a way to write an interpolated string to a Writer that you already have
@@ -64,7 +65,7 @@ Simple but missing
 
 ## [ ] Writergate
 - [x] Allow using expr-interpolated strings directly into a writer
-- [ ] Allow for named non-interpolated args into holes with a struct
+- [x] Allow for named non-interpolated args into holes with a struct
 - [ ] Implement at least one format specifier (precision, pretty)
 
 - [ ] Return value binding, or named return values, for guaranteed RVO

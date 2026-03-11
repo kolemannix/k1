@@ -1,5 +1,5 @@
 ns static_run;
-let INT_VIEW: view[int] = [1,2,3,4,5]
+let INT_SPAN: span[int] = [1,2,3,4,5]
 
 let i2: 12 = { 3 * 4 }
 let i3: 12 = #static { 3 * 4 }
@@ -164,14 +164,14 @@ fn test() {
   // Call order
   #static bar(2);
 
-  // View
-  let view: view[int] = #static {
+  // span
+  let span: span[int] = #static {
     let xs = [1,2,3,4,5];
-    xs.asView()
+    xs.as-span()
   };
-  assertEquals(view, [1,2,3,4,5]);
+  assertEquals(span, [1,2,3,4,5]);
   #static {
-    let* l = list/wrapBuffer(buffer/copyFromView(INT_VIEW));
+    let* l = list/wrapBuffer(buffer/copyFrom-span(INT_SPAN));
     l.push(9);
     assertEquals(l.len, 6);
     assertEquals(l.last(), some(9));
@@ -184,8 +184,8 @@ fn test() {
     lam(1)
   }, 2);
 
-  // View of views!
-  let vov: view[view[int]] = #static [[1,2,3], [4,5,6]];
+  // span of spans!
+  let vov: span[span[int]] = #static [[1,2,3], [4,5,6]];
   assertEquals(vov.len(), 2);
   assertEquals(vov.get(0).get(0), 1);
   assertEquals(vov.get(0).get(1), 2);

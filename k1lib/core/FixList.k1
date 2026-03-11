@@ -51,7 +51,7 @@ ns FixList {
     }
   }
 
-  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: view[T]): result[empty, empty] {
+  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: span[T]): result[empty, empty] {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.as-buffer().slice(start = self.len(), end = needed);
@@ -64,7 +64,7 @@ ns FixList {
     }
   }
 
-  fn pushN[T, N: static size](self: *mut FixList[T, N], values: view[T]): empty {
+  fn pushN[T, N: static size](self: *mut FixList[T, N], values: span[T]): empty {
     let result = self.tryPushN[T, N](values);
     if result is .err(_) crash("FixList out of space")
   }
@@ -73,8 +73,8 @@ ns FixList {
     self.data*.as-buffer().slice(0, self.len())
   }
 
-  fn asView[T, N: static size](self: *FixList[T, N]): view[T] {
-    self.data*.as-view().slice(0, self.len())
+  fn as-span[T, N: static size](self: *FixList[T, N]): span[T] {
+    self.data*.as-span().slice(0, self.len())
   }
 
   fn get[T, N: static size](self: *FixList[T, N], index: size): T {
@@ -94,7 +94,7 @@ ns FixList {
   }
 
   fn last[T, N: static size](self: *FixList[T, N]): ?T {
-    self.asView().last()
+    self.as-span().last()
   }
 
   fn pop[T, N: static size](self: *mut FixList[T, N]): ?T {
