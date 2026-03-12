@@ -39,6 +39,8 @@ macro_rules! b_ice {
 pub struct BcDebugVariableInfo {
     pub name: Ident,
     pub original_type_id: TypeId,
+    pub user_hidden: bool,
+    pub source_span: SpanId,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -707,6 +709,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let is_debug = f.compiler_debug;
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
+    b.entry_span = fn_span;
 
     // Set up parameters
     let fn_params = f.params;
@@ -861,6 +864,8 @@ pub struct Builder<'k1> {
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
+    // Where we put the hoisted allocas
+    entry_span: SpanId,
 }
 
 impl<'k1> Builder<'k1> {
@@ -873,6 +878,7 @@ impl<'k1> Builder<'k1> {
             last_alloca_index: None,
             cur_block: 0,
             cur_span: SpanId::NONE,
+            entry_span: SpanId::NONE,
         }
     }
 
@@ -882,6 +888,9 @@ impl<'k1> Builder<'k1> {
         }
         self.block_count = 0;
         self.k1.bytecode.b_variables.clear();
+        self.last_alloca_index = None;
+        self.cur_span = SpanId::NONE;
+        self.entry_span = SpanId::NONE;
         self.k1.bytecode.b_loops.clear();
     }
 
@@ -903,8 +912,18 @@ impl<'k1> Builder<'k1> {
     }
 
     fn make_inst(&mut self, inst: Inst, comment: BcStr, debug_info: BcDebugInfo) -> InstId {
+        let span = self.cur_span;
+        self.make_inst_ext(inst, comment, debug_info, span)
+    }
+    fn make_inst_ext(
+        &mut self,
+        inst: Inst,
+        comment: BcStr,
+        debug_info: BcDebugInfo,
+        span: SpanId,
+    ) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
-        self.k1.bytecode.sources.add_expected_id(self.cur_span, id);
+        self.k1.bytecode.sources.add_expected_id(span, id);
         self.k1.bytecode.comments.add_expected_id(comment, id);
         self.k1.bytecode.debug_info.add_expected_id(debug_info, id);
         id
@@ -932,9 +951,15 @@ impl<'k1> Builder<'k1> {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let inst_id =
-            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment.into(), debug_info);
+        let alloca_span = self.entry_span;
+        let inst_id = self.make_inst_ext(
+            Inst::Alloca { t: pt, vm_layout: layout },
+            comment.into(),
+            debug_info,
+            alloca_span,
+        );
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
+        self.last_alloca_index = Some(index as u32);
         inst_id
     }
 
@@ -1208,11 +1233,13 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
-            let var_name = b.k1.variables.get(let_stmt.variable_id).name;
+            let var = b.k1.variables.get(let_stmt.variable_id);
             let debug_info = BcDebugInfo {
                 variable_info: Some(BcDebugVariableInfo {
-                    name: var_name,
+                    name: var.name,
                     original_type_id: let_stmt.variable_type,
+                    user_hidden: var.user_hidden(),
+                    source_span: b.cur_span,
                 }),
             };
 
@@ -2999,10 +3026,13 @@ pub fn display_block(
     writeln!(w)?;
     for inst_id in bc.mem.getn(block.instrs).iter() {
         if show_source {
-            let span_id = bc.sources.get(*inst_id);
-            let lines = k1.ast.get_span_content(*span_id);
+            let span_id = *bc.sources.get(*inst_id);
+            let lines = k1.ast.get_span_content(span_id);
+            let the_span = k1.ast.spans.get(span_id);
+            let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
-            write!(w, "|  {first_line:80}|")?;
+            let column = the_span.start + 1 - line.start_char;
+            write!(w, "|  {first_line:80}| L{}:{} |", line.line_number(), column)?;
         }
 
         write!(w, " i{:3} = ", *inst_id)?;

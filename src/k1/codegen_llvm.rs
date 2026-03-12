@@ -29,6 +29,8 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
+use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
+
 use log::{debug, info, trace};
 
 use crate::bc::{
@@ -338,6 +340,27 @@ impl<'ctx> DebugContext<'ctx> {
         };
     }
 
+    // Bugged inkwell function: https://github.com/TheDan64/inkwell/issues/613
+    pub fn insert_declare_at_end(
+        &self,
+        storage: PointerValue<'ctx>,
+        var_info: Option<DILocalVariable<'ctx>>,
+        expr: Option<DIExpression<'ctx>>,
+        debug_loc: DILocation<'ctx>,
+        block: BasicBlock<'ctx>,
+    ) {
+        let _dbg_record = unsafe {
+            LLVMDIBuilderInsertDeclareRecordAtEnd(
+                self.debug_builder.as_mut_ptr(),
+                storage.as_value_ref(),
+                var_info.map(|v| v.as_mut_ptr()).unwrap_or(std::ptr::null_mut()),
+                expr.unwrap_or_else(|| self.debug_builder.create_expression(vec![])).as_mut_ptr(),
+                debug_loc.as_mut_ptr(),
+                block.as_mut_ptr(),
+            )
+        };
+    }
+
     fn push_scope(&mut self, span: SpanId, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
         self.debug_stack.push(DebugStackEntry { span, scope, file });
     }
@@ -471,6 +494,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug: bool,
         optimize: bool,
     ) -> Self {
+        eprintln!("init codegen debug={debug} optimize={optimize}");
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
@@ -483,7 +507,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module);
+        let machine = Cg::set_up_machine(&mut llvm_module, debug);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -630,10 +654,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.ctx.i8_type().array_type(size_bytes)
     }
 
-    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
+    fn get_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
         let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
-        let column = span.start - line.start_char;
+        let column = span.start + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
             line.line_index + 1,
@@ -641,6 +665,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.debug.current_scope(),
             None,
         );
+        locn
+    }
+    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
+        let locn = self.get_debug_location_from_span(span);
         self.builder.set_current_debug_location(locn);
         locn
     }
@@ -1408,6 +1436,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let alloca = self.builder.build_alloca(ty, name).unwrap();
+        alloca.as_instruction().unwrap().set_debug_location(None);
         self.get_insert_function_mut().last_alloca_instr = Some(alloca.as_instruction().unwrap());
 
         // Restore the builder's position
@@ -1881,26 +1910,39 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Alloca { t, .. } => {
-                // task(di): Eventually we could supplement with the type_id from the
+                // task(debug info): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
 
                 // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
-                let instr = self.build_k1_alloca(&cg_type, "");
-                inst_mappings.insert(inst_id, instr.as_basic_value_enum());
+                let alloca_ptr = self.build_k1_alloca(&cg_type, "");
+                inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
                 let bc_debug_info = self.k1.bytecode.debug_info.get(inst_id);
-                if let Some(var_info) = bc_debug_info.variable_info {
+                if let Some(var_info) = bc_debug_info.variable_info
+                    && !var_info.user_hidden
+                {
                     let name_str = self.k1.ident_str(var_info.name);
-                    let _local_variable = self.debug.debug_builder.create_auto_variable(
+                    // nocommit there does not need to be a debug info stack anymore
+                    eprintln!("create_auto_variable {}", name_str);
+                    let debug_locn = self.get_debug_location_from_span(var_info.source_span);
+                    let local_variable = self.debug.debug_builder.create_auto_variable(
                         self.debug.current_scope(),
                         name_str,
                         self.debug.current_file(),
-                        self.get_line_number(span),
+                        self.get_line_number(var_info.source_span),
                         cg_type.debug_type(),
                         true,
                         0,
                         cg_type.rich_repr_layout().align,
+                    );
+                    dbg!(alloca_ptr, alloca_ptr.as_instruction());
+                    self.debug.insert_declare_at_end(
+                        alloca_ptr,
+                        Some(local_variable),
+                        None,
+                        debug_locn,
+                        self.builder.get_insert_block().unwrap(),
                     );
                 }
 
@@ -3303,21 +3345,23 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.k1.program_name()
     }
 
-    fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
+    fn set_up_machine(module: &mut LlvmModule, debug: bool) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        // I use this explicit triple to avoid an annoying warning log on mac.
-        let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
-        let triple = TargetTriple::create(triple_str);
-        // let triple = TargetMachine::get_default_triple();
+        // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
+        // let triple = TargetTriple::create(triple_str);
+        let triple = TargetMachine::get_default_triple();
 
         let target = Target::from_triple(&triple).unwrap();
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
+        let opt_level = if debug { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         let machine = target
             .create_target_machine(
                 &triple,
-                "generic",
-                "",
-                OptimizationLevel::Aggressive,
+                &cpu,
+                &features,
+                opt_level,
                 inkwell::targets::RelocMode::Default,
                 inkwell::targets::CodeModel::Default,
             )
@@ -3325,8 +3369,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let data_layout = &machine.get_target_data().get_data_layout();
         info!(
-            "Initializing to 'native' target using triple {}. Layout: {}",
+            "Initializing to target: {} using cpu: {} triple: {}, features: {}, layout: {}",
             target.get_name().to_string_lossy(),
+            cpu,
+            triple,
+            features,
             data_layout.as_str().to_string_lossy()
         );
         module.set_data_layout(data_layout);
@@ -3348,11 +3395,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
                 .expect("Failed to create .ll file");
             std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!(
-                "Module '{}' failed validation: {}",
-                self.name(),
-                err.to_string_lossy()
-            )
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
         if optimize {
@@ -3360,6 +3403,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .run_passes("default<O2>", &self.llvm_machine, PassBuilderOptions::create())
                 .unwrap();
         } else {
+            // No opt path; we could run some QoL passes?
             // self.llvm_module
             //     .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
             //     .unwrap();
@@ -3383,9 +3427,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let machine = &self.llvm_machine;
         let path = path.as_ref();
         log::info!("Outputting object file to {}", path.display());
-        machine
-            .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, path)
-            .unwrap();
+        machine.write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, path).unwrap();
         Ok(())
     }
 

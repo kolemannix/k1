@@ -10291,6 +10291,9 @@ impl TypedProgram {
                 if fn_call.args.is_empty() {
                     return failf!(call_span, "format needs a format string");
                 }
+                if fn_call.args.len() > 2 {
+                    return failf!(call_span, "format takes at most 2 arguments: the format string, and the format values");
+                }
                 let fmt_string_arg = *self.ast.p_call_args.get_nth(fn_call.args, 0);
                 match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {

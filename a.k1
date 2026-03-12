@@ -1,26 +1,7 @@
 #debug
 fn main() {
-
-  let world = "Budapest";
-  let getWorld = fn. world;
-
-  // StringBuilder implements `writer`
-  let* w = StringBuilder/new();
-
-  // If you have a buffer already, or any writer at all, you can 'write' to it formatted
-  writef(w, "hello {world} -- ");
-  writef(w, "hello {world} {}", 42);
-  println(w.buildTmp());
-
-  // Or you can just make strings directly, mixing interpolated expressions
-  // with struct specifiers
-  let s = stringf("hello {getWorld()} {yyyy}-{mm}-{dd}", {yyyy:2021,mm:10,dd:3});
-  println(s);
-
-  // This still works too, if interpolation is all you need
-  println("hello, {getWorld()}!");
-
-  // nocommit test uninit structs
+  let x = (1 * 100 * 2) / 2;
+  assert(x == 100);
 
   {}
 }

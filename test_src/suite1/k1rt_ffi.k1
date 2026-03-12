@@ -1,4 +1,4 @@
-fn test_ffi() {
+fn test-ffi() {
   let s: string = #static {
     let* stack-buf = array/zeroed[char, 1024]();
     let len: core/c-int = core/k1rt/snprintf_f64(

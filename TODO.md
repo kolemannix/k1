@@ -27,10 +27,10 @@ Syntax/elegance
 - [x] replace `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`
 - [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
-- [ ] Rename `view` to `span`
-- [x] Rename 'static' types to 'static value' types
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [x] Rename `view` to `span`
+- [x] Rename 'static' types to 'static value' types
 - [x] Need a way to write an interpolated string to a Writer that you already have
       Let's just call it 'fmt' and make it a special construct
 - [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`

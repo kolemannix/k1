@@ -1,0 +1,27 @@
+ns format-test;
+
+fn test() {
+  let world = "Budapest";
+  let getWorld = fn. world;
+
+  // StringBuilder implements `writer`
+  let* w = StringBuilder/new();
+
+  // If you have a buffer already, or any writer at all, you can 'write' to it formatted
+  writef(w, "hello {world} -- ");
+  writef(w, "hello {world} {}", 42);
+  assertEquals(w.buildTmp(), "hello Budapest -- hello Budapest 42");
+  assertEquals("true", stringf("{}", true));
+  assertEquals("-3.140000", stringf("{}", -3.14));
+  assertEquals("-3", stringf("{}", -3i8));
+  
+  assert(testCompile(stringf("{}", 1, 1)).isSome());
+  assert(testCompile(stringf("{missing}", {x:1})).isSome());
+  assert(testCompile(stringf("{x}", {x: { nested: "asdf" }})).isSome());
+
+  // Or you can just make strings directly, mixing interpolated expressions
+  // with struct specifiers
+  let s = stringf("hello {getWorld()} {yyyy}-{mm}-{dd}", {yyyy:2021,mm:10,dd:3});
+  // TODO left pad, get it from npm!
+  assertEquals(s, "hello Budapest 2021-10-3");
+}
