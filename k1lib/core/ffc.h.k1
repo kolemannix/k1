@@ -1,0 +1,18 @@
+ns ffc;
+
+deftype alias ffc_outcome = u32
+let FFC_OUTCOME_OK           : ffc_outcome = 0
+let FFC_OUTCOME_INVALID_INPUT: ffc_outcome = 1
+let FFC_OUTCOME_OUT_OF_RANGE : ffc_outcome = 2
+deftype ffc_result = {
+  // Where parsing stopped
+  ptr: ptr,
+  // The outcome of the call
+  outcome: ffc_outcome
+}
+
+extern("k1rt", "ffc_parse_double") fn parse_double(len: size, c-str: ptr, out: *mut f64): ffc_result
+extern("k1rt", "ffc_parse_float") fn parse_float(len: size, c-str: ptr, out: *mut f32): ffc_result
+
+fn result_is_ok(result: ffc_result): bool { result.outcome == FFC_OUTCOME_OK }
+//ffc_result ffc_from_chars_double_options(const char *start, const char *end, double* out, ffc_parse_options options);

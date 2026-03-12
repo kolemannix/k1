@@ -94,7 +94,9 @@ impl TypedProgram {
         match self.exprs.get(expr) {
             TypedExpr::Struct(s) => {
                 for f in self.mem.getn(s.fields).iter() {
-                    recurse!(f.expr);
+                    if let Some(expr) = f.expr {
+                        recurse!(expr);
+                    }
                 }
             }
             TypedExpr::StructFieldAccess(field_access) => {
@@ -162,7 +164,8 @@ impl TypedProgram {
             TypedExpr::Return(ret) => recurse!(ret.value),
             TypedExpr::Break(brk) => recurse!(brk.value),
             TypedExpr::Lambda(lam) => {
-                let lambda_type = self.types.get(lam.lambda_type).as_lambda().unwrap();
+                let lambda_type_id = self.types.get(lam.lambda_type).as_lambda().unwrap();
+                let lambda_type = self.types.lambda_types.get(lambda_type_id);
                 let function = self.get_function(lambda_type.function_id);
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }

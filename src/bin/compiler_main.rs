@@ -7,7 +7,6 @@ use std::process::ExitCode;
 use clap::Parser;
 use k1::compiler;
 use k1::compiler::{Args, Command};
-use log::info;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -40,8 +39,6 @@ fn run() -> anyhow::Result<ExitCode> {
     log::set_max_level(log::LevelFilter::Info);
     let args = Args::parse();
     log::debug!("{:#?}", args);
-
-    info!("k1 Compiler v0.1.0");
 
     let out_dir: PathBuf = ".k1-out".into();
     std::fs::create_dir_all(&out_dir)?;

@@ -1,9 +1,9 @@
-use core/SpillList
+use core/spill-list
 
-deftype StringBuilder = { list: SpillList[u8, 64] }
+deftype StringBuilder = { list: spill-list[u8, 96] }
 ns StringBuilder {
   fn new(): StringBuilder {
-    { list: SpillList/new() }
+    { list: spill-list/new() }
   }
 
   fn reset(self: *mut StringBuilder) {
@@ -12,30 +12,30 @@ ns StringBuilder {
 
   fn buildTmp(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.asView().clonedIn(context .Current)()),
-      .Spilled(l)* -> string/fromBytes(l.asView())
+      .Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context .Current)()),
+      .Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }
 
   // Careful, if the StringBuilder is stack-allocated, and not 
   // spilled, this points to the stack memory!
-  fn rawView(self: *StringBuilder): View[char] {
-    self.list*.asView().toCharView()
+  fn raw-span(self: *StringBuilder): span[char] {
+    self.list*.as-span().as-char-span()
   }
 
   fn build(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.asView().cloned()),
-      .Spilled(l)* -> string/fromBytes(l.asView())
+      .Inline(f)* -> string/fromBytes(f.as-span().cloned()),
+      .Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }
 }
 
-impl Writer for *mut StringBuilder {
-  fn writeByte(self: Self, b: u8): empty {
+impl writer for *mut StringBuilder {
+  fn write-byte(self: self, b: u8): empty {
     self.list*.push(b)
   }
-  fn writeBytes(self: Self, b: View[u8]): empty {
+  fn write-bytes(self: self, b: span[u8]): empty {
     self.list*.pushN(b)
   }
 }

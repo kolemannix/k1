@@ -1,7 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T, b: T) {
+fn assertEquals[T: print and equals](context locn: compiler/source-location)(a: T, b: T) {
   if a != b {
     crash("ASSERT FAILED: {a} != {b}")
   }
@@ -9,30 +9,30 @@ fn assertEquals[T: Print and Equals](context locn: compiler/SourceLocation)(a: T
 
 ns iter {
 
-  fn find[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): ?T {
+  fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): ?T {
     for iterable {
-      if pred(it) return(.Some(it))
+      if pred(it) return(.some(it))
     };
-    .None
+    .none
   }
 
-  fn position[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): ?size {
+  fn position[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): ?size {
     for iterable {
-      if it == needle return(.Some(itIndex))
+      if it == needle return(.some(itIndex))
     };
-    .None
+    .none
   }
 
-  fn contains[T: Equals, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, needle: T): bool {
+  fn contains[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): bool {
     position(iterable, needle).isSome()
   }
 
-  fn forall[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
+  fn forall[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
     for iterable { if not pred(it) return(false) };
     true
   }
 
-  fn exists[T, Iter: Iterator[Item = T], I: Iterable[Item = T, I = Iter]](iterable: I, pred: some \T -> bool): bool {
+  fn exists[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): bool {
     for iterable {
       if pred(it) return(true)
     };
@@ -43,20 +43,20 @@ ns iter {
 
 fn inc(i: *mut size) { i <- i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[T: Add and KnowledgeOfOne](i: *mut T): T { i <- i.* + 1 }
+// fn incNew[T: Add and KnowledgeOfOne](i: *mut T): T { i <- i.* + KnowledgeOfOne@(T)/one() }
 
 fn identity[T](value: T): T { value }
 
-fn printIt[T: Print](value: T) {
-  value.printTo(io/STDOUT)
+fn printIt[T: print](value: T) {
+  value.printTo(io/stdout)
 }
 
 fn print(s: string) {
-  // TODO: Instead of this hack, make write(Sink, View[byte]) the intrinsic.
-  if k1/IS_STATIC and compiler/CAPTURE_PRINTS.* {
-    k1/emitCompilerMessage(compiler/location(), .Info, s)
+  // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
+  if k1/is-static and compiler/capture-prints.* {
+    k1/emit-compiler-message(compiler/location(), .info, s)
   } else {
-    io/STDOUT.writeString(s)
+    io/stdout.write-string(s)
   };
   {}
 }
@@ -68,10 +68,10 @@ fn println(s: string) {
 }
 
 fn eprint(s: string) {
-  if k1/IS_STATIC and compiler/CAPTURE_PRINTS.* {
-    k1/emitCompilerMessage(compiler/location(), .Warn, s)
+  if k1/is-static and compiler/capture-prints.* {
+    k1/emit-compiler-message(compiler/location(), .warn, s)
   } else {
-    io/STDERR.writeString(s)
+    io/stderr.write-string(s)
   };
   {}
 }
@@ -86,20 +86,20 @@ fn eprintln(s: string) {
 ns io {
   // TODO: Add buffering
   deftype OutStream = { fileNo: i32 }
-  let STDOUT: OutStream = { fileNo: posix/STDOUT };
-  let STDERR: OutStream = { fileNo: posix/STDERR };
+  let stdout: OutStream = { fileNo: posix/stdout }
+  let stderr: OutStream = { fileNo: posix/stderr }
 
-  impl Writer for OutStream {
-    fn writeByte(self: Self, value: u8) {
+  impl writer for OutStream {
+    fn write-byte(self: self, value: u8) {
       let* valueRef: *u8 = value;
-      posix/write(fileNo = self.fileNo, data = valueRef.as[ptr], count = 1);
+      posix/write(file-no = self.fileNo, data = valueRef.as[ptr], count = 1);
       {}
     }
-    fn writeBytes(self: Self, bytes: View[byte]) {
+    fn write-bytes(self: self, bytes: span[byte]) {
       posix/write(
-        fileNo = self.fileNo,
+        file-no = self.fileNo,
         data = bytes.dataPtr(),
-        count = (bytes.len()).as[c_sizet]
+        count = bytes.len().as[c-sizet]
       );
       {}
     }
@@ -109,55 +109,55 @@ ns io {
 ns sys {
 
   fn printBacktrace() {
-    #if k1/OS_POSIX {
+    #if k1/os-posix {
       k1rt/_k1_print_backtrace(frame_count = 128);
     } else {
       println("non-posix backtrace TODO")
     }
   }
 
-  #if k1/OS_MACOS extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
+  #if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
 
   fn random(upperBound: u32): u32 {
-    #if k1/OS == "macos" arc4random_uniform(upperBound)
+    #if k1/os == "macos" arc4random_uniform(upperBound)
     else if k1/OS == "linux" crash("linux 'random' unimpl")
     else if k1/OS == "wasm" crash("wasm 'random' unimpl")
     else crash("unreachable os")
   }
 
-  fn parseMainArgs(argCount: u32, args: ptr): View[string] {
-    let buf = Buffer/fromPtrAndCount[CString](
+  fn parseMainArgs(argCount: u32, args: ptr): span[string] {
+    let buf = buffer/fromPtrAndCount[c-string](
       count = argCount.as[size],
-      pointer = args
+      ptr = args
     );
-    let strings = List/fromMap(buf, \cstr. string/wrapCString(cstr));
-    strings.asView()
+    let strings = list/fromMap(buf, fn cstr. string/wrap-c(cstr));
+    strings.as-span()
   }
 
-  fn readLine(maxLengthBytes: size): Result[string, string] {
-    let* buffer = Buffer/_allocate[byte](maxLengthBytes);
-    let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c_sizet]);
+  fn readLine(maxLengthBytes: size): result[string, string] {
+    let* buffer = buffer/_allocate[byte](maxLengthBytes);
+    let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
 
     if bytesRead < 0 {
-      return(.Err("Failed to read line"));
+      return(.err("Failed to read line"));
     };
 
     let length: size = bytesRead - 1;
     buffer.len* <- length;
 
     let result = string/wrapByteBuffer(buffer);
-    .Ok(result)
+    .ok(result)
   }
 
 }
 
 ns files {
 
-  fn readToString(context alloc: mem/AllocMode)(path: string): string {
+  fn readToString(context alloc: mem/alloc-mode)(path: string): string {
     let filenameCString = path.toCString(context .Arena)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
-    if file.isNull() {
+    if file.is-null() {
       crash("fopen failed: `{path}`");
     };
     defer libc/files/fclose(file);
@@ -169,14 +169,14 @@ ns files {
     libc/files/fseek(file, 0, libc/files/SEEK_SET);
     libc/files/fread(buf, fileSizeBytes, 1, file);
     let string = string/wrapBuffer(
-      Buffer/fromPtrAndCount(count = fileSizeBytes, pointer = buf)
+      buffer/fromPtrAndCount(count = fileSizeBytes, ptr = buf)
     );
 
     string
   }
 }
 
-fn assertMsg(context locn: compiler/SourceLocation)(msg: string, value: bool) {
+fn assertMsg(context locn: compiler/source-location)(msg: string, value: bool) {
   if not value {
     crash("ASSERT FAILED: {msg}")
   };
@@ -190,7 +190,7 @@ ns char {
   fn as_u8(self: char): u8 { self.as[u8] }
 
   // mask to convert ASCII letters to uppercase
-  let ASCII_CASE_MASK: u8 = 0b0010_0000;
+  let ASCII_CASE_MASK: u8 = 0b0010_0000
   // Ported from Rust core library; todo wrapping_sub
   //fn asDigit(self: char, radix: u32): ?u32 {
   //  assert(radix >= 2 and radix <= 36);
@@ -215,8 +215,8 @@ ns char {
   }
 
   fn toAsciiDigit(self: char): ?u8 {
-    if self.isAsciiDigit() { .Some(self.as[u8] - '0'.as[u8]) } 
-    else .None
+    if self.isAsciiDigit() { .some(self.as[u8] - '0'.as[u8]) } 
+    else .none
   }
 
   fn isAsciiLower(self: char): bool {
@@ -231,33 +231,33 @@ ns char {
 
   fn toAsciiUpper(self: char): char {
     // Toggle (clear) the 6th bit if we are ascii lower
-    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.isAsciiLower().as_u8());
+    let u8 = (self.as[u8]).xor(ASCII_CASE_MASK * self.isAsciiLower().as-u8());
     u8.as[char]
   }
 
   fn toAsciiLower(self: char): char {
     // Set the 6th bit if we are ascii upper
-    let u8 = (self.as[u8]).bitOr(ASCII_CASE_MASK * self.isAsciiUpper().as_u8());
+    let u8 = (self.as[u8]) | (ASCII_CASE_MASK * self.isAsciiUpper().as-u8());
     u8.as[char]
   }
 
 }
 
-impl Comparable for char {
-  fn compare(self: char, other: char): Ordering {
+impl comparable for char {
+  fn compare(self: char, other: char): ordering {
     (self.as[u8]).compare(other.as[u8])
   }
 }
 
-impl ScalarCmp for char {
-  fn lt(self: Self, other: Self): bool { (self.as[u8]).lt(other.as[u8]) }
-  fn le(self: Self, other: Self): bool { (self.as[u8]).le(other.as[u8]) }
-  fn gt(self: Self, other: Self): bool { (self.as[u8]).gt(other.as[u8]) }
-  fn ge(self: Self, other: Self): bool { (self.as[u8]).ge(other.as[u8]) }
+impl scalar-cmp for char {
+  fn lt(self: self, other: self): bool { (self.as[u8]).lt(other.as[u8]) }
+  fn le(self: self, other: self): bool { (self.as[u8]).le(other.as[u8]) }
+  fn gt(self: self, other: self): bool { (self.as[u8]).gt(other.as[u8]) }
+  fn ge(self: self, other: self): bool { (self.as[u8]).ge(other.as[u8]) }
 }
 
-impl[T: Print] Show for T {
-  fn show(self: Self): string { 
+impl[T: print] show for T {
+  fn show(self: self): string { 
     let* sb = StringBuilder/new();
     self.printTo(sb);
     sb.build()
@@ -265,96 +265,96 @@ impl[T: Print] Show for T {
 }
 
 
-impl Print for bool {
-  fn printTo[W: Writer](self: bool, w: W) { 
+impl print for bool {
+  fn printTo[w: writer](self: bool, w: w) { 
     let s = if self "true" else "false";
-    w.writeString(s)
+    w.write-string(s)
   }
 }
-impl Show for bool { fn show(self: bool): string { if self "true" else "false" } }
+impl show for bool { fn show(self: bool): string { if self "true" else "false" } }
 
-impl Print for char { fn printTo[W: Writer](self: char, w: W) { w.writeChar(self) } }
+impl print for char { fn printTo[w: writer](self: char, w: w) { w.write-char(self) } }
 // Direct specialized 'show' impl to avoid going through a buffer
-impl Show for char { fn show(self: char): string { self.toString() } }
+impl show for char { fn show(self: char): string { self.toString() } }
 
-fn formatUInt[W: Writer](context w: W)(value: u64, base: u64) {
-  if value == 0 { w.writeChar('0'); return() }
+fn formatUInt[w: writer](context w: w)(value: u64, base: u64) {
+  if value == 0 { w.write-char('0'); return() }
   else if value < base {
-    let digit = u8/toAsciiDigitBase(value.as[u8], base);
-    w.writeChar(digit);
+    let digit = u8/toAsciiDigit(value.as[u8]);
+    w.write-char(digit);
   } else if value < (base * 2) {
     let first = (value / base);
-    let firstDigit = u8/toAsciiDigitBase(first.as[u8], base);
+    let firstDigit = u8/toAsciiDigit(first.as[u8]);
     let second = value % base;
-    let secondDigit = u8/toAsciiDigitBase(second.as[u8], base);
-    w.writeChar(firstDigit);
-    w.writeChar(secondDigit);
+    let secondDigit = u8/toAsciiDigit(second.as[u8]);
+    w.write-char(firstDigit);
+    w.write-char(secondDigit);
   } else {
     let remaining = value;
-    // TODO(stdlib slow): Try to use stack space for small ones.
-    let* digits = List/withCapacity[char](8);
+    let* digits: *mut FixList[char, 20] = uninit;
+    digits.used* <- 0;
     while remaining > 0 {
       let d = remaining % base;
-      let c = u8/toAsciiDigitBase(d.as[u8], base);
+      let c = u8/toAsciiDigit(d.as[u8]);
       digits.push(c);
       remaining := remaining / base;
     };
 
     digits.reverse();
 
-    w.writeBytes(digits.asView().asByteView());
+    w.write-bytes(digits.as-span().as-byte-span());
 
     {}
   }
 }
 
-impl Print for u8 {
-  fn printTo[W: Writer](self: u8, w: W) {
+impl print for u8 {
+  fn printTo[w: writer](self: u8, w: w) {
     (self.as[u64]).printTo(w)
   }
 }
 
-impl Print for u16 {
-  fn printTo[W: Writer](self: u16, w: W) {
+impl print for u16 {
+  fn printTo[w: writer](self: u16, w: w) {
     (self.as[u64]).printTo(w)
   }
 }
 
-impl Print for u32 {
-  fn printTo[W: Writer](self: u32, w: W) {
+impl print for u32 {
+  fn printTo[w: writer](self: u32, w: w) {
     (self.as[u64]).printTo(w)
   }
 }
 
-impl Print for u64 {
-  fn printTo[W: Writer](self: u64, w: W) {
+impl print for u64 {
+  fn printTo[w: writer](self: u64, w: w) {
     formatUInt(context w)(self, base = 10);
   }
 }
 
-impl Print for i8 {
-  fn printTo[W: Writer](self: i8, w: W) {
+impl print for i8 {
+  fn printTo[w: writer](self: i8, w: w) {
     (self.as[int]).printTo(w)
   }
 }
 
-impl Print for i16 {
-  fn printTo[W: Writer](self: i16, w: W) {
+impl print for i16 {
+  fn printTo[w: writer](self: i16, w: w) {
     (self.as[int]).printTo(w)
   }
 }
 
-impl Print for i32 {
-  fn printTo[W: Writer](self: i32, w: W) {
+impl print for i32 {
+  fn printTo[w: writer](self: i32, w: w) {
     (self.as[int]).printTo(w)
   }
 }
 
-impl Print for int {
-  fn printTo[W: Writer](self: int, w: W) {
+impl print for int {
+  fn printTo[w: writer](self: int, w: w) {
     let neg = self < 0;
     if neg {
-      w.writeChar('-');
+      w.write-char('-');
     };
 
     let pos = if neg { (self * -1) } else self;
@@ -362,64 +362,65 @@ impl Print for int {
   }
 }
 
-impl[S, F: Print] Try[T = S, E = F] for Result[S, F] {
-  fn error(e: E): Self { .Err(e) }
-  fn value(t: T): Self    { .Ok(t) }
+impl[S, F: print] try[t = S, e = F] for result[S, F] {
+  fn error(e: e): self { .err(e) }
+  fn value(t: t): self    { .ok(t) }
 
-  fn isOk(self: Self): bool { self is .Ok(_) }
-  fn getValue(self: Self): T  { 
+  fn is-ok(self: self): bool { self is .ok(_) }
+  fn get-value(self: self): t  {
     switch self {
-      .Ok(s) -> s,
-      .Err(e) -> crash("getValue() on .Err: {e}")
+      .ok(s) -> s,
+      .err(e) -> crash("get-value() on .err: {e}")
     }
   }
-  fn getError(self: Self): E { 
+  fn get-error(self: self): e {
     switch self {
-      .Ok(_) -> crash("getError() on .Ok"),
-      .Err(e) -> e
-    }
-  }
-}
-
-impl[S, F] Try[T = S, E = F] for Result[S, F] {
-  fn error(e: E): Self { .Err(e) }
-  fn value(t: T): Self    { .Ok(t) }
-
-  fn isOk(self: Self): bool { self is .Ok(_) }
-  fn getValue(self: Self): T  { 
-    switch self {
-      .Ok(s) -> s,
-      .Err(e) -> crash("getValue() on .Err")
-    }
-  }
-  fn getError(self: Self): E { 
-    switch self {
-      .Ok(_) -> crash("getError() on .Ok"),
-      .Err(e) -> e
+      .ok(_) -> crash("get-error() on .ok"),
+      .err(e) -> e
     }
   }
 }
 
-impl Comparable for i64 {
-  fn compare(self: i64, other: i64): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
+impl[S, F] try[t = S, e = F] for result[S, F] {
+  fn error(e: e): self { .err(e) }
+  fn value(t: t): self    { .ok(t) }
+
+  fn is-ok(self: self): bool { self is .ok(_) }
+  fn get-value(self: self): t  {
+    switch self {
+      .ok(s) -> s,
+      .err(e) -> crash("get-value() on .err")
+    }
+  }
+  fn get-error(self: self): e {
+    switch self {
+      .ok(_) -> crash("get-error() on .ok"),
+      .err(e) -> e
+    }
   }
 }
 
-impl Comparable for u64 {
-  fn compare(self: u64, other: u64): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
+impl comparable for i64 {
+  fn compare(self: i64, other: i64): ordering {
+    if self == other .equal else if self > other .greater else .less
   }
 }
 
-impl Comparable for u8 {
-  fn compare(self: u8, other: u8): Ordering {
-    if self == other .Equal else if self > other .Greater else .Less
+impl comparable for u64 {
+  fn compare(self: u64, other: u64): ordering {
+    if self == other .equal else if self > other .greater else .less
+  }
+}
+
+impl comparable for u8 {
+  fn compare(self: u8, other: u8): ordering {
+    if self == other .equal else if self > other .greater else .less
   }
 }
 
 ns u8 {
-  fn toAsciiDigitBase(v: u8, base: u64): char {
+  // TODO: replace with char -> digit lut
+  fn toAsciiDigit(v: u8): char {
     if v < 10 {
       (v + 48).as[char] // '0' + v
     } else if v < 36 {
@@ -427,27 +428,24 @@ ns u8 {
     } else if v < 62 {
       (v + 29).as[char] // 'A' + (v - 36)
     } else {
-      crash("u8/toAsciiDigitBase: value {v} is out of range for base {base}")
+      crash("u8/toAsciiDigit: value {v} is out of range (max 61)")
     }
-  }
-  fn toAsciiDigit(v: u8): char {
-    (v + 48).as[char]
   }
 }
 
 ns u32 {
-  let minValue: u32 = 0x00000000;
-  let maxValue: u32 = 0xFFFFFFFF;
+  let minValue: u32 = 0x00000000
+  let maxValue: u32 = 0xFFFFFFFF
 }
 
 ns i32 {
-  let maxValue: i32 = 0x7FFFFFFF;
-  let minValue: i32 = -0x80000000;
+  let maxValue: i32 = 0x7FFFFFFF
+  let minValue: i32 = -0x80000000
 }
 
 ns i64 {
-  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF;
-  let minValue: i64 = -0x8000000000000000;
+  let maxValue: i64 = 0x7FFFFFFFFFFFFFFF
+  let minValue: i64 = -0x8000000000000000
   fn nextPow2(self: i64): i64 {
     // TODO: We could call ctlz instead when available
     if self < 0 crash("i64/nextPow2: value must be positive") else
@@ -461,7 +459,7 @@ ns i64 {
   }
 
   fn abs(self: i64): i64 {
-    let mask = self.shiftRight(63);
+    let mask = self >> 63;
     self.xor(mask) - mask;
   }
 }
@@ -469,18 +467,18 @@ ns i64 {
 ns u64 {
   fn nextPow2(self: u64): u64 {
     let v = self - 1;
-    v := v.bitOr(v.shiftRight(1));
-    v := v.bitOr(v.shiftRight(2));
-    v := v.bitOr(v.shiftRight(4));
-    v := v.bitOr(v.shiftRight(8));
-    v := v.bitOr(v.shiftRight(16));
-    v := v.bitOr(v.shiftRight(32));
+    v := v | (v >> 1);
+    v := v | (v >> 2);
+    v := v | (v >> 4);
+    v := v | (v >> 8);
+    v := v | (v >> 16);
+    v := v | (v >> 32);
     v + 1
   }
 
   fn bitmaskLow(n: size): u64 {
     assert(n <= 64);
-    1usize.shiftLeft((n).as[u32]) - 1
+    (1usize << n.as[u32]) - 1
   }
 
 }
@@ -491,67 +489,88 @@ ns k1rt {
   // Allowing you to mix and match .c and .k1 files
 
   // TODO: Doesn't even need to be written in C
-  extern("k1rt", "_k1_print_backtrace") fn _k1_print_backtrace(frame_count: c_int)
+  extern("k1rt", "_k1_print_backtrace") fn _k1_print_backtrace(frame_count: c-int)
 
-  extern("k1rt", "_k1_snprintf_f32") fn snprintf_f32(buf: ptr, size: c_sizet, float: f32, places: u32): i32
-  extern("k1rt", "_k1_snprintf_f64") fn snprintf_f64(buf: ptr, size: c_sizet, float: f64, places: u32): i32
+  extern("k1rt", "_k1_snprintf_f32") fn snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32
+  extern("k1rt", "_k1_snprintf_f64") fn snprintf_f64(buf: ptr, size: c-sizet, float: f64, places: i32): i32
+
+  extern("k1rt", "_k1_parse_f64") fn parse-f64()
 }
 
 ns f64 {
-  fn format[W: Writer](f: f64, w: W, places: u32) {
-    let* stackBuf = Array/bytes[32]();
-    let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.getBase().as[ptr], 32, f, places);
+  fn format[w: writer](f: f64, w: w, places: i32) {
+    let* stackBuf = array/zeroed[u8, 32]();
+    let writtenLen: i32 = k1rt/snprintf_f64(stackBuf.get-base().as[ptr], 32, f, places);
     if writtenLen <= 0 crash("snprintf_f32 returned {writtenLen}");
-    w.writeBytes(stackBuf.asView().slice(0, writtenLen.as[size]))
+    w.write-bytes(stackBuf.as-span().slice(0, writtenLen.as[size]))
+  }
+
+  fn from-string(s: string): result[{ value: f64, len: size }, string] {
+    parse-string(s = s, require-total = true);
+  }
+  fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
+    let* out: *mut f64 = uninit;
+    let result = ffc/parse_double(s.len(), s.dataPtr(), out);
+    if not ffc/result_is_ok(result) {
+      .err("Could not parse '{s}' as f64")
+    } else {
+      let len = result.ptr.diff(s.dataPtr());
+      if require-total and len != s.len() {
+        .err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
+      } else {
+        .ok({ value: out.*, len })
+      }
+    }
+  }
+
+}
+
+impl equals for f32 { intern fn equals(self: f32, other: f32): bool }
+impl equals for f64 { intern fn equals(self: f64, other: f64): bool }
+
+impl add for f32 { intern fn add(self: self, other: self): self }
+impl add for f64 { intern fn add(self: self, other: self): self }
+
+impl sub for f32 { intern fn sub(self: self, other: self): self }
+impl sub for f64 { intern fn sub(self: self, other: self): self }
+
+impl mul for f32 { intern fn mul(self: self, other: self): self }
+impl mul for f64 { intern fn mul(self: self, other: self): self }
+
+impl div for f32 { intern fn div(self: self, other: self): self }
+impl div for f64 { intern fn div(self: self, other: self): self }
+
+impl rem for f32 { intern fn rem(self: self, other: self): self }
+impl rem for f64 { intern fn rem(self: self, other: self): self }
+
+impl scalar-cmp for f32 {
+  intern fn lt(self: self, other: self): bool
+  intern fn le(self: self, other: self): bool
+  intern fn gt(self: self, other: self): bool
+  intern fn ge(self: self, other: self): bool
+}
+impl scalar-cmp for f64 {
+  intern fn lt(self: self, other: self): bool
+  intern fn le(self: self, other: self): bool
+  intern fn gt(self: self, other: self): bool
+  intern fn ge(self: self, other: self): bool
+}
+
+impl print for f32 {
+  fn printTo[w: writer](self: f32, w: w) {
+    f64/format(self.as[f64], w, places = -1);
   }
 }
 
-impl Equals for f32 { intern fn equals(self: f32, other: f32): bool }
-impl Equals for f64 { intern fn equals(self: f64, other: f64): bool }
-
-impl Add for f32 { intern fn add(self: Self, other: Self): Self }
-impl Add for f64 { intern fn add(self: Self, other: Self): Self }
-
-impl Sub for f32 { intern fn sub(self: Self, other: Self): Self }
-impl Sub for f64 { intern fn sub(self: Self, other: Self): Self }
-
-impl Mul for f32 { intern fn mul(self: Self, other: Self): Self }
-impl Mul for f64 { intern fn mul(self: Self, other: Self): Self }
-
-impl Div for f32 { intern fn div(self: Self, other: Self): Self }
-impl Div for f64 { intern fn div(self: Self, other: Self): Self }
-
-impl Rem for f32 { intern fn rem(self: Self, other: Self): Self }
-impl Rem for f64 { intern fn rem(self: Self, other: Self): Self }
-
-impl ScalarCmp for f32 {
-  intern fn lt(self: Self, other: Self): bool
-  intern fn le(self: Self, other: Self): bool
-  intern fn gt(self: Self, other: Self): bool
-  intern fn ge(self: Self, other: Self): bool
-}
-impl ScalarCmp for f64 {
-  intern fn lt(self: Self, other: Self): bool
-  intern fn le(self: Self, other: Self): bool
-  intern fn gt(self: Self, other: Self): bool
-  intern fn ge(self: Self, other: Self): bool
-}
-
-impl Print for f32 {
-  fn printTo[W: Writer](self: f32, w: W) {
-    f64/format(self.as[f64], w, places = 6);
+impl print for f64 {
+  fn printTo[w: writer](self: f64, w: w) {
+    f64/format(self, w, places = -1);
   }
 }
 
-impl Print for f64 {
-  fn printTo[W: Writer](self: f64, w: W) {
-    f64/format(self, w, places = 6);
-  }
-}
-
-impl Print for ptr {
-  fn printTo[W: Writer](self: ptr, w: W) {
-    w.writeString("0x");
+impl print for ptr {
+  fn printTo[w: writer](self: ptr, w: w) {
+    w.write-string("0x");
     formatUInt(context w)(self.as[usize], base = 16);
   }
 }

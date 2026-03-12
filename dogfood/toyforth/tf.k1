@@ -7,12 +7,12 @@ deftype TfObj = either(u32)
   Int   ({ common: ObjCommon, i: i64 }),
   Str   ({ common: ObjCommon, value: string }),
   Bool  ({ common: ObjCommon, b: bool }),
-  List  ({ common: ObjCommon, elems: List[*mut TfObj], len: size }),
+  List  ({ common: ObjCommon, elems: list[*mut TfObj], len: size }),
   Symbol({ common: ObjCommon, name: string })
 
 deftype Parser = { input: string, cursor: size }
 
-deftype Ctx = { stack: List[TfObj] }
+deftype Ctx = { stack: list[TfObj] }
 
 use mem/new
 fn mkStr(value: string): *TfObj { new(.Str({ common: ObjCommon/empty, value })) }
@@ -20,7 +20,7 @@ fn mkSym(name: string): *TfObj { new(.Symbol({ common: ObjCommon/empty, name }))
 fn mkInt(i: i64): *TfObj { new(.Int({ common: ObjCommon/empty, i })) }
 fn mkBool(b: bool): *TfObj { new(.Bool({ common: ObjCommon/empty, b })) }
 fn mkList(): *TfObj { 
-  new(.List({ common: ObjCommon/empty, elems: List/empty(), len: 0 }))
+  new(.List({ common: ObjCommon/empty, elems: list/empty(), len: 0 }))
 }
 
 fn compile(programText: string): *TfObj {
@@ -29,9 +29,9 @@ fn compile(programText: string): *TfObj {
 }
 
 fn main(argc: u32, argv: ptr): i32 {
-  let context alloc: mem/AllocMode = { kind: .SystemHeap };
+  let context alloc: mem/alloc-mode = { kind: .SystemHeap };
 
-  let args: View[string] = core/sys/parseMainArgs(argc, argv);
+  let args: span[string] = core/sys/parseMainArgs(argc, argv);
   if args.len() != 2 {
     eprintln("Usage: {args.get(0)} <fname>");
     return(1);

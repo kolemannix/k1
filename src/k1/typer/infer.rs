@@ -52,15 +52,14 @@ impl TypedProgram {
         let mut self_ = scopeguard::guard(self, |self_| {
             let clock = &self_.timing.clock;
             let start = self_.ictx().start_raw;
-            let end = clock.raw();
-            let elapsed = clock.delta_as_nanos(start, end);
+            let elapsed = clock.elapsed_nanos(start);
 
             let ictx = self_.ictx_mut();
             let id = ictx.origin_stack.pop().unwrap();
             debug_assert_eq!(id, span);
             if ictx.origin_stack.is_empty() {
                 self_.timing.total_infers += 1;
-                self_.timing.total_infer_nanos += elapsed;
+                self_.timing.total_infer_nanos += elapsed as i64;
 
                 debug!("Resetting inference context");
                 self_.ictx_pop();
@@ -198,7 +197,7 @@ impl TypedProgram {
                 if !allow_mismatch {
                     return failf!(
                         argument_span,
-                        "Passed value does not match expected type: expected {} but got {}. {msg}",
+                        "(unify fail) Passed value does not match expected type: expected {} but got {}\nReason: {msg}",
                         self_.type_id_to_string(expected_type_so_far),
                         self_.type_id_to_string(argument_type)
                     );
@@ -305,8 +304,7 @@ impl TypedProgram {
                 self.type_id_to_string(solution_type_id),
                 self.type_id_to_string(static_type),
             );
-            let Some(solution_static_type) =
-                self.types.get_static_type_id_of_type(solution_type_id)
+            let Some(solution_static_type) = self.types.get_value_type_id_of_type(solution_type_id)
             else {
                 error!(
                     "The solution was not a static type; this is probably crashworthy because we shouldn't have accepted it"
@@ -441,10 +439,10 @@ impl TypedProgram {
                 passed_type_args_count
             );
         }
-        let all_passed = passed_type_args.len() == type_params.len()
+        let all_params_were_passed = passed_type_args.len() == type_params.len()
             && passed_type_args.iter().all(|nt| nt.type_expr.is_some());
-        debug!("all_passed={all_passed}");
-        let solved_type_params = if all_passed {
+        debug!("all_passed={all_params_were_passed}");
+        let solved_type_params = if all_params_were_passed {
             let mut evaled_params: SV4<NameAndType> =
                 SmallVec::with_capacity(passed_type_args_count);
             for (type_param, type_arg) in type_params.iter().zip(passed_type_args.iter()) {
@@ -590,11 +588,7 @@ impl TypedProgram {
                 .zip(self.named_types.get_slice(type_args).iter())
                 .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
                 .collect();
-            for function_type_param in self
-                .function_type_params
-                .copy_slice_sv::<4>(original_function_sig.function_type_params)
-                .iter()
-            {
+            for function_type_param in self.mem.getn(original_function_sig.function_type_params) {
                 let (corresponding_arg, corresponding_value_param) =
                     args_and_params.get(function_type_param.value_param_index as usize);
                 debug!(
@@ -923,14 +917,14 @@ impl TypedProgram {
             return TypeUnificationResult::Matching;
         }
 
-        let passed_type = match self.types.get_no_follow(passed_type) {
+        let passed_type = match self.types.get(passed_type) {
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 tp.static_constraint.unwrap()
             }
             _ => passed_type,
         };
 
-        let slot_type = match self.types.get_no_follow(slot_type) {
+        let slot_type = match self.types.get(slot_type) {
             Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                 tp.static_constraint.unwrap()
             }
@@ -959,20 +953,29 @@ impl TypedProgram {
                 self.add_substitution(TypeSubstitutionPair { from: slot_type, to: passed_type });
                 TypeUnificationResult::Matching
             }
-            (Type::Reference(passed_refer), Type::Reference(refer)) => self
+            (Type::Reference(passed_ref), slot) => {
                 // For the purposes of inference, we ignore the difference between
                 // write and read pointers, since they'll still fail typecheck in the end
                 // but we'd like to infer successfully to get a good message
-                .unify_and_find_substitutions_rec(passed_refer.inner_type, refer.inner_type),
+                match slot.as_reference() {
+                    None => self.unify_and_find_substitutions_rec(passed_ref.inner_type, slot_type),
+
+                    // This performs a single-layer deref.
+                    // This improves error messages, and also allows us to infer correctly even when an auto-deref is needed
+
+                    // Here in infer/unify, we're really after capturing the programmer's intent as
+                    // best as we can, and typechecking/coercion takes care of whether to ultimately
+                    // let the code through, so we can be a little generous
+                    Some(slot_ref) => self.unify_and_find_substitutions_rec(
+                        passed_ref.inner_type,
+                        slot_ref.inner_type,
+                    ),
+                }
+            }
             (Type::Struct(passed_struct), Type::Struct(struc)) => {
-                // Struct example:
-                // type Pair<T, U> = { a: T, b: U }
-                // fn get_first<T, U>(p: Pair<T, U>): T { p.a }
-                // get_first({ a: 1, b: 2})
-                // passed_expr: Pair<int, int>, argument_type: Pair<T, U>
-                // passed expr: { a: int, b: int }, argument_type: { a: T, b: U }
-                //
                 // Structs must have all same field names in same order
+
+                // One day, we could do better, infer on as many fields match...
                 let passed_fields = passed_struct.fields;
                 let fields = struc.fields;
                 if passed_fields.len() != fields.len() {
@@ -1072,36 +1075,40 @@ impl TypedProgram {
                     )
                 }
             }
-            (Type::Lambda(passed_lambda), Type::LambdaObject(param_lambda)) => self
-                .unify_and_find_substitutions_rec(
+            (Type::Lambda(passed_lambda_id), Type::LambdaObject(slot_lambda_obj)) => {
+                let passed_lambda = self.types.lambda_types.get(*passed_lambda_id);
+                self.unify_and_find_substitutions_rec(
                     passed_lambda.function_type,
-                    param_lambda.function_type,
-                ),
+                    slot_lambda_obj.function_type,
+                )
+            }
             (Type::LambdaObject(passed_lambda), Type::LambdaObject(param_lambda)) => self
                 .unify_and_find_substitutions_rec(
                     passed_lambda.function_type,
                     param_lambda.function_type,
                 ),
-            (Type::Static(passed_static), Type::Static(param_static)) => self
+            (Type::StaticValue(passed_value_type), Type::StaticValue(param_value_type)) => self
                 .unify_and_find_substitutions_rec(
-                    passed_static.family_type_id,
-                    param_static.family_type_id,
+                    passed_value_type.family_type_id,
+                    param_value_type.family_type_id,
                 ),
-            (Type::Static(passed_static), _non_static) => {
+            (Type::StaticValue(passed_static), _non_static) => {
                 // We infer 'through' statics, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
                 self.unify_and_find_substitutions_rec(passed_static.family_type_id, slot_type)
             }
-            (_non_static_passed, Type::Static(static_slot)) if static_slot.value_id.is_none() => {
-                // We infer 'through' statics, even though they'll fail typecheck without a cast.
+            (_non_value_passed, Type::StaticValue(value_type_slot))
+                if value_type_slot.value_id.is_none() =>
+            {
+                // We infer 'through' value types, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
-                self.unify_and_find_substitutions_rec(passed_type, static_slot.family_type_id)
+                self.unify_and_find_substitutions_rec(passed_type, value_type_slot.family_type_id)
             }
 
             // --------------- MISS CASES: we detect further explicit cases for better error message ---------------------
-            (passed_type, Type::Reference(_passed_t)) if passed_type.as_reference().is_none() => {
+            (passed_type, Type::Reference(_slot_t)) if passed_type.as_reference().is_none() => {
                 TypeUnificationResult::NonMatching("Consider passing a reference")
             }
             _ => {

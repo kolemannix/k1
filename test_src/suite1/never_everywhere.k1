@@ -1,6 +1,21 @@
 ns never_everywhere;
 
-fn callArgument(): never { println(crash("call arg")) }
+fn takesFour(_a: empty, _b: empty, _c: empty, _d: empty) {{}}
+fn callArguments(): never { 
+  // We're going to do stuff in call arguments that ultimately crash, and ensure that
+  // they do run in order up to the 'never' typed one
+  let* counter = 0;
+  let incr = fn() { counter <- counter.* + 1 };
+  // This should get compiled to:
+  // { incr(); incr(), incr(), { if i.* == 3 core/sys/exit(0) else crash("i wasnt incremented") } }
+  // No 'call' is even emitted
+  takesFour(
+    _a = incr(),
+    _b = incr(),
+    _c = incr(),
+    _d = { if counter.* == 3 core/sys/exit(0) else crash("counter wasnt incremented") }
+  )
+}
 fn letRhs(): empty { let _x = crash("letRhs") }
 fn assgnRhs(): never { let _x = 123; _x := crash("assgn rhs") }
 // should fail to compile anyway
@@ -8,9 +23,9 @@ fn assgnRhs(): never { let _x = 123; _x := crash("assgn rhs") }
 fn binopRhs(): int { 4 + crash("") }
 fn unop(): never { not crash("") }
 fn whileCond(): never { while crash("asdf") { {} } }
-fn enumConstrPayload(): never { Opt.Some(crash("asdf")) }
+fn enumConstrPayload(): never { opt.some(crash("asdf")) }
 fn getEnumPayload(): i64 { 
-  let x: ?int = Opt.Some(crash(""));
+  let x: ?int = opt.some(crash(""));
 }
 fn castTarget(): i64 { crash(""): i64 }
 fn inReturn(): never { 
@@ -18,7 +33,7 @@ fn inReturn(): never {
     testCompile(
       return(crash("what"))
     ),
-    .Some("return is dead since returned expression is divergent; remove the return")
+    .some("return is dead since returned expression is divergent; remove the return")
   );
 
   core/sys/exit(0)
@@ -28,11 +43,12 @@ fn inBreak(): never {
     testCompile(
       loop { break(crash("inBreak")) }
     ),
-    .Some("break is dead since returned expression is divergent; consider removing the 'break'")
+    .some("break is dead since returned expression is divergent; consider removing the 'break'")
   );
   core/sys/exit(0)
 }
 
 fn test() {
-  {}
+  let crashyArgsError = testCompile(#static callArguments());
+  assert(crashyArgsError is .none);
 }

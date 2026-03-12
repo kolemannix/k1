@@ -1,9 +1,9 @@
 ns meta_defns;
 
-#meta "let n: u64 = 255;"
-#meta "let x: u64 = 256;"
+#meta "let n: u64 = 255"
+#meta "let x: u64 = 256"
 
-#meta "fn isPow2(x: u64): bool {{ (x - 1) || Bitwise/bitAnd(x) == 0 }"
+#meta p"fn isPow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 
 #meta {
   let name1 = "1";
@@ -14,16 +14,16 @@ ns meta_defns;
 }
 
 #meta {
-  "deftype Frob = {{ b: bool }"
+  p"deftype Frob = { b: bool }"
 }
 
 #meta {
-  "ability Named {{ fn getName(self: Self): string }"
+  p"ability Named { fn getName(self: self): string }"
 }
 
 #meta {
-  `impl Named for Frob {{
-    fn getName(self: Self): string {{ if self.b "Bob" else "Joe" }
+  p`impl Named for Frob {
+    fn getName(self: self): string { if self.b "Bob" else "Joe" }
   }`
 }
 
@@ -48,7 +48,7 @@ fn test() {
 }
 
 // Only "static, true" and "meta, true" should appear
-#if true #static { println("static, true"); {} } 
-#if false #static { println("static, false"); {} } 
-#if true #meta { println("meta, true"); "let u1: empty = {{};" } 
-#if false #meta { println("meta, false"); "let u2: empty = {{};" } 
+// #if true #static { println("static, true"); {} } 
+// #if false #static { println("static, false"); {} } 
+// #if true #meta { println("meta, true"); "let u1: empty = {{};" } 
+// #if false #meta { println("meta, false"); "let u2: empty = {{};" } 

@@ -1,15 +1,15 @@
 ns condcomp;
 
 
-let MY_VALUE: bool = true;
-let MY_VALUE_NEG: bool = not MY_VALUE;
+let MY_VALUE: bool = true
+let MY_VALUE_NEG: bool = not MY_VALUE
 
 fn test() {
   use core/k1;
-  let _a = k1/OS;
+  let _a = k1/os;
   let _b = "macos";
-  assertEquals(k1/OS, "macos");
-  assertEquals(k1/TEST, false);
+  assertEquals(k1/os, "macos");
+  assertEquals(k1/test, false);
 
   let trip = false;
   #if MY_VALUE_NEG {

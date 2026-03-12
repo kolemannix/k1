@@ -4,22 +4,22 @@
 ns meta {
 
   ability CodeWriter {
-    fn line(self: Self, line: string) 
-    fn lines[Iter: Iterator[Item = string]](self: Self, lines: Iter) {
+    fn line(self: self, line: string) 
+    fn lines[Iter: iterator[item = string]](self: self, lines: Iter) {
       for l in lines { self.line(l) }
     }
-    fn var[T](self: Self, name: string, value: T) 
+    fn var[T](self: self, name: string, value: T) 
 
-    fn indent(self: Self, n: size) {
+    fn indent(self: self, n: size) {
       self.repeat("  ", n);
     }
-    fn implPrint(self: Self, typeName: string, body: string, indent: size) {
+    fn implPrint(self: self, type-name: string, body: string, indent: size) {
       self.indent(indent);
-      self.line("impl Print for {typeName} {{");
+      self.line("impl print for {type-name} {{");
 
       self.indent(indent + 1);
-      self.line("fn printTo[W: Writer](self: Self, w: W) {{");
-      self.writeString(body);
+      self.line(p"fn printTo[w: writer](self: self, w: w) {");
+      self.write-string(body);
       self.indent(indent + 1);
       self.line("}");
 
@@ -28,42 +28,42 @@ ns meta {
     }
   }
   
-  impl[W: Writer] CodeWriter for W {
-    fn line(self: Self, line: string) {
-      self.writeString(line);
-      self.writeString("\n");
+  impl[w: writer] CodeWriter for w {
+    fn line(self: self, line: string) {
+      self.write-string(line);
+      self.write-string("\n");
     }
     
-    fn var[T](self: Self, name: string, value: T) {
+    fn var[T](self: self, name: string, value: T) {
       let bakedVar = meta/bakedVariable[T](name, value);
-      self.writeString(bakedVar)
+      self.write-string(bakedVar)
     }
   }
 
   fn bakedValueExpr[T](value: T): string {
-    let valueId = bakeStaticValue[T](value);
-    `core/meta/getStaticValue({valueId})`
+    let valueId = bake-static-value[T](value);
+    `core/meta/get-static-value({valueId})`
   }
 
   fn bakedVariable[T](name: string, value: T): string {
     let bakedValueExpr: string = bakedValueExpr[T](value);
-    let typeId = types/typeId[T]();
-    `let {name}: typeFromId({typeId}) = {bakedValueExpr};\n`
+    let type-id = types/type-id[T]();
+    `let {name}: typeFromId({type-id}) = {bakedValueExpr};\n`
   }
 
-  // Note: If we had an interface for "growable collection", we could implement it here.
+  // Note: If we had an ability for "growable collection", we could implement it.
   //       len, get, empty, (push)
   fn defineSoA[T](name: string): string {
-    let structTypeId = types/typeId[T]();
+    let structTypeId = types/type-id[T];
     let tt = "typeFromId({structTypeId})";
-    require types/typeSchema(structTypeId) is .Struct({ fields }) else
+    require types/type-schema(structTypeId) is .struct({ fields }) else
       crash("Its called a STRUCT of arrays for a reason");
     if fields.isEmpty() { crash("Input struct must have at least one field") };
 
     let* code = StringBuilder/new();
     code.line("deftype {name} = {{");
     for f in fields {
-      code.line("  ARR_{f.name}: List[typeFromId({f.typeId})],");
+      code.line("  ARR_{f.name}: list[typeFromId({f.type-id})],");
     };
     code.line("}");
 
@@ -82,7 +82,7 @@ ns meta {
     // begin fn empty
     code.line(`  fn empty(): {name} {{ {{`);
     for f in fields {
-      code.line(`    ARR_{f.name}: List/empty(),`);
+      code.line(`    ARR_{f.name}: list/empty(),`);
     };
     code.line(`  } }`); // end fn empty
 

@@ -6,40 +6,40 @@ deftype Foo = {
   a: bool
 }
 
-fn canFailInt(): Result[int, Error] { .Ok(42) }
-fn canFailBool(): Result[bool, Error] { .Ok(false) }
+fn canFailInt(): result[int, Error] { .ok(42) }
+fn canFailBool(): result[bool, Error] { .ok(false) }
 
-impl Try[T = int, E = Error] for Foo {
-  fn error(_e: E): Self   { { a: false } }
-  fn value(_t: T): Self { { a: true  } }
+impl try[t = int, e = Error] for Foo {
+  fn error(_e: e): self   { { a: false } }
+  fn value(_t: t): self { { a: true  } }
 
-  fn isOk(self: Self): bool { self.a }
-  fn getValue(_self: Self): T  { 3 }
-  fn getError(_self: Self): E { "FooError" }
+  fn is-ok(self: self): bool { self.a }
+  fn get-value(_self: self): t  { 3 }
+  fn get-error(_self: self): e { "FooError" }
 }
 
-fn fails(): Result[bool, Error] {
-  let value: Result[int, Error] = .Err("woops");
+fn fails(): result[bool, Error] {
+  let value: result[int, Error] = .err("woops");
   let i = value.try;
-  .Ok(i % 2 == 0)
+  .ok(i % 2 == 0)
 }
 
-fn run(): Result[i32, Error] {
+fn run(): result[i32, Error] {
   let result: int = canFailInt().try;
   assert(result == 42);
   let result: int = ({ a: true }: Foo).try;
   assert(result == 3);
 
-  let c = \(-> Result[bool, Error]) {
+  let c = fn(-> result[bool, Error]) {
     let i = fails().try;
-    .Ok(not i)
+    .ok(not i)
   };
   let res = c();
-  assert(res is .Err("woops"));
+  assert(res is .err("woops"));
 
-  .Ok(0)
+  .ok(0)
 }
 
 fn test() {
-  assert(run().isOk());
+  assert(run().is-ok());
 }

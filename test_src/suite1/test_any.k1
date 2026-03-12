@@ -1,29 +1,29 @@
 ns any_test;
 
-use types/Any
-use types/TypeSchema
-use types/typeId
-use types/makeAny
+use types/any
+use types/type-schema
+use types/type-id
+use types/make-any
 
-fn kindOfAny(any: Any): string {
-  typeVariantName(any.typeId) ? "fail"
+fn kindOfAny(any: any): string {
+  typeVariantName(any.type-id) ? "fail"
 }
 
-fn typeVariantName(typeId: u64): ?string {
-  let schema = types/typeSchema(typeId);
-  let schemaSchema = types/typeSchema(typeId[TypeSchema]());
-  require schemaSchema is .Either(e) else { return(.None) };
-  let variant = core/iter/find(e.variants, \(v)
-    if v.tag is .U8(t) and t == schema.tag true else false
+fn typeVariantName(type-id: u64): ?string {
+  let schema = types/type-schema(type-id);
+  let schemaSchema = types/type-schema(type-id[type-schema]);
+  require schemaSchema is .either(e) else { return(.none) };
+  let variant = core/iter/find(e.variants, fn v.
+    if v.tag is .u8(t) and t == schema.tag true else false
   );
-  variant.map(\v. v.name)
+  variant.map(fn v. v.name)
 }
 
 fn test() {
   let* i: *int = 10;
-  let intPtr: Any = makeAny(i);
+  let intPtr = make-any(i);
   let* s = { x: 1, y: 100 };
-  let structPtr: Any = makeAny(s);
-  assertEquals(kindOfAny(intPtr), "Int");
-  assertEquals(kindOfAny(structPtr), "Struct");
+  let structPtr = make-any(s);
+  assertEquals(kindOfAny(intPtr), "int");
+  assertEquals(kindOfAny(structPtr), "struct");
 }

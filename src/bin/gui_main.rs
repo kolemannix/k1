@@ -162,8 +162,6 @@ fn main() -> anyhow::Result<()> {
     let args = k1::compiler::Args::try_parse().unwrap();
     info!("{:#?}", args);
 
-    info!("k1 Compiler v0.1.0");
-
     let out_dir = Path::new(".k1-out");
 
     // If gui mode:

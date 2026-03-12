@@ -1,6 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use crate::failf;
+
 /// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
 /// as some general lowering
 use super::*;
@@ -13,10 +15,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_empty_struct(&mut self, span: SpanId) -> TypedExprId {
-        let value_id = self.static_values.add(StaticValue::Struct(StaticStruct {
-            type_id: self.types.builtins.empty,
-            fields: MSlice::empty(),
-        }));
+        let value_id = self.static_values.empty_id();
         self.add_static_constant_expr(value_id, span)
     }
 
@@ -28,7 +27,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Equals_equals.with_span(span),
+            self.ast.idents.f.equals__equals.with_span(span),
             &[],
             &[lhs, rhs],
             ctx.with_no_expected_type(),
@@ -44,7 +43,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> TyperResult<TypedExprId> {
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Add_add.with_span(span),
+            self.ast.idents.f.add__add.with_span(span),
             &[],
             &[lhs, rhs],
             ctx.with_no_expected_type(),
@@ -314,7 +313,7 @@ impl TypedProgram {
     pub(super) fn synth_parsed_bool_not(&mut self, base: ParsedExprId) -> ParsedExprId {
         let span = self.ast.exprs.get_span(base);
         self.synth_parsed_function_call(
-            self.ast.idents.f.bool_negated.with_span(span),
+            self.ast.idents.f.bool__negated.with_span(span),
             &[],
             &[base],
             false,
@@ -367,8 +366,8 @@ impl TypedProgram {
         let line_number_expr = self.synth_int(TypedIntValue::U64(line_number as u64), span);
         let struct_expr = TypedExpr::Struct(StructLiteral {
             fields: self.mem.pushn(&[
-                StructLiteralField { name: self.ast.idents.b.filename, expr: filename_expr },
-                StructLiteralField { name: self.ast.idents.b.line, expr: line_number_expr },
+                StructLiteralField { name: self.ast.idents.b.filename, expr: Some(filename_expr) },
+                StructLiteralField { name: self.ast.idents.b.line, expr: Some(line_number_expr) },
             ]),
         });
         self.exprs.add(struct_expr, COMPILER_SOURCE_LOC_TYPE_ID, span)
@@ -409,14 +408,14 @@ impl TypedProgram {
     /// Used when we skip static execution, but still need to typecheck the rest of the
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
-    pub(super) fn synth_phony(
-        &mut self,
-        type_id: TypeId,
-        span: SpanId,
-    ) -> TypedExprId {
-        let type_args = self.named_types.add_slice_copy(&[NameAndType { name: self.ast.idents.b.T, type_id }]);
-        let phony_fn_id = self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
-        let specialized_phony_fn_id = self.specialize_function_signature(type_args, SliceHandle::empty(), phony_fn_id).unwrap();
+    pub(super) fn synth_phony(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
+        let type_args =
+            self.named_types.add_slice_copy(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
+        let phony_fn_id =
+            self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
+        let specialized_phony_fn_id = self
+            .specialize_function_signature(type_args, SliceHandle::empty(), phony_fn_id)
+            .unwrap();
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
@@ -452,6 +451,216 @@ impl TypedProgram {
         let variant_tag_expr = self.synth_int(variant_tag, span);
         let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
         Ok(tag_equals)
+    }
+
+    /// Produces a series of printTo calls to the given writer,
+    /// inside a fresh block, of type 'empty'
+    pub(super) fn synth_format_calls(
+        &mut self,
+        writer_expr: TypedExprId,
+        parts: MSlice<InterpolatedStringPart, ParsedProgram>,
+        args_expr: TypedExprId,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> TyperResult<TypedExprId> {
+        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
+        let block_scope = block.scope_id;
+        let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
+        if self.ast.config.no_std {
+            return failf!(span, "Interpolated strings are not supported in no_std mode");
+        }
+        let mut hole_index = 0;
+        fn get_named_arg(
+            k1: &mut TypedProgram,
+            args: TypedExprId,
+            name: Ident,
+            span: SpanId,
+        ) -> Option<TypedExprId> {
+            let type_id = k1.exprs.get_type(args);
+            match k1.types.get(type_id) {
+                Type::Struct(_) => {
+                    let Some((field_index, field)) =
+                        k1.types.get_struct_field_by_name(type_id, name)
+                    else {
+                        return None;
+                    };
+                    let field_expr = k1.exprs.add(
+                        TypedExpr::StructFieldAccess(FieldAccess {
+                            base: args,
+                            field_index: field_index as u32,
+                            struct_type: type_id,
+                            access_kind: FieldAccessKind::ValueToValue,
+                        }),
+                        field.type_id,
+                        span,
+                    );
+                    Some(field_expr)
+                }
+                _ => None,
+            }
+        }
+        fn get_nth_arg(
+            k1: &mut TypedProgram,
+            args: TypedExprId,
+            n: usize,
+            span: SpanId,
+        ) -> TyperResult<TypedExprId> {
+            let type_id = k1.exprs.get_type(args);
+            match k1.types.get(type_id) {
+                Type::Char
+                | Type::Bool
+                | Type::Pointer
+                | Type::Integer(_)
+                | Type::Float(_)
+                | Type::Reference(_)
+                | Type::Array(_)
+                | Type::Enum(_) => Ok(args),
+                Type::Struct(s) => {
+                    if n >= s.fields.len() as usize {
+                        return failf!(
+                            span,
+                            "Format args struct only has {} fields, but this hole asks for field {}",
+                            s.fields.len(),
+                            n + 1
+                        );
+                    }
+                    let nth_field = k1.types.get_struct_field(type_id, n);
+                    let field_expr = k1.exprs.add(
+                        TypedExpr::StructFieldAccess(FieldAccess {
+                            base: args,
+                            field_index: n as u32,
+                            struct_type: type_id,
+                            access_kind: FieldAccessKind::ValueToValue,
+                        }),
+                        nth_field.type_id,
+                        span,
+                    );
+                    Ok(field_expr)
+                }
+                _ => {
+                    failf!(span, "Not formattable currently: {}", k1.type_id_to_string(type_id))
+                }
+            }
+        }
+
+        for part in self.ast.mem.getn(parts) {
+            match part {
+                parse::InterpolatedStringPart::String(string_id) => {
+                    let rust_str = self.ast.strings.get_string(*string_id);
+                    if !rust_str.is_empty() {
+                        let string_expr = self.synth_string_literal(*string_id, span);
+                        let print_call =
+                            self.synth_printto_call(string_expr, writer_expr, block_ctx)?;
+                        self.push_expr_id_to_block(&mut block, print_call);
+                    }
+                }
+                parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
+                    let parsed_expr = self.ast.exprs.get(*expr_id);
+                    let expr_span = self.ast.exprs.get_span(*expr_id);
+                    let naked_variable_name = match parsed_expr {
+                        ParsedExpr::Variable(ParsedVariable { name }) if name.path.is_empty() => {
+                            Some(name.name)
+                        }
+                        _ => None,
+                    };
+                    // Must be a naked variable expr, look for it in the struct, then in the scope
+                    let typed_expr = match naked_variable_name {
+                        None => {
+                            let typed_expr = self.eval_expr(*expr_id, block_ctx)?;
+                            typed_expr
+                        }
+                        Some(name) => {
+                            let struct_arg = get_named_arg(self, args_expr, name, expr_span);
+                            match struct_arg {
+                                Some(field_expr) => field_expr,
+                                None => self.eval_expr(*expr_id, block_ctx)?,
+                            }
+                        }
+                    };
+
+                    let print_expr_call = self.synth_printto_call(typed_expr, writer_expr, ctx)?;
+                    self.push_expr_id_to_block(&mut block, print_expr_call);
+                }
+                parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
+                    // Grab the hole_index'th argument from args_expr.
+                    let arg = get_nth_arg(self, args_expr, hole_index, *span)?;
+                    hole_index += 1;
+                    let print_expr_call = self.synth_printto_call(arg, writer_expr, ctx)?;
+                    self.push_expr_id_to_block(&mut block, print_expr_call);
+                }
+            };
+        }
+        Ok(self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID))
+    }
+
+    /// Produces a string, resulting from using a core/string-builder
+    /// to write the given interpolated string expr + arguments into it
+    pub(super) fn synth_interpolated_string(
+        &mut self,
+        expr_id: ParsedExprId,
+        ctx: EvalExprContext,
+        args_expr: Option<TypedExprId>,
+    ) -> TyperResult<TypedExprId> {
+        let span = self.ast.exprs.get_span(expr_id);
+        let ParsedExpr::InterpolatedString(interpolated_string) = *self.ast.exprs.get(expr_id)
+        else {
+            panic!()
+        };
+
+        let part_count = interpolated_string.parts.len();
+        if part_count == 1 {
+            let parse::InterpolatedStringPart::String(string_id) =
+                self.ast.mem.get_nth(interpolated_string.parts, 0)
+            else {
+                panic!()
+            };
+            let e = self.synth_string_literal(*string_id, span);
+            return Ok(e);
+        }
+
+        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
+        let block_scope = block.scope_id;
+        let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
+        if self.ast.config.no_std {
+            return failf!(span, "Interpolated strings are not supported in no_std mode");
+        }
+        let new_string_builder = self.synth_typed_call_typed_args(
+            self.ast.idents.f.StringBuilder_new.with_span(span),
+            &[],
+            &[],
+            block_ctx,
+            false,
+        )?;
+        let string_builder_var = self.synth_variable_defn(
+            self.ast.idents.b.builder,
+            new_string_builder,
+            false,
+            true, // is_mutable
+            true, // is_referencing
+            block.scope_id,
+        );
+        self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
+        let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
+        let format_block = self.synth_format_calls(
+            string_builder_var.variable_expr,
+            interpolated_string.parts,
+            args_expr,
+            span,
+            ctx,
+        )?;
+        self.push_expr_id_to_block(&mut block, format_block);
+        let build_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
+            &[],
+            &[string_builder_var.variable_expr],
+            block_ctx,
+            false,
+        )?;
+        self.push_expr_id_to_block(&mut block, build_call);
+
+        // build_call_type should definitely be string
+        let build_call_type = self.exprs.get_type(build_call);
+        Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
     }
 }
 

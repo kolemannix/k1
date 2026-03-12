@@ -1,6 +1,6 @@
 ns ability_fail;
-ability Num {
-  fn num(self: Self): i32
+ability num {
+  fn num(self: self): i32
 }
 
 deftype Tool = either True, False, Iono
@@ -8,9 +8,9 @@ deftype Tool = either True, False, Iono
 fn test() {
   let p: Tool = .True;
   let result = testCompile(p.num());
-  assertEquals(result, .Some(
-`Call to Num/num with Self := Tool does not work
+  assertEquals(result, .some(
+`Call to num/num with self := Tool does not work
 No matching implementations found
-Function type: \($Self) -> i32`
+Function type: fn('self) -> i32`
   ))
 }

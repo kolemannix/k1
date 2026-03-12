@@ -2,8 +2,8 @@ ns ability_complex;
 
 deftype Pair[PA, PB] = { a: *PA, b: ?PB }
 ability AsPair[AA, BB] {
-  fn getA(self: Self): *AA
-  fn getB(self: Self): ?BB
+  fn getA(self: self): *AA
+  fn getB(self: self): ?BB
 }
 
 impl[A, B] AsPair[AA = A, BB = B] for Pair[A, B] {

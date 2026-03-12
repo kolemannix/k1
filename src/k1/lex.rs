@@ -156,14 +156,16 @@ impl StringDelimKind {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum TokenKind {
     Ident,
+    /// A completed string
     String {
         delim: StringDelimKind,
+        interp_exprs: bool,
     },
-    /// Used in string interpolation; any not-fully-standalone string, for example:
+    /// Used in string interpolation; any not-fully-completed string, for example:
     /// Could be the initial segment, a connecting segment between 2 interpolations,
-    /// or the end.
     StringUnterminated {
         delim: StringDelimKind,
+        interp_exprs: bool,
     },
 
     Char,
@@ -180,11 +182,9 @@ pub enum TokenKind {
     KeywordLoop,
     KeywordNamespace,
     KeywordIntern,
-    KeywordExtern,
     KeywordFor,
     KeywordIn,
     KeywordDo,
-    KeywordEither,
     KeywordAbility,
     KeywordImpl,
     KeywordAuto,
@@ -261,12 +261,23 @@ impl AsRef<str> for TokenKind {
 }
 
 impl TokenKind {
-    pub const STRING_DQ: TokenKind = TokenKind::String { delim: StringDelimKind::DoubleQuote };
-    pub const STRING_BT: TokenKind = TokenKind::String { delim: StringDelimKind::Backtick };
-    pub const STRING_UNTERM_DQ: TokenKind =
-        TokenKind::StringUnterminated { delim: StringDelimKind::DoubleQuote };
-    pub const STRING_UNTERM_BT: TokenKind =
-        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick };
+    pub const STRING_DQ_INTERP: TokenKind =
+        TokenKind::String { delim: StringDelimKind::DoubleQuote, interp_exprs: true };
+    pub const STRING_DQ_PLAIN: TokenKind =
+        TokenKind::String { delim: StringDelimKind::DoubleQuote, interp_exprs: false };
+
+    pub const STRING_BT_INTERP: TokenKind =
+        TokenKind::String { delim: StringDelimKind::Backtick, interp_exprs: true };
+    pub const STRING_BT_PLAIN: TokenKind =
+        TokenKind::String { delim: StringDelimKind::Backtick, interp_exprs: false };
+
+    pub const STRING_UNTERM_DQ_INTERP: TokenKind =
+        TokenKind::StringUnterminated { delim: StringDelimKind::DoubleQuote, interp_exprs: true };
+
+    pub const STRING_UNTERM_BT_INTERP: TokenKind =
+        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs: true };
+    pub const STRING_UNTERM_BT_PLAIN: TokenKind =
+        TokenKind::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs: false };
 
     pub fn get_repr(&self) -> &'static str {
         match self {
@@ -282,11 +293,9 @@ impl TokenKind {
             K::KeywordLoop => "loop",
             K::KeywordNamespace => "ns",
             K::KeywordIntern => "intern",
-            K::KeywordExtern => "extern",
             K::KeywordFor => "for",
             K::KeywordIn => "in",
             K::KeywordDo => "do",
-            K::KeywordEither => "either",
             K::KeywordAbility => "ability",
             K::KeywordImpl => "impl",
             K::KeywordAuto => "auto",
@@ -345,10 +354,34 @@ impl TokenKind {
             K::SingleQuote => "singleq",
 
             K::Ident => "<ident>",
-            K::String { delim: StringDelimKind::Backtick } => "<`string`>",
-            K::String { delim: StringDelimKind::DoubleQuote } => "<\"string\">",
-            K::StringUnterminated { delim: StringDelimKind::Backtick } => "<`string...>",
-            K::StringUnterminated { delim: StringDelimKind::DoubleQuote } => "<\"string...>",
+            K::String { delim: StringDelimKind::Backtick, interp_exprs } => {
+                if *interp_exprs {
+                    "<f`string`>"
+                } else {
+                    "<`string`>"
+                }
+            }
+            K::String { delim: StringDelimKind::DoubleQuote, interp_exprs } => {
+                if *interp_exprs {
+                    "<f\"string\">"
+                } else {
+                    "<\"string\">"
+                }
+            }
+            K::StringUnterminated { delim: StringDelimKind::Backtick, interp_exprs } => {
+                if *interp_exprs {
+                    "<f`string...>"
+                } else {
+                    "<`string...>"
+                }
+            }
+            K::StringUnterminated { delim: StringDelimKind::DoubleQuote, interp_exprs } => {
+                if *interp_exprs {
+                    "<f\"string...>"
+                } else {
+                    "<\"string...>"
+                }
+            }
             K::Char => "<char>",
 
             K::Eof => "<EOF>",
@@ -426,11 +459,9 @@ impl TokenKind {
             "loop" => Some(K::KeywordLoop),
             "ns" => Some(K::KeywordNamespace),
             "intern" => Some(K::KeywordIntern),
-            "extern" => Some(K::KeywordExtern),
             "for" => Some(K::KeywordFor),
             "in" => Some(K::KeywordIn),
             "do" => Some(K::KeywordDo),
-            "either" => Some(K::KeywordEither),
             "ability" => Some(K::KeywordAbility),
             "impl" => Some(K::KeywordImpl),
             "auto" => Some(K::KeywordAuto),
@@ -463,11 +494,9 @@ impl TokenKind {
             K::KeywordLoop => true,
             K::KeywordNamespace => true,
             K::KeywordIntern => true,
-            K::KeywordExtern => true,
             K::KeywordFor => true,
             K::KeywordIn => true,
             K::KeywordDo => true,
-            K::KeywordEither => true,
             K::KeywordAbility => true,
             K::KeywordImpl => true,
             K::KeywordAuto => true,
@@ -614,16 +643,22 @@ enum LexMode {
     /// (and requires!) that the language grammar has matched bracing
     Interp { brace_depth: u32 },
     /// A double-quote string. Escape patterns are different
-    DoubleQuoteString,
+    DoubleQuoteString { exprs: bool },
     /// A backtick string; only backticks must be escaped
-    BacktickString,
+    BacktickString { exprs: bool },
 }
 
 impl LexMode {
+    pub fn is_dq_string(&self) -> bool {
+        matches!(self, LexMode::DoubleQuoteString { .. })
+    }
+    pub fn is_bt_string(&self) -> bool {
+        matches!(self, LexMode::BacktickString { .. })
+    }
     pub fn string_delim_kind(&self) -> Option<StringDelimKind> {
         match self {
-            LexMode::DoubleQuoteString => Some(StringDelimKind::DoubleQuote),
-            LexMode::BacktickString => Some(StringDelimKind::Backtick),
+            LexMode::DoubleQuoteString { .. } => Some(StringDelimKind::DoubleQuote),
+            LexMode::BacktickString { .. } => Some(StringDelimKind::Backtick),
             LexMode::Tokens => None,
             LexMode::Interp { .. } => None,
         }
@@ -712,7 +747,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             }
             let lex_mode = state.mode_stack.last_mut().unwrap();
             match lex_mode {
-                LexMode::DoubleQuoteString | LexMode::BacktickString => {
+                LexMode::DoubleQuoteString { exprs: interp_exprs }
+                | LexMode::BacktickString { exprs: interp_exprs } => {
+                    let interp_exprs = *interp_exprs;
                     let (_, next) = self.peek_two();
                     match c {
                         EOF_CHAR => {
@@ -730,12 +767,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 tok_buf.push(next);
                                 self.advance();
                                 self.advance();
-                            } else if *lex_mode == LexMode::DoubleQuoteString && next == '"' {
+                            } else if lex_mode.is_dq_string() && next == '"' {
                                 tok_buf.push(c);
                                 tok_buf.push(next);
                                 self.advance();
                                 self.advance();
-                            } else if *lex_mode == LexMode::BacktickString && next == '`' {
+                            } else if lex_mode.is_bt_string() && next == '`' {
                                 tok_buf.push(c);
                                 tok_buf.push(next);
                                 self.advance();
@@ -745,7 +782,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 self.advance();
                             }
                         }
-                        '{' => {
+                        // { is only special when interp_exprs is true
+                        '{' if interp_exprs => {
                             if next == '{' {
                                 self.advance();
                                 self.advance();
@@ -759,7 +797,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                                 tokens.push(make_buffered_token(
                                     self,
-                                    K::StringUnterminated { delim: string_delim_kind },
+                                    K::StringUnterminated { delim: string_delim_kind, interp_exprs },
                                     tok_buf,
                                     n,
                                 ));
@@ -769,14 +807,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         }
                         '"' => {
                             // Terminates a double-quoted string
-                            if *lex_mode == LexMode::DoubleQuoteString {
+                            if lex_mode.is_dq_string() {
                                 tok_buf.push('"');
                                 self.advance();
                                 let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                                 state.mode_stack.pop();
                                 tokens.push(make_buffered_token(
                                     self,
-                                    K::String { delim: string_delim_kind },
+                                    K::String { delim: string_delim_kind, interp_exprs },
                                     tok_buf,
                                     n + 1,
                                 ));
@@ -788,14 +826,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         }
                         '`' => {
                             // Terminates a backtick string
-                            if *lex_mode == LexMode::BacktickString {
+                            if lex_mode.is_bt_string() {
                                 tok_buf.push('`');
                                 self.advance();
                                 let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                                 state.mode_stack.pop();
                                 tokens.push(make_buffered_token(
                                     self,
-                                    K::String { delim: string_delim_kind },
+                                    K::String { delim: string_delim_kind, interp_exprs },
                                     tok_buf,
                                     n + 1,
                                 ));
@@ -806,7 +844,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             }
                         }
                         '\n' => {
-                            if *lex_mode == LexMode::BacktickString {
+                            if lex_mode.is_bt_string() {
                                 tok_buf.push('\n');
                                 self.advance();
                             } else {
@@ -837,14 +875,27 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     return Ok(None);
                 }
             }
-            if c == '"' {
-                state.mode_stack.push(LexMode::DoubleQuoteString);
+            let (_, next) = self.peek_two();
+            if c == 'p' && next == '"' {
+                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
+                tok_buf.push_str("f\"");
+                self.advance();
+                self.advance();
+                continue;
+            } else if c == '"' {
+                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: true });
                 tok_buf.push('"');
                 self.advance();
                 continue;
+            } else if c == 'p' && next == '`' {
+                state.mode_stack.push(LexMode::BacktickString { exprs: false });
+                tok_buf.push_str("f`");
+                self.advance();
+                self.advance();
+                continue;
             } else if c == '`' {
-                state.mode_stack.push(LexMode::BacktickString);
-                tok_buf.push('"');
+                state.mode_stack.push(LexMode::BacktickString { exprs: true });
+                tok_buf.push('`');
                 self.advance();
                 continue;
             }
@@ -861,9 +912,12 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     // 100.42 -> Ident(100.42)
                     // 100.toInt() -> Ident(100), Dot, Ident(toInt)
                     // knows to accept dot for numbers
-                    if is_number && single_char_tok == K::Dot {
+                    if single_char_tok == K::Minus {
+                        // Fall through; let the ident code handle this
+                    } else if is_number && single_char_tok == K::Dot {
                         if next.is_numeric() {
-                            // Fall through, continue the floating point number including a dot
+                            // Fall through, let the ident code handle this, which will
+                            // continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
                             tokens.push(make_keyword_or_ident(self, tok_buf, n));
@@ -965,14 +1019,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     is_number = true;
                 }
                 tok_buf.push(c);
-            } else if !tok_buf.is_empty() && is_ident_char(c) || c == '.' {
+            } else if !tok_buf.is_empty() && (is_ident_char(c) || c == '.') {
                 if c == '.' && !is_number {
                     panic!("lexer got dot outside of is_number state")
                 }
 
                 // case: Continue an ident
                 if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
-                    return Err(errf!(self, n, "Identifiers cannot begin with __"));
+                    return Err(errf!(self, n, "the __ prefix is reserved for internals"));
                 }
                 tok_buf.push(c);
             // We can possibly remove this check; it would be handled next loop
@@ -1013,7 +1067,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 }
 
 pub fn is_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
 fn is_ident_or_num_start(c: char) -> bool {
@@ -1148,83 +1202,83 @@ mod test {
     #[test]
     fn extern_fn_name() -> anyhow::Result<()> {
         let input = r#"extern(printf)"#;
-        expect_token_kinds(input, vec![K::KeywordExtern, K::OpenParen, K::Ident, K::CloseParen])
+        expect_token_kinds(input, vec![K::Ident, K::OpenParen, K::Ident, K::CloseParen])
     }
 
     #[test]
     fn literal_string_simple() -> anyhow::Result<()> {
         let (spans, tokens) = set_up("\"foobear\"")?;
-        assert_token(&spans, &tokens, 0, K::STRING_DQ, 0, 9);
+        assert_token(&spans, &tokens, 0, K::STRING_DQ_INTERP, 0, 9);
         Ok(())
     }
 
     #[test]
     fn literal_string_in_call() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up("let x = println(\"foobear\")")?;
+        let (spans, tokens) = set_up("let x = println(p\"foobear\")")?;
         assert_token(&spans, &tokens, 0, K::KeywordLet, 0, 3);
         assert_token(&spans, &tokens, 1, K::Ident, 4, 1);
         assert_token(&spans, &tokens, 2, K::Equals, 6, 1);
         assert_token(&spans, &tokens, 3, K::Ident, 8, 7);
         assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1);
-        assert_token(&spans, &tokens, 5, K::STRING_DQ, 16, 9);
-        assert_token(&spans, &tokens, 6, K::CloseParen, 25, 1);
+        assert_token(&spans, &tokens, 5, K::STRING_DQ_PLAIN, 16, 10);
+        assert_token(&spans, &tokens, 6, K::CloseParen, 26, 1);
         Ok(())
     }
 
     #[test]
     fn interpolation_1() -> anyhow::Result<()> {
-        let input = r#""Hello, {world}""#;
+        let input = r#"f"Hello, {world}""#;
         expect_token_kinds(
             input,
-            vec![K::STRING_UNTERM_DQ, K::OpenBrace, K::Ident, K::CloseBrace, K::STRING_DQ],
+            vec![K::STRING_UNTERM_DQ_INTERP, K::OpenBrace, K::Ident, K::CloseBrace, K::STRING_DQ_INTERP],
         )
     }
 
     #[test]
     fn interpolation_start_end() -> anyhow::Result<()> {
-        let input = r#""{foo()}, {world}""#;
+        let input = r#" f"{foo()}, {world}" "#;
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
                 K::Ident,
                 K::OpenParen,
                 K::CloseParen,
                 K::CloseBrace,
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
             ],
         )
     }
 
     #[test]
     fn interpolation_string() -> anyhow::Result<()> {
-        let input = r#""{"hello"}""#;
+        let input = r#""{p"hello"}""#;
         expect_token_kinds(
             input,
-            vec![K::STRING_UNTERM_DQ, K::OpenBrace, K::STRING_DQ, K::CloseBrace, K::STRING_DQ],
+            vec![K::STRING_UNTERM_DQ_INTERP, K::OpenBrace, K::STRING_DQ_PLAIN, K::CloseBrace, K::STRING_DQ_INTERP],
         )
     }
 
     #[test]
     fn interpolation_nested() -> anyhow::Result<()> {
-        let input = r#""{"hello {var}"}""#;
+        let input = r#" "{"hello {var}"}" "#;
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
             ],
         )
     }
@@ -1232,18 +1286,18 @@ mod test {
     #[test]
     fn interpolation_escape_doublebrace() -> anyhow::Result<()> {
         let input = "\"Method 'sum' does not exist on type: '{{ x: iword, y: iword }'\"";
-        expect_token_kinds(input, vec![K::STRING_DQ])
+        expect_token_kinds(input, vec![K::STRING_DQ_INTERP])
     }
 
     #[test]
     fn interpolation_nested_with_braces() -> anyhow::Result<()> {
-        let input = r#""{"hello {({ x: 42 }).x}"}""#;
+        let input = r#" "{"hello {({ x: 42 }).x}"}" "#;
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
                 K::OpenParen,
                 K::OpenBrace,
@@ -1255,9 +1309,9 @@ mod test {
                 K::Dot,
                 K::Ident, // .x
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
             ],
         )
     }
@@ -1265,7 +1319,7 @@ mod test {
     #[test]
     fn backtick_string_1() -> anyhow::Result<()> {
         let input = "`Method 'sum' does not exist on type: '{{ x: iword, y: iword }'`";
-        expect_token_kinds(input, vec![K::STRING_BT])
+        expect_token_kinds(input, vec![K::STRING_BT_INTERP])
     }
 
     #[test]
@@ -1277,15 +1331,15 @@ mod test {
         expect_token_kinds(
             input,
             vec![
-                K::STRING_UNTERM_BT,
+                K::STRING_UNTERM_BT_INTERP,
                 K::OpenBrace,
-                K::STRING_UNTERM_DQ,
+                K::STRING_UNTERM_DQ_INTERP,
                 K::OpenBrace,
                 K::Ident,
                 K::CloseBrace,
-                K::STRING_DQ,
+                K::STRING_DQ_INTERP,
                 K::CloseBrace,
-                K::STRING_BT,
+                K::STRING_BT_INTERP,
             ],
         )
     }

@@ -4,200 +4,204 @@
 // Represents a contiguously allocated segment of memory that
 // stores values of type T.
 
-// Views are read-only.
+// spans are read-only.
 
 // You should never modify the contents
-// of the data pointed to by a View unless you know you have
+// of the data pointed to by a span unless you know you have
 // exclusive access to the data (e.g., just created it) 
 // and never break the contract that no observable
-// view contents should ever change
-ns View {
+// span contents should ever change
+ns span {
   
   ////////////////////////
   // Constructor functions
 
   // Only safe if you have exclusive access to buffer
-  fn wrapBuffer[T](buffer: Buffer[T]): View[T] {
+  fn wrapBuffer[T](buffer: buffer[T]): span[T] {
     { buffer }
   }
 
-  fn innerBuffer[T](self: View[T]): Buffer[T] {
+  fn from-raw[T](ptr: ptr, len: size): span[T] {
+    { buffer: buffer/fromPtrAndCount(ptr, len) }
+  }
+
+  fn innerBuffer[T](self: span[T]): buffer[T] {
     self.buffer
   }
 
-  fn dataPtr[T](self: View[T]): ptr {
+  fn dataPtr[T](self: span[T]): ptr {
     self.buffer.dataPtr()
   }
 
-  fn empty[T](): View[T] {
-    { buffer: Buffer/empty[T]() }
+  fn empty[T](): span[T] {
+    { buffer: buffer/empty[T]() }
   }
 
-  fn copyFromArray[T, N: static size](array: *Array[T, N]): View[T] {
-    let buffer = Buffer/copyFromArray[T, N](array);
+  fn copy-from-array[T, N: static size](array: *array[T, N]): span[T] {
+    let buffer = buffer/copy-from-array[T, N](array);
     { buffer }
   }
 
-  fn cloned[T](self: View[T]): View[T] {
+  fn cloned[T](self: span[T]): span[T] {
     { buffer: self.buffer.cloned() }
   }
 
-  fn clonedIn[T](context alloc: mem/AllocMode)(self: View[T]): View[T] {
+  fn clonedIn[T](context alloc: mem/alloc-mode)(self: span[T]): span[T] {
     { buffer: self.buffer.clonedIn() }
   }
 
-  fn len[T](self: View[T]): size { self.buffer.len }
+  fn len[T](self: span[T]): size { self.buffer.len }
 
-  fn getRef[T](self: View[T], index: size): *T {
+  fn getRef[T](self: span[T], index: size): *T {
     self.buffer.getRefRead[T](index)
   }
 
-  fn get[T](self: View[T], index: size): T {
+  fn get[T](self: span[T], index: size): T {
     let tRef = self.getRef(index);
     tRef.*
   }
 
-  fn slice[T](self: View[T], start: size, end: size): View[T] {
+  fn slice[T](self: span[T], start: size, end: size): span[T] {
     { buffer: self.buffer.slice(start, end) }
   }
 
-  fn take[T](self: View[T], count: size): View[T] { self.slice(0,     count) }
-  fn drop[T](self: View[T], count: size): View[T] { self.slice(count, self.len()) }
+  fn take[T](self: span[T], count: size): span[T] { self.slice(0,     count) }
+  fn drop[T](self: span[T], count: size): span[T] { self.slice(count, self.len()) }
 
-  fn chunks[T](self: View[T], size: size): View[View[T]] {
+  fn chunks[T](self: span[T], size: size): span[span[T]] {
     let bufferChunks = self.buffer.chunks(size);
     mem/bitcast(bufferChunks)
   }
 
-  fn isEmpty[T](self: View[T]): bool {
+  fn isEmpty[T](self: span[T]): bool {
     self.len() == 0
   }
 
-  fn nonEmpty[T](self: View[T]): bool {
+  fn nonEmpty[T](self: span[T]): bool {
     self.len() > 0
   }
 
-  fn firstRef[T](self: View[T]): ?*T {
+  fn firstRef[T](self: span[T]): ?*T {
     if not self.isEmpty() {
-      .Some(self.getRef(0))
+      .some(self.getRef(0))
     } else {
-      .None
+      .none
     }
   }
 
-  fn first[T](self: View[T]): ?T {
+  fn first[T](self: span[T]): ?T {
     switch self.firstRef() {
-      .None -> .None,
-      .Some(firstRef) -> .Some(firstRef.*)
+      .none -> .none,
+      .some(firstRef) -> .some(firstRef.*)
     }
   }
 
-  fn lastRef[T](self: View[T]): ?*T {
+  fn lastRef[T](self: span[T]): ?*T {
     if not self.isEmpty() {
-      .Some(self.getRef(self.len() - 1))
+      .some(self.getRef(self.len() - 1))
     } else {
-      .None
+      .none
     }
   }
 
-  fn last[T](self: View[T]): ?T {
+  fn last[T](self: span[T]): ?T {
     switch self.lastRef() {
-      .None -> .None,
-      .Some(lastRef) -> .Some(lastRef.*)
+      .none -> .none,
+      .some(lastRef) -> .some(lastRef.*)
     }
   }
 
-  fn concat[T](self: View[T], other: View[T]): View[T] {
+  fn concat[T](self: span[T], other: span[T]): span[T] {
     let concatedBuffer = self.innerBuffer().concat(other.innerBuffer());
     wrapBuffer(concatedBuffer)
   }
 
-  fn sorted[T](self: View[T]): View[T] where T: Comparable {
+  fn sorted[T](self: span[T]): span[T] where T: comparable {
     let newBuffer = self.buffer.cloned();
     wrapBuffer(newBuffer.sorted())
   }
 
-  fn toCharView(self: View[byte]): View[char] {
+  fn as-char-span(self: span[byte]): span[char] {
     { buffer: self.buffer.toCharBuffer() }
   }
 
-  fn asByteView(self: View[char]): View[byte] {
+  fn as-byte-span(self: span[char]): span[byte] {
     { buffer: self.buffer.asByteBuffer() }
   }
 
 }
 
-impl[T] Iterable[Item = T, I = BufferIterator[T]] for View[T] {
-  fn iterator(self: Self): I {
+impl[T] iterable[item = T, i = BufferIterator[T]] for span[T] {
+  fn iterator(self: self): i {
     BufferIterator/fromBuffer(self.innerBuffer())
   }
 }
 
-impl[T: Print] Print for View[T] {
-  fn printTo[W: Writer](self: Self, w: W): empty {
-    w.writeChar('[');
+impl[T: print] print for span[T] {
+  fn printTo[w: writer](self: self, w: w): empty {
+    w.write-char('[');
     for self {
       it.printTo(w);
       let last = itIndex == self.len() - 1;
       if not last {
-        w.writeChar(',');
+        w.write-char(',');
       };
     };
-    w.writeChar(']');
+    w.write-char(']');
   }
 }
 
-impl[T: Equals] Equals for View[T] {
-  fn equals(self: View[T], other: View[T]): bool {
+impl[T: equals] equals for span[T] {
+  fn equals(self: span[T], other: span[T]): bool {
     self.buffer == other.buffer
   }
 }
 
 // Eventually, we can create some abstractions like this to DRY up working
 // with these sequential containers
-//ability AsView {
-//  fn asView[T](self: Self): View[T]
+//ability as-span {
+//  fn as-span[T](self: self): view[T]
 //}
 //
-//ability ViewLike {
-//  fn len[T](self: Self): size
-//  fn getRef[T](self: Self, index: size): *T
-//  fn get[T](self: Self, index: size): T { self.getRef.* }
-//  fn slice[T](self: Self, start: size, end: size): View[T]
-//  fn take[T](self: View[T], count: size): View[T] { self.slice(0,     count) }
-//  fn drop[T](self: View[T], count: size): View[T] { self.slice(count, self.len()) }
+//ability span-like {
+//  fn len[T](self: self): size
+//  fn getRef[T](self: self, index: size): *T
+//  fn get[T](self: self, index: size): T { self.getRef.* }
+//  fn slice[T](self: self, start: size, end: size): view[T]
+//  fn take[T](self: view[T], count: size): view[T] { self.slice(0,     count) }
+//  fn drop[T](self: view[T], count: size): view[T] { self.slice(count, self.len()) }
 //
-//  fn isEmpty[T](self: View[T]): bool { self.len() == 0 }
+//  fn isEmpty[T](self: view[T]): bool { self.len() == 0 }
 //
-//  fn nonEmpty[T](self: View[T]): bool { self.len() > 0 }
+//  fn nonEmpty[T](self: view[T]): bool { self.len() > 0 }
 //
-//  fn firstRef[T](self: View[T]): ?*T {
+//  fn firstRef[T](self: view[T]): ?*T {
 //    if not self.isEmpty() {
-//      .Some(self.getRef(0))
+//      .some(self.getRef(0))
 //    } else {
-//      .None
+//      .none
 //    }
 //  }
 //
-//  fn first[T](self: View[T]): ?T {
+//  fn first[T](self: view[T]): ?T {
 //    switch self.firstRef() {
-//      .None -> .None,
-//      .Some(firstRef) -> .Some(firstRef.*)
+//      .none -> .none,
+//      .some(firstRef) -> .some(firstRef.*)
 //    }
 //  }
 //
-//  fn lastRef[T](self: View[T]): ?*T {
+//  fn lastRef[T](self: view[T]): ?*T {
 //    if not self.isEmpty() {
-//      .Some(self.getRef(self.len() - 1))
+//      .some(self.getRef(self.len() - 1))
 //    } else {
-//      .None
+//      .none
 //    }
 //  }
 //
-//  fn last[T](self: View[T]): ?T {
+//  fn last[T](self: view[T]): ?T {
 //    switch self.lastRef() {
-//      .None -> .None,
-//      .Some(lastRef) -> .Some(lastRef.*)
+//      .none -> .none,
+//      .some(lastRef) -> .some(lastRef.*)
 //    }
 //  }
 //

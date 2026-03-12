@@ -1,39 +1,39 @@
 ns ability_default_fns;
 
-let* I32_SPEC_COUNTER: *mut int = 0;
+let* I32_SPEC_COUNTER: *mut int = 0
 
 ability Increment {
-  fn inc(self: Self): Self
-  fn incTwice(self: Self): Self {
+  fn inc(self: self): self
+  fn incTwice(self: self): self {
     // Testing scope bindings
-    let me: Self = self;
-    let again: Self = me;
+    let me: self = self;
+    let again: self = me;
     again.inc().inc()
   }
 }
 impl Increment for i32 {
-  fn inc(self: Self): Self { self + 1 }
-  fn incTwice(self: Self): i32 {
+  fn inc(self: self): self { self + 1 }
+  fn incTwice(self: self): i32 {
     I32_SPEC_COUNTER <- I32_SPEC_COUNTER.* + 1;
     // Testing scope bindings
-    let me: Self = self;
+    let me: self = self;
     let again: i32 = me;
     again + 2
   }
 }
 
 impl Increment for u32 {
-  fn inc(self: Self): Self { self + 1 }
+  fn inc(self: self): self { self + 1 }
 }
 
 ability IncrFour {
-  fn incFour(self: Self): Self
-  fn incEight(self: Self): Self {
+  fn incFour(self: self): self
+  fn incEight(self: self): self {
     self.incFour().incFour()
   }
 }
 impl[T: Increment] IncrFour for T {
-  fn incFour(self: Self): Self {
+  fn incFour(self: self): self {
     self.incTwice().inc().inc()
   }
 }

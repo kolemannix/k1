@@ -11,7 +11,7 @@ fn takesHelloer[T](t: T): MyString where T: SayHello {
 }
 
 ability SayHello {
-  fn hello(self: Self): MyString {
+  fn hello(self: self): MyString {
     { s: "Hello" }
   }
 }
@@ -48,7 +48,7 @@ ns foo {
   ns core {
     deftype Test = either A, B
     ns Test {
-      let default: Test = .A;
+      let default: Test = .A
     }
   }
 }

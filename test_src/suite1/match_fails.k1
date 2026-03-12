@@ -2,24 +2,24 @@ ns match_fails;
 
 deftype Foo = { x: int, y: ?bool }
 fn useless() {
-  let foo: Foo = { x: 1, y: .None };
+  let foo: Foo = { x: 1, y: .none };
   let result = testCompile(switch foo {
-    { x, y: .Some(true) } -> x,
-    { x, y: .Some(false) } -> x,
-    { x, y: .Some(false) } -> x,
-    { x, y: .None } -> x + 2
+    { x, y: .some(true) } -> x,
+    { x, y: .some(false) } -> x,
+    { x, y: .some(false) } -> x,
+    { x, y: .none } -> x + 2
   });
-  assert(result is .Some(_));
+  assert(result is .some(_));
 }
 
 deftype Blub = { x: int, y: ?bool }
 fn unhandled() {
-  let blub: Blub = { x: 1, y: .None };
+  let blub: Blub = { x: 1, y: .none };
   let result = testCompile(switch blub {
-    { x, y: .Some(true) } -> x,
-    { x, y: .None } -> x + 2
+    { x, y: .some(true) } -> x,
+    { x, y: .none } -> x + 2
   });
-  assert(result is .Some(_));
+  assert(result is .some(_));
 }
 
 fn test() {

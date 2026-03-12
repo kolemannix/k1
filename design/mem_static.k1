@@ -10,21 +10,21 @@ ns mem {
   deftype SystemHeap = {}
 
   ability Allocator {
-    fn allocate(self: Self, size: size, align: size): ptr
-    fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr
-    fn free(self: Self, ptr: ptr, size: size, align: size)
+    fn allocate(self: self, size: size, align: size): ptr
+    fn reallocate(self: self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr
+    fn free(self: self, ptr: ptr, size: size, align: size)
 
     fn allocStyle(): AllocStyle
   }
 
   impl Allocator for mem/SystemHeap {
-    fn allocate(self: Self, size: size, align: size): ptr {
+    fn allocate(self: self, size: size, align: size): ptr {
       core/mem/alloc(size, align)
     }
-    fn reallocate(self: Self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
+    fn reallocate(self: self, ptr: ptr, oldSize: size, align: size, newSize: size): ptr {
       core/mem/realloc(ptr, oldSize = oldSize, align = align, newSize = newSize)
     }
-    fn free(self: Self, ptr: ptr, size: size, align: size) {
+    fn free(self: self, ptr: ptr, size: size, align: size) {
       core/mem/free(ptr, size, align)
     }
     fn allocStyle(): AllocStyle { .Heap }
@@ -60,14 +60,14 @@ ns mem {
 
   // The allocator _could_ end up being zero-sized, in which case
   // we should optimize out the function argument altogether!
-  fn bufferGrowTo[T, A: Allocator](context a: A)(self: Buffer[T]*, newCount: u64) {
+  fn bufferGrowTo[T, A: Allocator](context a: A)(self: buffer[T]*, newCount: u64) {
     #if supportsRealloc[A]() {
       let newSize = bufferSizeBytes[T](newCount);
       let realloc = a.realloc(self.dataptr(), newSize);
       self <- { len: newCount, data: realloc }
     } else {
       let oldPtr = self.data;
-      let newBuffer = Buffer/_allocate[T](newCount);
+      let newBuffer = buffer/_allocate[T](newCount);
       _copyFrom[T](self.*, newBuffer, self.len);
 
       #if requiresFree[A]() { a.free(oldPtr) };
@@ -78,19 +78,19 @@ ns mem {
 
 }
 
-fn myAllocateIn[A: Allocator, T](context a: A)(size: size): Buffer[T] {
+fn myAllocateIn[A: Allocator, T](context a: A)(size: size): buffer[T] {
   let ptr = if count == 0 {
-    ptr/NULL
+    ptr/null
   } else {
     let sizeBytes = bufferSizeBytes[T](count);
-    mem/allocate(sizeBytes, core/types/alignOf[T]())
+    mem/allocate(sizeBytes, core/types/align-of[T]())
   };
   let data = ptr.as[*T];
   { len: count, data }
 }
 
-fn myFilledIn[A: Allocator, T](context a: A)(b: Buffer[T], size: size, value: T): Buffer[T] {
-  let buf: Buffer[T] = myAllocateIn[A, T](size);
+fn myFilledIn[A: Allocator, T](context a: A)(b: buffer[T], size: size, value: T): buffer[T] {
+  let buf: buffer[T] = myAllocateIn[A, T](size);
   let i = 0: size;
   while i < size {
     buf.set(i, value);

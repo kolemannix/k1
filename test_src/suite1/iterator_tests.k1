@@ -5,16 +5,16 @@ use core/iter/position
 
 fn test() {
 
-  let firstEven = find([1,2,3,4], \(x) x % 2 == 0);
+  let firstEven = find([1,2,3,4], fn(x) x % 2 == 0);
   assertEquals(firstEven, some(2));
 
   let indexOfThree = position([1,2,3,4], 3);
   assertEquals(indexOfThree, some(2));
 
-  assert(not core/iter/exists([1,2,3,5,7,9,11], \(t) t == 0));
-  assert(core/iter/exists([1,2,3,5,7,9,11], \(t) t == 2));
+  assert(not core/iter/exists([1,2,3,5,7,9,11], fn(t) t == 0));
+  assert(core/iter/exists([1,2,3,5,7,9,11], fn(t) t == 2));
 
-  assert(core/iter/forall([1,3,5,7,9,11], \(t) t % 2 == 1));
+  assert(core/iter/forall([1,3,5,7,9,11], fn(t) t % 2 == 1));
 
   {}
 }

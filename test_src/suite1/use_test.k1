@@ -1,7 +1,7 @@
 ns use_test;
 
 // Use a function from top-level
-use core/types/typeId
+use core/types/type-id
 // Use a constant from top-level
 use core/libc/files/SEEK_END as SEEKEND
 
@@ -11,8 +11,8 @@ ns foo {
 
 fn test() {
   // Use a function from stmt w/ alias
-  use core/types/typeId as typeIdAlias;
-  assert(typeIdAlias[never]() == typeId[never]()); 
+  use core/types/type-id as type-id-alias;
+  assert(type-id-alias[never] == type-id[never]);
 
   // Use a constant from stmt w/ alias
   use core/libc/files/SEEK_END as S;
@@ -24,8 +24,8 @@ fn test() {
   let hello: str = "Hello";
 
   // Use a generic type
-  use core/Opt as Optional;
-  let helloOpt: Optional[str] = some("Hello");
+  use core/opt as optional;
+  let helloOpt: optional[str] = some("Hello");
   assert(hello == helloOpt.!);
 
   // Use a namespace

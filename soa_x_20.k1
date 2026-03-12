@@ -1,0 +1,23 @@
+
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List2")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List3")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List4")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List5")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List6")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List7")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List8")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List9")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List10")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List11")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List12")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List13")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List14")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List15")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List16")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List17")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List18")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List19")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List20")
+#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List21")
+
+fn main(): i32 { 0 }

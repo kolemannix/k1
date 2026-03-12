@@ -10,10 +10,10 @@ fn matchBool(b: bool): string {
 deftype TriState = either Yes, No, Failure({ reason: string })
 fn matchTristateOpt(t: ?TriState): string {
   switch t {
-    .Some(.Yes) -> "yes",
-    .Some(.No) -> "no",
-    .Some(.Failure(s)) -> "failure: {s.reason}",
-    .None -> "none"
+    .some(.Yes) -> "yes",
+    .some(.No) -> "no",
+    .some(.Failure(s)) -> "failure: {s.reason}",
+    .none -> "none"
   }
 }
 
@@ -27,9 +27,9 @@ fn failedWithBaz(t: TriState): bool {
 
 fn matchOptBool(b: ?bool): string {
   switch b {
-    .None -> identity("None"),
-    .Some(false) -> identity("false"),
-    .Some(true) -> identity("true")
+    .none -> identity("None"),
+    .some(false) -> identity("false"),
+    .some(true) -> identity("true")
   }
 }
 
@@ -49,13 +49,13 @@ fn main(): i32 {
   };
 
   assertEquals(matchBool(false), "false");
-  assertEquals(matchOptBool(.Some(false)), "false");
-  assertEquals(matchOptBool(.None), "None");
+  assertEquals(matchOptBool(.some(false)), "false");
+  assertEquals(matchOptBool(.none), "None");
 
   let yes: TriState = .Yes;
-  assertEquals(matchTristateOpt(.Some(yes)), "yes");
-  assertEquals(matchTristateOpt(.Some(.Yes)), "yes");
-  assertEquals(matchTristateOpt(.Some(.Failure({ reason: "because" }))), "failure: because");
+  assertEquals(matchTristateOpt(.some(yes)), "yes");
+  assertEquals(matchTristateOpt(.some(.Yes)), "yes");
+  assertEquals(matchTristateOpt(.some(.Failure({ reason: "because" }))), "failure: because");
 
   assert(not bothTrue({ a: true, b: false }));
   assert(bothTrue({ a: true, b: true }));
@@ -64,7 +64,7 @@ fn main(): i32 {
   assert(not failedWithBaz(.No));
 
   switch some(42) {
-    .Some(x) if x == 42 -> {},
+    .some(x) if x == 42 -> {},
     _ -> assert(false),
   };
 

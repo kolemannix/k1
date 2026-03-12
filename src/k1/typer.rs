@@ -12,7 +12,7 @@ pub(crate) mod types;
 pub(crate) mod visit;
 
 use crate::typer::dump::K1DisplayArgs;
-use crate::{bc, compiler, k1_format, k1_format_user, kbail, vm};
+use crate::{bc, clock, compiler, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -21,6 +21,7 @@ pub use static_value::{
     StaticValuePool,
 };
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
@@ -28,13 +29,13 @@ use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
-use std::io::stderr;
+use std::io::IsTerminal;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{MHandle, MList, MSlice, MStr, Mem};
+use crate::kmem::{MHandle, MList, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -50,14 +51,14 @@ use types::*;
 use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
-    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, NamedTypeArg, NamedTypeArgId,
-    NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock, ParsedBlockKind,
-    ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
-    ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
-    ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr,
-    ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedWhileExpr, QIdent,
-    Sources, StringId, StructValueField,
+    self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, InterpolatedStringPart, NamedTypeArg,
+    NamedTypeArgId, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
+    ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId,
+    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
+    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -172,17 +173,24 @@ impl InferenceContext {
     }
 
     pub fn reset(&mut self) {
-        self.constraints.clear();
+        self.origin_stack.clear();
         self.params.clear();
         self.solutions_so_far.clear();
         self.inference_vars.clear();
+        self.constraints.clear();
         self.substitutions.clear();
         self.substitutions_vec.clear();
         self.start_raw = 0;
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
+pub struct TypeDefnStackEntry {
+    pub type_id: TypeId,
+    pub layout_depth: u32,
+}
+
+#[derive(Clone, Copy)]
 pub struct StaticExecContext {
     #[allow(unused)]
     is_metaprogram: bool,
@@ -220,7 +228,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct EvalExprContext {
     scope_id: ScopeId,
     expected_type_id: Option<TypeId>,
@@ -313,7 +321,7 @@ impl PatternCtorId {
     pub const FUNCTION_POINTER: PatternCtorId = PatternCtorId::from_u32(9).unwrap();
     pub const LAMBDA_OBJECT: PatternCtorId = PatternCtorId::from_u32(10).unwrap();
     pub const BUFFER: PatternCtorId = PatternCtorId::from_u32(11).unwrap();
-    pub const VIEW: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
+    pub const SPAN: PatternCtorId = PatternCtorId::from_u32(12).unwrap();
 }
 
 /// Used for analyzing pattern matching
@@ -336,9 +344,9 @@ pub enum PatternCtor {
     TypeVariable,
     FunctionPointer,
     LambdaObject,
-    Static,
+    ValueType,
     Buffer,
-    View,
+    Span,
     /// In the future, we should do real array patterns since length is statically known
     Array,
     Reference(PatternCtorId),
@@ -758,14 +766,14 @@ impl TypedFunctionKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FunctionSignature {
     pub name: Option<Ident>,
     pub function_type: TypeId,
     pub type_params: NamedTypeSlice,
-    pub function_type_params: SliceHandle<FunctionTypeParamId>,
+    pub function_type_params: MSlice<FunctionTypeParam, TypedProgram>,
 }
-impl_copy_if_small!(32, FunctionSignature);
+impl_copy_if_small!(24, FunctionSignature);
 
 impl FunctionSignature {
     pub fn make_no_generics(name: Option<Ident>, function_type: TypeId) -> FunctionSignature {
@@ -773,7 +781,7 @@ impl FunctionSignature {
             name,
             function_type,
             type_params: SliceHandle::empty(),
-            function_type_params: SliceHandle::empty(),
+            function_type_params: MSlice::empty(),
         }
     }
 
@@ -794,7 +802,7 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub params: MSlice<TypedFunctionParam, TypedProgram>,
     pub type_params: NamedTypeSlice,
-    pub function_type_params: SliceHandle<FunctionTypeParamId>,
+    pub function_type_params: MSlice<FunctionTypeParam, TypedProgram>,
     pub body_block: Option<TypedExprId>,
     pub intrinsic_type: Option<Builtin>,
     pub linkage: Linkage,
@@ -824,7 +832,6 @@ impl TypedFunction {
     }
 }
 
-nz_u32_id!(FunctionTypeParamId);
 #[derive(Debug, Clone, Copy)]
 /// When a function takes a special type parameter, either a 'function_like'
 /// or a 'static'. This ties the type parameter to its value param, which
@@ -931,6 +938,13 @@ pub struct DerefExpr {
 }
 
 #[derive(Clone)]
+pub enum CallResolution {
+    Other(TypedExprId),
+    Call(Callee),
+    MethodCall { callee: Callee, receiver: TypedExprId },
+}
+
+#[derive(Clone)]
 pub enum Callee {
     StaticFunction(FunctionId),
     StaticLambda {
@@ -956,7 +970,7 @@ pub enum Callee {
         function_sig: FunctionSignature,
     },
 }
-impl_copy_if_small!(40, Callee);
+impl_copy_if_small!(32, Callee);
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
@@ -1007,7 +1021,8 @@ pub struct Call {
 #[derive(Clone, Copy)]
 pub struct StructLiteralField {
     pub name: Ident,
-    pub expr: TypedExprId,
+    // None means uninitialized
+    pub expr: Option<TypedExprId>,
 }
 
 #[derive(Clone)]
@@ -1532,7 +1547,6 @@ pub type TyperResult<A> = Result<A, TyperError>;
 
 #[derive(Debug, Clone)]
 struct SynthedVariable {
-    #[allow(unused)]
     pub variable_id: VariableId,
     pub defn_stmt: TypedStmtId,
     pub variable_expr: TypedExprId,
@@ -1589,14 +1603,15 @@ impl Variable {
 #[derive(Debug, Clone)]
 pub struct TypedGlobal {
     pub variable_id: VariableId,
-    pub parsed_expr: ParsedExprId,
+    pub parsed_expr: Option<ParsedExprId>,
     pub initial_value: Option<StaticValueId>,
-    pub ty: TypeId,
+    pub type_id: TypeId,
     pub span: SpanId,
     pub is_constant: bool,
     pub is_referencing: bool,
     pub is_tls: bool,
     pub is_exported: bool,
+    pub is_external: bool,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
 }
@@ -1905,8 +1920,18 @@ pub fn write_error(
     message: impl AsRef<str>,
     level: MessageLevel,
     span: SpanId,
+    use_color: bool,
 ) -> std::io::Result<()> {
-    parse::write_source_location(w, spans, sources, span, level, 6, Some(message.as_ref()))?;
+    parse::write_source_location(
+        w,
+        spans,
+        sources,
+        span,
+        level,
+        6,
+        Some(message.as_ref()),
+        use_color,
+    )?;
     Ok(())
 }
 
@@ -2032,41 +2057,67 @@ struct EvalTypeExprContext {
     /// If set, we're supposed to store our result in this type_id
     direct_unresolved_target_type: Option<TypeId>,
     is_direct_function_parameter: bool,
-    #[allow(unused)]
-    is_direct_variable_binding: bool,
 
     /// `inside_*` locations mean anywhere inside of the thing they describe, including top-level
     is_inside_type_definition_rhs: bool,
     is_inside_static_type: bool,
+    defn_layout_depth: Option<u32>,
 }
 impl_copy_if_small!(28, EvalTypeExprContext);
 
 impl EvalTypeExprContext {
     /// If we descend into a type, we can categorically clear all `direct_`
     /// fields, by definition
-    pub fn descended(&self) -> EvalTypeExprContext {
+    pub fn descended(&self, descend_layout: Option<bool>) -> Self {
+        let defn_layout_depth = match descend_layout {
+            Some(true) => self.defn_layout_depth.map(|d| d + 1),
+            Some(false) => self.defn_layout_depth,
+            None => None,
+        };
         EvalTypeExprContext {
             direct_unresolved_target_type: None,
             is_direct_function_parameter: false,
-            is_direct_variable_binding: false,
+            defn_layout_depth,
             ..*self
         }
+    }
+
+    /// Descend into a nested type definition, but mark that this type is not structurally part
+    /// of the parent type
+    /// (e.g., deftype Foo = { x: Foo.t, t: int } )
+    ///                           ^^^
+    ///                           legal
+    /// Foo doesn't really refer to itself, the lhs of the dot op is 'layout unrelated' to Foo
+    pub fn descended_layout_unrelated(&self) -> Self {
+        self.descended(None)
+    }
+
+    /// Descend into a nested type definition, but with no layout indirection
+    /// (e.g., struct in struct)
+    pub fn descended_layout_direct(&self) -> Self {
+        self.descended(Some(false))
+    }
+
+    /// Descend into a nested type definition, with layout indirection
+    /// (e.g., *Inner, or )
+    pub fn descended_layout_indirect(&self) -> Self {
+        self.descended(Some(true))
     }
 
     pub const EMPTY: Self = EvalTypeExprContext {
         direct_unresolved_target_type: None,
         is_direct_function_parameter: false,
-        is_direct_variable_binding: false,
         is_inside_type_definition_rhs: false,
         is_inside_static_type: false,
+        defn_layout_depth: None,
     };
 
     pub const VARIABLE_BINDING: Self = EvalTypeExprContext {
         direct_unresolved_target_type: None,
         is_direct_function_parameter: false,
-        is_direct_variable_binding: true,
         is_inside_type_definition_rhs: false,
         is_inside_static_type: false,
+        defn_layout_depth: None,
     };
 }
 
@@ -2077,10 +2128,10 @@ pub struct Symbol {
     pub identifier: Ident,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum UseStatus {
     Unresolved(ScopeId),
-    Resolved(UseableSymbol),
+    Resolved(SV4<UseableSymbol>),
 }
 
 impl UseStatus {
@@ -2099,6 +2150,7 @@ pub struct AbilityImplHandle {
     full_impl_id: AbilityImplId,
 }
 
+/// Allocations that we re-use
 pub struct TypedModuleBuffers {
     name_builder: String,
     emitted_code: String,
@@ -2106,7 +2158,9 @@ pub struct TypedModuleBuffers {
     /// For Pattern matching trials
     trial_ctors: Vec<PatternCtorTrialEntry>,
     field_ctors: Vec<Vec<(Ident, PatternCtorId)>>,
+    pattern_ctor_ancestor_stack: Vec<TypeId>,
     int_parse: String,
+    visited_types: RefCell<FxHashMap<TypeId, ()>>,
 }
 
 nz_u32_id!(ModuleId);
@@ -2161,6 +2215,9 @@ pub struct Module {
     pub manifest: ModuleManifest,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
+
+    pub parse_elapsed_ms: u64,
+    pub typecheck_elapsed_ms: u64,
 }
 
 impl Module {
@@ -2173,6 +2230,9 @@ impl Module {
             manifest: ModuleManifest::default(),
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
+
+            parse_elapsed_ms: 0,
+            typecheck_elapsed_ms: 0,
         }
     }
 }
@@ -2320,14 +2380,21 @@ pub struct TypedProgram {
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
-    type_defn_stack: Vec<TypeId>,
+    /// Each entry in this stack contains a set of type ids that are being defined
+    /// at this exact layout level. If we ever find ourselves in the current stack entry,
+    /// that means we have an infinite layout: a mention of a type directly within itself
+    /// for example: deftype Foo = { f: Foo }
+    /// If we ever find ourselves at a prior level, that's a valid recursive mention
+    /// for example: deftype Foo = { f: *Foo }
+    ///                                 ^ the * pushes a new entry on the stack
+    /// What about a flat Vec with "layout_depth_level: usize" instead?
+    type_defn_stack: Vec<TypeDefnStackEntry>,
 
     // Buffers that we prefer to re-use to avoid thousands of allocations
     // Clear them after you use them, but leave the memory allocated
     buffers: TypedModuleBuffers,
 
     pub named_types: VPool<NameAndType, NameAndTypeId>,
-    pub function_type_params: VPool<FunctionTypeParam, FunctionTypeParamId>,
 
     pub patterns: TypedPatternPool,
     pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
@@ -2378,24 +2445,25 @@ impl Drop for TypedProgram {
 }
 
 pub struct Timing {
-    pub clock: quanta::Clock,
+    pub clock: clock::Clock,
     pub total_infers: usize,
-    pub total_infer_nanos: u64,
-    pub total_vm_nanos: u64,
-    pub total_bytecode_nanos: u64,
+    pub total_infer_nanos: i64,
+    pub total_vm_nanos: i64,
+    pub total_vm_instrs: i64,
+    pub total_bytecode_nanos: i64,
 }
 
 impl Timing {
-    pub fn time_raw(&self) -> u64 {
+    pub fn raw(&self) -> u64 {
         self.clock.raw()
     }
 
     pub fn elapsed_nanos(&self, since: u64) -> u64 {
-        self.clock.delta_as_nanos(since, self.clock.raw())
+        self.clock.elapsed_nanos(since)
     }
 
     pub fn elapsed_ms(&self, since: u64) -> u64 {
-        self.elapsed_nanos(since) / 1_000_000
+        self.clock.elapsed_ms(since)
     }
 }
 
@@ -2440,13 +2508,17 @@ impl TypedProgram {
         pattern_ctors.add(PatternCtor::FunctionPointer);
         pattern_ctors.add(PatternCtor::LambdaObject);
         pattern_ctors.add(PatternCtor::Buffer);
-        pattern_ctors.add(PatternCtor::View);
+        pattern_ctors.add(PatternCtor::Span);
 
-        debug!("clock init");
         let init_start = std::time::Instant::now();
-        let clock =
-            if cfg!(feature = "profile") { quanta::Clock::new() } else { quanta::Clock::mock().0 };
-        debug!("clock calibration done in {}ms", init_start.elapsed().as_millis());
+        let clock = if cfg!(feature = "profile") {
+            debug!("clock init");
+            let c = clock::Clock::new_counter();
+            debug!("clock calibration done in {}ms", init_start.elapsed().as_millis());
+            c
+        } else {
+            clock::Clock::new_system()
+        };
 
         let mut vm_static_stack = vm::Stack::make();
         let addr = vm_static_stack.push_t(true as u8);
@@ -2491,17 +2563,18 @@ impl TypedProgram {
             phase: 0,
             inference_context_stack: Vec::with_capacity(8),
             inference_context_extras: (0..8).map(|_| InferenceContext::make()).collect(),
-            type_defn_stack: Vec::with_capacity(8),
+            type_defn_stack: Vec::with_capacity(16),
             buffers: TypedModuleBuffers {
                 name_builder: String::with_capacity(4096),
                 emitted_code: String::with_capacity(8192),
                 lexer_tokens: Vec::with_capacity(16384),
                 trial_ctors: Vec::with_capacity(1024),
                 field_ctors: (0..128).map(|_| Vec::with_capacity(128)).collect::<Vec<_>>(),
+                pattern_ctor_ancestor_stack: Vec::with_capacity(64),
                 int_parse: String::with_capacity(128),
+                visited_types: RefCell::new(FxHashMap::with_capacity(128)),
             },
             named_types: VPool::make_with_hint("named_types", 32768),
-            function_type_params: VPool::make_with_hint("function_type_params", 8192),
             patterns: TypedPatternPool::make(),
             pattern_ctors,
             vm: Box::new(Some(vm::Vm::make())),
@@ -2529,6 +2602,7 @@ impl TypedProgram {
                 total_infers: 0,
                 total_infer_nanos: 0,
                 total_vm_nanos: 0,
+                total_vm_instrs: 0,
                 total_bytecode_nanos: 0,
             },
             global_id_k1_arena: None,
@@ -2540,7 +2614,7 @@ impl TypedProgram {
         src_path: &Path,
         primary_module: bool,
     ) -> anyhow::Result<ModuleId> {
-        eprintln!("Loading module {:?}...", src_path);
+        debug!("Loading module {:?}...", src_path);
         let src_path = src_path.canonicalize().map_err(|e| {
             anyhow::anyhow!("Error loading module '{}': {}", src_path.to_string_lossy(), e)
         })?;
@@ -2566,11 +2640,12 @@ impl TypedProgram {
             files_to_compile.swap(0, builtin_index);
         };
         let directory_string = module_dir.to_str().unwrap().to_string();
-        let parse_start = self.timing.time_raw();
+        let parse_start = self.timing.raw();
 
         let parsed_namespace_id = parse::init_module(module_name, &mut self.ast);
         let mut token_buffer = std::mem::take(&mut self.buffers.lexer_tokens);
-        eprintln!("Parsing {} discovered files for module {src_path_name}", files_to_compile.len());
+        debug!("Parsing {} discovered files for module {src_path_name}", files_to_compile.len());
+
         for path in &files_to_compile {
             let content = std::fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("Failed to open file to parse: {:?}", path));
@@ -2605,12 +2680,7 @@ impl TypedProgram {
 
         let parse_elapsed_us = self.timing.elapsed_nanos(parse_start) / 1_000;
         let parse_elapsed_ms = parse_elapsed_us / 1_000;
-        let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
-        eprintln!(
-            "parsing took {}ms. {}us/line incl. io",
-            parse_elapsed_ms,
-            parse_elapsed_us / lines as u64
-        );
+        self.modules.get_mut(module_id).parse_elapsed_ms = parse_elapsed_ms;
 
         if !self.ast.errors.is_empty() {
             bail!("Parsing module {} failed with {} errors", src_path_name, self.ast.errors.len());
@@ -2684,13 +2754,12 @@ impl TypedProgram {
         if is_core {
             debug_assert_eq!(module_id, MODULE_ID_CORE);
         }
-        let typing_elapsed_ms =
-            self.timing.clock.delta_as_nanos(type_start, self.timing.clock.raw()) / 1_000_000;
+        let typing_elapsed_ms = self.timing.clock.elapsed_ms(type_start);
+        self.modules.get_mut(module_id).typecheck_elapsed_ms = typing_elapsed_ms;
         // if self.ast.config.profile {
         // }
         // self.named_types.print_size_info();
         // self.types.types.print_size_info();
-        eprintln!("\ttyping took {}ms", typing_elapsed_ms,);
 
         #[cfg(feature = "profile")]
         {
@@ -2869,16 +2938,11 @@ impl TypedProgram {
         self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
     }
 
-    // New recursive types design:
-    // - recursive references stay, because its actually better for codegen
-    // - Use ParsedTypeDefnId as payload for uniqueness of the RecursiveReference type
-    // - codegen_type will stop at recursive references and do an opaque struct
-    // - Require that we're inside a struct or enum root in order to do a recursive definition
-    // - Update the RecursiveReference to point to the real type_id once eval comes back
     fn eval_type_defn(
         &mut self,
         parsed_type_defn_id: ParsedTypeDefnId,
         scope_id: ScopeId,
+        defn_layout_depth: u32,
     ) -> TyperResult<TypeId> {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id);
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
@@ -2903,16 +2967,15 @@ impl TypedProgram {
             return Ok(rhs);
         }
 
-        // TODO(perf): clone of ParsedTypeDefn clones a Vec which contains a Vec!
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id).clone();
         debug_assert!(!parsed_type_defn.flags.is_alias());
 
-        // TODO: ident lookup
-        if self.ident_str(parsed_type_defn.name) == "some" {
+        if parsed_type_defn.name == self.ast.idents.b.some {
             return failf!(parsed_type_defn.span, "'some' is not a valid type name");
         }
         let my_type_id = self.types.find_type_defn_mapping(parsed_type_defn_id).unwrap();
-        self.type_defn_stack.push(my_type_id);
+        self.type_defn_stack
+            .push(TypeDefnStackEntry { type_id: my_type_id, layout_depth: defn_layout_depth });
 
         if self.types.get(my_type_id).as_unresolved().is_none() {
             return Ok(my_type_id);
@@ -2927,11 +2990,12 @@ impl TypedProgram {
             Some(parsed_type_defn.name),
         );
         let mut type_params: SV4<NameAndType> =
-            SmallVec::with_capacity(parsed_type_defn.type_params.len());
-        for type_param in parsed_type_defn.type_params.iter() {
+            SmallVec::with_capacity(parsed_type_defn.type_params.len() as usize);
+        for type_param in self.ast.mem.getn(parsed_type_defn.type_params).iter() {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
-                    &type_param.constraints,
+                    &self.ast.mem,
+                    type_param.constraints,
                 ) {
                     Ok(Some(parsed_static_constraint)) => {
                         Some(self.eval_type_expr(parsed_static_constraint, defn_scope_id)?)
@@ -2940,7 +3004,7 @@ impl TypedProgram {
                     Err(msg) => return failf!(type_param.span, "{}", msg),
                 };
             let mut ability_constraints = smallvec![];
-            for parsed_constraint in type_param.constraints.iter() {
+            for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
                 match parsed_constraint {
                     ParsedTypeConstraintExpr::Ability(ability_expr) => {
                         let ability_sig =
@@ -2980,8 +3044,8 @@ impl TypedProgram {
             direct_unresolved_target_type: if is_generic_defn { None } else { Some(my_type_id) },
             is_inside_type_definition_rhs: true,
             is_direct_function_parameter: false,
-            is_direct_variable_binding: false,
             is_inside_static_type: false,
+            defn_layout_depth: Some(defn_layout_depth),
         };
 
         // Actually compile the RHS
@@ -3009,30 +3073,19 @@ impl TypedProgram {
         };
 
         // Recursive generic types do not work.
-        // The recursive reference needs to point to the generic type, which it does
-        // look like we're doing.
         //
-        // deftype Tree[T] = { info: int, child: Tree[T]* }
-        // ->  let* t1: Tree[unit]* = { info: 0, child: core/Pointer/NULL as Tree[unit]* };
-        // ->                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        //       Field child has incorrect type: Expected Tree but got { info: iword, child: Tree* }
-        // Interestingly, Expected Tree means expected RecursiveReference to Tree
-        // I think the problem then is in instantiate, we need to update the reference
-        // to point to an instantiated type, not to the generic anymore!
-        //
-        // We aren't even properly running the TypeApplication expr at all
+        // We aren't properly running the TypeApplication expr
         // if its recursive, we just point at the generic, which is very wrong
-        let final_type_id = if is_generic_defn {
+        if is_generic_defn {
             let gen_type = GenericType { params: type_params_handle, inner: rhs_type_id };
             self.types.resolve_unresolved(my_type_id, Type::Generic(gen_type), None);
-            my_type_id
-        } else {
-            my_type_id
-        };
+        }
 
-        let popped_type = self.type_defn_stack.pop();
-        debug_assert_eq!(popped_type, Some(my_type_id));
-        Ok(final_type_id)
+        let Some(defn_stack_entry) = self.type_defn_stack.pop() else {
+            self.ice_with_span("No defn stack entry", parsed_type_defn.span);
+        };
+        debug_assert_eq!(defn_stack_entry.type_id, my_type_id);
+        Ok(my_type_id)
     }
 
     fn eval_type_expr(
@@ -3047,9 +3100,9 @@ impl TypedProgram {
         &mut self,
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
-        // The context is mostly about 'where are are' - where this type expression is located -
+        // The context is mostly about 'where we are' - where this type expression is located -
         // with respect to the source language. Is this a type definition? A function parameter
-        // type? etc.
+        // type? Are we immediately inside a function parameter?
         context: EvalTypeExprContext,
     ) -> TyperResult<TypeId> {
         let base = match self.ast.type_exprs.get(type_expr_id) {
@@ -3088,20 +3141,11 @@ impl TypedProgram {
                             self.ident_str(existing_field.name)
                         );
                     }
-                    let ty =
-                        self.eval_type_expr_ext(ast_field.ty, scope_id, context.descended())?;
-                    // TODO(infinite recursive types): This is kinda how we'd prevent this
-                    // Need to just put in the context "are we indirected or not"
-                    // if let Type::RecursiveReference(rr) = self.types.get_no_follow(ty) {
-                    //     if Some(rr.parsed_id)
-                    //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
-                    //     {
-                    //         return make_fail_span(
-                    //             "Recursive references require some indirection",
-                    //             self.ast.get_type_expression_span(ast_field.ty),
-                    //         );
-                    //     }
-                    // }
+                    let ty = self.eval_type_expr_ext(
+                        ast_field.type_expr,
+                        scope_id,
+                        context.descended_layout_direct(),
+                    )?;
                     fields.push(StructTypeField { name: ast_field.name, type_id: ty })
                 }
 
@@ -3116,6 +3160,8 @@ impl TypedProgram {
                     defn_info,
                     None,
                 );
+
+                // We've identified the only empty struct; save its id for the compiler to use
                 if no_fields && defn_info.is_none() {
                     self.types.builtins.empty = type_id;
                 }
@@ -3130,38 +3176,43 @@ impl TypedProgram {
                 }
             }
             ParsedTypeExpr::Optional(opt) => {
-                let inner_ty = self.eval_type_expr_ext(opt.base, scope_id, context.descended())?;
-                let type_args = self.types.mem.pushn(&[inner_ty]);
-                let optional_type = self.instantiate_generic_type(OPTIONAL_TYPE_ID, type_args);
-                Ok(optional_type)
+                // Rewrite the sugar and compile the parsed
+                let parsed_ty_app = ParsedTypeExpr::TypeApplication(parse::TypeApplication {
+                    span: opt.span,
+                    name: QIdent::naked(self.ast.idents.b.opt, opt.span),
+                    args: self.ast.p_type_args.add_slice_copy(&[NamedTypeArg {
+                        name: None,
+                        type_expr: Some(opt.base),
+                        span: opt.span,
+                    }]),
+                });
+                let parsed_ty_app_id = self.ast.type_exprs.add(parsed_ty_app);
+                self.eval_type_expr(parsed_ty_app_id, scope_id)
             }
             ParsedTypeExpr::Reference(r) => {
-                let span = r.span;
                 let mutable = match r.kind {
                     parse::ReferenceKind::Read => false,
                     parse::ReferenceKind::Mut => true,
                 };
-                let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
-                match self.types.get(inner_ty) {
-                    Type::Function(_) => {
-                        if mutable {
-                            return failf!(span, "Function pointers cannot be *write");
-                        }
-                        let type_id = self.types.add_function_pointer_type(inner_ty);
-                        Ok(type_id)
-                    }
-                    _ => {
-                        let reference_type =
-                            Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
-                        let type_id = self.types.add_anon(reference_type);
-                        Ok(type_id)
-                    }
+                let inner_ty =
+                    self.eval_type_expr_ext(r.base, scope_id, context.descended_layout_indirect())?;
+                if let Type::Function(_) = self.types.get(inner_ty) {
+                    let function_pointer_type = self.types.add_function_pointer_type(inner_ty);
+                    Ok(function_pointer_type)
+                } else {
+                    let reference_type =
+                        Type::Reference(ReferenceType { inner_type: inner_ty, mutable });
+                    let type_id = self.types.add_anon(reference_type);
+                    Ok(type_id)
                 }
             }
             ParsedTypeExpr::Array(arr) => {
                 let arr = *arr;
-                let element_type =
-                    self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
+                let element_type = self.eval_type_expr_ext(
+                    arr.element_type,
+                    scope_id,
+                    context.descended_layout_direct(),
+                )?;
 
                 let size_type_id = match self.ast.type_exprs.get(arr.size_expr).clone() {
                     ParsedTypeExpr::StaticLiteral(parsed_literal) => {
@@ -3172,15 +3223,19 @@ impl TypedProgram {
                                 scope_id,
                                 Some(I64_TYPE_ID),
                             )?;
-                        let static_type = StaticType {
+                        let value_type = StaticValueType {
                             family_type_id: inner_type_id,
                             value_id: Some(static_value_id),
                         };
-                        self.types.add_anon(Type::Static(static_type))
+                        self.types.add_anon(Type::StaticValue(value_type))
                     }
                     _ => {
                         // For other expressions, evaluate normally
-                        self.eval_type_expr_ext(arr.size_expr, scope_id, context.descended())?
+                        self.eval_type_expr_ext(
+                            arr.size_expr,
+                            scope_id,
+                            context.descended_layout_indirect(),
+                        )?
                     }
                 };
 
@@ -3194,13 +3249,8 @@ impl TypedProgram {
                         self.type_id_to_string(static_type.family_type_id)
                     );
                 }
-                let concrete_size = self.get_concrete_count_of_array(size_type_id);
 
-                let array_type = Type::Array(ArrayType {
-                    element_type,
-                    size_type: size_type_id,
-                    concrete_count: concrete_size,
-                });
+                let array_type = Type::Array(ArrayType { element_type, size_type: size_type_id });
                 let type_id = self.types.add_anon(array_type);
                 Ok(type_id)
             }
@@ -3250,20 +3300,8 @@ impl TypedProgram {
                             let type_id = self.eval_type_expr_ext(
                                 *payload_type_expr,
                                 scope_id,
-                                context.descended(),
+                                context.descended_layout_direct(),
                             )?;
-                            // TODO(infinite recursive types): This is kinda how we'd prevent infinite recursion
-                            // if let Type::RecursiveReference(rr) = self.types.get_no_follow(type_id)
-                            // {
-                            //     if Some(rr.parsed_id)
-                            //         == context.inner_type_defn_info.as_ref().map(|i| i.ast_id)
-                            //     {
-                            //         return make_fail_span(
-                            //             "Recursive references requires some indirection",
-                            //             self.ast.get_type_expression_span(*payload_type_expr),
-                            //         );
-                            //     }
-                            // }
                             Some(type_id)
                         }
                     };
@@ -3286,7 +3324,6 @@ impl TypedProgram {
                     context.direct_unresolved_target_type.and_then(|t| self.types.get_defn_info(t));
                 let enum_type = Type::Enum(EnumType {
                     variants: variants.into_handle(&mut self.types.mem),
-                    ast_node: type_expr_id.into(),
                     tag_type,
                 });
                 let enum_type_id = self.add_or_resolve_type(
@@ -3299,8 +3336,11 @@ impl TypedProgram {
             }
             ParsedTypeExpr::DotMemberAccess(dot_acc) => {
                 let dot_acc = dot_acc.clone();
-                let base_type =
-                    self.eval_type_expr_ext(dot_acc.base, scope_id, context.descended())?;
+                let base_type = self.eval_type_expr_ext(
+                    dot_acc.base,
+                    scope_id,
+                    context.descended_layout_unrelated(),
+                )?;
                 if let Some(spec_info) = self.types.get_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     if let Some(matching_type_var_pos) = self
@@ -3309,10 +3349,9 @@ impl TypedProgram {
                         .iter()
                         .position(|tp| tp.name == dot_acc.member_name)
                     {
-                        let actual_type =
-                            self.types.mem.get_nth(spec_info.type_args, matching_type_var_pos);
-                        let root_type = self.types.get_root_id(*actual_type);
-                        return Ok(root_type);
+                        let type_arg_type_id =
+                            *self.types.mem.get_nth(spec_info.type_args, matching_type_var_pos);
+                        return Ok(type_arg_type_id);
                     }
                 }
                 match self.types.get(base_type) {
@@ -3506,18 +3545,18 @@ impl TypedProgram {
                 }
                 let parsed_static = *parsed_static;
                 let inner_type_id = self.eval_type_expr_ext(
-                    parsed_static.inner_type_expr,
+                    parsed_static.family_type_expr,
                     scope_id,
                     EvalTypeExprContext { is_inside_static_type: true, ..context },
                 )?;
-                if let Type::Static(_) = self.types.get(inner_type_id) {
+                if let Type::StaticValue(_) = self.types.get(inner_type_id) {
                     return failf!(
                         parsed_static.span,
-                        "Static type cannot be nested inside another static type"
+                        "Value type cannot be nested inside another value type"
                     );
                 };
-                let static_type = StaticType { family_type_id: inner_type_id, value_id: None };
-                let static_type_id = self.types.add_anon(Type::Static(static_type));
+                let value_type = StaticValueType { family_type_id: inner_type_id, value_id: None };
+                let static_type_id = self.types.add_anon(Type::StaticValue(value_type));
                 Ok(static_type_id)
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
@@ -3525,7 +3564,7 @@ impl TypedProgram {
                 let (static_value_id, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
                 let static_type_id =
-                    self.types.add_static_type(inner_type_id, Some(static_value_id));
+                    self.types.add_value_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
             }
         }?;
@@ -3598,8 +3637,11 @@ impl TypedProgram {
                 else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
-                let inner =
-                    self.eval_type_expr_ext(fn_type_expr_id, scope_id, context.descended())?;
+                let inner = self.eval_type_expr_ext(
+                    fn_type_expr_id,
+                    scope_id,
+                    context.descended_layout_indirect(),
+                )?;
                 if self.types.get(inner).as_function().is_none() {
                     return failf!(
                         ty_app.span,
@@ -3626,8 +3668,16 @@ impl TypedProgram {
                 let Some(arg2_expr) = args[1].type_expr else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
-                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
-                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
+                let arg1 = self.eval_type_expr_ext(
+                    arg1_expr,
+                    scope_id,
+                    context.descended_layout_direct(),
+                )?;
+                let arg2 = self.eval_type_expr_ext(
+                    arg2_expr,
+                    scope_id,
+                    context.descended_layout_direct(),
+                )?;
 
                 let struct1 = self
                     .types
@@ -3684,8 +3734,16 @@ impl TypedProgram {
                 let Some(arg2_expr) = args[1].type_expr else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
-                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
-                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
+                let arg1 = self.eval_type_expr_ext(
+                    arg1_expr,
+                    scope_id,
+                    context.descended_layout_direct(),
+                )?;
+                let arg2 = self.eval_type_expr_ext(
+                    arg2_expr,
+                    scope_id,
+                    context.descended_layout_indirect(),
+                )?;
 
                 let struct1 = self
                     .types
@@ -3743,28 +3801,44 @@ impl TypedProgram {
             Some((type_id, _)) => {
                 match self.types.get(type_id) {
                     Type::Unresolved(parsed_type_defn_id) => {
-                        // We recurse into unresolved types, so that we can detect corecursion,
-                        // but only if we're doing a type definition
-                        if self.type_defn_stack.contains(&type_id) {
-                            let recursive_reference =
-                                self.types.add_anon(Type::RecursiveReference(RecursiveReference {
-                                    root_type_id: type_id,
-                                    // TODO: Support generic recursive types
-                                    // by storing this
-                                    // type_args: smallvec![],
-                                }));
-                            Ok(recursive_reference)
+                        if let Some(entry) =
+                            self.type_defn_stack.iter().find(|e| e.type_id == type_id)
+                        {
+                            if Some(entry.layout_depth) == context.defn_layout_depth {
+                                kbail!(
+                                    self,
+                                    ty_app_span,
+                                    "Same-level recursion: type {} directly contains itself",
+                                    ty_app_name.name
+                                )
+                            }
+                            if !ty_app.args.is_empty() {
+                                return failf!(ty_app_span, "cant do recursive generics yet");
+                            }
+                            debug!(
+                                "yielding after detecting recursion: {}",
+                                self.qident_to_string(ty_app_name)
+                            );
+                            Ok(type_id)
                         } else {
+                            // Not recursion, just encountering an out-of-order type
                             debug!(
                                 "Evaluating {} inside {} because I haven't seen it",
                                 self.ident_str(self.ast.get_type_defn(*parsed_type_defn_id).name),
                                 self.scope_id_to_string(scope_id)
                             );
                             // Unresolved types are always named definitions
-                            let defn_info = self.types.get_defn_info(type_id).unwrap();
+                            let target_type_defn_info = self.types.get_defn_info(type_id).unwrap();
 
-                            let _result =
-                                self.eval_type_defn(*parsed_type_defn_id, defn_info.scope)?;
+                            // If we are in a definition, use the layout depth. Otherwise this
+                            // should start fresh at depth zero
+                            let fresh_layout_depth = context.defn_layout_depth.unwrap_or(0);
+
+                            let _result = self.eval_type_defn(
+                                *parsed_type_defn_id,
+                                target_type_defn_info.scope,
+                                fresh_layout_depth,
+                            )?;
 
                             // Just re-call this function from the top now that the type exists. (hack? idk)
                             self.eval_type_application(ty_app_id, scope_id, context)
@@ -3799,7 +3873,7 @@ impl TypedProgram {
                             let arg_type_id = self.eval_type_expr_ext(
                                 parsed_arg_expr,
                                 scope_id,
-                                context.descended(),
+                                context.descended_layout_indirect(),
                             )?;
                             subst_pairs.push(spair! { param.type_id => arg_type_id });
                             type_arguments.push(arg_type_id);
@@ -3895,7 +3969,6 @@ impl TypedProgram {
                 //if specialized_type == inner {
                 //    panic!("Instantiate should never no-op")
                 //}
-                // let is_sl = self.ident_str(defn_info.name) == "SpillList";
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
                         self.types.get_instance_info(specialized_type).unwrap().type_args;
@@ -3942,6 +4015,7 @@ impl TypedProgram {
         // - count_type_variables
         // - Layout (?) although due to indirection requirements, less critical
         // - Other places I am sure
+
         let all_holes = substitution_pairs
             .iter()
             .all(|p| self.types.type_variable_counts.get(p.from).inference_variable_count > 0);
@@ -4003,7 +4077,7 @@ impl TypedProgram {
             return matching_pair.to;
         }
 
-        let res = match self.types.get_no_follow(type_id) {
+        let res = match self.types.get(type_id) {
             Type::InferenceHole(_) => type_id,
             Type::Char
             | Type::Integer(_)
@@ -4047,7 +4121,6 @@ impl TypedProgram {
                 }
             }
             Type::Enum(e) => {
-                let original_ast_node = e.ast_node;
                 let original_tag_type = e.tag_type;
                 let new_variants = self.types.mem.dupn(e.variants);
                 let mut any_changed = false;
@@ -4075,11 +4148,7 @@ impl TypedProgram {
                                 .pushn_iter(substitution_pairs.iter().map(|p| p.to)),
                         })
                         .or_else(|| self.types.get_instance_info(type_id).cloned());
-                    let new_enum = EnumType {
-                        variants: new_variants,
-                        ast_node: original_ast_node,
-                        tag_type: original_tag_type,
-                    };
+                    let new_enum = EnumType { variants: new_variants, tag_type: original_tag_type };
                     let new_enum_id = self.types.add(
                         Type::Enum(new_enum),
                         defn_info_to_use,
@@ -4180,18 +4249,18 @@ impl TypedProgram {
                     type_id
                 }
             }
-            Type::Static(stat) => {
-                if stat.value_id.is_some() {
+            Type::StaticValue(value_type) => {
+                if value_type.value_id.is_some() {
                     // Can't substitute inside the type "static[string; "hello"]"
                     // But you can inside type "static[T; _]"
                     type_id
                 } else {
-                    let inner_type = stat.family_type_id;
-                    let new_inner_type = self.substitute_in_type(inner_type, substitution_pairs);
-                    if new_inner_type == inner_type {
+                    let family_type = value_type.family_type_id;
+                    let new_inner_type = self.substitute_in_type(family_type, substitution_pairs);
+                    if new_inner_type == family_type {
                         type_id
                     } else {
-                        self.types.add_anon(Type::Static(StaticType {
+                        self.types.add_anon(Type::StaticValue(StaticValueType {
                             family_type_id: new_inner_type,
                             value_id: None,
                         }))
@@ -4201,9 +4270,6 @@ impl TypedProgram {
             Type::Unresolved(_) => {
                 unreachable!("substitute_in_type is not expected to be called on Unresolved")
             }
-            Type::RecursiveReference(_rr) => unreachable!(
-                "substitute_in_type is not expected to be called on RecursiveReference"
-            ),
             Type::Array(arr) => {
                 let arr = *arr;
                 let element_type = arr.element_type;
@@ -4213,11 +4279,9 @@ impl TypedProgram {
                     type_id // No change needed
                 } else {
                     // Create new Array type with substituted element type
-                    let concrete_size = self.get_concrete_count_of_array(new_size_type);
                     let new_array_type = Type::Array(ArrayType {
                         element_type: new_element_type,
                         size_type: new_size_type,
-                        concrete_count: concrete_size,
                     });
                     self.types.add_anon(new_array_type)
                 }
@@ -4230,25 +4294,6 @@ impl TypedProgram {
             self.dump_type_id_to_string(res)
         );
         res
-    }
-
-    /// Based on the 'size_type' of an array, determine what its concrete count is
-    /// Size type can be a type parameter, in which case its 0
-    /// But it can also be a known static size (i64), in which case its the value of it
-    pub fn get_concrete_count_of_array(&self, size_type: TypeId) -> Option<u64> {
-        match self.get_value_of_static_type(size_type) {
-            Some(StaticValue::Int(TypedIntValue::I64(i))) => Some(*i as u64),
-            _ => None,
-        }
-    }
-
-    pub fn get_value_of_static_type(&self, type_id: TypeId) -> Option<&StaticValue> {
-        match self.types.get(type_id) {
-            Type::Static(StaticType { value_id: Some(value_id), .. }) => {
-                Some(self.static_values.get(*value_id))
-            }
-            _ => None,
-        }
     }
 
     fn get_module_manifest(
@@ -4265,9 +4310,12 @@ impl TypedProgram {
             return Ok(None);
         };
         let manifest_global = self.ast.get_global(manifest_function).clone();
-        let type_id = self.eval_type_expr(manifest_global.ty, Scopes::ROOT_SCOPE_ID)?;
+        let type_id = self.eval_type_expr(manifest_global.type_expr, Scopes::ROOT_SCOPE_ID)?;
+        let Some(value_expr) = manifest_global.value_expr else {
+            return failf!(manifest_global.span, "Missing value");
+        };
         let manifest_result = self.execute_static_expr(
-            manifest_global.value_expr,
+            value_expr,
             EvalExprContext {
                 scope_id: Scopes::ROOT_SCOPE_ID,
                 expected_type_id: Some(type_id),
@@ -4394,7 +4442,9 @@ impl TypedProgram {
                     },
                     ParsedLiteral::String(string_id, span) => {
                         match self.types.get(target_type_id) {
-                            Type::Static(s) if s.family_type_id == STRING_TYPE_ID => Ok(()),
+                            Type::StaticValue(svt) if svt.family_type_id == STRING_TYPE_ID => {
+                                Ok(())
+                            }
                             _ if target_type_id == STRING_TYPE_ID => Ok(()),
                             _ => failf!(
                                 self.ast.get_pattern_span(pat_expr),
@@ -4578,7 +4628,7 @@ impl TypedProgram {
     }
 
     fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
-        let lookup_result = self.types.get_no_follow(type_id);
+        let lookup_result = self.types.get(type_id);
         match lookup_result {
             Type::TypeParameter(tvar) => match self.scopes.find_type(scope_id, tvar.name) {
                 None => {
@@ -4597,7 +4647,6 @@ impl TypedProgram {
                     }
                 }
             },
-            Type::RecursiveReference(rr) => rr.root_type_id,
             _ => type_id,
         }
     }
@@ -4643,8 +4692,8 @@ impl TypedProgram {
             }
             // If we failed typechecking, and we expected a static, and we passed a non-static
             // Try to lift it
-            (Type::Static(expected_static), None) => {
-                if expected_static.family_type_id == actual_type_id {
+            (Type::StaticValue(expected_value_type), None) => {
+                if expected_value_type.family_type_id == actual_type_id {
                     if let Ok(static_lifted) = self.attempt_static_lift(expr) {
                         let static_lifted_type = self.exprs.get_type(static_lifted);
                         return match self.check_types(expected, static_lifted_type, scope_id) {
@@ -4663,8 +4712,9 @@ impl TypedProgram {
 
         // If we expect a lambda object and you pass a lambda
         if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
-            if let Type::Lambda(lambda_type) = self.get_expr_type(expr) {
+            if let Type::Lambda(lambda_type_id) = self.get_expr_type(expr) {
                 let span = self.exprs.get_span(expr);
+                let lambda_type = self.types.lambda_types.get(*lambda_type_id);
                 let lambda_object_type = self.types.add_lambda_object(
                     &self.ast.idents,
                     lambda_type.function_type,
@@ -4919,8 +4969,8 @@ impl TypedProgram {
             self.type_id_to_string(expected).blue(),
         );
 
-        let expected = self.types.get_static_type_id_of_type(expected).unwrap_or(expected);
-        let actual = self.types.get_static_type_id_of_type(actual).unwrap_or(actual);
+        let expected = self.types.get_value_type_id_of_type(expected).unwrap_or(expected);
+        let actual = self.types.get_value_type_id_of_type(actual).unwrap_or(actual);
 
         debug!(
             "typecheck resolved: {} <: {}",
@@ -5021,7 +5071,9 @@ impl TypedProgram {
             (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
                 self.check_types(fp1.function_type_id, fp2.function_type_id, scope_id)
             }
-            (Type::Lambda(expected_lambda), Type::Lambda(actual_lambda)) => {
+            (Type::Lambda(expected_lambda_id), Type::Lambda(actual_lambda_id)) => {
+                let expected_lambda = self.types.lambda_types.get(*expected_lambda_id);
+                let actual_lambda = self.types.lambda_types.get(*actual_lambda_id);
                 if expected_lambda.parsed_id == actual_lambda.parsed_id
                     && expected_lambda.function_type == actual_lambda.function_type
                 {
@@ -5044,9 +5096,9 @@ impl TypedProgram {
                     act_lambda_object.function_type,
                     scope_id,
                 ),
-            (Type::Static(exp_static_type), Type::Static(act_static_type)) => {
-                if exp_static_type.family_type_id == act_static_type.family_type_id {
-                    match (exp_static_type.value_id, act_static_type.value_id) {
+            (Type::StaticValue(exp_value_type), Type::StaticValue(act_value_type)) => {
+                if exp_value_type.family_type_id == act_value_type.family_type_id {
+                    match (exp_value_type.value_id, act_value_type.value_id) {
                         (None, None) => Ok(()),    // Both unresolved
                         (None, Some(_)) => Ok(()), // Expected unresolved, actual has a value
                         (Some(exp_value_id), Some(act_value_id)) => {
@@ -5063,7 +5115,7 @@ impl TypedProgram {
                         }
                         (Some(_), None) => Err(k1_format_user!(
                             self,
-                            "Expected a specific static but got an unresolved one: {} vs {}",
+                            "Expected a specific value but got a general family: {} vs {}",
                             expected,
                             actual,
                         )),
@@ -5071,7 +5123,7 @@ impl TypedProgram {
                 } else {
                     Err(k1_format_user!(
                         self,
-                        "Expected static {} but got static {}",
+                        "Expected value type {} but got value type {}",
                         expected,
                         actual
                     ))
@@ -5223,7 +5275,10 @@ impl TypedProgram {
         //       Currently we'll just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let expr = self.eval_block(&parsed_expr_as_block, ctx, true)?;
+        let static_block_scope =
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let static_eval_ctx = ctx.with_scope(static_block_scope);
+        let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
 
@@ -5329,10 +5384,11 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
-        let type_id = self.eval_type_expr(parsed_global.ty, scope_id)?;
+        let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
 
         let is_referencing = parsed_global.is_referencing;
-        let is_exported = parsed_global.export;
+        let is_exported = parsed_global.is_export;
+        let is_external = parsed_global.is_external;
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
         let value_expr_id = parsed_global.value_expr;
@@ -5358,12 +5414,13 @@ impl TypedProgram {
             variable_id,
             initial_value: None,
             parsed_expr: value_expr_id,
-            ty: type_id,
+            type_id,
             span: global_span,
             is_referencing,
             is_constant: !is_mutable,
-            is_tls: parsed_global.thread_local,
+            is_tls: parsed_global.is_thread_local,
             is_exported,
+            is_external,
             ast_id: parsed_global_id,
             parent_scope: scope_id,
         });
@@ -5375,6 +5432,7 @@ impl TypedProgram {
         };
         self.global_ast_mappings.insert(parsed_global_id, global_id);
         self.scopes.add_variable(scope_id, global_name, variable_id);
+
         Ok(variable_id)
     }
 
@@ -5387,8 +5445,22 @@ impl TypedProgram {
             return Ok(());
         };
         let typed_global = self.globals.get(global_id);
+        let is_external = typed_global.is_external;
+        let value_expr_id = if is_external {
+            match typed_global.parsed_expr {
+                None => return Ok(()),
+                Some(_id) => {
+                    return failf!(parsed_global.span, "External globals cannot have initializers");
+                }
+            }
+        } else {
+            match typed_global.parsed_expr {
+                None => return failf!(parsed_global.span, "Global has no initializer"),
+                Some(id) => id,
+            }
+        };
         let scope_id = typed_global.parent_scope;
-        let declared_type = typed_global.ty;
+        let declared_type = typed_global.type_id;
 
         let is_referencing = parsed_global.is_referencing;
         let expected_rhs_type = if is_referencing {
@@ -5401,7 +5473,6 @@ impl TypedProgram {
         };
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
-        let value_expr_id = parsed_global.value_expr;
 
         let expected_type_for_execution =
             match self.types.get_static_type_of_type(expected_rhs_type) {
@@ -5523,9 +5594,9 @@ impl TypedProgram {
         };
         let ability_args = self.named_types.get_slice(ability.kind.arguments());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
-        // Add Self
+        // Add self
         subst_pairs.push(spair! {ability.self_type_id => type_variable_id});
-        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.Self_, type_variable_id);
+        let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, type_variable_id);
         // Add ability params
         for (parent_ability_param, ability_arg) in
             self.mem.getn(all_params).iter().filter(|p| !p.is_impl_param).zip(ability_args.iter())
@@ -5794,13 +5865,6 @@ impl TypedProgram {
         let parameter_constraints: SV4<Option<TypeId>> =
             self.named_types.get_slice(args).iter().map(|nt| Some(nt.type_id)).collect();
 
-        // Follow 'statics' since we're never going to be implementing abilities for the
-        // specific static values but instead for the inner types
-        // let self_type_id = match self.types.get_no_follow(self_type_id) {
-        //     Type::Static(stat) => stat.family_type_id,
-        //     _ => self_type_id,
-        // };
-
         self.find_ability_impl_for_type_or_generate_new(
             self_type_id,
             base_ability,
@@ -5961,7 +6025,7 @@ impl TypedProgram {
             );
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
-                let static_type = self.types.get(static_constraint).as_static().unwrap();
+                let static_type = self.types.get(static_constraint).as_value_type().unwrap();
                 if static_type.family_type_id != solution.type_id {
                     eprintln!(
                         "Blanket impl almost matched but a static constraint failed: {} != {}",
@@ -5972,24 +6036,25 @@ impl TypedProgram {
                 }
             }
             for parsed_ability_expr in
-                parsed_param.constraints.iter().filter_map(|p| p.as_ability())
+                self.ast.mem.getn(parsed_param.constraints).iter().filter_map(|p| p.as_ability())
             {
                 let constraint_signature = self
                     .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
                     .unwrap();
-                if let Err(mut e) = self.check_type_constraint(
+                if let Err(e) = self.check_type_constraint(
                     solution.type_id,
                     constraint_signature,
                     parsed_param.name,
                     constraint_checking_scope,
                     span,
                 ) {
-                    e.message = format!(
-                        "Blanket impl almost matched but a constraint was unsatisfied; {}",
-                        e.message
+                    self.report_hint(
+                        e.span,
+                        format!(
+                            "Blanket impl almost matched but a constraint was unsatisfied; {}",
+                            e.message
+                        ),
                     );
-                    e.level = MessageLevel::Info;
-                    self.write_error(&mut std::io::stderr(), &e).unwrap();
                     return None;
                 }
             }
@@ -6071,7 +6136,7 @@ impl TypedProgram {
             };
         }
 
-        let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.Self_, self_type_id);
+        let _ = self.scopes.add_type(new_impl_scope, self.ast.idents.b.self_, self_type_id);
 
         let mut specialized_functions = self.mem.new_list(blanket_impl.functions.len());
         let kind = AbilityImplKind::DerivedFromBlanket { blanket_impl_id };
@@ -6486,10 +6551,10 @@ impl TypedProgram {
         }
 
         // Special case: .toMut / .unMut reference unwrap operations
-        if field_access.field_name == self.ast.idents.b.toMut
-            || field_access.field_name == self.ast.idents.b.unMut
+        if field_access.field_name == self.ast.idents.b.to_mut
+            || field_access.field_name == self.ast.idents.b.un_mut
         {
-            let to_mut = field_access.field_name == self.ast.idents.b.toMut;
+            let to_mut = field_access.field_name == self.ast.idents.b.to_mut;
             let name = if to_mut { "toMut" } else { "unMut" };
             let base_expr = self.eval_expr(field_access.base, ctx)?;
             let reference_type = match self.get_expr_type(base_expr) {
@@ -6589,12 +6654,12 @@ impl TypedProgram {
         }
         //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
         match self.types.get(base_type_id) {
-            Type::Static(st) => {
-                let Some(struct_type) = self.types.get(st.family_type_id).as_struct() else {
+            Type::StaticValue(svt) => {
+                let Some(struct_type) = self.types.get(svt.family_type_id).as_struct() else {
                     kbail!(
                         self,
                         span,
-                        "Field {} not found on static type {}",
+                        "Field {} not found on value type {}",
                         field_access.field_name,
                         base_type_id
                     )
@@ -6609,7 +6674,7 @@ impl TypedProgram {
                             self.type_id_to_string(base_type_id)
                         )
                     })?;
-                match st.value_id {
+                match svt.value_id {
                     None => {
                         // Abstract case
                         kbail!(self, span, "Can't work with abstract static structs yet")
@@ -6617,7 +6682,7 @@ impl TypedProgram {
                     Some(value_id) => {
                         let StaticValue::Struct(static_struct) = self.static_values.get(value_id)
                         else {
-                            ice_span!(self, span, "Expected static struct")
+                            ice_span!(self, span, "Expected struct value type")
                         };
                         let field_value_id =
                             self.static_values.mem.get_nth(static_struct.fields, field_index);
@@ -6671,7 +6736,7 @@ impl TypedProgram {
     ) -> TyperResult<TypedExprId> {
         let scope_id = ctx.scope_id;
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
-        let block_try_impl = self.expect_ability_implementation(
+        let block_try_impl = self.expect_ability_impl(
                     block_return_type,
                     TRY_ABILITY_ID,
                     scope_id,
@@ -6683,21 +6748,21 @@ impl TypedProgram {
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
         let try_value_type = self.exprs.get_type(try_value_original_expr);
         let value_try_impl =
-            self.expect_ability_implementation(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
+            self.expect_ability_impl(try_value_type, TRY_ABILITY_ID, scope_id, span)?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
             .named_types
             .get_slice(block_impl_args)
             .iter()
-            .find(|nt| nt.name == get_ident!(self, "E"))
+            .find(|nt| nt.name == get_ident!(self, "e"))
             .map(|nt| nt.type_id)
             .unwrap();
         let error_type = self
             .named_types
             .get_slice(value_impl_args)
             .iter()
-            .find(|nt| nt.name == get_ident!(self, "E"))
+            .find(|nt| nt.name == get_ident!(self, "e"))
             .map(|nt| nt.type_id)
             .unwrap();
         if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
@@ -6710,7 +6775,7 @@ impl TypedProgram {
             .named_types
             .get_slice(value_impl_args)
             .iter()
-            .find(|nt| nt.name == get_ident!(self, "T"))
+            .find(|nt| nt.name == get_ident!(self, "t"))
             .map(|nt| nt.type_id)
             .unwrap();
         let mut result_block = self.synth_block(scope_id, ScopeType::LexicalBlock, span, 2);
@@ -6721,21 +6786,21 @@ impl TypedProgram {
         );
         let result_block_ctx = ctx.with_scope(result_block.scope_id).with_no_expected_type();
         let is_ok_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_isOk.with_span(span),
+            self.ast.idents.f.try__is_ok.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
             false,
         )?;
         let get_ok_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
             false,
         )?;
         let get_error_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getError.with_span(span),
+            self.ast.idents.f.try__get_error.with_span(span),
             &[],
             &[try_value_var.variable_expr],
             result_block_ctx,
@@ -6781,9 +6846,9 @@ impl TypedProgram {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
         let operand_type = self.exprs.get_type(operand_expr);
         let _try_impl =
-            self.expect_ability_implementation(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
+            self.expect_ability_impl(operand_type, TRY_ABILITY_ID, ctx.scope_id, span)?;
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[operand_expr],
             ctx,
@@ -6956,7 +7021,7 @@ impl TypedProgram {
                     },
                 };
                 let type_to_use = if should_type_as_static {
-                    self.types.add_static_type(STRING_TYPE_ID, Some(static_value_id))
+                    self.types.add_value_type(STRING_TYPE_ID, Some(static_value_id))
                 } else {
                     STRING_TYPE_ID
                 };
@@ -7038,20 +7103,20 @@ impl TypedProgram {
                     None,
                 );
                 let true_case = parse::ParsedMatchCase {
-                    patterns: smallvec![is_expr.pattern],
+                    patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
                     expression: true_expression,
                 };
                 let wildcard_pattern =
                     self.ast.patterns.add_pattern(parse::ParsedPattern::Wildcard(is_expr.span));
                 let false_case = parse::ParsedMatchCase {
-                    patterns: smallvec![wildcard_pattern],
+                    patterns: MSpillSlice::one(wildcard_pattern),
                     guard_condition_expr: None,
                     expression: false_expression,
                 };
                 let as_match_expr = parse::ParsedMatchExpression {
                     match_subject: is_expr.target_expression,
-                    cases: vec![true_case, false_case],
+                    cases: self.ast.mem.pushn(&[true_case, false_case]),
                     span: is_expr.span,
                 };
                 let match_expr_id = self.ast.exprs.add_expression(
@@ -7072,42 +7137,42 @@ impl TypedProgram {
             ParsedExpr::Cast(cast) => {
                 let cast = *cast;
                 let dest_type = self.eval_type_expr(cast.dest_type, ctx.scope_id)?;
-                eprintln!("actual cast node");
                 self.eval_cast(cast.base_expr, dest_type, cast.span, ctx)
             }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(_is) => {
-                let res = self.eval_interpolated_string(expr_id, ctx)?;
+                let res = self.synth_interpolated_string(expr_id, ctx, None)?;
                 Ok(res)
             }
             ParsedExpr::Builtin(span) => {
                 let Some(defn_name) = ctx.global_defn_name else {
                     return failf!(*span, "builtin can only be used as a top-level expression");
                 };
-                if ctx.scope_id != self.get_k1_scope_id() {
+                let parent_scope_id = self.scopes.get_scope(ctx.scope_id).parent.unwrap();
+                if parent_scope_id != self.get_k1_scope_id() {
                     return failf!(*span, "All the known builtins constants live in the k1 scope");
                 }
                 match self.ident_str(defn_name) {
-                    "TEST" => {
+                    "test" => {
                         let is_test_build = self.ast.config.is_test_build;
                         Ok(self.synth_bool(is_test_build, *span))
                     }
-                    "OS" => {
+                    "os" => {
                         // TODO: Ideally this is an enum!
                         let os_str = self.ast.config.target.target_os().to_str();
                         let string_id = self.ast.strings.intern(os_str);
                         Ok(self.synth_string_literal(string_id, *span))
                     }
-                    "NO_STD" => {
+                    "no-std" => {
                         let no_std = self.ast.config.no_std;
                         Ok(self.synth_bool(no_std, *span))
                     }
-                    "DEBUG" => {
+                    "debug" => {
                         let debug = self.ast.config.debug;
                         Ok(self.synth_bool(debug, *span))
                     }
-                    "IS_STATIC" => Ok(self.synth_bool(false, *span)),
-                    "MULTITHREADING" => {
+                    "is-static" => Ok(self.synth_bool(false, *span)),
+                    "multithreading" => {
                         let bool_value = self.program_settings.multithreaded;
                         Ok(self.synth_bool(bool_value, *span))
                     }
@@ -7199,7 +7264,7 @@ impl TypedProgram {
 
     fn add_static_value_expr(&mut self, value_id: StaticValueId, span: SpanId) -> TypedExprId {
         let inner_type_id = self.static_values.get(value_id).get_type();
-        let static_type_id = self.types.add_static_type(inner_type_id, Some(value_id));
+        let static_type_id = self.types.add_value_type(inner_type_id, Some(value_id));
         self.exprs.add_static(value_id, static_type_id, true, span)
     }
 
@@ -7263,7 +7328,7 @@ impl TypedProgram {
                 let this_element_type = self.exprs.get_type(element_expr_checked);
                 if element_type.is_none() {
                     // Erase static type info since a list of all one static value isn't very useful
-                    let chased_type = self.types.get_chased_id(this_element_type);
+                    let chased_type = self.types.get_static_family_id_if_static(this_element_type);
                     element_type = Some(chased_type)
                 };
                 elements.push(element_expr_checked);
@@ -7294,8 +7359,8 @@ impl TypedProgram {
                 list_lit_ctx,
                 false,
             )?,
-            ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
-                self.ast.idents.f.Buffer__allocate.with_span(span),
+            ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
+                self.ast.idents.f.buffer__allocate.with_span(span),
                 &[element_type],
                 &[count_expr],
                 list_lit_ctx,
@@ -7312,7 +7377,7 @@ impl TypedProgram {
         };
         let is_referencing_let = match list_kind {
             ContainerKind::Array(_) => true,
-            ContainerKind::Buffer | ContainerKind::View => false,
+            ContainerKind::Buffer | ContainerKind::Span => false,
             ContainerKind::List => true,
         };
         let dest_coll_variable = self.synth_variable_defn(
@@ -7335,8 +7400,8 @@ impl TypedProgram {
                     list_lit_ctx,
                     false,
                 )?,
-                ContainerKind::Buffer | ContainerKind::View => self.synth_typed_call_typed_args(
-                    self.ast.idents.f.Buffer_set.with_span(span),
+                ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
+                    self.ast.idents.f.buffer_set.with_span(span),
                     &[element_type],
                     &[dest_coll_variable.variable_expr, index_expr, *element_value_expr],
                     list_lit_ctx,
@@ -7361,8 +7426,8 @@ impl TypedProgram {
         let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
             ContainerKind::Buffer => dest_coll_variable.variable_expr,
-            ContainerKind::View => self.synth_typed_call_typed_args(
-                self.ast.idents.f.View_wrapBuffer.with_span(span),
+            ContainerKind::Span => self.synth_typed_call_typed_args(
+                self.ast.idents.f.span_wrapBuffer.with_span(span),
                 &[element_type],
                 &[dest_coll_variable.variable_expr],
                 ctx.with_no_expected_type(),
@@ -7423,24 +7488,24 @@ impl TypedProgram {
                 self.eval_variable(variable_expr, ctx.scope_id, false)?;
             let variable_type = self.exprs.get_type(variable_expr);
             match self.types.get(variable_type) {
-                Type::Static(stat) => {
-                    if let Some(value_id) = stat.value_id {
+                Type::StaticValue(svt) => {
+                    if let Some(value_id) = svt.value_id {
                         static_parameters.push((variable_id, value_id));
                     } else {
                         return failf!(
                             span,
-                            "Static parameter `{}` is unresolved",
+                            "Value type parameter `{}` is unresolved",
                             self.ident_str(param)
                         );
                     }
                 }
                 Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
                     let static_type =
-                        self.types.get(tp.static_constraint.unwrap()).as_static().unwrap();
+                        self.types.get(tp.static_constraint.unwrap()).as_value_type().unwrap();
                     let Some(value_id) = static_type.value_id else {
                         return failf!(
                             span,
-                            "Expected a resolved static type for argument {}",
+                            "Expected a value type for argument {}, got a value family",
                             self.ident_str(param),
                         );
                     };
@@ -7449,7 +7514,7 @@ impl TypedProgram {
                 _ => {
                     return failf!(
                         span,
-                        "Non-static parameters aren't supported: {}: {}",
+                        "Non-value parameters aren't supported: {}: {}",
                         self.ident_str(param),
                         self.type_id_to_string(variable_type)
                     );
@@ -7551,7 +7616,7 @@ impl TypedProgram {
                             generated_filename,
                             content.clone(),
                         ));
-                    // nocommit: Write #meta source files asynchronously
+                    // TODO: Write #meta source files asynchronously
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
                             "Failed to write out generated metaprogram at {}. {e}",
@@ -7640,22 +7705,27 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
-        let mut field_values = self.mem.new_list(parsed_struct.fields.len() as u32);
-        let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len() as u32);
-        let ast_struct = parsed_struct.clone();
-        for ast_field in ast_struct.fields.iter() {
-            let parsed_expr = match ast_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(
-                    ParsedExpr::Variable(parse::ParsedVariable {
-                        name: QIdent::naked(ast_field.name, ast_field.span),
-                    }),
-                    false,
-                    None,
-                ),
-                Some(expr) => *expr,
+        let mut field_values = self.mem.new_list(parsed_struct.fields.len());
+        let mut field_defns = self.types.mem.new_list(parsed_struct.fields.len());
+        for ast_field in self.ast.mem.getn(parsed_struct.fields) {
+            let parsed_expr = match ast_field.value {
+                StructValueFieldKind::VarShorthand => {
+                    let variable_expr = self.ast.exprs.add_expression(
+                        ParsedExpr::Variable(parse::ParsedVariable {
+                            name: QIdent::naked(ast_field.name, ast_field.span),
+                        }),
+                        false,
+                        None,
+                    );
+                    variable_expr
+                }
+                StructValueFieldKind::Expr(parsed_expr) => parsed_expr,
+                StructValueFieldKind::Uninit => {
+                    return failf!(ast_field.span, "uninit is not allowed in anonymous structs");
+                }
             };
             let expr = self.eval_expr(parsed_expr, ctx.with_expected_type(None))?;
             let expr_type = self.exprs.get_type(expr);
@@ -7663,13 +7733,13 @@ impl TypedProgram {
                 return failf!(ast_field.span, "never is not allowed in struct literals");
             }
             field_defns.push(StructTypeField { name: ast_field.name, type_id: expr_type });
-            field_values.push(StructLiteralField { name: ast_field.name, expr });
+            field_values.push(StructLiteralField { name: ast_field.name, expr: Some(expr) });
         }
 
         let struct_type = StructType { fields: self.types.mem.list_to_handle(field_defns) };
         let struct_type_id = self.types.add_anon(Type::Struct(struct_type));
         let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, ast_struct.span))
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
     }
 
     fn eval_expected_struct(
@@ -7677,7 +7747,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let ParsedExpr::Struct(parsed_struct) = self.ast.exprs.get(expr_id) else {
+        let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
         let original_expected_struct_id = ctx.expected_type_id.unwrap();
@@ -7690,17 +7760,20 @@ impl TypedProgram {
         let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
-        let ast_struct = parsed_struct.clone();
+        let mut passed_fields_aligned: SV8<(
+            Option<ParsedExprId>,
+            &StructValueField,
+            &StructTypeField,
+        )> = smallvec![];
 
-        // Try to use just stack space for this scratch data structure
-        let mut passed_fields_aligned: SmallVec<
-            [(ParsedExprId, &StructValueField, &StructTypeField); 8],
-        > = SmallVec::with_capacity(field_count as usize);
-
-        let struct_span = ast_struct.span;
+        let struct_span = parsed_struct.span;
         for expected_field in self.types.mem.getn(expected_struct.fields).iter() {
-            let Some(passed_field) =
-                &ast_struct.fields.iter().find(|f| f.name == expected_field.name)
+            let Some(passed_field) = self
+                .ast
+                .mem
+                .getn(parsed_struct.fields)
+                .iter()
+                .find(|f| f.name == expected_field.name)
             else {
                 return failf!(
                     struct_span,
@@ -7708,22 +7781,28 @@ impl TypedProgram {
                     self.ident_str(expected_field.name)
                 );
             };
-            let parsed_expr = match passed_field.expr.as_ref() {
-                None => self.ast.exprs.add_expression(
-                    ParsedExpr::Variable(parse::ParsedVariable {
-                        name: QIdent::naked(passed_field.name, passed_field.span),
-                    }),
-                    false,
-                    None,
-                ),
-                Some(expr) => *expr,
+            let parsed_expr = match passed_field.value {
+                StructValueFieldKind::VarShorthand => {
+                    let variable_expr = self.ast.exprs.add_expression(
+                        ParsedExpr::Variable(parse::ParsedVariable {
+                            name: QIdent::naked(passed_field.name, passed_field.span),
+                        }),
+                        false,
+                        None,
+                    );
+                    Some(variable_expr)
+                }
+                StructValueFieldKind::Expr(parsed_expr) => Some(parsed_expr),
+                StructValueFieldKind::Uninit => None,
             };
             passed_fields_aligned.push((parsed_expr, passed_field, expected_field))
         }
 
-        if let Some(unknown_field) = ast_struct.fields.iter().find(|passed_field| {
-            original_expected_struct.find_field(&self.types.mem, passed_field.name).is_none()
-        }) {
+        if let Some(unknown_field) =
+            self.ast.mem.getn(parsed_struct.fields).iter().find(|passed_field| {
+                original_expected_struct.find_field(&self.types.mem, passed_field.name).is_none()
+            })
+        {
             return failf!(
                 struct_span,
                 "Struct has an unexpected field '{}'",
@@ -7736,26 +7815,43 @@ impl TypedProgram {
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
-            let expr = self
-                .eval_expr_with_coercion(
-                    *passed_expr,
-                    ctx.with_expected_type(Some(expected_field.type_id)),
-                    true,
-                )
-                .map_err(|e| {
-                    errf!(
-                        passed_field.span,
-                        "Field '{}' has an issue\n    {}",
-                        self.ident_str(passed_field.name),
-                        e.message
-                    )
-                })?;
-            let expr_type = self.exprs.get_type(expr);
-            if expr_type == NEVER_TYPE_ID {
-                return failf!(passed_field.span, "never is not allowed in struct literals");
-            }
-            field_types.push(StructTypeField { name: expected_field.name, type_id: expr_type });
-            field_values.push(StructLiteralField { name: expected_field.name, expr });
+            match passed_expr {
+                None => {
+                    // Uninitialized field
+                    field_values.push(StructLiteralField { name: expected_field.name, expr: None });
+                    field_types.push(StructTypeField {
+                        name: expected_field.name,
+                        type_id: expected_field.type_id,
+                    });
+                }
+                Some(passed_expr) => {
+                    let expr = self
+                        .eval_expr_with_coercion(
+                            *passed_expr,
+                            ctx.with_expected_type(Some(expected_field.type_id)),
+                            true,
+                        )
+                        .map_err(|e| {
+                            errf!(
+                                passed_field.span,
+                                "Field '{}' has an issue\n{}",
+                                self.ident_str(passed_field.name),
+                                e.message
+                            )
+                        })?;
+                    let expr_type = self.exprs.get_type(expr);
+                    if expr_type == NEVER_TYPE_ID {
+                        return failf!(
+                            passed_field.span,
+                            "never is not allowed in struct literals"
+                        );
+                    }
+                    field_types
+                        .push(StructTypeField { name: expected_field.name, type_id: expr_type });
+                    field_values
+                        .push(StructLiteralField { name: expected_field.name, expr: Some(expr) });
+                }
+            };
         }
 
         let output_instance_info = match self.types.get_instance_info(expected_struct_id).cloned() {
@@ -7821,7 +7917,11 @@ impl TypedProgram {
         );
 
         let typed_struct = StructLiteral { fields: self.mem.list_to_handle(field_values) };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), output_struct_type_id, ast_struct.span))
+        Ok(self.exprs.add(
+            TypedExpr::Struct(typed_struct),
+            output_struct_type_id,
+            parsed_struct.span,
+        ))
     }
 
     fn eval_while_loop(
@@ -7894,93 +7994,6 @@ impl TypedProgram {
         Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), break_type, loop_expr.span))
     }
 
-    fn eval_interpolated_string(
-        &mut self,
-        expr_id: ParsedExprId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
-        let span = self.ast.exprs.get_span(expr_id);
-        let ParsedExpr::InterpolatedString(interpolated_string) = self.ast.exprs.get(expr_id)
-        else {
-            panic!()
-        };
-
-        let part_count = interpolated_string.parts.len();
-        if part_count == 1 {
-            let parse::InterpolatedStringPart::String(string_id) =
-                interpolated_string.parts.first().unwrap().clone()
-            else {
-                self.ice_with_span("String had only one part that was not a string", span)
-            };
-            let e = self.synth_string_literal(string_id, span);
-            Ok(e)
-        } else {
-            let interpolated_string = interpolated_string.clone();
-            let mut block = self.synth_block(
-                ctx.scope_id,
-                ScopeType::LexicalBlock,
-                span,
-                part_count as u32 + 2,
-            );
-            let block_scope = block.scope_id;
-            let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-            if self.ast.config.no_std {
-                return failf!(span, "Interpolated strings are not supported in no_std mode");
-            }
-            let new_string_builder = self.synth_typed_call_typed_args(
-                self.ast.idents.f.StringBuilder_new.with_span(span),
-                &[],
-                &[],
-                block_ctx,
-                false,
-            )?;
-            let string_builder_var = self.synth_variable_defn(
-                get_ident!(self, "sb"),
-                new_string_builder,
-                false,
-                true, // is_mutable
-                true, // is_referencing
-                block.scope_id,
-            );
-            self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
-            for part in interpolated_string.parts.into_iter() {
-                match part {
-                    parse::InterpolatedStringPart::String(string_id) => {
-                        let rust_str = self.ast.strings.get_string(string_id);
-                        if !rust_str.is_empty() {
-                            let string_expr = self.synth_string_literal(string_id, span);
-                            let print_literal_call = self.synth_printto_call(
-                                string_expr,
-                                string_builder_var.variable_expr,
-                                block_ctx,
-                            )?;
-                            self.push_expr_id_to_block(&mut block, print_literal_call);
-                        }
-                    }
-                    parse::InterpolatedStringPart::Expr(expr_id) => {
-                        let typed_expr_to_stringify = self.eval_expr(expr_id, block_ctx)?;
-                        let print_expr_call = self.synth_printto_call(
-                            typed_expr_to_stringify,
-                            string_builder_var.variable_expr,
-                            ctx,
-                        )?;
-                        self.push_expr_id_to_block(&mut block, print_expr_call);
-                    }
-                };
-            }
-            let build_call = self.synth_typed_call_typed_args(
-                self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
-                &[],
-                &[string_builder_var.variable_expr],
-                block_ctx,
-                false,
-            )?;
-            self.push_expr_id_to_block(&mut block, build_call);
-            let build_call_type = self.exprs.get_type(build_call);
-            Ok(self.exprs.add_block(&mut self.mem, block, build_call_type))
-        }
-    }
-
     fn eval_lambda(
         &mut self,
         expr_id: ParsedExprId,
@@ -8017,11 +8030,11 @@ impl TypedProgram {
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
         let lambda_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, None, None);
-        let lambda_arguments = lambda.arguments.clone();
+        let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
         let span = lambda.span;
         let body_span = self.ast.exprs.get_span(lambda.body);
-        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() as u32 + 1);
+        let mut typed_params = self.types.mem.new_list(lambda_arguments.len() + 1);
         if let Some(t) = ctx.expected_type_id {
             debug!(
                 "lambda expected type is {} {}",
@@ -8050,7 +8063,7 @@ impl TypedProgram {
             },
         );
 
-        for (index, arg) in lambda_arguments.iter().enumerate() {
+        for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
                 None => {
@@ -8081,10 +8094,11 @@ impl TypedProgram {
             });
         }
 
-        let mut param_variables = self.mem.new_list(lambda_arguments.len() as u32 + 1);
+        let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
 
         let lambda_scope = self.scopes.get_scope_mut(lambda_scope_id);
-        for (typed_arg, parsed_arg) in typed_params.iter().zip(lambda_arguments.iter()) {
+        for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments))
+        {
             let name = typed_arg.name;
             let variable_id = self.variables.add(Variable {
                 name,
@@ -8122,16 +8136,17 @@ impl TypedProgram {
             _ => body_type,
         };
 
-        let encl_fn_id = self
+        let enclosing_fn_name = self
             .scopes
             .enclosing_functions
             .get(ctx.scope_id)
             .function
-            .expect("lambda to be inside a function");
-        let encl_fn_name = self.get_function(encl_fn_id).name;
+            .map(|id| self.get_function(id).name);
         let name = self.build_ident_with(|k1, s| {
-            s.push_str(k1.ident_str(encl_fn_name));
-            s.push_str("_{lambda}_");
+            if let Some(fn_name) = enclosing_fn_name {
+                s.push_str(k1.ident_str(fn_name));
+            };
+            s.push_str("_lam_");
             write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
         });
         let name_string = self.make_qualified_name(ctx.scope_id, name, "__", true);
@@ -8158,7 +8173,7 @@ impl TypedProgram {
                 scope: lambda_scope_id,
                 params: self.mem.list_to_handle(param_variables),
                 type_params: SliceHandle::empty(),
-                function_type_params: SliceHandle::empty(),
+                function_type_params: MSlice::empty(),
                 body_block: Some(body_expr_id),
                 intrinsic_type: None,
                 linkage: Linkage::Standard,
@@ -8192,7 +8207,7 @@ impl TypedProgram {
                 v.type_id,
                 span,
             );
-            env_exprs.push(StructLiteralField { name: v.name, expr: var_expr });
+            env_exprs.push(StructLiteralField { name: v.name, expr: Some(var_expr) });
         }
         let env_fields_handle = self.types.mem.list_to_handle(env_field_types);
         let environment_struct_type =
@@ -8288,7 +8303,7 @@ impl TypedProgram {
             scope: lambda_scope_id,
             params: self.mem.list_to_handle(param_variables),
             type_params: SliceHandle::empty(),
-            function_type_params: SliceHandle::empty(),
+            function_type_params: MSlice::empty(),
             body_block: Some(body_expr_id),
             intrinsic_type: None,
             linkage: Linkage::Standard,
@@ -8368,25 +8383,29 @@ impl TypedProgram {
         let match_expr_span = match_parsed_expr.span;
         let arms_ctx = ctx.with_scope(match_scope_id);
 
-        let parsed_cases = &match_parsed_expr.cases;
-        let parsed_pattern_count: usize =
-            parsed_cases.iter().map(|parsed_case| parsed_case.patterns.len()).sum();
+        let parsed_cases = match_parsed_expr.cases;
+        let parsed_pattern_count: u32 = self
+            .ast
+            .mem
+            .getn(parsed_cases)
+            .iter()
+            .map(|parsed_case| parsed_case.patterns.len())
+            .sum();
 
-        let mut typed_arms: MList<TypedMatchArm, _> =
-            self.mem.new_list(parsed_pattern_count as u32 + 1); // Add one for fallback arm
+        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_list(parsed_pattern_count + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
         let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
-            self.tmp.new_list(parsed_pattern_count as u32);
+            self.tmp.new_list(parsed_pattern_count);
         let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
         // Core loop to build up the typed, compiled match arms
-        for parsed_case in parsed_cases.iter() {
+        for parsed_case in self.ast.mem.getn(parsed_cases) {
             let multi_pattern = parsed_case.patterns.len() > 1;
             let mut expected_bindings: Option<SmallVec<[VariablePattern; 8]>> = None;
-            for parsed_pattern_id in parsed_case.patterns.iter() {
+            for parsed_pattern_id in parsed_case.patterns.as_slice(&self.ast.mem).iter() {
                 let pattern = self.eval_pattern(
                     *parsed_pattern_id,
                     target_expr_type,
@@ -8484,7 +8503,8 @@ impl TypedProgram {
                         // We chase down the type because, if its a static, it doesn't really make
                         // sense to expect every arm to evaluate to the same static, but rather to
                         // the static's inner type
-                        let chased_consequent_id = self.types.get_chased_id(consequent_expr_type);
+                        let chased_consequent_id =
+                            self.types.get_static_family_id_if_static(consequent_expr_type);
                         expected_arm_type_id = Some(chased_consequent_id);
                     }
 
@@ -8501,13 +8521,18 @@ impl TypedProgram {
         if !partial {
             let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
             let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
+            let mut visited_ancestors =
+                std::mem::take(&mut self.buffers.pattern_ctor_ancestor_stack);
             trial_constructors.clear();
             self.generate_constructors_for_type(
                 target_expr_type,
                 &mut trial_constructors,
                 &mut field_ctors_buf,
+                &mut visited_ancestors,
                 target_expr_span,
             );
+            debug_assert!(visited_ancestors.is_empty());
+
             'trial: for trial_entry in trial_constructors.iter_mut() {
                 '_pattern: for (pattern, kill_count) in all_unguarded_patterns.iter_mut() {
                     if TypedProgram::pattern_matches(
@@ -8526,6 +8551,7 @@ impl TypedProgram {
             let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
             self.buffers.trial_ctors = trial_constructors;
             self.buffers.field_ctors = field_ctors_buf;
+            self.buffers.pattern_ctor_ancestor_stack = visited_ancestors;
             if alive_count != 0 {
                 let patterns = self
                     .buffers
@@ -8558,7 +8584,11 @@ impl TypedProgram {
         let fallback_arm = TypedMatchArm {
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: self.synth_crash_call(
-                "No cases matched",
+                if partial {
+                    "No cases matched"
+                } else {
+                    "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
+                },
                 match_expr_span,
                 arms_ctx.with_no_expected_type(),
             )?,
@@ -8750,23 +8780,10 @@ impl TypedProgram {
             TypedPattern::Type(pattern) => {
                 // We want to push a cond to instrs representing whether the type matches
                 let pattern = *pattern;
-                let pattern_type_as_static = self.types.get_static_type_of_type(pattern.type_id);
-                let target_type_chased = match pattern_type_as_static {
-                    None => {
-                        // Example: The user passed the pattern type 'string', and the value is a specific static string
-                        // This should pass
-                        self.types.get_chased_id(target_expr_type)
-                    }
-                    Some(_stat) => {
-                        // The user passed a static as the pattern type; we should not chase through
-                        // the static on the scrutinee
-                        target_expr_type
-                    }
-                };
-                let pattern_did_match = target_type_chased == pattern.type_id;
+                let pattern_did_match = target_expr_type == pattern.type_id;
                 debug!(
                     "type {} == {}? {pattern_did_match}",
-                    self.type_id_to_string(target_type_chased),
+                    self.type_id_to_string(target_expr_type),
                     self.type_id_to_string(pattern.type_id)
                 );
                 let cond = self.synth_bool(pattern_did_match, pattern.span);
@@ -9058,14 +9075,14 @@ impl TypedProgram {
         let body_span = for_expr.body_block.span;
 
         // Project: Kill all this with the macro system
-        let (target_is_iterator, item_type) = match self.expect_ability_implementation(
+        let (target_is_iterator, _item_type) = match self.expect_ability_impl(
             iterable_type,
             ITERABLE_ABILITY_ID,
             ctx.scope_id,
             iterable_span,
         ) {
             Err(_not_iterable) => {
-                match self.expect_ability_implementation(
+                match self.expect_ability_impl(
                     iterable_type,
                     ITERATOR_ABILITY_ID,
                     ctx.scope_id,
@@ -9153,7 +9170,7 @@ impl TypedProgram {
         );
         #[allow(non_snake_case)]
         let next_getValue_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(iterable_span),
+            self.ast.idents.f.try__get_value.with_span(iterable_span),
             &[],
             &[next_variable.variable_expr],
             ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
@@ -9174,7 +9191,7 @@ impl TypedProgram {
 
         let user_body_block_id = body_block;
         let user_block_variable = self.synth_variable_defn_simple(
-            get_ident!(self, "block_expr_val"),
+            self.ast.idents.b.block_expr_val,
             user_body_block_id,
             consequent_block.scope_id,
         );
@@ -9182,12 +9199,12 @@ impl TypedProgram {
         consequent_block.statements.push(binding_variable.defn_stmt);
         consequent_block.statements.push(user_block_variable.defn_stmt);
 
-        let next_is_some_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Opt_isSome.with_span(body_span),
-            &[item_type],
-            &[next_variable.variable_expr],
-            loop_scope_ctx,
+        let next_is_some_call = self.synth_enum_is_variant(
+            next_variable.variable_expr,
+            1,
             false,
+            loop_scope_ctx.with_no_expected_type(),
+            None,
         )?;
         let empty_break = self.synth_empty_struct(body_span);
         let break_expr = self.exprs.add(
@@ -9294,7 +9311,7 @@ impl TypedProgram {
         Ok(block_id)
     }
 
-    fn expect_ability_implementation(
+    fn expect_ability_impl(
         &mut self,
         type_id: TypeId,
         base_ability_id: AbilityId,
@@ -9408,7 +9425,8 @@ impl TypedProgram {
                 // We chase down the type because, if its a static, it doesn't really make
                 // sense to expect every arm to evaluate to the same static, but rather to
                 // the static's inner type
-                let consequent_type_chased = self.types.get_chased_id(consequent_type);
+                let consequent_type_chased =
+                    self.types.get_static_family_id_if_static(consequent_type);
                 Some(consequent_type_chased)
             };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
@@ -9714,20 +9732,20 @@ impl TypedProgram {
             | K::BitShiftLeft
             | K::BitShiftRight => {
                 let fn_ident = match binary_op.op_kind {
-                    K::Add => self.ast.idents.f.Add_add,
-                    K::Subtract => self.ast.idents.f.Sub_sub,
-                    K::Multiply => self.ast.idents.f.Mul_mul,
-                    K::Divide => self.ast.idents.f.Div_div,
-                    K::Rem => self.ast.idents.f.Rem_rem,
+                    K::Add => self.ast.idents.f.add__add,
+                    K::Subtract => self.ast.idents.f.sub__sub,
+                    K::Multiply => self.ast.idents.f.mul__mul,
+                    K::Divide => self.ast.idents.f.div__div,
+                    K::Rem => self.ast.idents.f.rem__rem,
                     K::Less => self.ast.idents.f.ScalarCmp_lt,
                     K::LessEqual => self.ast.idents.f.ScalarCmp_le,
                     K::Greater => self.ast.idents.f.ScalarCmp_gt,
                     K::GreaterEqual => self.ast.idents.f.ScalarCmp_ge,
-                    K::BitAnd => self.ast.idents.f.Bitwise_and,
-                    K::BitOr => self.ast.idents.f.Bitwise_or,
-                    K::BitXor => self.ast.idents.f.Bitwise_xor,
-                    K::BitShiftLeft => self.ast.idents.f.Bitwise_shl,
-                    K::BitShiftRight => self.ast.idents.f.Bitwise_shr,
+                    K::BitAnd => self.ast.idents.f.bitwise_and,
+                    K::BitOr => self.ast.idents.f.bitwise_or,
+                    K::BitXor => self.ast.idents.f.bitwise_xor,
+                    K::BitShiftLeft => self.ast.idents.f.bitwise_shl,
+                    K::BitShiftRight => self.ast.idents.f.bitwise_shr,
                     _ => unreachable!(),
                 };
                 self.synth_typed_call_parsed_args(
@@ -9751,7 +9769,7 @@ impl TypedProgram {
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
         let try_impl = self
-            .expect_ability_implementation(lhs_type, TRY_ABILITY_ID, ctx.scope_id, span)
+            .expect_ability_impl(lhs_type, TRY_ABILITY_ID, ctx.scope_id, span)
             .map_err(|e| {
                 errf!(
                     span,
@@ -9769,20 +9787,20 @@ impl TypedProgram {
         }
         let mut coalesce_block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
         let lhs_variable = self.synth_variable_defn_simple(
-            get_ident!(self, "optelse_lhs"),
+            self.ast.idents.b.optelse_lhs,
             lhs,
             coalesce_block.scope_id,
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
         let lhs_has_value = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_isOk.with_span(span),
+            self.ast.idents.f.try__is_ok.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
             false,
         )?;
         let lhs_get_expr = self.synth_typed_call_typed_args(
-            self.ast.idents.f.Try_getValue.with_span(span),
+            self.ast.idents.f.try__get_value.with_span(span),
             &[],
             &[lhs_variable.variable_expr],
             coalesce_ctx,
@@ -9805,7 +9823,7 @@ impl TypedProgram {
         };
 
         let parsed_equals_call = self.synth_parsed_function_call(
-            self.ast.idents.f.Equals_equals.with_span(binary_op.span),
+            self.ast.idents.f.equals__equals.with_span(binary_op.span),
             &[],
             &[binary_op.lhs, binary_op.rhs],
             false,
@@ -9816,7 +9834,7 @@ impl TypedProgram {
         let final_result = match binary_op.op_kind {
             BinaryOpKind::Equals => equality_result,
             BinaryOpKind::NotEquals => self.synth_typed_call_typed_args(
-                self.ast.idents.f.bool_negated.with_span(binary_op.span),
+                self.ast.idents.f.bool__negated.with_span(binary_op.span),
                 &[],
                 &[equality_result],
                 ctx.with_no_expected_type(),
@@ -9878,15 +9896,15 @@ impl TypedProgram {
 
     /// Can 'shortcircuit' with Left if the function call to resolve
     /// is actually a builtin
-    fn resolve_parsed_function_call(
+    fn resolve_parsed_call(
         &mut self,
         fn_call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<Either<TypedExprId, Callee>> {
+    ) -> TyperResult<CallResolution> {
         let call_span = fn_call.span;
         if let Some(builtin_result) = self.handle_builtin_function_call_lookalikes(fn_call, ctx)? {
-            return Ok(Either::Left(builtin_result));
+            return Ok(CallResolution::Other(builtin_result));
         }
 
         let self_arg_expr: Option<MaybeTypedExpr> = match known_args.as_ref() {
@@ -9934,12 +9952,15 @@ impl TypedProgram {
                         let ability_impl_function = self.solve_ability_call(
                             function_ability_index,
                             fn_call,
+                            None,
                             known_args,
                             ctx,
                         )?;
-                        Ok(Either::Right(Callee::from_ability_impl_fn(&ability_impl_function)))
+                        Ok(CallResolution::Call(Callee::from_ability_impl_fn(
+                            &ability_impl_function,
+                        )))
                     } else {
-                        Ok(Either::Right(Callee::make_static(function_id)))
+                        Ok(CallResolution::Call(Callee::make_static(function_id)))
                     }
                 } else {
                     // Function lookup failed, now we deal with lower priority 'callable' things
@@ -9968,17 +9989,20 @@ impl TypedProgram {
                         );
 
                         match self.types.get(function_variable.type_id) {
-                            Type::Lambda(lambda_type) => Ok(Either::Right(Callee::StaticLambda {
-                                function_id: lambda_type.function_id,
-                                lambda_value_expr: self.exprs.add(
-                                    TypedExpr::Variable(VariableExpr { variable_id }),
-                                    function_variable.type_id,
-                                    fn_call.span,
-                                ),
-                                lambda_type_id: function_variable.type_id,
-                            })),
+                            Type::Lambda(lambda_type_id) => {
+                                let lambda_type = self.types.lambda_types.get(*lambda_type_id);
+                                Ok(CallResolution::Call(Callee::StaticLambda {
+                                    function_id: lambda_type.function_id,
+                                    lambda_value_expr: self.exprs.add(
+                                        TypedExpr::Variable(VariableExpr { variable_id }),
+                                        function_variable.type_id,
+                                        fn_call.span,
+                                    ),
+                                    lambda_type_id: function_variable.type_id,
+                                }))
+                            }
                             Type::LambdaObject(_lambda_object) => {
-                                Ok(Either::Right(Callee::DynamicLambda(self.exprs.add(
+                                Ok(CallResolution::Call(Callee::DynamicLambda(self.exprs.add(
                                     TypedExpr::Variable(VariableExpr { variable_id }),
                                     function_variable.type_id,
                                     fn_call.name.span,
@@ -9992,7 +10016,7 @@ impl TypedProgram {
                                     ),
                                     variable_id,
                                 };
-                                Ok(Either::Right(callee))
+                                Ok(CallResolution::Call(callee))
                             }
                             Type::FunctionPointer(_function_pointer) => {
                                 let function_pointer_expr = self.exprs.add(
@@ -10000,7 +10024,9 @@ impl TypedProgram {
                                     function_variable.type_id,
                                     fn_call.name.span,
                                 );
-                                Ok(Either::Right(Callee::DynamicFunction { function_pointer_expr }))
+                                Ok(CallResolution::Call(Callee::DynamicFunction {
+                                    function_pointer_expr,
+                                }))
                             }
                             _ => fn_not_found!(),
                         }
@@ -10118,6 +10144,12 @@ impl TypedProgram {
     ) -> TyperResult<Option<TypedExprId>> {
         let call_span = fn_call.span;
         let calling_scope = ctx.scope_id;
+        if !fn_call.name.path.is_empty() {
+            return Ok(None);
+        }
+        if fn_call.is_method {
+            return Ok(None);
+        }
         match self.ident_str(fn_call.name.name) {
             "return" => {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
@@ -10225,22 +10257,76 @@ impl TypedProgram {
                 };
                 Ok(Some(expr))
             }
+            "writef" => {
+                if fn_call.args.len() < 2 {
+                    return failf!(call_span, "write requires 2 arguments");
+                }
+                let writer_arg = self.ast.p_call_args.get_nth(fn_call.args, 0);
+                let writer = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
+                self.expect_ability_impl(
+                    self.exprs.get_type(writer),
+                    WRITER_ABILITY_ID,
+                    ctx.scope_id,
+                    self.exprs.get_span(writer),
+                )?;
+                let fmt_string_arg = self.ast.p_call_args.get_nth(fn_call.args, 1);
+                let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
+                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
+                        kbail!(self, call_span, "String has no format slots; lets not use write")
+                    }
+                    ParsedExpr::InterpolatedString(is) => is.parts,
+                    _ => kbail!(self, call_span, "Expected a format string first"),
+                };
+                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 2) {
+                    None => self.synth_empty_struct(call_span),
+                    Some(args_arg) => {
+                        self.eval_expr(args_arg.value, ctx.with_no_expected_type())?
+                    }
+                };
+                let format_block =
+                    self.synth_format_calls(writer, fmt_string, args, call_span, ctx)?;
+                Ok(Some(format_block))
+            }
+            "stringf" => {
+                if fn_call.args.is_empty() {
+                    return failf!(call_span, "format needs a format string");
+                }
+                if fn_call.args.len() > 2 {
+                    return failf!(call_span, "format takes at most 2 arguments: the format string, and the format values");
+                }
+                let fmt_string_arg = *self.ast.p_call_args.get_nth(fn_call.args, 0);
+                match self.ast.exprs.get(fmt_string_arg.value) {
+                    ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
+                        kbail!(self, call_span, "String has no format slots; lets not use format")
+                    }
+                    ParsedExpr::InterpolatedString(is) => is.parts,
+                    _ => kbail!(self, call_span, "Expected a format string first"),
+                };
+                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 1) {
+                    None => self.synth_empty_struct(call_span),
+                    Some(arg) => self.eval_expr(arg.value, ctx.with_no_expected_type())?,
+                };
+                let string =
+                    self.synth_interpolated_string(fmt_string_arg.value, ctx, Some(args))?;
+                Ok(Some(string))
+            }
             _ => Ok(None),
         }
     }
 
     fn handle_array_method_call(
         &mut self,
-        base: TypedExprId,
+        receiver: TypedExprId,
         array_type_id: TypeId,
         call: &ParsedCall,
         ctx: EvalExprContext,
-    ) -> TyperResult<Either<TypedExprId, Callee>> {
+    ) -> TyperResult<CallResolution> {
         let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
+        let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
         match call.name.name {
             n if n == self.ast.idents.b.len => {
-                let array_length = match array_type.concrete_count {
+                let array_length = match concrete_count {
                     None => {
                         // We have some generic Array type like arr: Array[T, N] where N is a type
                         // parameter
@@ -10249,11 +10335,11 @@ impl TypedProgram {
                         // the generic pass. So we just provide a validly-typed value of type 'N'.
                         self.synth_phony(array_type.size_type, span)
                     }
-                    Some(s) => self.synth_i64(s as i64, span),
+                    Some(size) => self.synth_i64(size, span),
                 };
-                Ok(Either::Left(array_length))
+                Ok(CallResolution::Other(array_length))
             }
-            n if n == self.ast.idents.b.get || n == self.ast.idents.b.getRef => {
+            n if n == self.ast.idents.b.get || n == self.ast.idents.b.get_ref => {
                 if call.args.len() != 2 {
                     return failf!(span, "Array get takes 1 argument, the index");
                 }
@@ -10264,13 +10350,13 @@ impl TypedProgram {
                     .check_and_coerce_expr(SIZE_TYPE_ID, index_expr, ctx.scope_id)
                     .map_err(|e| errf!(span, "Array get index type error: {}", e.message))?;
 
-                let is_referencing = n == self.ast.idents.b.getRef;
-                let array_reference_type = self.get_expr_type(base).as_reference();
+                let is_referencing = n == self.ast.idents.b.get_ref;
+                let array_reference_type = self.get_expr_type(receiver).as_reference();
                 if is_referencing && array_reference_type.is_none() {
                     return failf!(
                         span,
                         "Cannot use .getRef() on this Array since it is not a reference: {}",
-                        self.type_id_to_string(self.exprs.get_type(base))
+                        self.type_id_to_string(self.exprs.get_type(receiver))
                     );
                 }
                 let access_kind = if array_reference_type.is_some() {
@@ -10290,15 +10376,16 @@ impl TypedProgram {
                 };
                 if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
                     let static_index_type = self.exprs.get_type(static_index_expr);
-                    if let Some(index_usize) =
-                        self.get_value_of_static_type(static_index_type).and_then(|sv| sv.as_size())
+                    if let Some(index_size) = self
+                        .get_value_from_value_type(static_index_type)
+                        .and_then(|sv| self.static_values.get(sv).as_size())
                     {
-                        if let Some(concrete_size) = array_type.concrete_count {
-                            if index_usize as u64 >= concrete_size {
+                        if let Some(concrete_size) = concrete_count {
+                            if index_size >= concrete_size {
                                 return failf!(
                                     span,
                                     "Array index out of bounds: {} >= {}",
-                                    index_usize,
+                                    index_size,
                                     concrete_size
                                 );
                             }
@@ -10307,7 +10394,7 @@ impl TypedProgram {
                 }
                 let get_element_expr = self.exprs.add(
                     TypedExpr::ArrayGetElement(ArrayGetElement {
-                        base,
+                        base: receiver,
                         index: index_expr,
                         array_type: array_type_id,
                         access_kind,
@@ -10318,7 +10405,7 @@ impl TypedProgram {
                 let array_length_expr = self.synth_typed_call_typed_args(
                     QIdent::naked(self.ast.idents.b.len, span),
                     &[],
-                    &[base],
+                    &[receiver],
                     ctx.with_no_expected_type(),
                     true,
                 )?;
@@ -10332,7 +10419,7 @@ impl TypedProgram {
                 let string_id = self.ast.strings.intern("Array index out of bounds");
                 let crash_message = self.synth_string_literal(string_id, span);
                 let crash_oob = self.synth_typed_call_typed_args(
-                    self.ast.idents.f.core_crashBounds.with_span(span),
+                    self.ast.idents.f.core_crash_bounds.with_span(span),
                     &[],
                     &[array_length_expr, index_expr, crash_message],
                     ctx.with_no_expected_type(),
@@ -10345,12 +10432,15 @@ impl TypedProgram {
                     crash_oob,
                     span,
                 );
-                Ok(Either::Left(if_else_expr))
+                Ok(CallResolution::Other(if_else_expr))
             }
             _ => {
                 let array_scope = self.scopes.get_scope(self.scopes.array_scope_id);
                 if let Some(method_id) = array_scope.find_function(call.name.name) {
-                    Ok(Either::Right(Callee::make_static(method_id)))
+                    Ok(CallResolution::MethodCall {
+                        callee: Callee::make_static(method_id),
+                        receiver,
+                    })
                 } else {
                     failf!(span, "No such method on Array: {}", self.qident_to_string(&call.name))
                 }
@@ -10364,7 +10454,7 @@ impl TypedProgram {
         call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<Either<TypedExprId, Callee>> {
+    ) -> TyperResult<CallResolution> {
         debug_assert!(call.name.path.is_empty());
         let fn_name = call.name.name;
         let call_span = call.span;
@@ -10383,7 +10473,7 @@ impl TypedProgram {
                 ctx,
                 call.span,
             )? {
-                return Ok(Either::Left(enum_constr));
+                return Ok(CallResolution::Other(enum_constr));
             }
 
             let is_fn_convert =
@@ -10419,9 +10509,13 @@ impl TypedProgram {
                             );
                         }
                         return if fn_name == self.ast.idents.b.toDyn {
-                            Ok(Either::Left(self.function_to_lambda_object(function_id, call_span)))
+                            Ok(CallResolution::Other(
+                                self.function_to_lambda_object(function_id, call_span),
+                            ))
                         } else if fn_name == self.ast.idents.b.toRef {
-                            Ok(Either::Left(self.function_to_reference(function_id, call_span)))
+                            Ok(CallResolution::Other(
+                                self.function_to_reference(function_id, call_span),
+                            ))
                         } else {
                             unreachable!()
                         };
@@ -10439,8 +10533,8 @@ impl TypedProgram {
                     },
                 };
                 let result = self.eval_cast(base_arg.value, dest_type, call_span, ctx)?;
-                return Ok(Either::Left(result));
-            } else if fn_name == self.ast.idents.b.toStatic {
+                return Ok(CallResolution::Other(result));
+            } else if fn_name == self.ast.idents.b.to_static {
                 if call.args.len() != 1 {
                     return failf!(call_span, ".toStatic() takes no additional arguments");
                 }
@@ -10449,9 +10543,9 @@ impl TypedProgram {
                     Err(msg) => {
                         return failf!(call_span, "Failed to lift value to static: {}", msg);
                     }
-                    Ok(static_expr_id) => Ok(Either::Left(static_expr_id)),
+                    Ok(static_expr_id) => Ok(CallResolution::Other(static_expr_id)),
                 };
-            } else if fn_name == self.ast.idents.b.fromStatic {
+            } else if fn_name == self.ast.idents.b.from_static {
                 let base_value = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type_id = self.exprs.get_type(base_value);
                 let Some(static_type) = self.types.get_static_type_of_type(base_type_id) else {
@@ -10466,10 +10560,13 @@ impl TypedProgram {
                     static_type.value_id,
                     call_span,
                 );
-                return Ok(Either::Left(materialized));
+                return Ok(CallResolution::Other(materialized));
             }
         }
 
+        // We compile this expr, but we dont include it with our return value
+        // so it has to be re-compiled, as a result every method call base is double-compiled
+        // unnecessarily
         let base_expr = match base_expr {
             MaybeTypedExpr::Typed(expr) => expr,
             MaybeTypedExpr::Parsed(parsed_expr_id) => {
@@ -10481,7 +10578,7 @@ impl TypedProgram {
         if let Some(enum_as_result) =
             self.handle_enum_as_variant_call(base_expr, call, ctx.with_no_expected_type())?
         {
-            return Ok(Either::Left(enum_as_result));
+            return Ok(CallResolution::Other(enum_as_result));
         }
 
         let base_expr_type = self.exprs.get_type(base_expr);
@@ -10504,7 +10601,10 @@ impl TypedProgram {
                     .join(", ")
             );
             if let Some(method_id) = companion_scope.find_function(fn_name) {
-                return Ok(Either::Right(Callee::make_static(method_id)));
+                return Ok(CallResolution::MethodCall {
+                    callee: Callee::make_static(method_id),
+                    receiver: base_expr,
+                });
             }
         } else {
             debug!("companion scope not found for call to {}", self.ident_str(fn_name))
@@ -10535,9 +10635,18 @@ impl TypedProgram {
             if in_scope {
                 let ability_function_ref =
                     self.abilities.get(*ability_id).find_function_by_name(fn_name).unwrap();
-                match self.solve_ability_call(ability_function_ref, call, known_args, ctx) {
+                match self.solve_ability_call(
+                    ability_function_ref,
+                    call,
+                    Some(base_expr),
+                    known_args,
+                    ctx,
+                ) {
                     Ok(ability_impl_fn) => {
-                        return Ok(Either::Right(Callee::from_ability_impl_fn(&ability_impl_fn)));
+                        return Ok(CallResolution::MethodCall {
+                            callee: Callee::from_ability_impl_fn(&ability_impl_fn),
+                            receiver: base_expr,
+                        });
                     }
                     Err(e) => {
                         errors.push(e);
@@ -10631,10 +10740,10 @@ impl TypedProgram {
         );
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
-            expr: self.function_to_reference(dyn_function_id, call_span),
+            expr: Some(self.function_to_reference(dyn_function_id, call_span)),
         };
         let env_ptr_field =
-            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: null_ptr_expr };
+            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(null_ptr_expr) };
         let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
         let lambda_object_struct_literal = self.exprs.add(
             TypedExpr::Struct(StructLiteral { fields }),
@@ -10680,6 +10789,7 @@ impl TypedProgram {
         &mut self,
         ability_function_ref: TypedAbilityFunctionRef,
         fn_call: &ParsedCall,
+        receiver_if_method: Option<TypedExprId>,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
     ) -> TyperResult<AbilityImplFunction> {
@@ -10700,43 +10810,39 @@ impl TypedProgram {
             );
         }
 
-        // First, we need to solve for 'Self' using the arguments and expected return type
         // TODO: Make sure we handle context params in ability functions correctly,
         // Probably by: skipping them if not passed explicitly, and utilizing them if passed explicitly
         let mut all_type_params = self.tmp.new_list(ability_params.len() + 1);
         all_type_params
-            .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
+            .push(NameAndType { name: self.ast.idents.b.self_, type_id: ability_self_type_id });
         all_type_params.extend_iter(
             self.mem
                 .getn(ability_params)
                 .iter()
                 .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
         );
-        //let all_type_params_handle = self.named_types.add_slice_copy(&all_type_params);
-
-        // must_solve includes Self, and just the ability-side params (it excludes the ability impl params)
-        // let mut must_solve_type_params_new = self.tmp.new_list(ability_params.len() + 1);
-        // must_solve_type_params_new
-        //     .push(NameAndType { name: self.ast.idents.b.Self_, type_id: ability_self_type_id });
-        // must_solve_type_params_new.extend_iter(
-        //     self.mem.getn(ability_params)
-        //         .iter()
-        //         .filter(|p| !p.is_impl_param)
-        //         .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
-        // );
-        // let must_solve_type_params_handle =
-        //     self.named_types.add_slice_copy(&must_solve_type_params_new);
 
         let self_only_type_params_handle = self.named_types.add_slice_copy(&[NameAndType {
-            name: self.ast.idents.b.Self_,
+            name: self.ast.idents.b.self_,
             type_id: ability_self_type_id,
         }]);
 
-        let passed_args: &mut dyn Iterator<Item = MaybeTypedExpr> = match known_args {
-            Some(ka) => &mut ka.1.iter().map(|t| MaybeTypedExpr::Typed(*t)),
+        let mut passed_args: MList<MaybeTypedExpr, MemTmp> = self.tmp.new_list(passed_len as u32);
+        match known_args {
+            Some(known_args) => {
+                for known_arg_expr in known_args.1 {
+                    passed_args.push(MaybeTypedExpr::Typed(*known_arg_expr))
+                }
+            }
             None => {
-                let args = self.ast.p_call_args.get_slice(fn_call.args);
-                &mut args.iter().map(|arg| MaybeTypedExpr::Parsed(arg.value))
+                if let Some(receiver) = receiver_if_method {
+                    passed_args.push(MaybeTypedExpr::Typed(receiver))
+                }
+                let rest =
+                    if receiver_if_method.is_some() { fn_call.args.skip(1) } else { fn_call.args };
+                for arg in self.ast.p_call_args.get_slice(rest) {
+                    passed_args.push(MaybeTypedExpr::Parsed(arg.value))
+                }
             }
         };
         let mut args_and_params = self.tmp.new_list(passed_len as u32 + 1);
@@ -10747,10 +10853,12 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        for (arg, param) in passed_args.zip(self.types.mem.getn(ability_fn_type.logical_params())) {
+        for (arg, param) in
+            passed_args.iter().zip(self.types.mem.getn(ability_fn_type.logical_params()))
+        {
             let arg_and_param = match arg {
                 MaybeTypedExpr::Typed(expr) => {
-                    let type_id = self.exprs.get_type(expr);
+                    let type_id = self.exprs.get_type(*expr);
                     InferenceInputPair {
                         arg: TypeOrParsedExpr::Type(type_id),
                         param_type: param.type_id,
@@ -10758,7 +10866,7 @@ impl TypedProgram {
                     }
                 }
                 MaybeTypedExpr::Parsed(parsed_expr) => InferenceInputPair {
-                    arg: TypeOrParsedExpr::Parsed(parsed_expr),
+                    arg: TypeOrParsedExpr::Parsed(*parsed_expr),
                     param_type: param.type_id,
                     allow_mismatch: false,
                 },
@@ -10791,13 +10899,8 @@ impl TypedProgram {
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
         let solved_self = self.named_types.get_nth(self_solution, 0).type_id;
-        let solved_self = self.types.get_root_id(solved_self);
 
-        // nocommit: probably shouldnt follow statics here
-        let solved_self = match self.types.get(solved_self) {
-            Type::Static(stat) => stat.family_type_id,
-            _ => solved_self,
-        };
+        let solved_self = self.types.get_static_family_id_if_static(solved_self);
         let impl_handle = self
             .find_ability_impl_for_type_or_generate_new(
                 solved_self,
@@ -10807,14 +10910,15 @@ impl TypedProgram {
                 call_span,
             )
             .map_err(|msg| {
-                errf!(
+                kerr!(
+                    self,
                     call_span,
-                    "Call to {}/{} with Self := {} does not work\n{}\nFunction type: {}",
-                    self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
-                    self.ident_str(fn_call.name.name),
-                    self.type_id_to_string(solved_self),
+                    "Call to {}/{} with self := {} does not work\n{}\nFunction type: {}",
+                    &self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
+                    fn_call.name.name,
+                    solved_self,
                     msg,
-                    self.type_id_to_string(function_type_id),
+                    function_type_id,
                 )
             })?;
 
@@ -10943,6 +11047,14 @@ impl TypedProgram {
                 let ParsedExpr::Variable(v) = self.ast.exprs.get(base_expr) else {
                     return Ok(None);
                 };
+
+                // Local variables with the same name as an enum take precedence
+                if v.name.path.is_empty() {
+                    if let Some(_local_var) = self.scopes.find_variable(ctx.scope_id, v.name.name) {
+                        return Ok(None);
+                    }
+                }
+
                 let Some((base_type_in_scope, _)) = self.scopes.find_type_namespaced(
                     ctx.scope_id,
                     &v.name,
@@ -11001,14 +11113,18 @@ impl TypedProgram {
                 )?;
                 Ok(Some(enum_constructor))
             } else {
-                failf!(span, "No such variant: {}", self.ident_str(variant_name))
+                if base_expr.is_none() {
+                    failf!(span, "No such variant: {}", self.ident_str(variant_name))
+                } else {
+                    Ok(None)
+                }
             }
         } else if let Type::Generic(g) = base_enum_or_generic_enum {
             let Some(inner_enum) = self.types.get(g.inner).as_enum() else { return Ok(None) };
             let Some(generic_variant) =
                 self.types.enum_variant_by_name(inner_enum.variants, variant_name)
             else {
-                return Ok(None);
+                return failf!(span, "No such variant: {}", self.ident_str(variant_name));
             };
             let g_params = g.params;
 
@@ -11141,8 +11257,11 @@ impl TypedProgram {
     fn align_call_arguments_with_parameters(
         &mut self,
         fn_call: &ParsedCall,
+        // If a method call and we've already compiled the first argument
+        // this is it, we should use it instead of the fn_call's first arg
+        method_receiver: Option<TypedExprId>,
         params: MSlice<FnParamType, TypePool>,
-        pre_evaled_params: Option<&[TypedExprId]>,
+        known_typed_args: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
     ) -> TyperResult<ArgsAndParams> {
@@ -11197,10 +11316,11 @@ impl TypedProgram {
         let params = if is_lambda { params.skip(1) } else { params };
         let explicit_param_count =
             self.types.mem.getn(params).iter().filter(|p| !p.is_context).count();
+        let context_param_count = params.len() as usize - explicit_param_count;
         let total_expected =
             if explicit_context_args { params.len() as usize } else { explicit_param_count };
         let actual_passed_args = args_slice;
-        let total_passed = match pre_evaled_params {
+        let total_passed = match known_typed_args {
             None => actual_passed_args.len(),
             Some(pre_evaled_params) => pre_evaled_params.len(),
         };
@@ -11224,13 +11344,24 @@ impl TypedProgram {
             // for looking up context params
             .filter(|p| explicit_context_args || !p.is_context);
 
-        if let Some(pre_evaled_params) = pre_evaled_params {
+        if let Some(pre_evaled_params) = known_typed_args {
             for (expr, param) in pre_evaled_params.iter().zip(expected_literal_params) {
                 final_args.push(MaybeTypedExpr::Typed(*expr));
                 final_params.push(*param)
             }
         } else {
+            let first_non_context_param_index =
+                if explicit_context_args { context_param_count } else { 0 };
             for (param_index, fn_param) in expected_literal_params.enumerate() {
+                // The first parameter that isn't an explicit `context` param is the method self
+                // param; if we've already compiled that term, use it here
+                if let Some(method_receiver) = method_receiver
+                    && param_index == first_non_context_param_index
+                {
+                    final_args.push(MaybeTypedExpr::Typed(method_receiver));
+                    final_params.push(*fn_param);
+                    continue;
+                }
                 let matching_argument = if named {
                     let Some(name_match) =
                         actual_passed_args.iter().find(|arg| arg.name == Some(fn_param.name))
@@ -11333,12 +11464,14 @@ impl TypedProgram {
             fn_call.args.is_empty() || known_args.is_none(),
             "cannot pass both typed value args and parsed value args to eval_function_call"
         );
-        let callee = match known_callee {
-            None => match self.resolve_parsed_function_call(fn_call, known_args.as_ref(), ctx)? {
-                Either::Left(expr) => return Ok(expr),
-                Either::Right(callee) => callee,
-            },
-            Some(callee) => callee,
+        let call_resolution = match known_callee {
+            None => self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx)?,
+            Some(callee) => CallResolution::Call(callee),
+        };
+        let (callee, method_receiver) = match call_resolution {
+            CallResolution::Other(typed_expr_id) => return Ok(typed_expr_id),
+            CallResolution::Call(callee) => (callee, None),
+            CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver)),
         };
 
         // Now that we have resolved to a function id, we need to specialize it if generic
@@ -11353,6 +11486,7 @@ impl TypedProgram {
             false => {
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    method_receiver,
                     params,
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
@@ -11371,7 +11505,7 @@ impl TypedProgram {
                             .map_err(|err| {
                                 errf!(
                                     err.span,
-                                    "Invalid call to {}\nInvalid type for parameter '{}': {}",
+                                    "Invalid call to {}\nInvalid type for parameter '{}'\n{}",
                                     self.qident_to_string(&fn_call.name),
                                     self.ident_str(param.name),
                                     err.message
@@ -11385,6 +11519,7 @@ impl TypedProgram {
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    method_receiver,
                     params,
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
@@ -11466,6 +11601,7 @@ impl TypedProgram {
                 let specialized_params = specialized_fn_type.physical_params;
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    method_receiver,
                     specialized_params,
                     known_args.map(|(_known_types, known_args)| known_args),
                     ctx.scope_id,
@@ -11481,37 +11617,40 @@ impl TypedProgram {
                     for (param_index, (maybe_typed_expr, param)) in
                         args_and_params.iter().enumerate()
                     {
-                        // Is this parameter a function type parameter? If so, we already have the
+                        // Is this parameter a fnlike type parameter? If so, we already have the
                         // typechecked value expression
                         let matching_ftp_index = self
-                            .function_type_params
-                            .get_slice(signature.function_type_params)
+                            .mem
+                            .getn(signature.function_type_params)
                             .iter()
                             .position(|ftp| ftp.value_param_index as usize == param_index);
                         let expr = match matching_ftp_index {
-                        Some(ftp_index) => {
-                            let value = fnlike_type_arg_values[ftp_index];
-                            value
-                        }
-                        None => match *maybe_typed_expr {
-                            MaybeTypedExpr::Typed(typed) => typed,
-                            MaybeTypedExpr::Parsed(parsed) => self
-                                .eval_expr_with_coercion(
-                                    parsed,
-                                    ctx.with_expected_type(Some(param.type_id)),
-                                    true,
-                                )
-                                .map_err(|err| {
-                                    errf!(
-                                        err.span,
-                                        "Invalid call to {}\nInvalid type for parameter '{}': {}",
-                                        self.qident_to_string(&fn_call.name),
-                                        self.ident_str(param.name),
-                                        err.message
+                            Some(ftp_index) => {
+                                let value = fnlike_type_arg_values[ftp_index];
+                                value
+                            }
+                            None => match *maybe_typed_expr {
+                                MaybeTypedExpr::Typed(typed) => {
+                                    let checked_coerced = self.check_and_coerce_expr(param.type_id, typed, ctx.scope_id)?;
+                                    checked_coerced
+                                },
+                                MaybeTypedExpr::Parsed(parsed) => self
+                                    .eval_expr_with_coercion(
+                                        parsed,
+                                        ctx.with_expected_type(Some(param.type_id)),
+                                        true,
                                     )
-                                })?,
-                        },
-                    };
+                                    .map_err(|err| {
+                                        errf!(
+                                            err.span,
+                                            "Invalid call to {}\nInvalid type for parameter '{}': {}",
+                                            self.qident_to_string(&fn_call.name),
+                                            self.ident_str(param.name),
+                                            err.message
+                                        )
+                                    })?,
+                            },
+                        };
                         typechecked_args.push(expr);
                     }
                 }
@@ -11526,7 +11665,6 @@ impl TypedProgram {
         // for divergent expressions
         let typechecked_arguments_slice = self.mem.getn(typechecked_arguments);
         for (index, arg) in typechecked_arguments_slice.iter().enumerate() {
-            // nocommit: A test in crash_never whatever test that these exprs all actually run
             if self.exprs.get_type(*arg) == NEVER_TYPE_ID {
                 let exprs_so_far = &typechecked_arguments_slice[0..=index];
                 return Ok(self.make_never_block(exprs_so_far, ctx.scope_id, span));
@@ -11596,7 +11734,7 @@ impl TypedProgram {
         };
         if let Ok(result) = result {
             debug_assert_eq!(
-                self.types.get(self.exprs.get_type(result)).as_static().unwrap().family_type_id,
+                self.types.get(self.exprs.get_type(result)).as_value_type().unwrap().family_type_id,
                 self.exprs.get_type(expr_id)
             );
         }
@@ -11635,19 +11773,19 @@ impl TypedProgram {
                 Ok(self.exprs.add_static(static_value_id, value.get_type(), false, span))
             }
             Builtin::StaticTypeToValue => {
-                // intern fn staticTypeToValue[T, ST: static T](): T
+                // intern fn staticTypeToValue[T, ST: value T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
-                let static_type_arg = self.named_types.get_nth(call.type_args, 1);
+                let value_type_arg = self.named_types.get_nth(call.type_args, 1);
 
                 let return_type = call.return_type;
-                let Type::Static(static_type) = self.types.get(static_type_arg.type_id) else {
+                let Type::StaticValue(value_type) = self.types.get(value_type_arg.type_id) else {
                     return failf!(
                         span,
-                        "Internal Error: 2nd type arg should be static: {}",
-                        self.type_id_to_string(static_type_arg.type_id)
+                        "Internal Error: 2nd type arg should be a value type: {}",
+                        self.type_id_to_string(value_type_arg.type_id)
                     );
                 };
-                if let Some(static_value_id) = static_type.value_id {
+                if let Some(static_value_id) = value_type.value_id {
                     Ok(self.add_static_constant_expr(static_value_id, span))
                 } else {
                     // Since the static type has no value, we know this is generic code
@@ -11678,7 +11816,7 @@ impl TypedProgram {
             }
             Builtin::SizeOf | Builtin::SizeOfStride | Builtin::AlignOf => {
                 let type_id = self.named_types.get_nth(call.type_args, 0).type_id;
-                let layout = self.types.get_layout(type_id);
+                let layout = self.get_layout(type_id);
                 let value_bytes = match intrinsic {
                     Builtin::SizeOf => layout.size as u64,
                     Builtin::SizeOfStride => layout.stride() as u64,
@@ -11701,8 +11839,8 @@ impl TypedProgram {
             Builtin::BitCast => {
                 let type_from = self.named_types.get_nth(call.type_args, 0).type_id;
                 let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
-                let layout_from = self.types.get_layout(type_from);
-                let layout_to = self.types.get_layout(type_to);
+                let layout_from = self.get_layout(type_from);
+                let layout_to = self.get_layout(type_to);
                 if layout_from.size == 0 {
                     kbail!(self, call.span, "Cannot bitcast from zero-sized type: {}", type_from)
                 }
@@ -11795,7 +11933,7 @@ impl TypedProgram {
         // A function-type-parameter, written 'some \A -> B'
         match typ {
             Type::FunctionPointer(fp) => Some(fp.function_type_id),
-            Type::Lambda(lam) => Some(lam.function_type),
+            Type::Lambda(lam_id) => Some(self.types.lambda_types.get(*lam_id).function_type),
             Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
             Type::FunctionTypeParameter(ftp) => Some(ftp.function_type),
             _ => None,
@@ -11827,16 +11965,13 @@ impl TypedProgram {
     ) -> TypeId {
         //let generic_function = self.get_function(generic_function_id);
         let generic_function_type_id = generic_function_sig.function_type;
-        let mut subst_pairs: SmallVec<[TypeSubstitutionPair; 8]> = SmallVec::with_capacity(
-            generic_function_sig.function_type_params.len()
-                + generic_function_sig.type_params.len(),
-        );
+        let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
 
         // Here, we're substituting **the entire function type params** for the function types we
         // have. The pairs look like "some T -> T" -> "(int -> int)*"
         for (function_type_param, function_type_arg) in self
-            .function_type_params
-            .get_slice(generic_function_sig.function_type_params)
+            .mem
+            .getn(generic_function_sig.function_type_params)
             .iter()
             .zip(self.named_types.get_slice(fnlike_type_arguments))
         {
@@ -11988,7 +12123,7 @@ impl TypedProgram {
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: SliceHandle::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
-            function_type_params: SliceHandle::empty(),
+            function_type_params: MSlice::empty(),
             body_block: None,
             intrinsic_type: generic_function.intrinsic_type,
             linkage: generic_function.linkage,
@@ -12152,20 +12287,22 @@ impl TypedProgram {
                 let parsed_use = self.ast.uses.get_use(use_stmt.use_id);
                 // These uses should always hit since we only do 1 pass inside function bodies, and
                 // at that point all symbols are resolvable
-                let Some(useable_symbol) =
-                    self.find_useable_symbol(ctx.scope_id, &parsed_use.target, true)?
-                else {
+                let useable_symbols =
+                    self.find_useable_symbols(ctx.scope_id, &parsed_use.target, true)?;
+                if useable_symbols.is_empty() {
                     return failf!(
                         parsed_use.target.span,
                         "Could not find {}",
                         self.ident_str(parsed_use.target.name)
                     );
                 };
-                self.scopes.add_use_binding(
-                    ctx.scope_id,
-                    useable_symbol,
-                    parsed_use.alias.unwrap_or(parsed_use.target.name),
-                );
+                for useable_symbol in &useable_symbols {
+                    self.scopes.add_use_binding(
+                        ctx.scope_id,
+                        useable_symbol,
+                        parsed_use.alias.unwrap_or(parsed_use.target.name),
+                    );
+                }
                 Ok(None)
             }
             ParsedStmt::Let(parsed_let) => {
@@ -12516,9 +12653,9 @@ impl TypedProgram {
                         let defer_stmt_id =
                             self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
                         if terminating {
-                            stmts.insert(stmts.len() - 1, defer_stmt_id);
+                            stmts.insert_grow(&mut self.mem, stmts.len() - 1, defer_stmt_id);
                         } else {
-                            stmts.push(defer_stmt_id)
+                            stmts.push_grow(&mut self.mem, defer_stmt_id)
                         }
                     }
                 };
@@ -12606,20 +12743,20 @@ impl TypedProgram {
                     Type::Float(_) => mk_arith!(OpKind::float(Op::Equals)),
                     _ => None,
                 },
-                (BITWISE_ABILITY_ID, "bitNot") if is_integer => Some(Builtin::BitNot),
-                (BITWISE_ABILITY_ID, "bitAnd") if is_integer => {
+                (BITWISE_ABILITY_ID, "bit-not") if is_integer => Some(Builtin::BitNot),
+                (BITWISE_ABILITY_ID, "bit-and") if is_integer => {
                     mk_bitwise!(BitwiseBinopKind::And)
                 }
-                (BITWISE_ABILITY_ID, "bitOr") if is_integer => {
+                (BITWISE_ABILITY_ID, "bit-or") if is_integer => {
                     mk_bitwise!(BitwiseBinopKind::Or)
                 }
                 (BITWISE_ABILITY_ID, "xor") if is_integer => {
                     mk_bitwise!(BitwiseBinopKind::Xor)
                 }
-                (BITWISE_ABILITY_ID, "shiftLeft") if is_integer => {
+                (BITWISE_ABILITY_ID, "shift-left") if is_integer => {
                     mk_bitwise!(BitwiseBinopKind::ShiftLeft)
                 }
-                (BITWISE_ABILITY_ID, "shiftRight") if is_integer => {
+                (BITWISE_ABILITY_ID, "shift-right") if is_integer => {
                     let int_type = t.expect_integer();
                     if int_type.is_signed() {
                         mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
@@ -12704,7 +12841,7 @@ impl TypedProgram {
                 },
                 Some("mem") => match fn_name_str {
                     "alloc" => Some(Builtin::Allocate),
-                    "allocZeroed" => Some(Builtin::AllocateZeroed),
+                    "alloc-zeroed" => Some(Builtin::AllocateZeroed),
                     "realloc" => Some(Builtin::Reallocate),
                     "free" => Some(Builtin::Free),
                     "copy" => Some(Builtin::MemCopy),
@@ -12715,12 +12852,12 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("types") => match fn_name_str {
-                    "typeId" => Some(Builtin::TypeId),
-                    "typeName" => Some(Builtin::TypeName),
-                    "typeSchema" => Some(Builtin::TypeSchema),
-                    "sizeOf" => Some(Builtin::SizeOf),
-                    "sizeOfStride" => Some(Builtin::SizeOfStride),
-                    "alignOf" => Some(Builtin::AlignOf),
+                    "type-id" => Some(Builtin::TypeId),
+                    "type-name" => Some(Builtin::TypeName),
+                    "type-schema" => Some(Builtin::TypeSchema),
+                    "size-of" => Some(Builtin::SizeOf),
+                    "size-of-stride" => Some(Builtin::SizeOfStride),
+                    "align-of" => Some(Builtin::AlignOf),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {
@@ -12732,20 +12869,20 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("string") => None,
-                Some("List") => None,
+                Some("list") => None,
                 Some("char") => None,
                 Some("ptr") => match fn_name_str {
-                    "refAtIndex" => Some(Builtin::PointerIndex),
+                    "ref-at-index" => Some(Builtin::PointerIndex),
                     _ => None,
                 },
                 Some("meta") => match fn_name_str {
-                    "bakeStaticValue" => Some(Builtin::BakeStaticValue),
-                    "getStaticValue" => Some(Builtin::GetStaticValue),
-                    "staticTypeToValue" => Some(Builtin::StaticTypeToValue),
+                    "bake-static-value" => Some(Builtin::BakeStaticValue),
+                    "get-static-value" => Some(Builtin::GetStaticValue),
+                    "static-type-to-value" => Some(Builtin::StaticTypeToValue),
                     _ => None,
                 },
                 Some("k1") => match fn_name_str {
-                    "emitCompilerMessage" => Some(Builtin::CompilerMessage),
+                    "emit-compiler-message" => Some(Builtin::CompilerMessage),
                     _ => None,
                 },
                 Some(_) => None,
@@ -12796,12 +12933,11 @@ impl TypedProgram {
                 }
             }
             Some(payload_type) => {
-                let payload_type_root = self.types.get_root_id(payload_type);
                 if let Some(payload_arg) = payload {
                     let payload_value = self
                         .eval_expr_with_coercion(
                             payload_arg,
-                            ctx.with_expected_type(Some(payload_type_root)),
+                            ctx.with_expected_type(Some(payload_type)),
                             true,
                         )
                         .map_err(|e| errf!(span, "Variant payload type mismatch: {}", e.message))?;
@@ -13086,7 +13222,7 @@ impl TypedProgram {
             specialized_child: specialized_ability_id,
             arguments,
         };
-        let self_ident = self.ast.idents.b.Self_;
+        let self_ident = self.ast.idents.b.self_;
         let new_self_type_id = self.add_type_parameter(
             TypeParameter {
                 name: self_ident,
@@ -13282,18 +13418,19 @@ impl TypedProgram {
         // Instantiate type arguments.
         let mut type_params: SmallVec<[NameAndType; 8]> =
             SmallVec::with_capacity(parsed_type_params.len());
-        let mut function_type_params: SV4<FunctionTypeParam> = SmallVec::new();
+        let mut function_type_params: MList<FunctionTypeParam, TypedProgram> =
+            self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
             let self_type_id = self_.abilities.get(ability_id.unwrap()).self_type_id;
-            type_params.push(NameAndType { name: self_.ast.idents.b.Self_, type_id: self_type_id })
+            type_params.push(NameAndType { name: self_.ast.idents.b.self_, type_id: self_type_id })
         }
         for type_parameter in parsed_type_params.iter() {
             let mut ability_constraints = SmallVec::new();
             let mut static_constraint: Option<TypeId> = None;
 
-            for parsed_constraint in type_parameter.constraints.iter().chain(
+            for parsed_constraint in self_.ast.mem.getn(type_parameter.constraints).iter().chain(
                 parsed_function
                     .additional_where_constraints
                     .iter()
@@ -13362,12 +13499,12 @@ impl TypedProgram {
             // - `some ty` function type parameter, inject the type parameter into the
             match self_.types.get(type_id) {
                 Type::FunctionTypeParameter(ftp) => {
-                    function_type_params.push(FunctionTypeParam {
-                        name: ftp.name,
-                        type_id,
-                        value_param_index: idx as u32,
-                        span: ftp.span,
-                    });
+                    let name = ftp.name;
+                    let span = ftp.span;
+                    function_type_params.push_grow(
+                        &mut self_.mem,
+                        FunctionTypeParam { name, type_id, value_param_index: idx as u32, span },
+                    );
                     // There's actually no way to refer to these types by name,
                     // so we don't need to add a name to the scope
                 }
@@ -13559,8 +13696,7 @@ impl TypedProgram {
         }));
 
         let type_params_handle = self_.named_types.add_slice_copy(&type_params);
-        let function_type_params_handle =
-            self_.function_type_params.add_slice_copy(&function_type_params);
+        let function_type_params_handle = self_.mem.list_to_handle(function_type_params);
         let function_id = self_.functions.next_id();
         for v in params.iter() {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
@@ -13735,7 +13871,7 @@ impl TypedProgram {
             Some(parsed_ability.name),
         );
 
-        let self_ident_id = self.ast.idents.b.Self_;
+        let self_ident_id = self.ast.idents.b.self_;
         let mut ability_params: MList<TypedAbilityParam, _> =
             self.mem.new_list(parsed_ability.params.len() as u32 + 1);
         let self_type_id = self.add_type_parameter(
@@ -13750,19 +13886,17 @@ impl TypedProgram {
         let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
         for ability_param in parsed_ability.params.clone().iter() {
             let mut ability_constraints: SV4<TypedAbilitySignature> = smallvec![];
-            for constraint in ability_param.constraints.iter() {
-                match constraint {
-                    parse::ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        let signature =
-                            self.eval_ability_expr(*ability_expr, false, ability_scope_id)?;
-                        ability_constraints.push(signature);
-                    }
-                    _ => {}
+            for constraint in self.ast.mem.getn(ability_param.constraints) {
+                if let parse::ParsedTypeConstraintExpr::Ability(ability_expr) = constraint {
+                    let signature =
+                        self.eval_ability_expr(*ability_expr, false, ability_scope_id)?;
+                    ability_constraints.push(signature);
                 }
             }
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
-                    &ability_param.constraints,
+                    &self.ast.mem,
+                    ability_param.constraints,
                 ) {
                     Ok(Some(parsed_constraint)) => {
                         Some(self.eval_type_expr(parsed_constraint, ability_scope_id)?)
@@ -13941,7 +14075,8 @@ impl TypedProgram {
         for blanket_impl_param in &parsed_ability_impl.generic_impl_params {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
-                    &blanket_impl_param.constraints,
+                    &self.ast.mem,
+                    blanket_impl_param.constraints,
                 ) {
                     Ok(Some(parsed_constraint)) => {
                         Some(self.eval_type_expr(parsed_constraint, impl_scope_id)?)
@@ -13977,8 +14112,12 @@ impl TypedProgram {
             if !blanket_impl_param.constraints.is_empty() {
                 let param_constraints_scope_id =
                     self.scopes.add_child_scope(impl_scope_id, ScopeType::AbilityImpl, None, None);
-                for ability_expr in
-                    blanket_impl_param.constraints.iter().filter_map(|c| c.as_ability())
+                for ability_expr in self
+                    .ast
+                    .mem
+                    .getn(blanket_impl_param.constraints)
+                    .iter()
+                    .filter_map(|c| c.as_ability())
                 {
                     let constrained_ability_sig =
                         self.eval_ability_expr(ability_expr, false, impl_scope_id)?;
@@ -14031,7 +14170,7 @@ impl TypedProgram {
         let _ = self
             .scopes
             .get_scope_mut(impl_scope_id)
-            .add_type(self.ast.idents.b.Self_, impl_self_type);
+            .add_type(self.ast.idents.b.self_, impl_self_type);
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
@@ -14251,6 +14390,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         skip_defns: &[ParsedId],
     ) {
+        self.tmp.reset(false);
         match def {
             ParsedId::Use(_) => {
                 // Uses are all resolved by now
@@ -14336,36 +14476,38 @@ impl TypedProgram {
             return;
         }
         debug!("Handling unfulfilled use {}", self.qident_to_string(&parsed_use.target));
-        let find_result =
-            match self.find_useable_symbol(scope_id, &parsed_use.target, fail_on_traverse_fail) {
+        let useable_symbols =
+            match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
                 Err(e) => {
                     self.report(e);
                     return;
                 }
                 Ok(sym) => sym,
             };
-        let resolution = if let Some(symbol) = find_result {
-            self.scopes.add_use_binding(
-                scope_id,
-                symbol,
-                parsed_use.alias.unwrap_or(parsed_use.target.name),
-            );
-            debug!("Inserting resolved use of {:?}", symbol);
-            UseStatus::Resolved(symbol)
-        } else {
+        let resolution = if useable_symbols.is_empty() {
             debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
             UseStatus::Unresolved(scope_id)
+        } else {
+            for symbol in &useable_symbols {
+                self.scopes.add_use_binding(
+                    scope_id,
+                    symbol,
+                    parsed_use.alias.unwrap_or(parsed_use.target.name),
+                );
+                debug!("Inserting resolved use of {:?}", symbol);
+            }
+            UseStatus::Resolved(useable_symbols)
         };
 
         self.use_statuses.insert(parsed_use_id, resolution);
     }
 
-    fn find_useable_symbol(
+    fn find_useable_symbols(
         &self,
         scope_id: ScopeId,
         name: &QIdent,
         fail_on_traverse_fail: bool,
-    ) -> TyperResult<Option<UseableSymbol>> {
+    ) -> TyperResult<SV4<UseableSymbol>> {
         let scope_id_to_search = match self.scopes.traverse_namespace_chain(
             scope_id,
             name.path,
@@ -14377,7 +14519,7 @@ impl TypedProgram {
                 if fail_on_traverse_fail {
                     return Err(e);
                 } else {
-                    return Ok(None);
+                    return Ok(smallvec![]);
                 }
             }
             Ok(s) => s,
@@ -14392,39 +14534,47 @@ impl TypedProgram {
 
         // TODO(MODULES): Validate modules cannot use something from a module they don't depend on
         // even if its in the program
+        //
+        // But that wouldn't really be a 'use' thing because you can use
+        // stuff without 'use'ing it, so actually it needs to happen everywhere
+        // we resolve namespaced identifiers :O
 
+        let mut found_symbols: SV4<_> = smallvec![];
         if let Some(function_id) = scope_to_search.find_function(name.name) {
-            Ok(Some(UseableSymbol {
+            found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Function(function_id),
-            }))
-        } else if let Some(type_id) = scope_to_search.find_type(name.name) {
+            });
+        }
+        if let Some(type_id) = scope_to_search.find_type(name.name) {
             let companion_namespace = self.types.get_companion_namespace(type_id);
-            Ok(Some(UseableSymbol {
+            found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Type { type_id, companion_namespace },
-            }))
-        } else if let Some(variable_id) =
+            })
+        }
+        if let Some(variable_id) =
             scope_to_search.find_variable(name.name).and_then(|vis| vis.variable_id())
         {
-            Ok(Some(UseableSymbol {
+            found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Global(variable_id),
-            }))
-        } else if let Some(ability_id) = scope_to_search.find_ability(name.name) {
+            })
+        }
+        if let Some(ability_id) = scope_to_search.find_ability(name.name) {
             let namespace_id = self.abilities.get(ability_id).namespace_id;
-            Ok(Some(UseableSymbol {
+            found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Ability(ability_id, namespace_id),
-            }))
-        } else if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
-            Ok(Some(UseableSymbol {
+            })
+        }
+        if let Some(ns_id) = scope_to_search.find_namespace(name.name) {
+            found_symbols.push(UseableSymbol {
                 source_scope: scope_id_to_search,
                 id: UseableSymbolId::Namespace(ns_id),
-            }))
-        } else {
-            Ok(None)
+            })
         }
+        Ok(found_symbols)
     }
 
     // Evaluate a namespace during the Type Declaration phase:
@@ -14460,6 +14610,7 @@ impl TypedProgram {
                         scope: namespace_scope_id,
                         companion_namespace: companion_namespace_id,
                         ast_id: ParsedId::TypeDefn(type_defn_id),
+                        recursive: false,
                     };
                     let type_id = self.types.add_unresolved_type_defn(type_defn_id, defn_info);
 
@@ -14479,17 +14630,17 @@ impl TypedProgram {
                     if namespace_scope_id == self.scopes.core_scope_id {
                         if name == self.ast.idents.b.string {
                             self.types.builtins.string = Some(type_id);
-                        } else if name == self.ast.idents.b.Buffer {
+                        } else if name == self.ast.idents.b.buffer {
                             self.types.builtins.buffer = Some(type_id);
                         }
                     } else if namespace_scope_id == self.scopes.types_scope_id {
-                        if name == self.ast.idents.b.TypeSchema {
+                        if name == self.ast.idents.b.type_schema {
                             self.types.builtins.types_type_schema = Some(type_id);
-                        } else if name == self.ast.idents.b.IntKind {
+                        } else if name == self.ast.idents.b.int_kind {
                             self.types.builtins.types_int_kind = Some(type_id);
-                        } else if name == self.ast.idents.b.IntValue {
+                        } else if name == self.ast.idents.b.int_value {
                             self.types.builtins.types_int_value = Some(type_id)
-                        } else if name == self.ast.idents.b.Layout {
+                        } else if name == self.ast.idents.b.layout {
                             self.types.builtins.types_layout = Some(type_id)
                         }
                     }
@@ -14545,7 +14696,7 @@ impl TypedProgram {
                 continue;
             }
             if let ParsedId::TypeDefn(type_defn_id) = parsed_definition_id {
-                if let Err(e) = self.eval_type_defn(*type_defn_id, namespace_scope_id) {
+                if let Err(e) = self.eval_type_defn(*type_defn_id, namespace_scope_id, 0) {
                     self.type_defn_stack.clear();
                     self.report(e);
                 };
@@ -14673,7 +14824,7 @@ impl TypedProgram {
             self.scopes.types_scope_id = ns_scope_id;
         }
         let is_array =
-            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.Array;
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.array;
         if is_array {
             self.scopes.array_scope_id = ns_scope_id;
         }
@@ -14885,6 +15036,9 @@ impl TypedProgram {
             manifest,
             namespace_id: typed_namespace_id,
             namespace_scope_id: root_namespace_scope_id,
+
+            parse_elapsed_ms: 0,
+            typecheck_elapsed_ms: 0,
         };
 
         if !is_core {
@@ -14935,7 +15089,6 @@ impl TypedProgram {
             };
         }
 
-        let mut err_writer = stderr();
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         check_for_errors!("namespace declaration");
@@ -14998,10 +15151,10 @@ impl TypedProgram {
             }
         }
 
-        debug_assert!(self.abilities.get(EQUALS_ABILITY_ID).name == get_ident!(self, "Equals"));
-        debug_assert!(self.abilities.get(BITWISE_ABILITY_ID).name == get_ident!(self, "Bitwise"));
+        debug_assert!(self.abilities.get(EQUALS_ABILITY_ID).name == get_ident!(self, "equals"));
+        debug_assert!(self.abilities.get(BITWISE_ABILITY_ID).name == get_ident!(self, "bitwise"));
         debug_assert!(
-            self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "Comparable")
+            self.abilities.get(COMPARABLE_ABILITY_ID).name == get_ident!(self, "comparable")
         );
 
         debug!(">> Pass 5 bodies (functions, globals, abilities)");
@@ -15010,7 +15163,7 @@ impl TypedProgram {
         check_for_errors!("typechecking");
 
         debug!(">> Pass 6 specialize function bodies");
-        self.specialize_pending_function_bodies(&mut err_writer)?;
+        self.specialize_pending_function_bodies()?;
         check_for_errors!("body specialization");
 
         Ok(())
@@ -15036,7 +15189,7 @@ impl TypedProgram {
             let buffer_struct = self.types.get(buffer_generic.inner).expect_struct();
             // debug_assert_eq!(
             //     self.types.get_layout(BUFFER_TYPE_ID),
-            //     Layout::from_rust_type::<vm::k1_types::K1ViewLike>()
+            //     Layout::from_rust_type::<vm::k1_types::K1BufferLike>()
             // );
             debug_assert!(buffer_struct.fields.len() == 2);
             debug_assert!(
@@ -15056,7 +15209,7 @@ impl TypedProgram {
             let list_generic = self.types.get(LIST_TYPE_ID).expect_generic();
             let info = self.types.get_defn_info(LIST_TYPE_ID).unwrap();
             let list_struct = self.types.get(list_generic.inner).expect_struct();
-            debug_assert!(info.name == get_ident!(self, "List"));
+            debug_assert!(info.name == get_ident!(self, "list"));
             debug_assert!(
                 self.types
                     .mem
@@ -15083,7 +15236,7 @@ impl TypedProgram {
             let optional_generic = self.types.get(OPTIONAL_TYPE_ID).expect_generic();
             let info = self.types.get_defn_info(OPTIONAL_TYPE_ID).unwrap();
             let inner = self.types.get(optional_generic.inner);
-            debug_assert!(info.name == get_ident!(self, "Opt"));
+            debug_assert!(info.name == get_ident!(self, "opt"));
             debug_assert!(inner.as_enum().unwrap().variants.len() == 2);
         }
         //
@@ -15093,14 +15246,11 @@ impl TypedProgram {
             let ordering_enum = self.types.get(ORDERING_TYPE_ID).expect_enum();
             let info = self.types.get_defn_info(ORDERING_TYPE_ID).unwrap();
             debug_assert!(ordering_enum.variants.len() == 3);
-            debug_assert!(info.name == get_ident!(self, "Ordering"));
+            debug_assert!(info.name == get_ident!(self, "ordering"));
         }
     }
 
-    fn specialize_pending_function_bodies(
-        &mut self,
-        err_writer: &mut impl std::io::Write,
-    ) -> anyhow::Result<()> {
+    fn specialize_pending_function_bodies(&mut self) -> anyhow::Result<()> {
         let mut function_ids: Vec<FunctionId> =
             Vec::with_capacity(self.functions_pending_body_specialization.len());
         while !self.functions_pending_body_specialization.is_empty() {
@@ -15109,8 +15259,7 @@ impl TypedProgram {
             for function_id in &function_ids {
                 let result = self.specialize_function_body(*function_id);
                 if let Err(e) = result {
-                    self.write_error(err_writer, &e)?;
-                    self.errors.push(e);
+                    self.report(e)
                 }
             }
             function_ids.clear()
@@ -15118,21 +15267,12 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn get_span_for_type_id(&self, type_id: TypeId) -> Option<SpanId> {
-        match self.types.get(type_id) {
-            Type::TypeParameter(tv) => Some(tv.span),
-            _ => self
-                .types
-                .get_ast_node(type_id)
-                .map(|parsed_id| self.ast.get_span_for_id(parsed_id)),
-        }
-    }
-
     fn generate_constructors_for_type(
         &mut self,
         type_id: TypeId,
         dst: &mut Vec<PatternCtorTrialEntry>,
         field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
+        ancestors: &mut Vec<TypeId>,
         span_id: SpanId,
     ) {
         #[inline]
@@ -15144,6 +15284,7 @@ impl TypedProgram {
             dst: &mut Vec<PatternCtorTrialEntry>,
             field_ctors_buf: &mut Vec<Vec<(Ident, PatternCtorId)>>,
             span_id: SpanId,
+            ancestors: &mut Vec<TypeId>,
             v: &TypedEnumVariant,
         ) {
             match v.payload.as_ref() {
@@ -15152,7 +15293,13 @@ impl TypedProgram {
                 )),
                 Some(payload) => {
                     let prev_len = dst.len();
-                    k1.generate_constructors_for_type(*payload, dst, field_ctors_buf, span_id);
+                    k1.generate_constructors_for_type(
+                        *payload,
+                        dst,
+                        field_ctors_buf,
+                        ancestors,
+                        span_id,
+                    );
                     for payload_pattern_id in dst[prev_len..].iter_mut() {
                         payload_pattern_id.ctor = k1.pattern_ctors.add(PatternCtor::Enum {
                             variant_name: v.name,
@@ -15162,10 +15309,23 @@ impl TypedProgram {
                 }
             }
         }
+
+        if ancestors.contains(&type_id) {
+            // FIXME: Here is where we would actually place a sentinel
+            //        ctor that we could expand as needed by the pattern
+            debug!("Stopping pattern ctor recursion at {}", self.type_id_to_string(type_id));
+
+            // Let's just say its a type variable, idk, tired of adding
+            // constructors that dont do anything
+            dst.push(alive(PatternCtorId::TYPE_VARIABLE));
+            return;
+        }
+
         if type_id == STRING_TYPE_ID {
             dst.push(alive(PatternCtorId::STRING));
             return;
         }
+        ancestors.push(type_id);
         match self.types.get(type_id) {
             Type::Char => dst.push(alive(PatternCtorId::CHAR)),
             Type::TypeParameter(_) => dst.push(alive(PatternCtorId::TYPE_VARIABLE)),
@@ -15185,6 +15345,7 @@ impl TypedProgram {
                     refer.inner_type,
                     dst,
                     field_ctors_buf,
+                    ancestors,
                     span_id,
                 );
                 for pointee_pattern_id in dst[prev_len..].iter_mut() {
@@ -15195,7 +15356,7 @@ impl TypedProgram {
             Type::Array(_array_type) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Array))),
             Type::Enum(enum_type) => {
                 for v in self.types.mem.getn(enum_type.variants) {
-                    handle_enum_variant(self, dst, field_ctors_buf, span_id, v)
+                    handle_enum_variant(self, dst, field_ctors_buf, span_id, ancestors, v)
                 }
             }
             Type::Struct(struc) => {
@@ -15205,98 +15366,113 @@ impl TypedProgram {
                 match self.types.get_as_container_instance(type_id) {
                     Some((_, ContainerKind::Buffer)) => {
                         dst.push(alive(PatternCtorId::BUFFER));
-                        return;
                     }
-                    Some((_, ContainerKind::View)) => {
-                        dst.push(alive(PatternCtorId::VIEW));
-                        return;
+                    Some((_, ContainerKind::Span)) => {
+                        dst.push(alive(PatternCtorId::SPAN));
                     }
-                    _ => {}
-                }
-                let field_count = struc.fields.len();
-                for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
-                    let prev_len = dst.len();
-                    self.generate_constructors_for_type(
-                        field.type_id,
-                        dst,
-                        field_ctors_buf,
-                        span_id,
-                    );
-                    match field_ctors_buf.get_mut(index) {
-                        None => field_ctors_buf.push(Vec::with_capacity(128)),
-                        Some(buf) => buf.clear(),
-                    };
-                    for field_ctor in dst[prev_len..].iter() {
-                        field_ctors_buf[index].push((field.name, field_ctor.ctor));
-                    }
-                    debug!(
-                        "Pushed {} constructors for field {}; resetting dst to {prev_len}",
-                        field_ctors_buf[index].len(),
-                        self.ident_str(field.name)
-                    );
-                    dst.truncate(prev_len);
-                }
-                let final_count = field_ctors_buf[0..field_count as usize]
-                    .iter()
-                    .map(|v| v.len())
-                    .reduce(|t, v| t * v)
-                    .unwrap_or(0);
-
-                debug!(
-                    "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
-                    field_ctors_buf.len(),
-                    self.type_id_to_string(type_id)
-                );
-                let dst_start = dst.len();
-                for _ in 0..final_count {
-                    let primed_struct_ctor_id = self.pattern_ctors.add(PatternCtor::Struct {
-                        fields: SmallVec::with_capacity(field_count as usize),
-                    });
-                    dst.push(alive(primed_struct_ctor_id));
-                }
-                let result_struct_ids = &mut dst[dst_start..];
-
-                // This entire loop is just about taking the cross-product of all the fields'
-                // respective constructors in an efficient way; by populating slots in
-                // a pre-allocated table, and doing a bit of math to decide how many times
-                // a pattern should repeat or cycle. Example
-                // {  a: bool, b: bool, c: either A, B, C }
-                // 0  f        f        A
-                // 1  f        f        B
-                // 2  f        f        C
-                // 3  f        t        A
-                // 4  f        t        B
-                // 5  f        t        C
-                // 6  t        f        A
-                // 7  t        f        B
-                // 8  t        f        C
-                // 9  t        t        A
-                // 10 t        t        B
-                // 11 t        t        C
-                // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
-                // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
-                // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
-                let mut field_index_w_multi_ctor = 0;
-                for ctors in field_ctors_buf[0..field_count as usize].iter() {
-                    if ctors.len() == 1 {
-                        for result_struct in result_struct_ids.iter_mut() {
-                            self.pattern_ctors.get_mut(result_struct.ctor).push_field(ctors[0]);
-                        }
-                    } else {
-                        // multiplier = 2 ^ field_index but only for fields that have more than
-                        // 1 pattern
-                        let multiplier = if field_index_w_multi_ctor == 0 {
-                            1
+                    _ => {
+                        let field_count = struc.fields.len();
+                        if field_count == 0 {
+                            dst.push(alive(
+                                self.pattern_ctors.add(PatternCtor::Struct { fields: smallvec![] }),
+                            ));
                         } else {
-                            field_index_w_multi_ctor * 2
-                        };
-                        let repeat_count = final_count / (ctors.len() * multiplier);
-                        for (row, result_struct) in result_struct_ids.iter_mut().enumerate() {
-                            let pattern_index = (row / repeat_count) % ctors.len();
-                            let pattern = ctors[pattern_index];
-                            self.pattern_ctors.get_mut(result_struct.ctor).push_field(pattern);
+                            for (index, field) in
+                                self.types.mem.getn(struc.fields).iter().enumerate()
+                            {
+                                let prev_len = dst.len();
+                                self.generate_constructors_for_type(
+                                    field.type_id,
+                                    dst,
+                                    field_ctors_buf,
+                                    ancestors,
+                                    span_id,
+                                );
+                                match field_ctors_buf.get_mut(index) {
+                                    None => field_ctors_buf.push(Vec::with_capacity(128)),
+                                    Some(buf) => buf.clear(),
+                                };
+                                for field_ctor in dst[prev_len..].iter() {
+                                    field_ctors_buf[index].push((field.name, field_ctor.ctor));
+                                }
+                                debug!(
+                                    "Pushed {} constructors for field {}; resetting dst to {prev_len}",
+                                    field_ctors_buf[index].len(),
+                                    self.ident_str(field.name)
+                                );
+                                dst.truncate(prev_len);
+                            }
+                            let final_count = field_ctors_buf[0..field_count as usize]
+                                .iter()
+                                .map(|v| v.len())
+                                .reduce(|t, v| t * v)
+                                .unwrap_or(0);
+
+                            debug!(
+                                "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
+                                field_ctors_buf.len(),
+                                self.type_id_to_string(type_id)
+                            );
+                            let dst_start = dst.len();
+                            for _ in 0..final_count {
+                                let primed_struct_ctor_id =
+                                    self.pattern_ctors.add(PatternCtor::Struct {
+                                        fields: SmallVec::with_capacity(field_count as usize),
+                                    });
+                                dst.push(alive(primed_struct_ctor_id));
+                            }
+                            let result_struct_ids = &mut dst[dst_start..];
+
+                            // This entire loop is just about taking the cross-product of all the fields'
+                            // respective constructors in an efficient way; by populating slots in
+                            // a pre-allocated table, and doing a bit of math to decide how many times
+                            // a pattern should repeat or cycle. Example
+                            // {  a: bool, b: bool, c: either A, B, C }
+                            // 0  f        f        A
+                            // 1  f        f        B
+                            // 2  f        f        C
+                            // 3  f        t        A
+                            // 4  f        t        B
+                            // 5  f        t        C
+                            // 6  t        f        A
+                            // 7  t        f        B
+                            // 8  t        f        C
+                            // 9  t        t        A
+                            // 10 t        t        B
+                            // 11 t        t        C
+                            // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
+                            // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
+                            // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
+                            let mut field_index_w_multi_ctor = 0;
+                            for ctors in field_ctors_buf[0..field_count as usize].iter() {
+                                if ctors.len() == 1 {
+                                    for result_struct in result_struct_ids.iter_mut() {
+                                        self.pattern_ctors
+                                            .get_mut(result_struct.ctor)
+                                            .push_field(ctors[0]);
+                                    }
+                                } else {
+                                    // multiplier = 2 ^ field_index but only for fields that have more than
+                                    // 1 pattern
+                                    let multiplier = if field_index_w_multi_ctor == 0 {
+                                        1
+                                    } else {
+                                        field_index_w_multi_ctor * 2
+                                    };
+                                    let repeat_count = final_count / (ctors.len() * multiplier);
+                                    for (row, result_struct) in
+                                        result_struct_ids.iter_mut().enumerate()
+                                    {
+                                        let pattern_index = (row / repeat_count) % ctors.len();
+                                        let pattern = ctors[pattern_index];
+                                        self.pattern_ctors
+                                            .get_mut(result_struct.ctor)
+                                            .push_field(pattern);
+                                    }
+                                    field_index_w_multi_ctor += 1;
+                                }
+                            }
                         }
-                        field_index_w_multi_ctor += 1;
                     }
                 }
             }
@@ -15306,18 +15482,17 @@ impl TypedProgram {
             Type::LambdaObject(_) => {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
-            Type::Static(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::Static))),
-            _ => self
-                .write_error(
-                    &mut stderr(),
-                    &errf!(
-                        span_id,
-                        "unhandled type in generate_constructors_for_type {}",
-                        self.type_id_to_string(type_id)
-                    ),
-                )
-                .unwrap(),
-        }
+            Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
+            _ => self.report_hint(
+                span_id,
+                format!(
+                    "INTERNAL COMPILER ERROR: unhandled type in generate_constructors_for_type {}",
+                    self.type_id_to_string(type_id)
+                ),
+            ),
+        };
+        let popped = ancestors.pop();
+        debug_assert_eq!(popped, Some(type_id));
     }
 
     fn pattern_matches(
@@ -15381,6 +15556,42 @@ impl TypedProgram {
         }
     }
 
+    /////////////////////////// Type access apis
+
+    /// Based on the 'size_type' of an array, determine what its concrete count is
+    /// Size type can be a type parameter, in which case its 0
+    /// But it can also be a known static size (i64), in which case its the value of it
+    pub fn get_concrete_count_of_array(&self, size_type: TypeId) -> Option<i64> {
+        self.types.get_type_as_i64(&self.static_values, size_type)
+    }
+
+    pub fn get_value_from_value_type(&self, type_id: TypeId) -> Option<StaticValueId> {
+        match self.types.get(type_id) {
+            Type::StaticValue(StaticValueType { value_id: Some(value_id), .. }) => Some(*value_id),
+            _ => None,
+        }
+    }
+
+    pub fn get_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {
+        self.types.get_physical_type(&self.static_values, type_id)
+    }
+
+    pub fn get_layout(&mut self, type_id: TypeId) -> Layout {
+        self.types.get_layout(&self.static_values, type_id)
+    }
+
+    /// Works for enum variants too
+    // Note: feels clumsy to return an SV4 here but nothing better comes to mind.
+    // I wanna return a slice but with what backing memory?
+    pub fn get_struct_layout(&mut self, struct_type_id: TypeId) -> SV4<StructField> {
+        let struct_pt = self.get_physical_type(struct_type_id).unwrap();
+        if struct_pt.is_empty() {
+            smallvec![]
+        } else {
+            self.types.get_agg_struct_layout(struct_pt.expect_agg())
+        }
+    }
+
     fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
         let root_ns: IdentSlice =
             self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]);
@@ -15418,25 +15629,25 @@ impl TypedProgram {
             core!("ptr"),
             core!("f32"),
             core!("f64"),
-            core!("Buffer"),
-            core!("View"),
-            core!("Array"),
-            core!("List"),
+            core!("buffer"),
+            core!("span"),
+            core!("array"),
+            core!("list"),
             core!("string"),
-            core!("Opt"),
+            core!("opt"),
             core!("some"),
             core!("none"),
-            core!("Ordering"),
-            core!("Result"),
-            core!("Equals"),
-            core!("Writer"),
-            core!("Print"),
-            core!("Show"),
-            core!("Bitwise"),
-            core!("Comparable"),
-            core!("Try"),
-            core!("Iterator"),
-            core!("Iterable"),
+            core!("ordering"),
+            core!("result"),
+            core!("equals"),
+            core!("writer"),
+            core!("print"),
+            core!("show"),
+            core!("bitwise"),
+            core!("comparable"),
+            core!("try"),
+            core!("iterator"),
+            core!("iterable"),
             core!("println"),
             core!("print"),
             core!("eprint"),
@@ -15452,16 +15663,22 @@ impl TypedProgram {
             core!("types"),
             core!("k1"),
             core!("IntRange"),
-            core!("Add"),
-            core!("Sub"),
-            core!("Mul"),
-            core!("Div"),
-            core!("Rem"),
-            core!("ScalarCmp"),
+            core!("add"),
+            core!("sub"),
+            core!("mul"),
+            core!("div"),
+            core!("rem"),
+            core!("scalar-cmp"),
+            core!("StringBuilder"),
             QIdent { path: core_mem, name: get_ident!(self, "zeroed"), span },
         ];
         for qid in idents_to_use.into_iter() {
-            let use_id = self.ast.uses.add_use(parse::ParsedUse { target: qid, alias: None, span });
+            let use_id = self.ast.uses.add_use(parse::ParsedUse {
+                target: qid,
+                alias: None,
+                span,
+                explicit_kind: None,
+            });
             self.eval_use_definition(scope, use_id, true);
         }
         Ok(())
@@ -15494,13 +15711,17 @@ impl TypedProgram {
             StaticEnum { enum_type_id: type_schema_type_id, variant_index: v.index, payload }
         };
 
-        // .get will follow statics and recursives
-        let chased_type_id = self.types.get_chased_id(type_id);
-        let typ = self.types.get_no_follow(chased_type_id);
+        // For now, introspection does not support 'static' types, it just sees through them
+
+        // Temporarily, we could provide a separate boolean-returning function to get a type's
+        // static value or something
+        let chased_type_id = self.types.get_static_family_id_if_static(type_id);
+
+        let typ = self.types.get(chased_type_id);
         let static_enum = match typ {
-            Type::Char => make_variant(self, get_ident!(self, "Char"), None),
-            Type::Bool => make_variant(self, get_ident!(self, "Bool"), None),
-            Type::Pointer => make_variant(self, get_ident!(self, "Ptr"), None),
+            Type::Char => make_variant(self, get_ident!(self, "char"), None),
+            Type::Bool => make_variant(self, get_ident!(self, "bool"), None),
+            Type::Pointer => make_variant(self, get_ident!(self, "ptr"), None),
             Type::Integer(integer_type) => {
                 let int_kind_enum_value = TypedProgram::make_int_kind(
                     self.types.mem.getn(int_kind_enum.variants),
@@ -15511,27 +15732,27 @@ impl TypedProgram {
                 let payload_value_id =
                     self.static_values.add(StaticValue::Enum(int_kind_enum_value));
                 let enum_value =
-                    make_variant(self, get_ident!(self, "Int"), Some(payload_value_id));
+                    make_variant(self, get_ident!(self, "int"), Some(payload_value_id));
                 enum_value
             }
             Type::Float(_float_type) => todo!("float schema"),
             Type::Struct(_struct_type) if chased_type_id == STRING_TYPE_ID => {
-                make_variant(self, get_ident!(self, "String"), None)
+                make_variant(self, get_ident!(self, "string"), None)
             }
             Type::Struct(struct_type) => {
                 let struct_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "Struct")).payload.unwrap();
-                // { fields: View[{}] }
+                    get_schema_variant(self, get_ident!(self, "struct")).payload.unwrap();
+                // { fields: span[{}] }
                 let struct_schema_payload_struct =
                     self.types.get(struct_schema_payload_type_id).expect_struct();
-                // { fields: View[{ ... }] }
+                // { fields: span[{ ... }] }
                 let struct_type_fields = struct_type.fields;
-                let struct_schema_fields_view_type_id =
+                let struct_schema_fields_span_type_id =
                     self.types.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
-                    self.types.get_as_view_instance(struct_schema_fields_view_type_id).unwrap();
+                    self.types.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
                 // { name: string), typeId: u64, offset: size }
-                let struct_layout = self.types.get_struct_layout(type_id);
+                let struct_layout = self.get_struct_layout(type_id);
                 let mut field_values: MList<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_list(struct_type_fields.len());
                 for (index, f) in self.types.mem.getn(struct_type_fields).iter().enumerate() {
@@ -15561,17 +15782,17 @@ impl TypedProgram {
                     );
                 }
                 let values_slice = self.static_values.mem.list_to_handle(field_values);
-                let view =
-                    self.static_values.add_view(struct_schema_fields_view_type_id, values_slice);
+                let span_value_id =
+                    self.static_values.add_span(struct_schema_fields_span_type_id, values_slice);
                 let payload = self
                     .static_values
-                    .add_struct_from_slice(struct_schema_payload_type_id, &[view]);
-                make_variant(self, get_ident!(self, "Struct"), Some(payload))
+                    .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
+                make_variant(self, get_ident!(self, "struct"), Some(payload))
             }
             Type::Reference(reference_type) => {
                 let reference_type = *reference_type;
                 let reference_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "Reference")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "reference")).payload.unwrap();
                 // { innerTypeId: u64, mutable: bool }
                 let inner_type_id_value_id =
                     self.static_values.add_type_id_int_value(reference_type.inner_type);
@@ -15587,20 +15808,21 @@ impl TypedProgram {
                     reference_schema_payload_type_id,
                     &[inner_type_id_value_id, mutable_value_id],
                 );
-                make_variant(self, get_ident!(self, "Reference"), Some(payload_struct_id))
+                make_variant(self, get_ident!(self, "reference"), Some(payload_struct_id))
             }
             Type::Array(array_type) => {
                 let array_type = *array_type;
+                let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
                 let array_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "Array")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "array")).payload.unwrap();
                 // { elementTypeId: u64, size: size }
                 let element_type_id_value_id =
                     self.static_values.add_type_id_int_value(array_type.element_type);
                 self.register_type_metainfo(array_type.element_type, span);
 
-                let maybe_concrete_size_value_id = match array_type.concrete_count {
+                let maybe_concrete_size_value_id = match concrete_count {
                     None => None,
-                    Some(size) => Some(self.static_values.add_size(to_k1_size_u64(size))),
+                    Some(size) => Some(self.static_values.add_size(size)),
                 };
                 let option_size = self.synth_optional_type(SIZE_TYPE_ID);
                 let size_value_id = synth::synth_static_option(
@@ -15613,16 +15835,16 @@ impl TypedProgram {
                     array_schema_payload_type_id,
                     &[element_type_id_value_id, size_value_id],
                 );
-                make_variant(self, get_ident!(self, "Array"), Some(payload_struct_id))
+                make_variant(self, get_ident!(self, "array"), Some(payload_struct_id))
             }
             Type::Enum(typed_enum) => {
                 let target_enum_variants = typed_enum.variants;
                 let either_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "Either")).payload.unwrap();
-                let variants_view_type_id =
+                    get_schema_variant(self, get_ident!(self, "either")).payload.unwrap();
+                let variants_span_type_id =
                     self.types.get_struct_field(either_payload_type_id, 1).type_id;
                 let variant_struct_type_id =
-                    self.types.get_as_view_instance(variants_view_type_id).unwrap();
+                    self.types.get_as_span_instance(variants_span_type_id).unwrap();
                 let tag_type = self.types.get(typed_enum.tag_type).expect_integer();
                 let tag_type_value_id =
                     self.static_values.add(StaticValue::Enum(TypedProgram::make_int_kind(
@@ -15630,10 +15852,11 @@ impl TypedProgram {
                         int_kind_type_id,
                         tag_type,
                     )));
-                let enum_agg_id = self.types.get_physical_type(type_id).unwrap().expect_agg();
+                let enum_agg_id = self.get_physical_type(type_id).unwrap().expect_agg();
                 let enum_pt = self.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
                 let maybe_payload_offset = enum_pt.payload_offset;
-                let mut variant_values = self.static_values.mem.new_list(target_enum_variants.len());
+                let mut variant_values =
+                    self.static_values.mem.new_list(target_enum_variants.len());
                 for variant in self.types.mem.getn(target_enum_variants) {
                     let name_string_id =
                         self.ast.strings.intern(self.ast.idents.get_name(variant.name));
@@ -15696,30 +15919,30 @@ impl TypedProgram {
                     ))
                 }
                 let variant_values_slice = self.static_values.mem.list_to_handle(variant_values);
-                let variants_view_value_id =
-                    self.static_values.add_view(variants_view_type_id, variant_values_slice);
+                let variants_span_value_id =
+                    self.static_values.add_span(variants_span_type_id, variant_values_slice);
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     either_payload_type_id,
-                    &[tag_type_value_id, variants_view_value_id],
+                    &[tag_type_value_id, variants_span_value_id],
                 );
-                make_variant(self, get_ident!(self, "Either"), Some(payload_value_id))
+                make_variant(self, get_ident!(self, "either"), Some(payload_value_id))
             }
-            Type::Never => make_variant(self, get_ident!(self, "Never"), None),
+            Type::Never => make_variant(self, get_ident!(self, "never"), None),
             Type::Function(fn_type) => {
                 let fn_type = *fn_type;
                 let function_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "Function")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "function")).payload.unwrap();
                 //Function({
-                //  params: View[{ name: string, typeId: u64 }],
+                //  params: span[{ name: string, typeId: u64 }],
                 //  returnTypeId: u64,
                 //}),
                 let function_schema_payload_struct =
                     self.types.get(function_schema_payload_type_id).expect_struct();
-                let function_params_view_field =
+                let function_params_span_field =
                     self.types.mem.get_nth(function_schema_payload_struct.fields, 0);
-                let function_params_view_type_id = function_params_view_field.type_id;
+                let function_params_span_type_id = function_params_span_field.type_id;
                 let function_param_struct_type_id =
-                    self.types.get_as_view_instance(function_params_view_type_id).unwrap();
+                    self.types.get_as_span_instance(function_params_span_type_id).unwrap();
 
                 let mut params_value_ids =
                     self.static_values.mem.new_list(fn_type.logical_params().len());
@@ -15750,9 +15973,9 @@ impl TypedProgram {
 
                 let params_value_ids_slice =
                     self.static_values.mem.list_to_handle(params_value_ids);
-                let params_view_value_id = self
+                let params_span_value_id = self
                     .static_values
-                    .add_view(function_params_view_type_id, params_value_ids_slice);
+                    .add_span(function_params_span_type_id, params_value_ids_slice);
 
                 self.register_type_metainfo(fn_type.return_type, span);
                 let return_type_id_value_id =
@@ -15762,16 +15985,16 @@ impl TypedProgram {
                     function_schema_payload_type_id,
                     &[
                         // params
-                        params_view_value_id,
+                        params_span_value_id,
                         // returnTypeId
                         return_type_id_value_id,
                     ],
                 );
-                make_variant(self, get_ident!(self, "Function"), Some(payload))
+                make_variant(self, get_ident!(self, "function"), Some(payload))
             }
             Type::FunctionPointer(fp) => {
                 let function_pointer_schema_payload_type_id =
-                    get_schema_variant(self, get_ident!(self, "FunctionPointer")).payload.unwrap();
+                    get_schema_variant(self, get_ident!(self, "function-pointer")).payload.unwrap();
 
                 let function_type_id_value_id =
                     self.static_values.add_type_id_int_value(fp.function_type_id);
@@ -15781,25 +16004,22 @@ impl TypedProgram {
                     function_pointer_schema_payload_type_id,
                     &[function_type_id_value_id],
                 );
-                make_variant(self, get_ident!(self, "FunctionPointer"), Some(payload))
+                make_variant(self, get_ident!(self, "function-pointer"), Some(payload))
             }
             Type::Lambda(_) | Type::LambdaObject(_) | Type::TypeParameter(_) => {
                 let s = self
                     .static_values
                     .add(StaticValue::String(self.ast.strings.intern(typ.kind_name())));
-                make_variant(self, get_ident!(self, "Other"), Some(s))
+                make_variant(self, get_ident!(self, "other"), Some(s))
             }
             Type::Generic(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
             | Type::Unresolved(_) => {
-                ice_span!(self, span, "TypeSchema on {}", typ.kind_name())
+                ice_span!(self, span, "type-schema on {}", typ.kind_name())
             }
-            Type::RecursiveReference(_) | Type::Static(_) => self.ice_with_span(
-                format!(
-                    "TypeSchema on recursive or static type should be unreachable {}",
-                    typ.kind_name()
-                ),
+            Type::StaticValue(_) => self.ice_with_span(
+                format!("type-schema on value type should be unreachable {}", typ.kind_name()),
                 span,
             ),
         };
@@ -15994,7 +16214,8 @@ impl TypedProgram {
         };
 
         if !skip_print {
-            self.write_error(&mut std::io::stderr(), &e).unwrap();
+            let use_color = std::io::stderr().is_terminal();
+            self.write_error(&mut std::io::stderr(), &e, use_color).unwrap();
         }
         self.errors.push(e);
     }
@@ -16007,15 +16228,31 @@ impl TypedProgram {
         });
     }
 
+    pub fn log_hint(&self, span: SpanId, message: impl AsRef<str>) {
+        let use_color = std::io::stderr().is_terminal();
+        let hint =
+            TyperError { message: message.as_ref().to_string(), span, level: MessageLevel::Hint };
+        self.write_error(&mut std::io::stderr(), &hint, use_color).unwrap();
+    }
+
     pub fn write_error(
         &self,
         w: &mut impl std::io::Write,
         error: &TyperError,
+        use_color: bool,
     ) -> std::io::Result<()> {
-        write_error(w, &self.ast.spans, &self.ast.sources, &error.message, error.level, error.span)
+        write_error(
+            w,
+            &self.ast.spans,
+            &self.ast.sources,
+            &error.message,
+            error.level,
+            error.span,
+            use_color,
+        )
     }
 
-    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId) {
+    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
         parse::write_source_location(
             w,
             &self.ast.spans,
@@ -16024,11 +16261,12 @@ impl TypedProgram {
             MessageLevel::Info,
             6,
             None,
+            use_color,
         )
         .unwrap()
     }
 
-    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId) {
+    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
         parse::write_source_location(
             w,
             &self.ast.spans,
@@ -16037,27 +16275,31 @@ impl TypedProgram {
             MessageLevel::Error,
             6,
             None,
+            use_color,
         )
         .unwrap()
     }
 
     #[track_caller]
     pub fn ice_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span);
+        let use_color = std::io::stderr().is_terminal();
+        self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("Internal Compiler Error: {}", msg.as_ref())
     }
 
     #[track_caller]
     pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperError>) -> ! {
+        let use_color = std::io::stderr().is_terminal();
         if let Some(error) = error {
-            self.write_error(&mut std::io::stderr(), error).unwrap();
+            self.write_error(&mut std::io::stderr(), error, use_color).unwrap();
         }
         panic!("Internal Compiler Error at: {}", msg.as_ref())
     }
 
     #[track_caller]
     pub fn todo_with_span(&self, msg: impl AsRef<str>, span: SpanId) -> ! {
-        self.write_location_error(&mut std::io::stderr(), span);
+        let use_color = std::io::stderr().is_terminal();
+        self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("not yet implemented: {}", msg.as_ref())
     }
 
@@ -16091,12 +16333,21 @@ impl TypedProgram {
     pub fn print_timing_info(
         &self,
         module_name: &str,
-        module_elapsed_ms: u64,
+        full_elapsed_ns: u64,
         out: &mut impl std::io::Write,
     ) -> std::io::Result<()> {
         let infer_ms = self.timing.total_infer_nanos as f64 / 1_000_000.0;
         let vm_ms = self.timing.total_vm_nanos as f64 / 1_000_000.0;
-        eprintln!("module {} took {}ms", module_name, module_elapsed_ms);
+        let lines: usize = self.ast.sources.iter().map(|s| s.1.lines.len()).sum();
+        // mm lines per ns, aka lines per second
+        let lines_per_s = if lines > 0 { lines as f64 * 1e9 / full_elapsed_ns as f64 } else { 0.0 };
+        eprintln!(
+            "module {} took {}ms ({:.2} line/s, {} lines)",
+            module_name,
+            full_elapsed_ns / 1_000_000,
+            lines_per_s,
+            lines
+        );
         eprintln!("\t{} expressions", self.exprs.len());
         eprintln!("\t{} statements", self.stmts.len());
         eprintln!("\t{} functions", self.functions.len());
@@ -16107,8 +16358,8 @@ impl TypedProgram {
             self.bytecode.instrs.len(),
             self.timing.total_bytecode_nanos / 1_000_000
         );
-        self.tmp.print_usage("\tmem tmp used");
-        self.mem.print_usage("\tmem mem used");
+        self.tmp.print_usage("\ttmp used");
+        self.mem.print_usage("\tperm used");
         self.types.mem.print_usage("\tmem types used");
         self.bytecode.mem.print_usage("\tmem bytecode used");
         writeln!(
@@ -16122,7 +16373,10 @@ impl TypedProgram {
                 0.0
             }
         )?;
-        writeln!(out, "\t{:.2}ms vm", vm_ms)?;
+        let vm_us = self.timing.total_vm_nanos as f64 / 1_000.0;
+        let vm_us_per_instr = vm_us / self.timing.total_vm_instrs as f64;
+
+        writeln!(out, "\t{:.2}ms vm, avg {:.2}us/instr", vm_ms, vm_us_per_instr)?;
         Ok(())
     }
 }

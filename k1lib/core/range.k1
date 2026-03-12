@@ -23,29 +23,29 @@ ns IntRangeIterator {
   }
 }
 
-impl Iterator[Item = int] for IntRangeIterator {
-  fn peek(self: *Self): ?int {
+impl iterator[item = int] for IntRangeIterator {
+  fn peek(self: *self): ?int {
      if self.position() >= self.range.end {
-       .None
+       .none
      } else {
        let current = self.current();
-       .Some(current)
+       .some(current)
      }
   }
-  fn sizeHint(self: *Self): { atLeast: size, atMost: ?size } {
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     let remaining = self.range.end - self.position();
-    { atLeast: remaining, atMost: .Some(remaining) }
+    { at-least: remaining, at-most: .some(remaining) }
   }
-  fn advanceBy(self: *mut Self, n: size) {
+  fn advance-by(self: *mut self, n: size) {
     self.stepBy(n);
     {}
   }
-  fn nth(self: *mut Self, n: size): ?size {
+  fn nth(self: *mut self, n: size): ?size {
     self.stepBy(n); 
     self.next()
   }
 }
 
-impl Iterable[Item = int, I = IntRangeIterator] for IntRange {
+impl iterable[item = int, i = IntRangeIterator] for IntRange {
   fn iterator(self: IntRange): IntRangeIterator { IntRangeIterator/make(self) }
 }

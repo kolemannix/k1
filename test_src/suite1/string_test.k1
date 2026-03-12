@@ -2,7 +2,7 @@ ns string_test;
 
 fn escape() {
   let s = "\n\0\t\r\"\\";
-  let codes = List/fromMap(s, \c. c.as_u8());
+  let codes = list/fromMap(s, fn c. c.as_u8());
   assert(codes == [10, 0, 9, 13, 34, 92]);
   assert(s.get(0) == '\n');
   assert(s.get(1) == '\0');
@@ -36,15 +36,15 @@ fn test() {
   assert("hello".indexOfString("hel").! == 0);
   assert("hello".indexOfString("").! == 0);
   assert("hello".indexOfString("e").! == 1);
-  assert("hello".indexOfString("x") is .None);
+  assert("hello".indexOfString("x") is .none);
 
   assert("hello".indexOf('e') == 1);
   assert("hello".indexOf('x') == -1);
 
   assert("123".toInt().! == 123);
   assert("-123".toInt().! == -123);
-  assert(not "--".toInt().isOk());
-  assert(not "123a".toInt().isOk());
+  assert(not "--".toInt().is-ok());
+  assert(not "123a".toInt().is-ok());
   assert("12399999".toInt().! == 12399999);
 
   escape();

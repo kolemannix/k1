@@ -3,87 +3,87 @@ ns type_schema {
     x: T, y: T, z: T
   }
 
-  use core/types/TypeSchema
-  use core/types/typeSchema
-  use core/types/typeId
-  use core/types/typeName
-  use core/types/getTypeSchema
+  use core/types/type-schema
+  use core/types/type-schema
+  use core/types/type-id
+  use core/types/type-name
+  use core/types/get-type-schema
 
   fn printStructShape[T](): string {
-    let id = typeId[T];
-    require getTypeSchema[T] is .Struct({ fields }) else { return("") };
+    let id = type-id[T];
+    require get-type-schema[T] is .struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
-    let name = typeName(id);
-    sb.writeString("Struct {name} {{\n");
+    let name = type-name(id);
+    sb.write-string("Struct {name} {{\n");
     for field in fields {
-      sb.writeString("  ");
-      sb.writeString(field.name);
-      sb.writeString(": ");
-      sb.writeString(typeName(field.typeId));
-      sb.writeString("\n");
+      sb.write-string("  ");
+      sb.write-string(field.name);
+      sb.write-string(": ");
+      sb.write-string(type-name(field.type-id));
+      sb.write-string("\n");
     };
-    sb.writeString("}");
+    sb.write-string("}");
     sb.build()
   }
 
   fn test() {
 
-    assert(getTypeSchema[u8]   is .Int(.U8));
-    assert(getTypeSchema[u16]  is .Int(.U16));
-    assert(getTypeSchema[u32]  is .Int(.U32));
-    assert(getTypeSchema[u64]  is .Int(.U64));
-    assert(getTypeSchema[i8]   is .Int(.I8));
-    assert(getTypeSchema[i16]  is .Int(.I16));
-    assert(getTypeSchema[i32]  is .Int(.I32));
-    assert(getTypeSchema[i64]  is .Int(.I64));
-    let pointByteSchema = getTypeSchema[Point3[u8]];
-    require pointByteSchema is .Struct({ fields }) else crash("");
+    assert(get-type-schema[u8]   is .int(.u8));
+    assert(get-type-schema[u16]  is .int(.u16));
+    assert(get-type-schema[u32]  is .int(.u32));
+    assert(get-type-schema[u64]  is .int(.u64));
+    assert(get-type-schema[i8]   is .int(.i8));
+    assert(get-type-schema[i16]  is .int(.i16));
+    assert(get-type-schema[i32]  is .int(.i32));
+    assert(get-type-schema[i64]  is .int(.i64));
+    let pointByteSchema = get-type-schema[Point3[u8]];
+    require pointByteSchema is .struct({ fields }) else crash("");
     assertEquals(fields.len(), 3);
-    require getTypeSchema[*i32]
-      is .Reference({ mutable: false, innerTypeId })
-      and innerTypeId == typeId[i32] else crash("");
-    assert(getTypeSchema[*mut i32] is .Reference({ mutable: true }));
+    require get-type-schema[*i32]
+      is .reference({ mutable: false, inner-type-id })
+      and inner-type-id == type-id[i32] else crash("");
+    assert(get-type-schema[*mut i32] is .reference({ mutable: true }));
     assertEquals(
-      getTypeSchema[**bool].asReference().!.innerTypeId,
-      typeId[*bool]
+      get-type-schema[**bool].asReference().!.inner-type-id,
+      type-id[*bool]
     );
 
-    assert(getTypeSchema[either Yes] is .Either(_));
+    assert(get-type-schema[either Yes] is .either(_));
 
-    require getTypeSchema[either Yes, No, MaybeSo(string)]
-      is .Either({ variants })
+    require get-type-schema[either Yes, No, MaybeSo(string)]
+      is .either({ variants })
       and variants.len() == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"
-      and variants.get(2).payload is .Some({ typeId, offset })
-      and typeId == typeId[string]
+      and variants.get(2).payload is .some({ type-id, offset })
+      and type-id == type-id[string]
       and offset == 8
       else crash("");
 
-    require getTypeSchema[(either Yes(int).Yes)]
-      is .Int(.I64)
+    require get-type-schema[(either Yes(int).Yes)]
+      is .int(.i64)
       else crash("");
 
-    assert(getTypeSchema[Array[i32, 10]] is .Array(_));
-    require getTypeSchema[Array[string, 5]]
-      is .Array({ elementTypeId, size })
-      and elementTypeId == typeId[string]
-      and size == .Some(5)
+    assert(get-type-schema[array[i32, 10]] is .array(_));
+    require get-type-schema[array[string, 5]]
+      is .array({ element-type-id, size })
+      and element-type-id == type-id[string]
+      and size == .some(5)
       else crash("");
 
-    assertEquals(printStructShape[Point3[u8]], "Struct Point3[u8] {{\n  x: u8\n  y: u8\n  z: u8\n}");
+    assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");
 
-    let isZeroPtr: *\(int) -> bool = isZero.toRef();
-    require getTypeSchema[typeOf(isZeroPtr)]
-      is .FunctionPointer({ functionTypeId }) else crash("");
+    let isZeroPtr: *fn(int) -> bool = isZero.toRef();
+    require get-type-schema[typeOf(isZeroPtr)]
+      is .function-pointer({ function-type-id }) else crash("");
 
-    require typeSchema(functionTypeId)
-      is .Function({ params, returnTypeId }) else crash("");
-    
-    assert(typeSchema(returnTypeId) is .Bool);
+    require type-schema(function-type-id)
+      is .function({ params, return-type-id }) else crash("");
+
+    assert(type-schema(return-type-id) is .bool);
     assertEquals(params.get(0).name, "x");
-    assert(typeSchema(params.get(0).typeId) is .Int(_));
+    assert(type-schema(params.get(0).type-id) is .int(_));
 
     {}
   }

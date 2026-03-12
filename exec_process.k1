@@ -1,0 +1,77 @@
+// wip process execution wrapper for K1  
+// Raw execve-based implementation
+
+#if core/k1/os-posix ns process {
+
+// POSIX system call extern declarations
+extern("fork") fn fork(): i32
+extern("execve") fn execve(path: ptr, argv: ptr, envp: ptr): i32
+extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
+
+// Convert span[string] to null-terminated *char array for execve  
+fn make-argv(context alloc: mem/alloc-mode)(program: string, args: span[string]): list[ptr] {
+    let array-len = 1 + args.len() + 1; // program + args + null terminator
+    let* argv = list/withCapacity[ptr](array-len);
+    
+    // Set program name as argv[0] 
+    argv.push(program.toCString().ptr);
+    
+    // Set arguments
+    for arg in args {
+      argv.push(arg.toCString().ptr);
+    };
+    
+    // Null terminate
+    argv.push(ptr/null);
+    
+    argv
+}
+
+fn run-command(context alloc: mem/alloc-mode)(program: string, args: span[string]): result[i32, {}] {
+    let argv = make-argv(program, args);
+    let envp = ptr/null;
+    
+    let pid = fork();
+    
+    if pid == 0 {
+        // Child process - exec the command
+        execve(argv.first().!, argv.base-ptr(), envp);
+        crash("execve failed; TODO check errno");
+    } else if pid > 0 {
+        // Parent process - wait for child
+        let* status: *mut i32 = 0;
+        waitpid(pid, status, 0);
+        .ok(status.*);
+    } else {
+        // Fork failed
+        .err({})
+    }
+}
+
+} // #if core/k1/os-posix
+
+fn testPosix() {
+    println("Testing process execution...");
+    //let context(impl Alloc) temp = mem/AllocMode.Arena;
+    let context temp = mem/alloc-mode.Arena;
+    
+    // Test 1: Simple echo command
+    let echoStatus = process/run-command(program = "/bin/echo", args = ["hello", "world"]).!;
+    println("Echo exit status: {echoStatus}");
+    
+    // Test 2: List current directory  
+    let lsStatus = process/run-command(program = "/bin/ls", args = []).!;
+    println("Ls exit status: {lsStatus}");
+    
+    // Test 3: Test command that should fail
+    let failStatus = process/run-command(program = "/nonexistent", args = []);
+    println("Nonexistent command isOk(): {failStatus.is-ok()}");
+}
+
+fn main() {
+  #if core/k1/os-posix {
+    testPosix()
+  } else {
+    println("Process execution only supported on POSIX systems")
+  }
+}

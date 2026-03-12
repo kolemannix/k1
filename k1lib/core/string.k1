@@ -2,88 +2,90 @@
 // All rights reserved.
 
 // TODO: CString type
-deftype alias CString = ptr
-ns CString { 
-}
+deftype alias c-string = ptr
 
 ns string {
   
-  fn view(self: string): View[char] { self.view }
+  fn span(self: string): span[char] { self.span }
 
   fn get(self: string, index: size): char {
-    self.view.get(index)
+    self.span.get(index)
   }
 
   fn getOpt(self: string, index: size): ?char {
-    if index >= self.len() .None
-    else .Some(self.get(index))
+    if index >= self.len() .none
+    else .some(self.get(index))
   }
 
-  fn viewBytes(self: string): View[byte] {
-    self.view().asByteView()
+  fn span-bytes(self: string): span[byte] {
+    self.span().as-byte-span()
   }
 
   fn cloned(self: string): string {
-    fromView(self.view.cloned())
+    from-span(self.span.cloned())
   }
 
-  fn fromView(view: View[char]): string {
-    { view }
+  fn from-span(span: span[char]): string {
+    { span }
   }
 
-  fn fromBytes(view: View[byte]): string {
-    { view: view.toCharView() }
+  fn fromRaw(ptr: ptr, len: size): string {
+    from-span(span/from-raw(ptr, len))
   }
 
-  fn wrapList(list: List[char]): string {
-    { view: list.asView() }
+  fn fromBytes(span: span[byte]): string {
+    { span: span.as-char-span() }
   }
 
-  fn wrapBuffer(buffer: Buffer[char]): string {
-    { view: View/wrapBuffer(buffer) }
+  fn wrapList(list: list[char]): string {
+    { span: list.as-span() }
   }
 
-  fn wrapByteBuffer(buffer: Buffer[byte]): string {
-    { view: View/wrapBuffer(buffer.toCharBuffer()) }
+  fn wrapBuffer(buffer: buffer[char]): string {
+    { span: span/wrapBuffer(buffer) }
   }
 
-  fn copyFromBytes(buffer: Buffer[byte]): string {
-    let copied: Buffer[byte] = buffer.cloned();
+  fn wrapByteBuffer(buffer: buffer[byte]): string {
+    { span: span/wrapBuffer(buffer.toCharBuffer()) }
+  }
+
+  fn copyFromBytes(buffer: buffer[byte]): string {
+    let copied: buffer[byte] = buffer.cloned();
     wrapByteBuffer(copied)
   }
 
-  fn copyFromBuffer(buffer: Buffer[char]): string {
+  fn copyFrombuffer(buffer: buffer[char]): string {
     let copied = buffer.cloned();
     wrapBuffer(copied)
   }
 
-  fn len(self: string): size { self.view.len() }
+  fn len(self: string): size { self.span.len() }
 
   fn isEmpty(self: string): bool { self.len() == 0 }
   fn nonEmpty(self: string): bool { self.len() != 0 }
 
   fn first(self: string): ?char {
-    if self.nonEmpty() .Some(self.get(0)) else .None
+    if self.nonEmpty() .some(self.get(0)) else .none
   }
 
   fn last(self: string): ?char {
-    if self.nonEmpty() .Some(self.get(self.len() - 1)) else .None
+    if self.nonEmpty() .some(self.get(self.len() - 1)) else .none
   }
 
   fn indexOf(self: string, c: char): i64 {
-    for self.view {
+    for self.span {
       if it == c return(itIndex)
     };
     -1
   }
 
   fn concat(self: string, other: string): string {
-    fromView(self.view.concat(other.view))
+    from-span(self.span.concat(other.span))
   }
 
-  fn appendCharIn(context alloc: mem/AllocMode)(self: string, c: char): string {
+  fn appendCharIn(context alloc: mem/alloc-mode)(self: string, c: char): string {
     let newLength = self.len() + 1;
-    let newBuffer = self.view.innerBuffer()._enlargedCloneIn(newLength);
+    let newBuffer = self.span.innerBuffer()._enlargedCloneIn(newLength);
     newBuffer.set(self.len(), c);
     wrapBuffer(newBuffer)
   }
@@ -92,8 +94,8 @@ ns string {
     appendCharIn(context .Current)(self, c)
   }
 
-  fn splitByChar(self: string, delim: char): List[string] {
-    let* ranges = List/empty[{ start: size, len: size }]();
+  fn splitByChar(self: string, delim: char): list[string] {
+    let* ranges = list/empty[{ start: size, len: size }]();
     let* r = { start: 0: size, len: 0: size };
 
     for c in self {
@@ -110,37 +112,37 @@ ns string {
       ranges.push(r);
     };
 
-    ranges.map(\range. {
+    ranges.map(fn range. {
       let end = range.start + range.len;
       self.substring(range.start, end)
     })
   }
 
   fn indexOfString(self: string, target: string): ?size {
-    for self.view {
+    for self.span {
       let i = itIndex;
       if i + target.len() >= self.len() {
-        return(.None)
+        return(.none)
       };
       let sub = self.substring(i, i + target.len());
-      if sub == target { return(.Some(i)) };
+      if sub == target { return(.some(i)) };
     };
-    .None
+    .none
   }
 
   fn substring(self: string, start: size, end: size): string {
-    { view: self.view.slice(start, end) }
+    { span: self.span.slice(start, end) }
   }
   fn slice(self: string, start: size, end: size): string {
-    { view: self.view.slice(start, end) }
+    { span: self.span.slice(start, end) }
   }
 
   fn take(self: string, count: size): string { self.substring(0,     count) }
   fn drop(self: string, count: size): string { self.substring(count, self.len()) }
 
-  fn chunks(self: string, size: size): View[string] {
-    let charViews: View[View[char]] = self.view.chunks(size);
-    mem/bitcast[View[View[char]], View[string]](charViews)
+  fn chunks(self: string, size: size): span[string] {
+    let char-spans: span[span[char]] = self.span.chunks(size);
+    mem/bitcast[span[span[char]], span[string]](char-spans)
   }
 
   fn startsWith(self: string, other: string): bool {
@@ -148,58 +150,38 @@ ns string {
   }
 
   fn dataPtr(self: string): ptr {
-    self.view.dataPtr()
+    self.span.dataPtr()
   }
 
-  fn toCString(context alloc: mem/AllocMode)(self: string): { ptr: ptr, len: size } {
+  fn toCString(context alloc: mem/alloc-mode)(self: string): { ptr: ptr, len: size } {
     if self.isEmpty()                  { ptr: "\0".dataPtr(), len: 0 }
-    else if self.last() is .Some('\0') { ptr: self.dataPtr(), len: self.len() - 1 }
+    else if self.last() is .some('\0') { ptr: self.dataPtr(), len: self.len() - 1 }
     else                               { ptr: self.appendCharIn('\0').dataPtr(), len: self.len() }
   }
 
-  fn wrapCString(cString: ptr): string {
-    let i = 0;
-    loop {
-      let c = cString.refAtIndex[char](i);
-      if c.* == '\0' {
-        break();
-      } else {
-        i := i + 1;
-      }
-    };
-    let buffer = Buffer/fromPtrAndCount[char](
-      count = i,
-      pointer = cString
-    );
-    wrapBuffer(buffer)
+  fn wrap-c(cString: ptr): string {
+    let len = libc/strlen(cString);
+    fromRaw(ptr = cString, len = len)
   }
 
-  fn fromCString(cString: ptr): string {
-    let* chars = List/empty[char]();
-    let i = 0;
-    loop {
-      let c = cString.refAtIndex[char](i);
-      if c.* == '\0' {
-        break();
-      } else {
-        chars.push(c);
-        i := i + 1;
-      }
-    };
-    wrapList(chars)
+  fn from-c(cString: ptr): string {
+    let wrapped = wrap-c(cString);
+    let copy = wrapped.cloned();
+    copy
   }
 
+  // TODO(stdlib perf): use snprintf for string to int
   fn toInt(self: string): ?int {
-    if self.isEmpty() { return(.None) };
+    if self.isEmpty() { return(.none) };
 
     let neg = self.get(0) == '-';
     let i = if neg 1 else 0;
     let total = 0;
     while i < self.len() {
-      if self.get(i).toAsciiDigit() is .Some(digit) {
+      if self.get(i).toAsciiDigit() is .some(digit) {
         total := (total * 10) + digit.as[int];
       } else {
-        return(.None);
+        return(.none);
       };
       i := i + 1;
     };
@@ -210,8 +192,8 @@ ns string {
   }
 
   fn capitalizeAscii(self: string): string {
-    if self.first() is .Some(c) and c.isAsciiLower() {
-      let cloneChars: Buffer[char] = self.view.buffer.cloned();
+    if self.first() is .some(c) and c.isAsciiLower() {
+      let cloneChars: buffer[char] = self.span.buffer.cloned();
       cloneChars.set(0, c.toAsciiUpper());
       wrapBuffer(cloneChars)
     } else self
@@ -220,28 +202,28 @@ ns string {
   fn parseBase10(s: string): ?uint {
     let o: uint = 0;
     for c in s {
-      if c.toAsciiDigit() is .Some(digitValue) {
+      if c.toAsciiDigit() is .some(digitValue) {
 
-      } else { return (.None) };
-      if not c.isAsciiDigit() { return(.None) };
+      } else { return (.none) };
+      if not c.isAsciiDigit() { return(.none) };
       // no
       let digitValue: uint = (c.as_u8() - 48).as[uint];
       o := o * 10;
       o := o + digitValue;
     };
-    .Some(o)
+    .some(o)
   }
 
 }
 
-impl Show for string {
+impl show for string {
   fn show(self: string): string { self }
 }
 
-impl Iterable[Item = char, I = BufferIterator[char]] for string {
-  fn iterator(self: string): I { self.view().iterator() }
+impl iterable[item = char, i = BufferIterator[char]] for string {
+  fn iterator(self: string): i { self.span().iterator() }
 }
 
-impl Iterable[Item = char, I = BufferIterator[char]] for *string {
-  fn iterator(self: *string): I { self.*.iterator() }
+impl iterable[item = char, i = BufferIterator[char]] for *string {
+  fn iterator(self: *string): i { self.*.iterator() }
 }

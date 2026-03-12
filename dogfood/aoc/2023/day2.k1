@@ -1,6 +1,6 @@
 deftype Color = either Red, Green, Blue
 
-impl Show for Color {
+impl show for Color {
   fn show(self: Color): string {
     switch self {
       .Red -> "red",
@@ -27,7 +27,7 @@ fn main(): i32 {
     let isGoodGame = true;
     let rounds = for round in line.splitByChar(';') yield {
       let values = round.splitByChar(',');
-      let values: List[{ amount: int, color: Color }] = for value in values yield {
+      let values: list[{ amount: int, color: Color }] = for value in values yield {
         let amountColor = value.splitByChar(' ');
         let amount = amountColor.get(0).toInt() ? crash("Bad amount: ".concat(value));
         let color: Color = switch amountColor.get(1) {

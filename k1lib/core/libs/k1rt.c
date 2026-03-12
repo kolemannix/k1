@@ -8,10 +8,16 @@
 #include <stdint.h>
 
 int _k1_snprintf_f64(char *buf, size_t size, double arg, int32_t places) {
-  return stbsp_snprintf(buf, size, "%.*f", places, arg);
+  if (places == -1)
+    return stbsp_snprintf(buf, size, "%f", arg);
+  else
+    return stbsp_snprintf(buf, size, "%.*f", places, arg);
 }
 int _k1_snprintf_f32(char *buf, size_t size, float arg, int32_t places) {
-  return stbsp_snprintf(buf, size, "%.*f", places, arg);
+  if (places == -1)
+    return stbsp_snprintf(buf, size, "%f", arg);
+  else
+    return stbsp_snprintf(buf, size, "%.*f", places, arg);
 }
 
 #include <execinfo.h> // for backtrace
@@ -26,3 +32,6 @@ void _k1_print_backtrace(int max_count) {
   }
   return;
 }
+
+#define FFC_IMPL
+#include "ffc.h"

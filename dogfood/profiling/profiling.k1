@@ -1,23 +1,5 @@
 // Port of basic block profiler from Casey Muratori's Computer Enhance
 
-#if k1/OS_MACOS ns macos_time {
-  deftype mach_timebase_info_data_t = { numer: u32, denom: u32 }
-
-  extern("mach_absolute_time") fn mach_absolute_time(): u64
-  extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
-
-  let* timebase: *mut mach_timebase_info_data_t = { numer: 0, denom: 0 };
-
-  fn perf_to_nanos(counter: u64): u64 {
-    if (timebase.denom == 0) {
-      mach_timebase_info(timebase);
-    };
-    eprintln("timebase is {timebase.numer} / {timebase.denom}");
-    (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64]);
-  }
-
-}
-
 // Core profiling data structures
 deftype ProfileAnchor = {
     tsc_elapsed_exclusive: u64,   // Does NOT include children
@@ -35,20 +17,18 @@ deftype ProfileBlock = {
 }
 
 // Global profiler state
-let* global_profiler_anchors: *mut Array[ProfileAnchor, 4096] = zeroed();
-let* global_profiler_parent: *mut u32 = 0;
-let* global_profile_start_tsc: *mut u64 = 0;
-let* global_profile_end_tsc: *mut u64 = 0;
+let* global_profiler_anchors: *mut array[ProfileAnchor, 4096] = zeroed()
+let* global_profiler_parent: *mut u32 = 0
+let* global_profile_start_tsc: *mut u64 = 0
+let* global_profile_end_tsc: *mut u64 = 0
 
-fn read_cpu_timer(): u64 {
-  macos_time/mach_absolute_time()
-}
+use std/time/read-cpu-counter
 
 fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let parent_index = global_profiler_parent.*;
     //eprintln("begin {label} with index {anchor_index}");
     //eprintln("  parent: {parent_index}");
-    let anchor = global_profiler_anchors.getRef(anchor_index.as[size]);
+    let anchor = global_profiler_anchors.get-ref(anchor_index.as[size]);
     
     // Initialize anchor on first use
     if anchor.label == "" {
@@ -63,7 +43,7 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
     let old_tsc_elapsed_inclusive = anchor.tsc_elapsed_inclusive;
     
     global_profiler_parent <- anchor_index;
-    let start_tsc = read_cpu_timer();
+    let start_tsc = read-cpu-counter();
     
     {
       label,
@@ -75,11 +55,11 @@ fn begin_profile_block(label: string, anchor_index: u32): ProfileBlock {
 }
 
 fn end_profile_block(block: ProfileBlock) {
-    let elapsed = read_cpu_timer() - block.start_tsc;
+    let elapsed = read-cpu-counter() - block.start_tsc;
     global_profiler_parent <- block.parent_index;
     
-    let parent = global_profiler_anchors.getRef(block.parent_index.as[size]);
-    let anchor = global_profiler_anchors.getRef(block.anchor_index.as[size]);
+    let parent = global_profiler_anchors.get-ref(block.parent_index.as[size]);
+    let anchor = global_profiler_anchors.get-ref(block.anchor_index.as[size]);
     
     parent.tsc_elapsed_exclusive* <- parent.tsc_elapsed_exclusive - elapsed;
     anchor <- {
@@ -104,7 +84,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *ProfileAnchor) {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64) {
-    for anchor in global_profiler_anchors.asBuffer().refIter() {
+    for anchor in global_profiler_anchors.as-buffer().refIter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }
@@ -113,15 +93,15 @@ fn print_anchor_data(total_cpu_elapsed: u64) {
 
 // Begin overall profiling session
 fn begin_profile() {
-    global_profile_start_tsc <- read_cpu_timer()
+    global_profile_start_tsc <- read-cpu-counter()
 }
 
 // End profiling session and print results
 fn end_and_print_profile() {
-    global_profile_end_tsc <- read_cpu_timer();
+    global_profile_end_tsc <- read-cpu-counter();
     let total_tsc_elapsed = global_profile_end_tsc.* - global_profile_start_tsc.*;
     
-    let nanos_elapsed = macos_time/perf_to_nanos(total_tsc_elapsed);
+    let nanos_elapsed = std/time/counter-to-nanos(total_tsc_elapsed);
     let total_time_ms = nanos_elapsed / 1_000_000;
     println("\nTotal time: {total_time_ms}ms");
     
@@ -170,7 +150,7 @@ fn main(): i32 {
   
   let result = 0;
   for IntRange/upTo(10) {
-    result := result + expensive_computation(10_000_000);
+    result := result + expensive_computation(1_000_000);
   };
 
   println("result: {result}");

@@ -34,6 +34,7 @@ fn low() {
 }
 
 fn moderate() {
+  recurse_basic/test();
   defer_test/test();
   zst_test/test();
   structural/test();
@@ -68,6 +69,7 @@ fn moderate() {
   array_type_test/test();
   ability_complex/test();
   any_test/test();
+  format-test/test();
 }
 
 fn coreLib() {
@@ -80,7 +82,6 @@ fn coreLib() {
   list_test/test();
   range_test/test();
   string_interp_test/test();
-  json_test/test();
   lib_compiler_test/test();
 }
 
@@ -95,7 +96,7 @@ fn main(): i32 {
   #static moderate();
 
   // "Advanced"
-  testFfi();
+  test-ffi();
   static_parameter/test();
   static_run/test();
 

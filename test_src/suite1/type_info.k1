@@ -1,26 +1,26 @@
 ns type_info;
 
-use core/types/sizeOf
-use core/types/sizeOfStride
-use core/types/alignOf
-use core/types/typeId
+use core/types/size-of
+use core/types/size-of-stride
+use core/types/align-of
+use core/types/type-id
 
 fn doIt(_foo: bool, _bar: u32): u32 {
   32
 }
 
 fn testSizeOf() {
-  assertEquals(sizeOf[string](), 16);
-  assertEquals(sizeOfStride[string](), 16);
-  assertEquals(alignOf[string](), 8);
-  assertEquals(sizeOf[{ x: u64, c: u8 }](), 9);
-  assertEquals(sizeOfStride[{ x: u64, c: u8 }](), 16);
+  assertEquals(size-of[string](), 16);
+  assertEquals(size-of-stride[string](), 16);
+  assertEquals(align-of[string](), 8);
+  assertEquals(size-of[{ x: u64, c: u8 }](), 9);
+  assertEquals(size-of-stride[{ x: u64, c: u8 }](), 16);
 }
 
 fn testFnTypeInfo() {
-  assertEquals(typeId[doIt.return](), typeId[u32]());
-  assertEquals(typeId[doIt._foo](), typeId[bool]());
-  assertEquals(typeId[doIt._bar](), typeId[doIt.return]());
+  assertEquals(type-id[doIt.return](), type-id[u32]());
+  assertEquals(type-id[doIt._foo](), type-id[bool]());
+  assertEquals(type-id[doIt._bar](), type-id[doIt.return]());
 }
 
 fn test() {

@@ -11,7 +11,7 @@ use crate::kmem::MList;
 use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
-use crate::{failf, mformat};
+use crate::{failf, static_assert_size};
 use crate::{
     kmem::{self, MSlice, MStr},
     lex::SpanId,
@@ -39,6 +39,8 @@ macro_rules! b_ice {
 pub struct BcDebugVariableInfo {
     pub name: Ident,
     pub original_type_id: TypeId,
+    pub user_hidden: bool,
+    pub source_span: SpanId,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -59,6 +61,7 @@ pub struct ProgramBytecode {
     pub exprs: FxHashMap<TypedExprId, CompiledUnit>,
     pub module_config: BcModuleConfig,
     pub calls: VPool<BcCall, BcCallId>,
+    pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
     b_blocks: Vec<Block>,
@@ -78,7 +81,7 @@ pub struct BcModuleConfig {}
 
 impl ProgramBytecode {
     pub fn make(instr_count_hint: usize) -> Self {
-        let function_count_hint = instr_count_hint / 32;
+        let function_count_hint = instr_count_hint / 16;
         ProgramBytecode {
             mem: kmem::Mem::make(),
             instrs: VPool::make_with_hint("bytecode_soa_instrs", instr_count_hint),
@@ -87,6 +90,7 @@ impl ProgramBytecode {
             debug_info: VPool::make_with_hint("bytecode_soa_debug_info", instr_count_hint),
             functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
             calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
+            phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: BcModuleConfig {},
             b_blocks: Vec::with_capacity(256),
@@ -210,7 +214,7 @@ pub enum Value {
     /// `Global` is always a storage location, regardless
     /// of the `k1` global declaration kind (referencing or not!)
     /// This greatly simplifies downstream code
-    Global {
+    GlobalAddr {
         t: PhysicalType,
         id: TypedGlobalId,
     },
@@ -223,6 +227,9 @@ pub enum Value {
         t: PhysicalType,
         index: u32,
     },
+    // FnRetSlot {
+    //     t: PhysicalType,
+    // },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
@@ -499,6 +506,7 @@ pub enum Inst {
         value: Value,
     },
 }
+static_assert_size!(Inst, 32);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IntCmpPred {
@@ -555,14 +563,14 @@ impl std::fmt::Display for FloatCmpPred {
 pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> InstKind {
     match value {
         Value::Inst(inst_id) => get_inst_kind(bc, types, *inst_id),
-        Value::Global { t: _, id: _ } => InstKind::PTR,
+        Value::GlobalAddr { t: _, id: _ } => InstKind::PTR,
         Value::StaticValue { t, id: _ } => InstKind::Value(*t),
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
         Value::Data32 { t: scalar_type, data: _ } => {
-            InstKind::Value(PhysicalType::Scalar(*scalar_type))
+            InstKind::Value(PhysicalType::scalar(*scalar_type))
         }
-        Value::Empty => InstKind::Value(PhysicalType::Empty),
+        Value::Empty => InstKind::Value(PhysicalType::EMPTY),
     }
 }
 
@@ -634,26 +642,26 @@ pub enum InstKind {
 }
 
 impl InstKind {
-    pub const EMPTY: InstKind = Self::Value(PhysicalType::Empty);
+    pub const EMPTY: InstKind = Self::Value(PhysicalType::EMPTY);
     pub const BOOL: InstKind = Self::scalar(ScalarType::U8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
     pub const U64: InstKind = Self::scalar(ScalarType::U64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
-        InstKind::Value(PhysicalType::Scalar(st))
+        InstKind::Value(PhysicalType::scalar(st))
     }
 
     fn is_ptr(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::Pointer)))
+        matches!(self, InstKind::Value(pt) if pt.is_ptr())
     }
     fn is_int(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(st)) if st.is_int())
+        matches!(self, InstKind::Value(pt) if pt.is_int())
     }
-    fn is_byte(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Scalar(ScalarType::U8)))
+    fn is_u8(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.is_u8())
     }
     fn is_aggregate(&self) -> bool {
-        matches!(self, InstKind::Value(PhysicalType::Agg(_)))
+        matches!(self, InstKind::Value(pt) if pt.is_agg())
     }
     fn is_storage(&self) -> bool {
         self.is_ptr() || self.is_aggregate()
@@ -683,9 +691,7 @@ impl InstKind {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
-            InstKind::Value(PhysicalType::Scalar(_)) => "scalar",
-            InstKind::Value(PhysicalType::Agg(_)) => "agg",
-            InstKind::Value(PhysicalType::Empty) => "empty",
+            InstKind::Value(_) => "value",
             InstKind::Void => "void",
             InstKind::Terminator => "terminator",
         }
@@ -701,13 +707,12 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let mut b = Builder::new(k1);
 
     debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
-    let name = b.k1.bytecode.mem.push_str("entry");
-    b.push_block(name);
     let f = b.k1.get_function(function_id);
     let intrinsic_type = f.intrinsic_type;
     let is_debug = f.compiler_debug;
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
+    b.entry_span = fn_span;
 
     // Set up parameters
     let fn_params = f.params;
@@ -741,6 +746,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
+        b.push_block("entry");
         compile_block_stmts(&mut b, None, body_block)?;
     };
 
@@ -764,7 +770,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed;
+    k1.timing.total_bytecode_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -789,8 +795,7 @@ pub fn compile_top_level_expr(
     }
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    let name = b.k1.bytecode.mem.push_str("expr_");
-    b.push_block(name);
+    b.push_block("expr_");
 
     let _result = compile_expr(&mut b, None, expr)?;
     let (return_type, diverges) = b.get_function_return_type(b.k1.exprs.get_type(expr));
@@ -805,10 +810,17 @@ pub fn compile_top_level_expr(
 
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
-    validate_unit(k1, CompilableUnitId::Expr(expr))?;
+    let unit_id = CompilableUnitId::Expr(expr);
+
+    validate_unit(k1, unit_id)?;
+
+    if is_debug {
+        let s = compiled_unit_to_string(k1, unit_id, true);
+        eprintln!("{s}");
+    }
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed;
+    k1.timing.total_bytecode_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -819,8 +831,9 @@ fn finalize_unit(
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
 ) -> CompiledUnit {
-    let compiled_blocks = b.bake_blocks();
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
+    let compiled_blocks = b.bake_blocks();
+    //b.k1.bytecode.mem.print_usage("after bake");
     let unit = CompiledUnit {
         unit_id,
         fn_type,
@@ -854,6 +867,8 @@ pub struct Builder<'k1> {
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
+    // Where we put the hoisted allocas
+    entry_span: SpanId,
 }
 
 impl<'k1> Builder<'k1> {
@@ -866,22 +881,29 @@ impl<'k1> Builder<'k1> {
             last_alloca_index: None,
             cur_block: 0,
             cur_span: SpanId::NONE,
+            entry_span: SpanId::NONE,
         }
     }
 
     fn reset_compilation_unit(&mut self) {
-        for b in &mut self.k1.bytecode.b_blocks {
+        for b in &mut self.k1.bytecode.b_blocks[0..self.block_count as usize] {
             b.instrs.clear();
         }
         self.block_count = 0;
         self.k1.bytecode.b_variables.clear();
+        self.last_alloca_index = None;
+        self.cur_span = SpanId::NONE;
+        self.entry_span = SpanId::NONE;
         self.k1.bytecode.b_loops.clear();
     }
 
     fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
-        let mut blocks = self.k1.bytecode.mem.new_list(self.k1.bytecode.b_blocks.len() as u32);
+        let mut blocks = self.k1.bytecode.mem.new_list(self.block_count);
         for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
             let instrs = self.k1.bytecode.mem.pushn(&b.instrs);
+            if instrs.is_empty() {
+                debug!("baking an empty basic block; wonder where it came from?");
+            }
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
@@ -893,8 +915,18 @@ impl<'k1> Builder<'k1> {
     }
 
     fn make_inst(&mut self, inst: Inst, comment: BcStr, debug_info: BcDebugInfo) -> InstId {
+        let span = self.cur_span;
+        self.make_inst_ext(inst, comment, debug_info, span)
+    }
+    fn make_inst_ext(
+        &mut self,
+        inst: Inst,
+        comment: BcStr,
+        debug_info: BcDebugInfo,
+        span: SpanId,
+    ) -> InstId {
         let id = self.k1.bytecode.instrs.add(inst);
-        self.k1.bytecode.sources.add_expected_id(self.cur_span, id);
+        self.k1.bytecode.sources.add_expected_id(span, id);
         self.k1.bytecode.comments.add_expected_id(comment, id);
         self.k1.bytecode.debug_info.add_expected_id(debug_info, id);
         id
@@ -922,9 +954,15 @@ impl<'k1> Builder<'k1> {
             None => 0,
             Some(i) => i as usize + 1,
         };
-        let inst_id =
-            self.make_inst(Inst::Alloca { t: pt, vm_layout: layout }, comment.into(), debug_info);
+        let alloca_span = self.entry_span;
+        let inst_id = self.make_inst_ext(
+            Inst::Alloca { t: pt, vm_layout: layout },
+            comment.into(),
+            debug_info,
+            alloca_span,
+        );
         self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
+        self.last_alloca_index = Some(index as u32);
         inst_id
     }
 
@@ -1043,17 +1081,20 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: BcStr) -> BlockId {
+    fn push_block(&mut self, name: impl Into<BcStr>) -> BlockId {
         let id = self.block_count;
         // Recycle builder blocks
         match self.k1.bytecode.b_blocks.get_mut(self.block_count as usize) {
             Some(recycled) => {
                 self.block_count += 1;
-                recycled.name = name;
+                recycled.name = name.into();
             }
             None => {
                 self.block_count += 1;
-                self.k1.bytecode.b_blocks.push(Block { name, instrs: Vec::with_capacity(256) });
+                self.k1
+                    .bytecode
+                    .b_blocks
+                    .push(Block { name: name.into(), instrs: Vec::with_capacity(256) });
             }
         }
 
@@ -1073,7 +1114,7 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
-        self.k1.types.get_physical_type(type_id).unwrap_or_else(|| {
+        self.k1.get_physical_type(type_id).unwrap_or_else(|| {
             b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string_ext(type_id, true))
         })
     }
@@ -1088,6 +1129,9 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
+        if let Some(pt) = self.k1.bytecode.phys_fn_type_cache.get(&type_id) {
+            return *pt;
+        }
         let function_type = *self.k1.types.get(type_id).expect_function();
         let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
         for (index, param) in
@@ -1106,12 +1150,14 @@ impl<'k1> Builder<'k1> {
             return_type,
             abi_mode: function_type.abi_mode,
         };
+
+        self.k1.bytecode.phys_fn_type_cache.insert(type_id, fn_ty);
         fn_ty
     }
 
     fn get_function_return_type(&mut self, type_id: TypeId) -> (PhysicalType, bool) {
         if type_id == NEVER_TYPE_ID {
-            (PhysicalType::Empty, true)
+            (PhysicalType::EMPTY, true)
         } else {
             let t = self.get_physical_type(type_id);
             (t, false)
@@ -1190,12 +1236,13 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             //task(bc): If variable is never re-assigned, and does not require memory
             //          we could avoid the alloca and use an immediate. Its unclear to me
             //          if this is a good idea
-            let var_name = b.k1.variables.get(let_stmt.variable_id).name;
-            let comment = b.k1.bytecode.mem.push_str("let");
+            let var = b.k1.variables.get(let_stmt.variable_id);
             let debug_info = BcDebugInfo {
                 variable_info: Some(BcDebugVariableInfo {
-                    name: var_name,
+                    name: var.name,
                     original_type_id: let_stmt.variable_type,
+                    user_hidden: var.user_hidden(),
+                    source_span: b.cur_span,
                 }),
             };
 
@@ -1211,7 +1258,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 });
                 Ok(Value::Empty)
             } else {
-                let variable_alloca = b.push_alloca_ext(var_pt, comment, debug_info);
+                let variable_alloca = b.push_alloca_ext(var_pt, "source let", debug_info);
                 // value_ptr means a pointer matching the type of the rhs
                 // For a referencing let, the original alloca a ptr
                 // So we need one for the inner type as well
@@ -1273,10 +1320,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
         }
         TypedStmt::Require(req) => {
             let req = req.clone();
-            let continue_name = mformat!(b.k1.bytecode.mem, "req_cont_{}", stmt.as_u32());
-            let require_continue_block = b.push_block(continue_name);
-            let else_name = mformat!(b.k1.bytecode.mem, "req_else_{}", stmt.as_u32());
-            let require_else_block = b.push_block(else_name);
+            let require_continue_block = b.push_block("require_continue");
+            let require_else_block = b.push_block("require_else");
 
             compile_matching_condition(
                 b,
@@ -1373,13 +1418,20 @@ fn compile_expr(
                 None => b.push_alloca(struct_pt, "struct literal").as_value(),
             };
             for (field_index, field) in b.k1.mem.getn(struct_literal.fields).iter().enumerate() {
-                let struct_offset = b.push_struct_offset(
-                    struct_agg_id,
-                    struct_base,
-                    field_index as u32,
-                    "struct lit field ptr",
-                );
-                compile_expr(b, Some(struct_offset), field.expr)?;
+                match field.expr {
+                    None => {
+                        // uninitialized field
+                    }
+                    Some(expr) => {
+                        let struct_offset = b.push_struct_offset(
+                            struct_agg_id,
+                            struct_base,
+                            field_index as u32,
+                            "struct lit field ptr",
+                        );
+                        compile_expr(b, Some(struct_offset), expr)?;
+                    }
+                }
             }
             Ok(struct_base)
         }
@@ -1441,16 +1493,16 @@ fn compile_expr(
                         Some(r) => r.inner_type,
                     };
                     let value_pt = b.get_physical_type(value_type);
-                    let address = Value::Global { t: value_pt, id: global_id };
-                    match value_pt {
-                        PhysicalType::Empty => {
+                    let address = Value::GlobalAddr { t: value_pt, id: global_id };
+                    match value_pt.to_enum() {
+                        PhysicalTypeEnum::Empty => {
                             if is_reference {
                                 Ok(Value::PTR_ZERO)
                             } else {
                                 Ok(Value::Empty)
                             }
                         }
-                        PhysicalType::Scalar(_) => {
+                        PhysicalTypeEnum::Scalar(_) => {
                             // We have a scalar type, but do we have a pointer to it or just
                             // a value?
                             if is_reference {
@@ -1470,7 +1522,7 @@ fn compile_expr(
                                 Ok(stored)
                             }
                         }
-                        PhysicalType::Agg(_) => {
+                        PhysicalTypeEnum::Agg(_) => {
                             if is_reference {
                                 let stored = store_scalar_if_dst(b, dst, address);
                                 Ok(stored)
@@ -1541,7 +1593,6 @@ fn compile_expr(
             let function_type_id = b.k1.get_callee_function_type(&call.callee);
             let phys_fn_type = b.get_physical_fn_type(function_type_id);
 
-            let mut args = b.k1.bytecode.mem.new_list(call.args.len() as u32 + 1);
             let maybe_function_id = call.callee.maybe_function_id();
             let (intrinsic_op, linkage) = match maybe_function_id {
                 None => (None, None),
@@ -1550,7 +1601,7 @@ fn compile_expr(
                     (f.intrinsic_type, Some(f.linkage))
                 }
             };
-            let callee = match (intrinsic_op, linkage) {
+            let (callee, first_arg) = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
                     let backend_builtin = match intrinsic_handler(intrinsic) {
                         BuiltinHandler::BcBakeStaticValue => {
@@ -1578,9 +1629,10 @@ fn compile_expr(
                         BuiltinHandler::BcZeroed => {
                             return {
                                 let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
-                                match b.get_physical_type(type_id) {
-                                    PhysicalType::Empty => Ok(Value::Empty),
-                                    pt @ PhysicalType::Agg(agg_id) => {
+                                let pt = b.get_physical_type(type_id);
+                                match pt.to_enum() {
+                                    PhysicalTypeEnum::Empty => Ok(Value::Empty),
+                                    PhysicalTypeEnum::Agg(agg_id) => {
                                         let pt_layout = b.k1.types.agg_types.get(agg_id).layout;
                                         let dst = match dst {
                                             None => b.push_alloca(pt, "zeroed no dst").as_value(),
@@ -1602,7 +1654,7 @@ fn compile_expr(
                                         };
                                         let memset_call = BcCall {
                                             dst: None,
-                                            ret_type: PhysicalType::Empty,
+                                            ret_type: PhysicalType::EMPTY,
                                             callee: BcCallee::Builtin(
                                                 memset_function_id,
                                                 BackendBuiltin::MemSet,
@@ -1613,7 +1665,7 @@ fn compile_expr(
                                         b.push_inst(Inst::Call { id: call_id }, "zeroed memset");
                                         Ok(dst)
                                     }
-                                    PhysicalType::Scalar(st) => {
+                                    PhysicalTypeEnum::Scalar(st) => {
                                         let zero_value = zero(st);
                                         let stored = store_scalar_if_dst(b, dst, zero_value);
                                         Ok(stored)
@@ -1651,14 +1703,14 @@ fn compile_expr(
 
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let from_value = compile_expr(b, None, arg0)?;
-                                match (from_pt, to_pt) {
-                                    (PhysicalType::Empty, _) | (_, PhysicalType::Empty) => {
+                                match (from_pt.to_enum(), to_pt.to_enum()) {
+                                    (PhysicalTypeEnum::Empty, _) | (_, PhysicalTypeEnum::Empty) => {
                                         return failf!(
                                             b.cur_span,
                                             "Cannot bitcast to or from empty type"
                                         );
                                     }
-                                    (PhysicalType::Scalar(_), PhysicalType::Scalar(_)) => {
+                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Scalar(_)) => {
                                         // Note that this also covers Pointer to Pointer
                                         let bitcast = b.push_inst_anon(Inst::BitCast {
                                             v: from_value,
@@ -1673,7 +1725,7 @@ fn compile_expr(
                                         );
                                         Ok(stored)
                                     }
-                                    (PhysicalType::Scalar(_), PhysicalType::Agg(_)) => {
+                                    (PhysicalTypeEnum::Scalar(_), PhysicalTypeEnum::Agg(_)) => {
                                         // We need a place, so its alloca time
                                         let locn = match dst {
                                             Some(dst) => dst,
@@ -1690,7 +1742,7 @@ fn compile_expr(
                                         );
                                         Ok(locn)
                                     }
-                                    (PhysicalType::Agg(_), PhysicalType::Scalar(_)) => {
+                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
                                         // Perform a 'load' of the scalar type _from_ the
                                         // aggregate's memory
                                         let loaded = load_or_copy(
@@ -1703,7 +1755,7 @@ fn compile_expr(
                                         );
                                         Ok(loaded)
                                     }
-                                    (PhysicalType::Agg(_), PhysicalType::Agg(_)) => {
+                                    (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Agg(_)) => {
                                         // Make a copy to a definitely-aligned destination.
                                         let locn = match dst {
                                             Some(dst) => dst,
@@ -1776,7 +1828,7 @@ fn compile_expr(
                     let Some(function_id) = maybe_function_id else {
                         b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
                     };
-                    BcCallee::Builtin(function_id, backend_builtin)
+                    (BcCallee::Builtin(function_id, backend_builtin), None)
                 }
                 (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
@@ -1784,10 +1836,10 @@ fn compile_expr(
                         None => b.k1.get_function(function_id).name,
                         Some(fn_name) => fn_name,
                     };
-                    BcCallee::Extern(lib_name, fn_name, function_id)
+                    (BcCallee::Extern(lib_name, fn_name, function_id), None)
                 }
                 _ => match &call.callee {
-                    Callee::StaticFunction(function_id) => BcCallee::Direct(*function_id),
+                    Callee::StaticFunction(function_id) => (BcCallee::Direct(*function_id), None),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
@@ -1798,8 +1850,7 @@ fn compile_expr(
                         // no stack-volatile things!
                         let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
-                        args.push(env_ptr);
-                        BcCallee::Direct(*function_id)
+                        (BcCallee::Direct(*function_id), Some(env_ptr))
                     }
                     Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
                     Callee::DynamicLambda(dl) => {
@@ -1822,12 +1873,11 @@ fn compile_expr(
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
-                        args.push(env);
-                        BcCallee::Indirect(phys_fn_type, fn_ptr)
+                        (BcCallee::Indirect(phys_fn_type, fn_ptr), Some(env))
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        BcCallee::Indirect(phys_fn_type, callee_inst)
+                        (BcCallee::Indirect(phys_fn_type, callee_inst), None)
                     }
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "bc abstract call");
@@ -1856,6 +1906,12 @@ fn compile_expr(
                 }
             }
 
+            let mut args =
+                b.k1.bytecode.mem.new_list(call.args.len() + first_arg.iter().count() as u32);
+            if let Some(first_arg) = first_arg {
+                args.push(first_arg)
+            }
+
             for (index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
                 // In case this has a side-effect and produces an Empty value, we still need to
                 // compile this expression!
@@ -1876,15 +1932,15 @@ fn compile_expr(
             debug_assert_eq!(phys_fn_type.params.len(), args.len() as u32);
             let call_dst = match dst {
                 Some(dst) => Some(dst),
-                None => match phys_fn_type.return_type {
-                    PhysicalType::Agg(_) => {
+                None => match phys_fn_type.return_type.to_enum() {
+                    PhysicalTypeEnum::Agg(_) => {
                         let return_agg_dst = b
                             .push_alloca(phys_fn_type.return_type, "call return agg storage")
                             .as_value();
                         Some(return_agg_dst)
                     }
-                    PhysicalType::Scalar(_) => None,
-                    PhysicalType::Empty => None,
+                    PhysicalTypeEnum::Scalar(_) => None,
+                    PhysicalTypeEnum::Empty => None,
                 },
             };
             let args_handle = b.k1.bytecode.mem.list_to_handle(args);
@@ -1915,25 +1971,20 @@ fn compile_expr(
             }
 
             let mut arm_blocks = b.k1.bytecode.mem.new_list(match_expr.arms.len());
-            for (arm_index, _arm) in b.k1.mem.getn(match_expr.arms).iter().enumerate() {
-                let name = mformat!(b.k1.bytecode.mem, "arm_{}_cond__{}", arm_index, expr.as_u32());
-                let name_cons =
-                    mformat!(b.k1.bytecode.mem, "arm_{}_cons__{}", arm_index, expr.as_u32());
-                let arm_block = b.push_block(name);
-                let arm_consequent_block = b.push_block(name_cons);
+            for _arm in b.k1.mem.getn(match_expr.arms).iter() {
+                let arm_block = b.push_block("arm_cond");
+                let arm_consequent_block = b.push_block("arm_cons");
                 arm_blocks.push((arm_block, arm_consequent_block));
             }
 
             let first_arm_block = arm_blocks[0].0;
             b.push_jump(first_arm_block, "enter match");
 
-            let fail_name = mformat!(b.k1.bytecode.mem, "match_fail__{}", expr.as_u32());
-            let fail_block = b.push_block(fail_name);
+            let fail_block = b.push_block("match_fail");
             b.goto_block(fail_block);
             b.push_inst_anon(Inst::Unreachable);
 
-            let end_name = mformat!(b.k1.bytecode.mem, "match_end__{}", expr.as_u32());
-            let match_end_block = b.push_block(end_name);
+            let match_end_block = b.push_block("match_end");
             b.goto_block(match_end_block);
             let result_inst_kind = b.type_to_inst_kind(match_result_type);
             let (result_came_from, is_empty) = match result_inst_kind {
@@ -2014,12 +2065,9 @@ fn compile_expr(
             }
         }
         TypedExpr::WhileLoop(w) => {
-            let cond_name = mformat!(b.k1.bytecode.mem, "while_cond__{}", expr.as_u32());
-            let cond_block = b.push_block(cond_name);
-            let body_name = mformat!(b.k1.bytecode.mem, "while_body__{}", expr.as_u32());
-            let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.k1.bytecode.mem, "while_end__{}", expr.as_u32());
-            let end_block = b.push_block(end_name);
+            let cond_block = b.push_block("while_loop_condition");
+            let loop_body_block = b.push_block("while_loop_body");
+            let end_block = b.push_block("while_loop_end");
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
             b.k1.bytecode.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
@@ -2039,12 +2087,8 @@ fn compile_expr(
             Ok(Value::Empty)
         }
         TypedExpr::LoopExpr(loop_expr) => {
-            // let start_block = self.builder.get_insert_block().unwrap();
-            // let current_fn = start_block.get_parent().unwrap();
-            let body_name = mformat!(b.k1.bytecode.mem, "loop_body__{}", expr.as_u32());
-            let loop_body_block = b.push_block(body_name);
-            let end_name = mformat!(b.k1.bytecode.mem, "loop_end__{}", expr.as_u32());
-            let loop_end_block = b.push_block(end_name);
+            let loop_body_block = b.push_block("loop_body");
+            let loop_end_block = b.push_block("loop_end");
 
             let break_pt_id = b.get_physical_type(expr_type);
 
@@ -2153,8 +2197,8 @@ fn compile_expr(
                     base_t.expect_reference().inner_type
                 }
             };
-            let enum_agg = b.k1.types.get_agg_for_type(enum_type_id);
-            let enum_pt = enum_agg.agg_type.expect_enum();
+            let enum_agg_id = b.k1.get_physical_type(enum_type_id).unwrap().expect_agg();
+            let enum_pt = b.k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
             let variants = enum_pt.variants;
             let enum_struct_repr = enum_pt.struct_repr;
             let payload_offset =
@@ -2189,12 +2233,31 @@ fn compile_expr(
         }
         TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
         TypedExpr::Return(typed_return) => {
+            // Call retslot / RVO plan
+            // - Currently return is weird for big types, we return an alloca.
+            // But, we don't look at the inst_kind, and thus dont wrongly return a pointer
+            // The VM and llvm backends look at the function return type and do
+            // the right thing. In VM, we actually have a ret slot on the caller frame
+            // and we store there, and in llvm, we treat 'ret i<myagg>' as a store to sret
+            //
+            // So lets say we add 'retslot' as a function param here in bc
+            // It gets declared on the signature like a param so callers have to provide it
+            // either via fresh alloca or use the dst we have (the optimization case).
+            // Return here in bc actually stores to it, if it exists, or generates straight
+            // into it. We put metadata on this param so LLVM knows its an sret
+            // We remove a ton of complexity from the LLVM backend
+
+            // let ret_pt = b.get_physical_type(expr_type);
+            // match ret_pt.is_agg() {
+
+            // }
             let inst = compile_expr(b, None, typed_return.value)?;
             let ret = b.push_inst(Inst::Ret(inst), "");
             Ok(ret.as_value())
         }
         TypedExpr::Lambda(lam_expr) => {
-            let l = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let lambda_type_id = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
+            let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
             b.k1.bytecode.b_units_pending_compile.push(function_id);
@@ -2342,7 +2405,7 @@ fn compile_cast(
             let to = to_pt.expect_scalar();
             let bitcast = b.push_inst_anon(Inst::BitCast {
                 v: base,
-                to: PhysicalType::Scalar(ScalarType::U8),
+                to: PhysicalType::scalar(ScalarType::U8),
             });
             let extend = b.push_inst(Inst::IntExtU { v: bitcast.as_value(), to }, "bool_to_int");
             let stored = store_scalar_if_dst(b, dst, extend.as_value());
@@ -2390,11 +2453,12 @@ fn compile_cast(
             Ok(stored)
         }
         CastType::LambdaToLambdaObject => {
-            let lambda_type = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+            let lambda_type_id = b.k1.get_expr_type(c.base_expr).as_lambda().unwrap();
+            let lambda_type = b.k1.types.lambda_types.get(lambda_type_id);
             let lambda_function_id = lambda_type.function_id;
 
             let lambda_env_type = b.get_physical_type(lambda_type.env_type);
-            // It seems that representing the environment of lambda objects as a pointer
+            // Representing the environment of lambda objects as a pointer
             // is problematic since the lambda object will only be 'good' as long as that pointer
             // is 'good', and currently we use stack space for it. But it could be that the
             // environment itself is very stable, for example 2 integers and a pointer to the heap.
@@ -2538,8 +2602,8 @@ fn load_value(
     make_copy: bool,
     comment: impl Into<BcStr>,
 ) -> Value {
-    match pt {
-        PhysicalType::Agg(_) => {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Agg(_) => {
             if make_copy {
                 let comment = comment.into();
                 let dst = b.push_alloca(pt, comment);
@@ -2549,8 +2613,8 @@ fn load_value(
                 src
             }
         }
-        PhysicalType::Scalar(st) => b.push_load(st, src, comment).as_value(),
-        PhysicalType::Empty => Value::Empty,
+        PhysicalTypeEnum::Scalar(st) => b.push_load(st, src, comment).as_value(),
+        PhysicalTypeEnum::Empty => Value::Empty,
     }
 }
 
@@ -2561,19 +2625,19 @@ fn store_value(
     value: Value,
     comment: impl Into<BcStr>,
 ) -> Option<InstId> {
-    match pt {
-        PhysicalType::Agg(_) => {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Agg(_) => {
             // Rename to `src` shows that, since we have an aggregate, `value` is a location.
             let src = value;
             let copy_inst = b.push_copy(dst, src, pt, comment);
             debug_assert!(copy_inst.is_some(), "We know its not the Empty type");
             copy_inst
         }
-        PhysicalType::Scalar(_) => {
+        PhysicalTypeEnum::Scalar(_) => {
             let store_inst = b.push_store(dst, value, comment);
             Some(store_inst)
         }
-        PhysicalType::Empty => None,
+        PhysicalTypeEnum::Empty => None,
     }
 }
 
@@ -2605,15 +2669,14 @@ fn compile_matching_condition(
         b.push_jump(cons_block, "empty condition");
         return Ok(());
     }
-    for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
+    for inst in b.k1.mem.getn(mc.instrs).iter() {
         match inst {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_name = mformat!(b.k1.bytecode.mem, "mc_cont__{}", index + 1);
-                let continue_block = b.push_block(continue_name);
+                let continue_block = b.push_block("matching_cond_continue");
                 b.push_jump_if(
                     cond_value,
                     continue_block,
@@ -2751,7 +2814,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
                 }
                 Inst::BoolNegate { v } => {
                     let inst_type = get_value_kind(bc, &k1.types, v);
-                    if !inst_type.is_byte() {
+                    if !inst_type.is_u8() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
@@ -2984,10 +3047,13 @@ pub fn display_block(
     writeln!(w)?;
     for inst_id in bc.mem.getn(block.instrs).iter() {
         if show_source {
-            let span_id = bc.sources.get(*inst_id);
-            let lines = k1.ast.get_span_content(*span_id);
+            let span_id = *bc.sources.get(*inst_id);
+            let lines = k1.ast.get_span_content(span_id);
+            let the_span = k1.ast.spans.get(span_id);
+            let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
-            write!(w, "|  {first_line:80}|")?;
+            let column = the_span.start + 1 - line.start_char;
+            write!(w, "|  {first_line:80}| L{}:{} |", line.line_number(), column)?;
         }
 
         write!(w, " i{:3} = ", *inst_id)?;
@@ -3039,7 +3105,7 @@ pub fn display_inst(
         }
         Inst::StructOffset { struct_t, base, field_index, vm_offset } => {
             write!(w, "struct_offset ")?;
-            k1.types.display_pt(w, PhysicalType::Agg(struct_t))?;
+            k1.types.display_pt(w, PhysicalType::agg(struct_t))?;
             write!(w, ".{}, {} ({})", field_index, base, vm_offset)?;
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
@@ -3107,7 +3173,9 @@ pub fn display_inst(
             write!(w, "]")?;
         }
         Inst::Ret(value) => {
-            write!(w, "ret {}", value)?;
+            write!(w, "ret ")?;
+            display_inst_kind(w, &k1.types, get_value_kind(bc, &k1.types, &value))?;
+            write!(w, " {}", value)?;
         }
         Inst::BoolNegate { v } => {
             write!(w, "bool not {}", v)?;
@@ -3305,7 +3373,7 @@ impl std::fmt::Display for Value {
 pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
     match value {
         Value::Inst(inst_id) => write!(w, "i{}", inst_id.as_u32()),
-        Value::Global { id, .. } => write!(w, "g{}", id.as_u32()),
+        Value::GlobalAddr { id, .. } => write!(w, "g{}", id.as_u32()),
         Value::StaticValue { id, .. } => write!(w, "static{}", id.as_u32()),
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),

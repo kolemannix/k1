@@ -13,7 +13,7 @@ mod stack_tests {
         CompiledUnit {
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
             fn_type: bc::PhysicalFunctionType {
-                return_type: PhysicalType::Empty,
+                return_type: PhysicalType::EMPTY,
                 diverges: false,
                 params: MSlice::empty(),
                 abi_mode: AbiMode::Internal,
@@ -28,7 +28,7 @@ mod stack_tests {
 
     fn fake_ret_info() -> RetInfo {
         RetInfo {
-            pt: PhysicalType::Scalar(ScalarType::U32),
+            pt: PhysicalType::scalar(ScalarType::U32),
             place: RetPlace::ScalarCallInst { frame_index: 0, inst_index: 0 },
             ip: 0,
             block: 0,

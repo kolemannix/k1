@@ -137,13 +137,13 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
                 }
                 TestExpectation::AbortErrorMessage { .. } => {
                     let mut buf = Vec::new();
-                    module.write_error(&mut buf, err).unwrap();
+                    module.write_error(&mut buf, err, true).unwrap();
                     let s = String::from_utf8_lossy(&buf);
                     bail!("{filename}\n\tExpected: abort\n\tgot    : compile error '{}'", s)
                 }
                 TestExpectation::ExitCode { code: expected_code, .. } => {
                     let mut buf = Vec::new();
-                    module.write_error(&mut buf, err).unwrap();
+                    module.write_error(&mut buf, err, true).unwrap();
                     let s = String::from_utf8_lossy(&buf);
                     bail!(
                         "{filename}\n\tExpected: exit code {}\n\tgot     : compile error: {}",

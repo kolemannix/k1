@@ -7,7 +7,7 @@ use log::debug;
 use crate::bc::{self, ProgramBytecode};
 use crate::errf;
 use crate::lex::SpanId;
-use crate::typer::types::{AggType, Layout, PhysicalType, ScalarType};
+use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
 use crate::typer::{FunctionId, TypedProgram, TyperResult};
 use crate::vm;
 use crate::vm::{Value, Vm};
@@ -176,10 +176,10 @@ fn pt_to_ffi_type(
     k1: &mut TypedProgram,
     pt: PhysicalType,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
-    match pt {
-        PhysicalType::Empty => Ok(unsafe { types::void }),
-        PhysicalType::Scalar(st) => Ok(scalar_to_ffi_type(st)),
-        PhysicalType::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
+    match pt.to_enum() {
+        PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
+        PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
+        PhysicalTypeEnum::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
             AggType::Enum(_e) => {
                 let (tag_field, payload_field) = k1.types.get_enum_struct_layout(agg_id);
                 let count = if payload_field.is_some() { 2 } else { 1 };

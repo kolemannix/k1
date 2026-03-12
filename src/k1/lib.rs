@@ -8,6 +8,7 @@ pub mod codegen_llvm;
 pub mod compiler;
 mod fixmap;
 mod kmem;
+mod clock;
 pub mod lex;
 pub mod parse;
 mod pool;

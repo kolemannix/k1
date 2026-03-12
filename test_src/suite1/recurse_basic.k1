@@ -1,0 +1,35 @@
+ns recurse_basic {
+  deftype Node = { node: *Node }
+  deftype ENode = either Leaf, Node(*ENode)
+
+  fn make(n: size): *Node {
+    //println("make {n}");
+    if n <= 0 ptr/null.r[Node] else mem/new({ node: make(n - 1) })
+   }
+
+  fn count(n: *Node): size {
+    //println("count");
+    if n.as[ptr].is-null() 0 else 1 + count(n.node)
+  }
+
+  fn emake(n: size): ENode {
+    //println("emake {n}");
+    if n == 0 .Leaf else .Node(mem/new(emake(n - 1)))
+  }
+
+  fn ecount(en: ENode): size {
+    //println("ecount");
+    switch en {
+      .Leaf -> 0,
+      .Node(child) -> 1 + ecount(child.*)
+    }
+  }
+
+  fn test() {
+    let node = make(4);
+    assertEquals(count(node), 4);
+    let enode = emake(10);
+    assertEquals(ecount(enode), 10);
+  }
+
+}

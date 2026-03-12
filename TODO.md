@@ -1,18 +1,10 @@
 "C with typeclasses and tagged unions"
 
 GOOD IDEAS 11/13
-Put lambda environments in the arena
-Implement inlining in typer or bc
-AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem)
-- let context(impl Alloc) temp = mem/AllocMode.Arena;
-- let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+- When converting a lambda to a dyn lambda, put its environments in the current allocator instead of on the stack
 - language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [X] Specialization solution (when types are known by the function)
-      A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
-A let* that goes to the heap, mark/reset on function return. (function arenas)
-Support ".c" sources; compiles your c and adds it to the main compilation unit
-- definitions #c "void foo() { }"
-- #cfile "asm.c"
+-     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -22,20 +14,29 @@ More optimal final programs
 
 Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
-- [ ] userland: CCompatString which is a valid c string with prefixed length
+- [ ] userland: CCompatString which is a valid c string with length in front of the allocation (ill call it antirez strings)
 - [ ] User-defined implicit conversions: based on a special ability that integrates with 
       type inference? (like Mojo's ImplicitlyIntable, etc): ImplicitAs?
-- [ ] [design/flags_in_tags.md]
-- [ ] Support "base-2-shifted" enum tags, allowing for set-like logic on variants:
-      if tags go 1,2,4,8, then we can make a mask for, 1 and 4, instead of matching or writing predicate functions (See Andrew Reece; BSC 2025; Assuming as much as possible)
-      either(u32, set|tagset|bitfield)? Gives you a few 'free (jumpless)' predicates per enum!
-  - [ ] First-class data-oriented design features for struct/enum setups?
-      base2 tags, ["encoding approach"](https://www.youtube.com/watch?v=IroPQ150F6c),
+- [ ] [design/flags_in_tags.k1]
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
+- [x] Incorporate ffc.h for int and float parsing
+- [ ] Inspired by fast_float, char to digit lookup table
 
 Syntax/elegance
+- [x] replace `\` with 'fn' for lambda notation, one more character and we
+      can be similarly elegant, `\x.x` becomes `fn x.x`
+- [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
+- [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [x] Rename `view` to `span`
+- [x] Rename 'static' types to 'static value' types
+- [x] Need a way to write an interpolated string to a Writer that you already have
+      Let's just call it 'fmt' and make it a special construct
+- [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
+  - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
+- [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
+  - Allow users to capitalize domain types, but types like List/Opt/Buffer/Result should sink into the background
 - [x] Replace the builtin for ... yield with a userspace function taking a lambda
 - [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
       to produce a very strong name for this concept
@@ -43,36 +44,55 @@ Syntax/elegance
   - [x] Ok now I'm really thinking about `size` and it being signed.
   - [x] Also: do safe integer coercions automatically
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
-- [x] Need a syntax that takes an interpolated string but writes it to a Writer that you already have
- - [ ] Also need positional format args as well (probably just our userland printf finished out)
 
 Simple but missing
-- [ ] Decide if overflow traps or not (in debug and release, if those are even different)
-- [ ] Get an addr2line implementation linked in for better backtraces, likely (https://github.com/gimli-rs/addr2line)
-- [x] Support ability constraints on generics
-- [ ] Support explicit type args in AnonEnumConstructor syntax 
-- [ ] implement iterator for Array
-- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`
-
+- [ ] decide if overflow traps or not (in debug and release, if those are even different)
+- [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
+- [x] support ability constraints on generics
+- [ ] support explicit type args in AnonEnumConstructor syntax 
+- [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
+      currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
+- [ ] implement iterator for array
 
 # Bugs
-- [ ] Defect: RecursiveReference approach to recursive types seems bad
+- [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work
 - [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
+
+## [ ] Writergate
+- [x] Allow using expr-interpolated strings directly into a writer
+- [x] Allow for named non-interpolated args into holes with a struct
+- [ ] Implement at least one format specifier (precision, pretty)
+
+- [ ] Return value binding, or named return values, for guaranteed RVO
+- [x] Uninit in struct fields - just don't store there
+
+## [ ] Context ability types
+- [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
+  - let context(impl Alloc) temp = mem/AllocMode.Arena;
+  - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
+
+## [ ] Distribute builds that work
+- [ ] Test on linux
+- [ ] Link in lld? ugh. For now maybe just ship with it
+- [ ] 
 
 ## Project: Optimize the bytecode a bit
 - [ ] Function inlining
 - [ ] Prune unreachable blocks
 
 ## Project: di. Debug Info tidyups
-- [ ] Fix random jumping to function header
+- [x] Fix random jumping to function header
 - [ ] Annotate U8s with boolean somehow where they are actually booleans
 
 ## Project: Recursive types take 2
+- [x] Remove RecursiveReference; make visitors detect cycles
+- [x] add test with co-recursion and infinite recursion
+- [ ] Support deeper pattern matching on recursive types
 
 ## VM Profiler: Instrument the vm itself
 
@@ -85,7 +105,7 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
 - [ ] Rename `Enum` -> `Sum` or `DUnion` in the code
-- [ ] Think about optimizing no-payload enums into non-aggregates, but at the typer level.
+- [ ] Optimize no-payload enums into non-aggregates, at the typer level.
 
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
@@ -95,6 +115,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
 - [-] Real layouts, in a mem pool, to save roundtripping and increase locality
         -> Kinda done, we now re-use the values in a global 'static stack'
+- [ ] We'll want to skip the id-based repr entirely for heavy heavy static data I think
 
 ## Project: Arena-based core, builtins, stdlib 
 - [x] Thread-local globals
@@ -119,7 +140,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Zero-Sized Types
 - [x] Treat Unit and empty Struct as ZSTs
 - [x] Compile ZSTs to missing arguments, and LLVM void returns, and no-ops inside other types
-- [ ] Treat statics as ZSTs
+- [x] Treat statics as ZSTs
 - [ ] Think about `never` in either variants: Is it a ZST? Does it make the variant unreachable? Result[T, never]
 
 ## Project: system interface, 'Write' ability and intrinsic fix.

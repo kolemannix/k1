@@ -1,6 +1,6 @@
 ns arith;
 
-let z: int = 1337;
+let z: int = 1337
 
 fn add_stuff(x: int, y: int): int {
   let b: int = x + 1;

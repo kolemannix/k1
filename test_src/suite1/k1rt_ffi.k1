@@ -1,12 +1,12 @@
-fn testFfi() {
+fn test-ffi() {
   let s: string = #static {
-    let* buf = Array/zeroed[char, 1024]();
-    let len: core/c_int = core/k1rt/snprintf_f64(
-      buf.basePtr(), 1024, 3.14, places = 3
+    let* stack-buf = array/zeroed[char, 1024]();
+    let len: core/c-int = core/k1rt/snprintf_f64(
+      stack-buf.base-ptr(), 1024, 3.14, places = 3
     );
     if len < 0 crash("");
-    let chars = buf.asView().slice(0, len.as[size]);
-    string/fromView(chars)
+    let chars = stack-buf.as-span().slice(0, len.as[size]);
+    string/from-span(chars)
   };
   assertEquals(s, "3.140")
 }

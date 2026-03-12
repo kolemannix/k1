@@ -2,17 +2,17 @@ ns matching_if;
 
 deftype alias ABC = either A, B, C
 
-impl Print for ABC {
-  fn printTo[W: Writer](self: ABC, w: W) {
+impl print for ABC {
+  fn printTo[w: writer](self: ABC, w: w) {
     switch self {
-      .A -> w.writeChar('A'),
-      .B -> w.writeChar('B'),
-      .C -> w.writeChar('C')
+      .A -> w.write-char('A'),
+      .B -> w.write-char('B'),
+      .C -> w.write-char('C')
     }
   }
 }
 
-impl Equals for ABC {
+impl equals for ABC {
   fn equals(self: ABC, other: ABC): bool {
     switch { fst: self, snd: other } {
       { fst: .A, snd: .A } -> true,
@@ -46,7 +46,7 @@ fn test() {
   let foo = 3;
   let x = some("foo");
   let y = some("bar");
-  let result = if x is .Some(v) and y is .Some("bar") and foo == 3 {
+  let result = if x is .some(v) and y is .some("bar") and foo == 3 {
     v == "foo";
   } else {
     // Fails parsing without parens since 'false' isn't a keyword! hm
@@ -56,11 +56,11 @@ fn test() {
 
   // Illegal due to the 'or' breaking the 'matching condition' property
   let failure1 = testCompile(
-    if x is .Some(illegal_binding) or true {
+    if x is .some(illegal_binding) or true {
       illegal_binding
     }
   );
-  assert(failure1 is .Some(_));
+  assert(failure1 is .some(_));
 
   let myPoint = { x: 1, y: 2 };
   let structResult = if myPoint is { x: 1, y: yy } and myPoint is { x: xx, y: 2 } {
@@ -70,14 +70,14 @@ fn test() {
 
   // Test nested pattern matching with Options containing structs
   let nested = some({ x: some(42), y: some(24) });
-  let nestedResult = if nested is .Some({ x: .Some(xVal), y: .Some(yVal) }) {
+  let nestedResult = if nested is .some({ x: .some(xVal), y: .some(yVal) }) {
     xVal == 42 and yVal == 24
   } else (false);
   assert(nestedResult);
 
   // Test that partial nested matches fail appropriately
   let partial = some({ x: some(42), y: none[int]() });
-  let partialResult = if partial is .Some({ x: .Some(xVal), y: .Some(yVal) }) {
+  let partialResult = if partial is .some({ x: .some(xVal), y: .some(yVal) }) {
     (false)  // Should never reach here
   } else (true);
   assert(partialResult);
@@ -87,7 +87,7 @@ fn test() {
     point: { x: 1, y: 2 },
     value: some("test")
   });
-  let complexResult = if complex is .Some({ point: { x: 1, y: yy }, value: .Some(v) }) {
+  let complexResult = if complex is .some({ point: { x: 1, y: yy }, value: .some(v) }) {
     yy == 2 and v == "test"
   } else (false);
   assert(complexResult);
@@ -97,7 +97,7 @@ fn test() {
     outer: 1,
     inner: some({ value: 1 })
   });
-  let mixedResult = if mixed is .Some({ outer: o, inner: .Some({ value: v })}) {
+  let mixedResult = if mixed is .some({ outer: o, inner: .some({ value: v })}) {
     o == v  // Both should be 1
   } else (false);
   assert(mixedResult);
@@ -105,13 +105,13 @@ fn test() {
   // Test that we can't use bound variables in the pattern itself
   // We should prevent shadowing within the same match, seems like always a bad idea
   let shadowFailure = testCompile({
-    if mixed is .Some({ outer: o, inner: .Some({ value: o })}) {} else {}
+    if mixed is .some({ outer: o, inner: .some({ value: o })}) {} else {}
   });
   assert(shadowFailure.isSome());
 
   let myOpt = some(42);
   let yourOpt = some(false);
-  if myOpt is .Some(x) and x == 42 {} else assert(false);
+  if myOpt is .some(x) and x == 42 {} else assert(false);
 
   assertEquals(bindingIfStruct({ x: 1, y: 2 }), .A);
   assertEquals(bindingIfStruct({ x: 2, y: 2 }), .B);
@@ -120,7 +120,7 @@ fn test() {
   assertEquals(switchStruct({ x: 1, y: 3 }), .B);
   assertEquals(switchStruct({ x: 0, y: 2 }), .B);
 
-  if myOpt is .Some(42) and yourOpt is .Some(f) and 3 == 3 and not false {
+  if myOpt is .some(42) and yourOpt is .some(f) and 3 == 3 and not false {
     assert(f == false)
   } else assert(false);
 

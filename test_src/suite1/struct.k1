@@ -28,7 +28,7 @@ fn structArgMut() {
   assert(not x.y);
 }
 
-impl Equals for { a: int } {
+impl equals for { a: int } {
   fn equals(self: { a: int }, other: { a: int }): bool {
     self.a == other.a
   }

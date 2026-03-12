@@ -20,7 +20,7 @@ fn test() {
   // assert(t is { x: 0, y: 0 });
   assert(t is { width: 0, height: 0 });
 
-  assert(core/types/sizeOf[Text]() == 48);
+  assert(core/types/size-of[Text]() == 48);
 
-  assert(core/types/sizeOf[UserView]() == core/types/sizeOf[{ name: string }]());
+  assert(core/types/size-of[UserView]() == core/types/size-of[{ name: string }]());
 }

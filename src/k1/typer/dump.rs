@@ -121,7 +121,20 @@ impl TypedProgram {
         ty: TypeId,
         expand: bool,
     ) -> std::fmt::Result {
-        self.display_type_ext(writ, ty, expand)
+        let mut visited = self.buffers.visited_types.borrow_mut();
+        let res = self.display_type_id_ext(writ, ty, expand, &mut visited);
+        visited.clear();
+        res
+    }
+
+    pub fn display_type_id_rec<W: fmt::Write + ?Sized>(
+        &self,
+        writ: &mut W,
+        ty: TypeId,
+        expand: bool,
+        visited: &mut FxHashMap<TypeId, ()>,
+    ) -> std::fmt::Result {
+        self.display_type_id_ext(writ, ty, expand, visited)
     }
 
     // Silly function but so commonly needed its worth the call-site ergonomics
@@ -140,7 +153,7 @@ impl TypedProgram {
     }
 
     pub fn type_kind_to_string(&self, type_id: TypeId) -> &'static str {
-        let ty = self.types.get_no_follow(type_id);
+        let ty = self.types.get(type_id);
         ty.kind_name()
     }
 
@@ -149,7 +162,9 @@ impl TypedProgram {
         // But I think its ok to allocate the string; idk its probably way too big of an allocation
         // for most types and we'd be better off using one of our arenas
         let mut s = String::with_capacity(1028);
-        self.display_type_ext(&mut s, type_id, expand).unwrap();
+        let mut visited = self.buffers.visited_types.borrow_mut();
+        self.display_type_id_ext(&mut s, type_id, expand, &mut visited).unwrap();
+        visited.clear();
         s
     }
 
@@ -158,10 +173,11 @@ impl TypedProgram {
         w: &mut W,
         spec_info: &GenericInstanceInfo,
         expand: bool,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         w.write_str("[")?;
         for (index, t) in self.types.mem.getn(spec_info.type_args).iter().enumerate() {
-            self.display_type_id(w, *t, expand)?;
+            self.display_type_id_ext(w, *t, expand, visited)?;
             let last = index == spec_info.type_args.len() as usize - 1;
             if !last {
                 w.write_str(", ")?;
@@ -171,14 +187,23 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn display_type_ext<W: fmt::Write + ?Sized>(
+    fn display_type_id_ext<W: fmt::Write + ?Sized>(
         &self,
         w: &mut W,
         type_id: TypeId,
         expand: bool,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
         let defn_info = self.types.get_defn_info(type_id);
-        match self.types.get_no_follow(type_id) {
+        if visited.contains_key(&type_id) {
+            if let Some(defn_info) = defn_info {
+                self.write_ident(w, defn_info.name)?;
+            }
+            return Ok(());
+        }
+
+        visited.insert(type_id, ());
+        match self.types.get(type_id) {
             Type::Char => w.write_str("char"),
             Type::Integer(int_type) => {
                 write!(w, "{}", int_type)?;
@@ -194,15 +219,15 @@ impl TypedProgram {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand)?;
+                        self.display_instance_info(w, spec_info, expand, visited)?;
                     }
                     if expand {
                         w.write_str("(")?;
-                        self.display_struct_fields(w, struc, expand)?;
+                        self.display_struct_fields(w, struc, expand, visited)?;
                         w.write_str(")")?;
                     }
                 } else {
-                    self.display_struct_fields(w, struc, expand)?;
+                    self.display_struct_fields(w, struc, expand, visited)?;
                 }
                 Ok(())
             }
@@ -214,21 +239,21 @@ impl TypedProgram {
                         &self.ast.idents,
                     )?;
                     w.write_str(".")?;
-                    w.write_str("$")?;
+                    w.write_str("'")?;
                     w.write_str(self.ident_str(tv.name))?;
                 } else {
-                    w.write_str("$")?;
+                    w.write_str("'")?;
                     w.write_str(self.ident_str(tv.name))?;
                 }
                 if let Some(static_constraint) = tv.static_constraint {
                     w.write_str(": ")?;
-                    self.display_type_id(w, static_constraint, expand)?;
+                    self.display_type_id_rec(w, static_constraint, expand, visited)?;
                 }
                 Ok(())
             }
             Type::FunctionTypeParameter(ftp) => {
                 w.write_str("some ")?;
-                self.display_type_id(w, ftp.function_type, expand)?;
+                self.display_type_id_rec(w, ftp.function_type, expand, visited)?;
                 Ok(())
             }
             Type::InferenceHole(hole) => {
@@ -236,7 +261,7 @@ impl TypedProgram {
                 write!(w, "{}", hole.index)?;
                 if let Some(stat) = hole.static_type {
                     w.write_str(": ")?;
-                    self.display_type_id(w, stat, expand)?;
+                    self.display_type_id_rec(w, stat, expand, visited)?;
                 }
                 Ok(())
             }
@@ -245,14 +270,14 @@ impl TypedProgram {
                 if r.mutable {
                     w.write_str("mut ")?;
                 }
-                self.display_type_id(w, r.inner_type, expand)?;
+                self.display_type_id_rec(w, r.inner_type, expand, visited)?;
                 Ok(())
             }
             Type::Enum(e) => {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, expand)?;
+                        self.display_instance_info(w, spec_info, expand, visited)?;
                     }
                     if expand {
                         w.write_str("(")?;
@@ -260,17 +285,17 @@ impl TypedProgram {
                 }
                 let is_named = defn_info.is_some();
                 if !is_named || expand {
-                    w.write_str("enum ")?;
+                    w.write_str("either ")?;
                     for (idx, v) in self.types.mem.getn(e.variants).iter().enumerate() {
                         w.write_str(self.ast.idents.get_name(v.name))?;
                         if let Some(payload) = &v.payload {
                             w.write_str("(")?;
-                            self.display_type_id(w, *payload, expand)?;
+                            self.display_type_id_rec(w, *payload, expand, visited)?;
                             w.write_str(")")?;
                         }
                         let last = idx == e.variants.len() as usize - 1;
                         if !last {
-                            w.write_str(" | ")?;
+                            w.write_str(", ")?;
                         }
                     }
                     if is_named {
@@ -294,83 +319,70 @@ impl TypedProgram {
                 w.write_str("]")?;
                 if expand {
                     w.write_str("(")?;
-                    self.display_type_id(w, generic.inner, expand)?;
+                    self.display_type_id_rec(w, generic.inner, expand, visited)?;
                     w.write_str(")")?;
                 }
                 Ok(())
             }
             Type::Function(fun) => {
-                w.write_str("\\")?;
-                w.write_str("(")?;
+                w.write_str("fn(")?;
                 for (idx, param) in self.types.mem.getn(fun.physical_params).iter().enumerate() {
                     if param.is_lambda_env {
                         w.write_str("(env)")?;
                     }
-                    self.display_type_id(w, param.type_id, expand)?;
+                    self.display_type_id_rec(w, param.type_id, expand, visited)?;
                     let last = idx == fun.physical_params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
                 }
                 w.write_str(") -> ")?;
-                self.display_type_id(w, fun.return_type, expand)
+                self.display_type_id_rec(w, fun.return_type, expand, visited)
             }
             Type::FunctionPointer(fp) => {
                 w.write_str("*")?;
-                self.display_type_id(w, fp.function_type_id, expand)?;
+                self.display_type_id_rec(w, fp.function_type_id, expand, visited)?;
                 Ok(())
             }
-            Type::Lambda(lam) => {
-                write!(w, "lambda_{}(", type_id)?;
-                self.display_type_id(w, lam.function_type, expand)?;
+            Type::Lambda(lam_id) => {
+                write!(w, "fnlam(")?;
+                let lam = self.types.lambda_types.get(*lam_id);
+                self.display_type_id_rec(w, lam.function_type, expand, visited)?;
                 w.write_str(")")?;
                 Ok(())
             }
             Type::LambdaObject(lambda_object) => {
                 w.write_str("lambda_object(")?;
-                self.display_type_id(w, lambda_object.struct_representation, expand)?;
+                self.display_type_id_rec(w, lambda_object.struct_representation, expand, visited)?;
                 w.write_str(")")?;
                 Ok(())
             }
-            Type::Static(stat) => {
+            Type::StaticValue(svt) => {
                 w.write_str("static[")?;
-                self.display_type_id(w, stat.family_type_id, expand)?;
-                if let Some(value_id) = stat.value_id {
+                self.display_type_id_rec(w, svt.family_type_id, expand, visited)?;
+                if let Some(value_id) = svt.value_id {
                     w.write_str(", ")?;
                     self.display_static_value(w, value_id)?;
                 }
                 w.write_str("]")?;
                 Ok(())
             }
-            Type::Unresolved(_u) => w.write_str("<unresolved>"),
-            Type::RecursiveReference(rr) => {
-                w.write_str("recurse~>(")?;
-                let info = self.types.get_defn_info(rr.root_type_id).unwrap();
-                w.write_str(self.ident_str(info.name))?;
-                if let Type::Generic(generic) = self.types.get(rr.root_type_id) {
-                    w.write_str("[")?;
-                    for (idx, param) in
-                        self.named_types.get_slice(generic.params).iter().enumerate()
-                    {
-                        w.write_str(self.ident_str(param.name))?;
-                        let last = idx == generic.params.len() - 1;
-                        if !last {
-                            w.write_str(", ")?;
-                        }
-                    }
-                    w.write_str("]")?;
-                }
-                w.write_str(")")?;
+            Type::Unresolved(u) => {
+                let defn = self.ast.type_defns.get(*u);
+                w.write_str("<unresolved definition '")?;
+                self.write_ident(w, defn.name)?;
+                w.write_str("'>")?;
                 Ok(())
             }
             Type::Array(array_type) => {
-                w.write_str("Array[")?;
-                self.display_type_ext(w, array_type.element_type, expand)?;
+                w.write_str("array[")?;
+                self.display_type_id_ext(w, array_type.element_type, expand, visited)?;
                 w.write_str(", ")?;
-                if let Some(size) = array_type.concrete_count {
+                let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
+                if let Some(size) = concrete_count {
                     write!(w, "{}", size)?;
                 } else {
-                    self.display_type_id(w, array_type.size_type, expand)?;
+                    self.display_type_id_rec(w, array_type.size_type, expand, visited)?;
                 }
                 w.write_str("]")
             }
@@ -382,7 +394,12 @@ impl TypedProgram {
         writ: &mut W,
         struc: &StructType,
         expand: bool,
+        visited: &mut FxHashMap<TypeId, ()>,
     ) -> std::fmt::Result {
+        if struc.fields.is_empty() {
+            return writ.write_str("{}");
+        }
+
         writ.write_str("{ ")?;
         for (index, field) in self.types.mem.getn(struc.fields).iter().enumerate() {
             if index > 0 {
@@ -390,7 +407,7 @@ impl TypedProgram {
             }
             writ.write_str(self.ast.idents.get_name(field.name))?;
             writ.write_str(": ")?;
-            self.display_type_id(writ, field.type_id, expand)?;
+            self.display_type_id_ext(writ, field.type_id, expand, visited)?;
         }
         writ.write_str(" }")
     }
@@ -535,7 +552,10 @@ impl TypedProgram {
                     w.write_str(&"  ".repeat(indentation + 1))?;
                     w.write_str(self.ident_str(field.name))?;
                     w.write_str(": ")?;
-                    self.display_expr_id(field.expr, w, indentation)?;
+                    match field.expr {
+                        None => w.write_str("uninit")?,
+                        Some(expr) => self.display_expr_id(expr, w, indentation)?,
+                    }
                 }
                 w.write_str("\n")?;
                 w.write_str(&"  ".repeat(indentation))?;
@@ -694,7 +714,8 @@ impl TypedProgram {
             }
             TypedExpr::Lambda(lambda_expr) => {
                 w.write_char('\\')?;
-                let lambda_type = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let lambda_type_id = self.types.get(lambda_expr.lambda_type).as_lambda().unwrap();
+                let lambda_type = self.types.lambda_types.get(lambda_type_id);
                 let fn_type = self.types.get(lambda_type.function_type).as_function().unwrap();
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, false).unwrap();
@@ -809,8 +830,8 @@ impl TypedProgram {
             }
             StaticValue::LinearContainer(cont) => {
                 match cont.kind {
-                    StaticContainerKind::View => write!(w, "View")?,
-                    StaticContainerKind::Array => write!(w, "Array")?,
+                    StaticContainerKind::Span => write!(w, "span")?,
+                    StaticContainerKind::Array => write!(w, "array")?,
                 }
                 self.display_static_items(w, self.static_values.get_slice(cont.elements))?;
                 Ok(())
@@ -880,9 +901,9 @@ impl TypedProgram {
             PatternCtor::TypeVariable => writ.write_str("<tvar>"),
             PatternCtor::FunctionPointer => writ.write_str("fn*"),
             PatternCtor::LambdaObject => writ.write_str("dyn[fn ...]"),
-            PatternCtor::Static => writ.write_str("static[...]"),
+            PatternCtor::ValueType => writ.write_str("static[...]"),
             PatternCtor::Buffer => writ.write_str("buffer"),
-            PatternCtor::View => writ.write_str("view"),
+            PatternCtor::Span => writ.write_str("span"),
             PatternCtor::Array => writ.write_str("<array>"),
             PatternCtor::Reference(inner) => {
                 writ.write_str("*")?;
@@ -1184,7 +1205,7 @@ impl TypedProgram {
                 }
                 self.write_ident(w, tp.name)?;
             }
-            for ftp in self.function_type_params.get_slice(signature.function_type_params).iter() {
+            for ftp in self.mem.getn(signature.function_type_params).iter() {
                 self.write_ident(w, ftp.name)?;
                 w.write_str(": ")?;
                 self.display_type_id(w, ftp.type_id, false)?;
@@ -1215,7 +1236,7 @@ impl TypedProgram {
     }
 
     pub fn dump_type(&self, w: &mut impl Write, id: TypeId) -> std::fmt::Result {
-        write!(w, "type #{:02} {:10} ", id, self.types.get_no_follow(id).kind_name())?;
+        write!(w, "type #{:02} {:10} ", id, self.types.get(id).kind_name())?;
         let tvar_info = self.types.get_contained_type_variable_counts(id);
         let l = self.types.get_layout_nonmut(id).unwrap_or(Layout::ZERO_SIZED);
         let defn_name = self.types.get_defn_info(id).map(|i| self.ident_str(i.name));
@@ -1226,7 +1247,9 @@ impl TypedProgram {
             tvar_info.type_parameter_count, tvar_info.inference_variable_count
         )?;
         writeln!(w)?;
-        self.display_type_ext(w, id, true)?;
+        let mut visited = self.buffers.visited_types.borrow_mut();
+        self.display_type_id_ext(w, id, true, &mut visited)?;
+        visited.clear();
         Ok(())
     }
 
@@ -1295,6 +1318,24 @@ pub trait DepDisplay<Dep, Args> {
     fn fmt(&self, w: &mut dyn Write, dep: &Dep, args: &Args) -> std::fmt::Result;
 }
 
+impl<D, A> DepDisplay<D, A> for str {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl<D, A> DepDisplay<D, A> for Cow<'static, str> {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl<D, A> DepDisplay<D, A> for String {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
 impl<D, A, T> DepDisplay<D, A> for &T
 where
     T: DepDisplay<D, A> + ?Sized,
@@ -1329,12 +1370,6 @@ pub fn depfmt<'d, 'a, 'v, D, A, T: ?Sized>(
     DepFmt { value, dep, args }
 }
 
-impl<D, A> DepDisplay<D, A> for str {
-    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
-        f.write_str(self)
-    }
-}
-
 impl DepDisplay<TypedProgram, K1DisplayArgs> for MStr<MemTmp> {
     fn fmt(
         &self,
@@ -1354,7 +1389,10 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for Ident {
 
 impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
-        k1.display_type_ext(f, *self, args.verbose)
+        let mut visited = k1.buffers.visited_types.borrow_mut();
+        let result = k1.display_type_id_ext(f, *self, args.verbose, &mut visited);
+        visited.clear();
+        result
     }
 }
 

@@ -1,15 +1,15 @@
 ns ability_self_call;
 
 ability Foo {
-  fn a(self: Self)
-  fn b(self: Self)
+  fn a(self: self)
+  fn b(self: self)
 }
 
 impl Foo for string {
-  fn a(self: Self) {
+  fn a(self: self) {
     self.b()
   }
-  fn b(_self: Self) {
+  fn b(_self: self) {
     {}
   }
 }

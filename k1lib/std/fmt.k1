@@ -3,28 +3,29 @@ use meta/CodeWriter
 
 // TODO: need to flesh this out more with format specifiers
 //           and other things
-fn fmt[Fmt: static string, Args, W: Writer](w: W, fmtString: Fmt, args: Args) {
+fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
   #meta(fmtString) {
     let* code = StringBuilder/new();
-    let argsTypeId = types/typeId[Args]();
-    let schema = types/typeSchema(argsTypeId);
+    let argsTypeId = types/type-id[Args];
+    let schema = types/type-schema(argsTypeId);
     // This naive splitting doesn't work; we need to walk the format string
     // emitting "string parts" or "arg specifiers"
     // Then iterate that structure to produce the runtime
     // code, which will need the baked string parts
+    let fmtString: string = fmtString.from-static();
     let parts = fmtString.splitByChar('?');
 
-    code.var("parts", parts.asView());
+    code.var("parts", parts.as-span());
     switch schema {
-      .String -> {
+      .string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
         };
         //meta/emitLine("its a string baby");
         code.line("parts.get(0).printTo(w);");
-        code.line("w.writeString(args);");
+        code.line("w.write-string(args);");
       },
-      .Struct({fields}) -> {
+      .struct({fields}) -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
         };
@@ -39,7 +40,7 @@ fn fmt[Fmt: static string, Args, W: Writer](w: W, fmtString: Fmt, args: Args) {
         };
 
       },
-      _ -> crash("Unsupported format arguments: {types/getTypeName[Args]}")
+      _ -> crash("Unsupported format arguments: {types/get-type-name[Args]}")
     };
     code.build()
   }

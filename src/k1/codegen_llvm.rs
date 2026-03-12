@@ -29,6 +29,8 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
+use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
+
 use log::{debug, info, trace};
 
 use crate::bc::{
@@ -39,8 +41,8 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, STRING_TYPE_ID, ScalarType,
-    TypeDefnInfo, TypeId,
+    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, STRING_TYPE_ID,
+    ScalarType, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
@@ -312,6 +314,7 @@ struct DebugContext<'ctx> {
     debug_builder: DebugInfoBuilder<'ctx>,
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
+    // TODO: there does not need to be a debug info stack anymore, it can just be the one entry
     debug_stack: Vec<DebugStackEntry<'ctx>>,
     strip_debug: bool,
 }
@@ -331,6 +334,27 @@ impl<'ctx> DebugContext<'ctx> {
                 self.debug_builder.as_mut_ptr(),
                 value.as_value_ref(),
                 var_info.as_mut_ptr(),
+                expr.unwrap_or_else(|| self.debug_builder.create_expression(vec![])).as_mut_ptr(),
+                debug_loc.as_mut_ptr(),
+                block.as_mut_ptr(),
+            )
+        };
+    }
+
+    // Bugged inkwell function: https://github.com/TheDan64/inkwell/issues/613
+    pub fn insert_declare_at_end(
+        &self,
+        storage: PointerValue<'ctx>,
+        var_info: Option<DILocalVariable<'ctx>>,
+        expr: Option<DIExpression<'ctx>>,
+        debug_loc: DILocation<'ctx>,
+        block: BasicBlock<'ctx>,
+    ) {
+        let _dbg_record = unsafe {
+            LLVMDIBuilderInsertDeclareRecordAtEnd(
+                self.debug_builder.as_mut_ptr(),
+                storage.as_value_ref(),
+                var_info.map(|v| v.as_mut_ptr()).unwrap_or(std::ptr::null_mut()),
                 expr.unwrap_or_else(|| self.debug_builder.create_expression(vec![])).as_mut_ptr(),
                 debug_loc.as_mut_ptr(),
                 block.as_mut_ptr(),
@@ -483,7 +507,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, module, optimize, debug);
 
-        let machine = Cg::set_up_machine(&mut llvm_module);
+        let machine = Cg::set_up_machine(&mut llvm_module, debug);
         let target_data = machine.get_target_data();
 
         let ptr = ctx.ptr_type(AddressSpace::default());
@@ -554,7 +578,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         self.builder.unset_current_debug_location();
-        let entrypoint = self.llvm_module.add_function("main", function_value.get_type(), None);
+        let entrypoint_fn_type =
+            self.ctx.i32_type().fn_type(&function_value.get_type().get_param_types(), false);
+        let entrypoint = self.llvm_module.add_function("main", entrypoint_fn_type, None);
         let entry_block = self.ctx.append_basic_block(entrypoint, "entry");
         self.builder.position_at_end(entry_block);
         let params: Vec<BasicMetadataValueEnum<'ctx>> =
@@ -564,9 +590,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .build_call(function_value, &params, "")
             .unwrap()
             .try_as_basic_value()
-            .basic()
-            .unwrap();
-        self.builder.build_return(Some(&res)).unwrap();
+            .basic();
+        match res {
+            None => self.builder.build_return(Some(&self.ctx.i32_type().const_zero())).unwrap(),
+            Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+        };
 
         info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
         Ok(())
@@ -577,43 +605,41 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return Ok(*g);
         }
         let global = self.k1.globals.get(global_id).clone();
-        let initial_static_value_id = global.initial_value.unwrap();
-        let initializer_basic_value =
-            self.codegen_static_value_as_const(initial_static_value_id, 0)?;
 
         let variable = self.k1.variables.get(global.variable_id);
-
-        let layout = self.k1.types.get_layout(global.ty);
-        let llvm_linkage = match global.is_exported {
-            false => LlvmLinkage::Private,
-            true => LlvmLinkage::External,
-        };
-        // For now let's just use the name, eventually we'll ask the user for a link name
-        let name = if global.is_exported {
+        let name = if global.is_exported || global.is_external {
+            // For now let's just use the name for externally linked symbols
+            // Eventually we'll need to ask the user for a link name
             self.k1.ident_str(variable.name).to_string()
         } else {
             self.k1.make_qualified_name(variable.owner_scope, variable.name, "__", false)
         };
-        let llvm_global = self.make_global_from_value(
-            initializer_basic_value,
-            layout.align,
-            &name,
-            global.is_constant,
-            llvm_linkage,
-        );
-        if self.k1.program_settings.multithreaded {
-            if global.is_tls {
-                llvm_global.set_thread_local(true);
-                let mode = if self.k1.program_settings.executable {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    // We don't yet support dynamic library as a target
-                    // So even libraries can use InitialExec
-                    ThreadLocalMode::InitialExecTLSModel
-                };
-                llvm_global.set_thread_local_mode(Some(mode));
-            }
-        }
+
+        let llvm_global = if global.is_external {
+            let Some(global_pt) = self.k1.get_physical_type(global.type_id) else {
+                return failf!(global.span, "ICE: Not physical; todo reject this in typer");
+            };
+            let basic_type = self.codegen_type(global_pt);
+            self.make_external_global(basic_type.rich_type(), &name, global.is_constant)
+        } else {
+            let initial_static_value_id = global.initial_value.unwrap();
+            let initializer_basic_value =
+                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+            let llvm_linkage = match global.is_exported {
+                false => LlvmLinkage::Private,
+                true => LlvmLinkage::External,
+            };
+            let layout = self.k1.get_layout(global.type_id);
+            self.make_global_from_value(
+                initializer_basic_value,
+                layout.align,
+                &name,
+                global.is_constant,
+                llvm_linkage,
+                global.is_tls,
+            )
+        };
+
         self.globals.insert(global_id, llvm_global);
         Ok(llvm_global)
     }
@@ -628,10 +654,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.ctx.i8_type().array_type(size_bytes)
     }
 
-    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
+    fn get_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
         let span = self.k1.ast.spans.get(span);
         let line = self.k1.ast.sources.get_line_for_span_start(span).expect("No line for span");
-        let column = span.start - line.start_char;
+        let column = span.start + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
             line.line_index + 1,
@@ -639,6 +665,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.debug.current_scope(),
             None,
         );
+        locn
+    }
+    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
+        let locn = self.get_debug_location_from_span(span);
         self.builder.set_current_debug_location(locn);
         locn
     }
@@ -691,8 +721,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     // FIXME(newcodegen): CgType is too big to return by value
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.types.pt_to_string(pt));
-        match pt {
-            PhysicalType::Scalar(st) => {
+        match pt.to_enum() {
+            PhysicalTypeEnum::Scalar(st) => {
                 let layout = st.get_layout();
                 let (name, encoding): (&'static str, u32) = match st {
                     ScalarType::U8 => ("u8", Self::DW_ATE_UNSIGNED),
@@ -716,7 +746,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .as_type();
                 CgType::Scalar(LlvmScalarType { pt, basic_type, layout, di_type })
             }
-            PhysicalType::Agg(agg_id) => {
+            PhysicalTypeEnum::Agg(agg_id) => {
                 if let Some(k1) = self.llvm_types.get(&agg_id) {
                     return *k1;
                 }
@@ -783,14 +813,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     AggType::Array { element_pt, len } => {
                         let element_type = self.codegen_type(element_pt);
                         let array_type = element_type.rich_type().array_type(len);
-                        let layout = self.k1.types.get_pt_layout(element_pt);
+                        let array_layout = self.k1.types.get_pt_layout(pt);
                         let di_type = self
                             .debug
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                layout.size_bits() as u64,
-                                layout.align_bits(),
+                                array_layout.size_bits() as u64,
+                                array_layout.align_bits(),
                                 &[],
                             )
                             .as_type();
@@ -800,7 +830,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             array_type,
                             element_type: self.mem.push_h(element_type),
                             di_type,
-                            layout,
+                            layout: array_layout,
                         })
                     }
                     AggType::Union { members } => {
@@ -842,7 +872,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     AggType::Enum(e) => {
                         let struct_repr_cg_type =
-                            self.codegen_type(PhysicalType::Agg(e.struct_repr));
+                            self.codegen_type(PhysicalType::agg(e.struct_repr));
 
                         struct_repr_cg_type
                     }
@@ -850,7 +880,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.llvm_types.insert(agg_id, cg_type);
                 cg_type
             }
-            PhysicalType::Empty => {
+            PhysicalTypeEnum::Empty => {
                 let struct_type = self.ctx.struct_type(&[], false);
                 let di_type = self
                     .debug
@@ -928,10 +958,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
-        match pt {
-            PhysicalType::Empty => self.builtin_types.empty.as_basic_type_enum(),
-            PhysicalType::Scalar(st) => self.scalar_basic_type(st),
-            PhysicalType::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
+        match pt.to_enum() {
+            PhysicalTypeEnum::Empty => self.builtin_types.empty.as_basic_type_enum(),
+            PhysicalTypeEnum::Scalar(st) => self.scalar_basic_type(st),
+            PhysicalTypeEnum::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
         }
     }
 
@@ -1390,7 +1420,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let f = self.get_insert_function();
         let function_entry_block = f.function_value.get_first_basic_block().unwrap();
 
-
         // Position the builder
         match f.last_alloca_instr {
             None => match function_entry_block.get_first_instruction() {
@@ -1407,6 +1436,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let alloca = self.builder.build_alloca(ty, name).unwrap();
+        alloca.as_instruction().unwrap().set_debug_location(None);
         self.get_insert_function_mut().last_alloca_instr = Some(alloca.as_instruction().unwrap());
 
         // Restore the builder's position
@@ -1802,7 +1832,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                 }
             },
-            bc::Value::Global { id, .. } => {
+            bc::Value::GlobalAddr { id, .. } => {
                 let global_value = self.codegen_global(id)?;
                 Ok(global_value.as_pointer_value().as_basic_value_enum())
             }
@@ -1880,26 +1910,36 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Alloca { t, .. } => {
-                // task(di): Eventually we could supplement with the type_id from the
+                // task(debug info): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
 
                 // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
-                let instr = self.build_k1_alloca(&cg_type, "");
-                inst_mappings.insert(inst_id, instr.as_basic_value_enum());
+                let alloca_ptr = self.build_k1_alloca(&cg_type, "");
+                inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
                 let bc_debug_info = self.k1.bytecode.debug_info.get(inst_id);
-                if let Some(var_info) = bc_debug_info.variable_info {
+                if let Some(var_info) = bc_debug_info.variable_info
+                    && !var_info.user_hidden
+                {
                     let name_str = self.k1.ident_str(var_info.name);
-                    let _local_variable = self.debug.debug_builder.create_auto_variable(
+                    let debug_locn = self.get_debug_location_from_span(var_info.source_span);
+                    let local_variable = self.debug.debug_builder.create_auto_variable(
                         self.debug.current_scope(),
                         name_str,
                         self.debug.current_file(),
-                        self.get_line_number(span),
+                        self.get_line_number(var_info.source_span),
                         cg_type.debug_type(),
                         true,
                         0,
                         cg_type.rich_repr_layout().align,
+                    );
+                    self.debug.insert_declare_at_end(
+                        alloca_ptr,
+                        Some(local_variable),
+                        None,
+                        debug_locn,
+                        self.builder.get_insert_block().unwrap(),
                     );
                 }
 
@@ -1912,7 +1952,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Load { t, src } => {
-                let cg_ty = self.codegen_type(PhysicalType::Scalar(t));
+                let cg_ty = self.codegen_type(PhysicalType::scalar(t));
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
                 inst_mappings.insert(inst_id, load);
@@ -1932,7 +1972,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::StructOffset { struct_t, base, field_index, .. } => {
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
 
-                let cg_struct_type = self.codegen_type(PhysicalType::Agg(struct_t)).expect_struct();
+                let cg_struct_type = self.codegen_type(PhysicalType::agg(struct_t)).expect_struct();
                 let gep =
                     self.build_struct_gep(base_ptr, cg_struct_type.struct_type, field_index, "");
                 inst_mappings.insert(inst_id, gep.into());
@@ -2030,15 +2070,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 // From agg to scalar -> handled by BC
                 // From scalar to agg -> handled by BC
-                match to {
-                    PhysicalType::Empty => panic!("BitCast on ZST"),
+                match to.to_enum() {
+                    PhysicalTypeEnum::Empty => panic!("BitCast on ZST"),
                     // From agg to agg -> canon type is ptr, nothing to do.
-                    PhysicalType::Agg(_) => {
+                    PhysicalTypeEnum::Agg(_) => {
                         inst_mappings.insert(inst_id, input);
                         Ok(())
                     }
                     // From scalar to scalar -> do the llvm bitcast
-                    PhysicalType::Scalar(st) => {
+                    PhysicalTypeEnum::Scalar(st) => {
                         let llvm_ty = self.scalar_basic_type(st);
                         let bitcast = self.builder.build_bit_cast(input, llvm_ty, "").unwrap();
                         inst_mappings.insert(inst_id, bitcast);
@@ -2514,16 +2554,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
-        match pt {
-            PhysicalType::Empty => {
+        match pt.to_enum() {
+            PhysicalTypeEnum::Empty => {
                 if is_return {
                     AbiParamMapping::VoidReturnEmpty
                 } else {
                     panic!("Cannot have empty parameter type")
                 }
             }
-            PhysicalType::Scalar(_) => AbiParamMapping::ScalarInRegister,
-            PhysicalType::Agg(agg_id) => {
+            PhysicalTypeEnum::Scalar(_) => AbiParamMapping::ScalarInRegister,
+            PhysicalTypeEnum::Agg(agg_id) => {
                 let agg_record = self.k1.types.agg_types.get(agg_id);
                 match agg_record.agg_type {
                     AggType::Enum(_)
@@ -2629,9 +2669,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             cur_bits: &mut u32,
             t: PhysicalType,
         ) {
-            match t {
-                PhysicalType::Empty => {}
-                PhysicalType::Scalar(st) => {
+            match t.to_enum() {
+                PhysicalTypeEnum::Empty => {}
+                PhysicalTypeEnum::Scalar(st) => {
                     let class = match st {
                         ScalarType::U8 => RegisterClass::Int,
                         ScalarType::U16 => RegisterClass::Int,
@@ -2647,7 +2687,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     };
                     append_type(class1, class2, cur_bits, class, st.get_layout().size_bits())
                 }
-                PhysicalType::Agg(agg_id) => {
+                PhysicalTypeEnum::Agg(agg_id) => {
                     let agg_record = c.k1.types.agg_types.get(agg_id);
                     match agg_record.agg_type {
                         AggType::Struct { fields } => {
@@ -2674,7 +2714,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 class1,
                                 class2,
                                 cur_bits,
-                                PhysicalType::Agg(e.struct_repr),
+                                PhysicalType::agg(e.struct_repr),
                             )
                         }
                     }
@@ -2866,7 +2906,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
-        let cg_ty = self.codegen_type(PhysicalType::Scalar(float.get_scalar_type()));
+        let cg_ty = self.codegen_type(PhysicalType::scalar(float.get_scalar_type()));
         let llvm_float_ty = cg_ty.rich_type().into_float_type();
         let llvm_value = llvm_float_ty.const_float(float.as_f64());
         Ok(llvm_value.as_basic_value_enum())
@@ -2903,7 +2943,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
-                let pt = self.k1.types.get_physical_type(*type_id).unwrap();
+                let pt = self.k1.get_physical_type(*type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero = cg_type.rich_type().const_zero();
                 zero.as_basic_value_enum()
@@ -2912,11 +2952,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 debug_assert!(!s.fields.is_empty());
                 // Always a packed struct, accounting for every byte.
                 let s_type_id = s.type_id;
-                let layout = self.k1.types.get_struct_layout(s.type_id);
+                let s_fields = s.fields;
+                let layout = self.k1.get_struct_layout(s.type_id);
                 let mut last_offset = 0;
                 let mut packed_values = self.tmp.new_list(8);
                 for (field, field_layout) in
-                    self.k1.static_values.mem.getn(s.fields).iter().zip(layout)
+                    self.k1.static_values.mem.getn(s_fields).iter().zip(layout)
                 {
                     let padding = field_layout.offset - last_offset;
                     if padding > 0 {
@@ -2935,7 +2976,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 debug_assert_eq!(
                     self.layout_per_llvm(&struct_value.get_type()).size,
-                    self.k1.types.get_layout(s_type_id).size,
+                    self.k1.get_layout(s_type_id).size,
                     "Checking Size of: {}",
                     struct_value
                 );
@@ -2945,8 +2986,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let e = *e;
                 let mut packed_values = self.tmp.new_list(4);
 
-                let enum_agg_id =
-                    self.k1.types.get_physical_type(e.enum_type_id).unwrap().expect_agg();
+                let enum_agg_id = self.k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
                 let enum_agg_record = self.k1.types.agg_types.get(enum_agg_id);
                 let enum_pt = enum_agg_record.agg_type.expect_enum();
                 let variant = self.k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
@@ -3002,35 +3042,36 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 );
                 struct_value.as_basic_value_enum()
             }
-            StaticValue::LinearContainer(view) => {
-                let view = *view;
+            StaticValue::LinearContainer(cont) => {
+                let cont = *cont;
                 let (element_type, _) =
-                    self.k1.types.get_as_container_instance(view.type_id).unwrap();
-                let view_elements = self.k1.static_values.mem.getn(view.elements);
+                    self.k1.types.get_as_container_instance(cont.type_id).unwrap();
+                let span_elements = self.k1.static_values.mem.getn(cont.elements);
                 let array_value =
-                    self.codegen_static_elements_array(element_type, view_elements, depth)?;
+                    self.codegen_static_elements_array(element_type, span_elements, depth)?;
 
-                match view.kind {
-                    StaticContainerKind::View => {
-                        let element_type_layout = self.k1.types.get_layout(element_type);
+                match cont.kind {
+                    StaticContainerKind::Span => {
+                        let element_type_layout = self.k1.get_layout(element_type);
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
                             &format!("static_elems_{}\0", static_value_id.as_u32()),
                             true,
                             LlvmLinkage::Private,
+                            false,
                         );
                         data_global.set_constant(true);
                         data_global.set_unnamed_addr(true);
                         data_global.set_initializer(&array_value);
-                        let view_struct = self
-                            .make_view_struct(
-                                view.type_id,
-                                view.len() as u64,
+                        let span_struct = self
+                            .make_span_struct(
+                                cont.type_id,
+                                cont.len() as u64,
                                 data_global.as_pointer_value(),
                             )
                             .unwrap();
-                        view_struct.as_basic_value_enum()
+                        span_struct.as_basic_value_enum()
                     }
                     StaticContainerKind::Array => array_value.as_basic_value_enum(),
                 }
@@ -3051,7 +3092,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
-        let element_layout = self.k1.types.get_layout(element_type);
+        let element_layout = self.k1.get_layout(element_type);
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
@@ -3079,16 +3120,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let struct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
         let type_id = self.k1.static_values.get(static_value_id).get_type();
-        let layout = self.k1.types.get_layout(type_id);
+        let layout = self.k1.get_layout(type_id);
         let global = self.make_global_from_value(
             struct_value,
             layout.align,
             &format!("static_{}\0", static_value_id.as_u32()),
             true,
             LlvmLinkage::Private,
+            false,
         );
         self.static_values_globals.insert(static_value_id, global);
         Ok(global)
+    }
+
+    fn make_external_global(
+        &mut self,
+        typ: BasicTypeEnum<'ctx>,
+        name: &str,
+        constant: bool,
+    ) -> GlobalValue<'ctx> {
+        let global = self.llvm_module.add_global(typ, None, name);
+        global.set_constant(constant);
+        global.set_linkage(LlvmLinkage::External);
+        global
     }
 
     fn make_global_from_value(
@@ -3098,6 +3152,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         name: &str,
         constant: bool,
         linkage: LlvmLinkage,
+        is_tls: bool,
     ) -> GlobalValue<'ctx> {
         let global = self.llvm_module.add_global(value.get_type(), None, name);
         global.set_alignment(align);
@@ -3105,6 +3160,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global.set_initializer(&value);
         global.set_constant(constant);
         global.set_linkage(linkage);
+        if self.k1.program_settings.multithreaded {
+            if is_tls {
+                global.set_thread_local(true);
+                let mode = if self.k1.program_settings.executable {
+                    ThreadLocalMode::LocalExecTLSModel
+                } else {
+                    // We don't yet support dynamic library as a target
+                    // So even libraries can use InitialExec
+                    ThreadLocalMode::InitialExecTLSModel
+                };
+                global.set_thread_local_mode(Some(mode));
+            }
+        }
         global
     }
 
@@ -3133,7 +3201,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.as_basic_value_enum()
             }
             StaticValue::Zero(type_id) => {
-                let pt = self.k1.types.get_physical_type(*type_id).unwrap();
+                let pt = self.k1.get_physical_type(*type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero_rich = cg_type.rich_type().const_zero();
                 match pt.is_agg() {
@@ -3185,13 +3253,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global_str_data.set_constant(true);
 
         // Ensure the string layout is what we expect
-        // deftype string = { private view: View[char] }
-        let string_pt = self.k1.types.get_physical_type(STRING_TYPE_ID).unwrap();
+        // deftype string = { private span: span[char] }
+        let string_pt = self.k1.get_physical_type(STRING_TYPE_ID).unwrap();
         let string_type = self.codegen_type(string_pt).expect_struct();
         let string_wrapper_struct_type = string_type.struct_type;
 
-        let char_view_struct = self.mem.get_nth_lt(string_type.fields, 0).expect_struct();
-        let char_buffer_cg_type = self.mem.get_nth_lt(char_view_struct.fields, 0).expect_struct();
+        let char_span_struct = self.mem.get_nth_lt(string_type.fields, 0).expect_struct();
+        let char_buffer_cg_type = self.mem.get_nth_lt(char_span_struct.fields, 0).expect_struct();
         debug_assert!(
             char_buffer_cg_type
                 .struct_type
@@ -3211,11 +3279,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             str_len as u64,
             global_str_data.as_pointer_value(),
         )?;
-        let char_view_struct_value = char_view_struct
+        let char_span_struct_value = char_span_struct
             .struct_type
             .const_named_struct(&[char_buffer_struct_value.as_basic_value_enum()]);
         let string_wrapper_struct = string_wrapper_struct_type
-            .const_named_struct(&[char_view_struct_value.as_basic_value_enum()]);
+            .const_named_struct(&[char_span_struct_value.as_basic_value_enum()]);
 
         let global_str_struct =
             self.llvm_module.add_global(string_wrapper_struct_type, None, name.unwrap_or(""));
@@ -3253,9 +3321,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(buffer_struct_value)
     }
 
-    fn make_view_struct(
+    fn make_span_struct(
         &mut self,
-        view_type_id: TypeId,
+        span_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
     ) -> TyperResult<StructValue<'ctx>> {
@@ -3263,9 +3331,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .k1
             .types
             .mem
-            .get_nth_lt(self.k1.types.get(view_type_id).expect_struct().fields, 0)
+            .get_nth_lt(self.k1.types.get(span_type_id).expect_struct().fields, 0)
             .type_id;
-        let buffer_pt = self.k1.types.get_physical_type(buffer_type_id).unwrap();
+        let buffer_pt = self.k1.get_physical_type(buffer_type_id).unwrap();
         let buffer_cg_type = self.codegen_type(buffer_pt).expect_struct();
         self.make_buffer_struct(buffer_cg_type.struct_type, len, data)
     }
@@ -3274,21 +3342,23 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.k1.program_name()
     }
 
-    fn set_up_machine(module: &mut LlvmModule) -> TargetMachine {
+    fn set_up_machine(module: &mut LlvmModule, debug: bool) -> TargetMachine {
         // Target::initialize_aarch64(&InitializationConfig::default());
         Target::initialize_native(&InitializationConfig::default()).unwrap();
-        // I use this explicit triple to avoid an annoying warning log on mac.
-        let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
-        let triple = TargetTriple::create(triple_str);
-        // let triple = TargetMachine::get_default_triple();
+        // let triple_str = &format!("arm64-apple-macosx{}", MAC_SDK_VERSION);
+        // let triple = TargetTriple::create(triple_str);
+        let triple = TargetMachine::get_default_triple();
 
         let target = Target::from_triple(&triple).unwrap();
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
+        let opt_level = if debug { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         let machine = target
             .create_target_machine(
                 &triple,
-                "generic",
-                "",
-                OptimizationLevel::Aggressive,
+                &cpu,
+                &features,
+                opt_level,
                 inkwell::targets::RelocMode::Default,
                 inkwell::targets::CodeModel::Default,
             )
@@ -3296,8 +3366,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let data_layout = &machine.get_target_data().get_data_layout();
         info!(
-            "Initializing to 'native' target using triple {}. Layout: {}",
+            "Initializing to target: {} using cpu: {} triple: {}, features: {}, layout: {}",
             target.get_name().to_string_lossy(),
+            cpu,
+            triple,
+            features,
             data_layout.as_str().to_string_lossy()
         );
         module.set_data_layout(data_layout);
@@ -3315,15 +3388,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.llvm_module.strip_debug_info();
         }
         self.llvm_module.verify().map_err(|err| {
-            let llvm_text = self.output_llvm_ir_text();
+            let llvm_text = self.emit_llvm_ir_text();
             let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
                 .expect("Failed to create .ll file");
             std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!(
-                "Module '{}' failed validation NEW: {}",
-                self.name(),
-                err.to_string_lossy()
-            )
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
         })?;
 
         if optimize {
@@ -3331,6 +3400,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .run_passes("default<O2>", &self.llvm_machine, PassBuilderOptions::create())
                 .unwrap();
         } else {
+            // No opt path; we could run some QoL passes?
             // self.llvm_module
             //     .run_passes("function(mem2reg)", &self.llvm_machine, PassBuilderOptions::create())
             //     .unwrap();
@@ -3350,23 +3420,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    #[allow(unused)]
-    pub fn emit_object_file(&self, rel_destination_dir: &str) -> anyhow::Result<()> {
-        let filename = format!("{}.o", self.name());
+    pub fn emit_object_file(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let machine = &self.llvm_machine;
-        let path = Path::new(rel_destination_dir).join(Path::new(&filename));
-        log::info!("Outputting object file to {}", path.to_str().unwrap());
-        machine
-            .write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, &path)
-            .unwrap();
+        let path = path.as_ref();
+        log::info!("Outputting object file to {}", path.display());
+        machine.write_to_file(&self.llvm_module, inkwell::targets::FileType::Object, path).unwrap();
         Ok(())
     }
 
-    pub fn output_llvm_ir_text(&self) -> String {
+    pub fn emit_llvm_ir_text(&self) -> String {
         self.llvm_module.print_to_string().to_string()
     }
 
-    pub fn write_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {
+    pub fn emit_bitcode_to_path(&self, path: impl AsRef<Path>) -> bool {
         self.llvm_module.write_bitcode_to_path(path)
     }
 

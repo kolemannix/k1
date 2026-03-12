@@ -8,21 +8,21 @@ use core/sys
 deftype Color = either White, Black
 deftype alias Bitboard = u64
 
-let RANK_1 :    Bitboard = 0x00000000000000FF;
-let RANK_2 :    Bitboard = 0x000000000000FF00;
-let RANK_3 :    Bitboard = 0x0000000000FF0000;
-let RANK_4 :    Bitboard = 0x00000000FF000000;
-let RANK_5 :    Bitboard = 0x000000FF00000000;
-let RANK_6 :    Bitboard = 0x0000FF0000000000;
-let RANK_7 :    Bitboard = 0x00FF000000000000;
-let RANK_8 :    Bitboard = 0xFF00000000000000;
-let A_FILE: Bitboard = 0x0101010101010101;
-let B_FILE: Bitboard = 0x0202020202020202;
-let C_FILE: Bitboard = 0x0404040404040404;
+let RANK_1 : Bitboard = 0x00000000000000FF
+let RANK_2 : Bitboard = 0x000000000000FF00
+let RANK_3 : Bitboard = 0x0000000000FF0000
+let RANK_4 : Bitboard = 0x00000000FF000000
+let RANK_5 : Bitboard = 0x000000FF00000000
+let RANK_6 : Bitboard = 0x0000FF0000000000
+let RANK_7 : Bitboard = 0x00FF000000000000
+let RANK_8 : Bitboard = 0xFF00000000000000
+let A_FILE : Bitboard = 0x0101010101010101
+let B_FILE : Bitboard = 0x0202020202020202
+let C_FILE : Bitboard = 0x0404040404040404
 
-let H_FILE: Bitboard = 0x8080808080808080;
-let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE;
-let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F;
+let H_FILE    : Bitboard = 0x8080808080808080
+let NOT_A_FILE: Bitboard = 0xFEFEFEFEFEFEFEFE
+let NOT_H_FILE: Bitboard = 0x7F7F7F7F7F7F7F7F
 
 deftype GameState = {
   wPawns: Bitboard,
@@ -66,12 +66,12 @@ fn indexToBit(index: u64): Bitboard {
 }
 
 fn printBitboard(b: Bitboard) {
-  let* l = List/empty[char]();
+  let* l = list/empty[char]();
   writeBitboard(l, b);
   println(string/wrapList(l))
 }
 
-fn writeBitboard[W: Writer](writer: W, b: Bitboard) {
+fn writeBitboard[w: writer](writer: w, b: Bitboard) {
   // Scanlines by rank backwards so it reads naturally
   let rank = 7;
   while rank >= 0 {
@@ -81,9 +81,9 @@ fn writeBitboard[W: Writer](writer: W, b: Bitboard) {
 
     for square in IntRange/make(rankStart, rankStart + 8) {
       let bit = valueAtSquare(b, square.as[u64]);
-      writer.writeChar(u8/toAsciiDigit(bit.as[u8]));
+      writer.write-char(u8/toAsciiDigit(bit.as[u8]));
     };
-    writer.writeChar('\n');
+    writer.write-char('\n');
     rank := rank - 1;
   }
 }
@@ -108,77 +108,78 @@ ns GameState {
   }
 
   fn printGrid(self: GameState) {
-    let* writer = List/withCapacity[char](128);
+    let* writer = list/withCapacity[char](128);
     let rank = 7;
     while rank >= 0 {
       let rankStart = rank * 8;
       for i in IntRange/make(rankStart, rankStart + 8) {
         let i = i.as[u64];
-        if isSet(self.wPawns, i) { writer.writeChar('P') }
-        else if isSet(self.wKnights, i) { writer.writeChar('N') }
-        else if isSet(self.wBishops, i) { writer.writeChar('B') }
-        else if isSet(self.wRooks, i) { writer.writeChar('R') }
-        else if isSet(self.wQueens, i) { writer.writeChar('Q') }
-        else if isSet(self.wKings, i) { writer.writeChar('K') }
-        else if isSet(self.bPawns, i) { writer.writeChar('p') }
-        else if isSet(self.bKnights, i) { writer.writeChar('n') }
-        else if isSet(self.bBishops, i) { writer.writeChar('b') }
-        else if isSet(self.bRooks, i) { writer.writeChar('r') }
-        else if isSet(self.bQueens, i) { writer.writeChar('q') }
-        else if isSet(self.bKings, i) { writer.writeChar('k') }
-        else { writer.writeChar('.') };
+        if isSet(self.wPawns, i) { writer.write-char('P') }
+        else if isSet(self.wKnights, i) { writer.write-char('N') }
+        else if isSet(self.wBishops, i) { writer.write-char('B') }
+        else if isSet(self.wRooks, i) { writer.write-char('R') }
+        else if isSet(self.wQueens, i) { writer.write-char('Q') }
+        else if isSet(self.wKings, i) { writer.write-char('K') }
+        else if isSet(self.bPawns, i) { writer.write-char('p') }
+        else if isSet(self.bKnights, i) { writer.write-char('n') }
+        else if isSet(self.bBishops, i) { writer.write-char('b') }
+        else if isSet(self.bRooks, i) { writer.write-char('r') }
+        else if isSet(self.bQueens, i) { writer.write-char('q') }
+        else if isSet(self.bKings, i) { writer.write-char('k') }
+        else { writer.write-char('.') };
       };
-      writer.writeChar('\n');
+      writer.write-char('\n');
       rank := rank - 1;
     };
     print(string/wrapList(writer));
     println("--------\nabcdefgh");
   }
 
-  fn genMoves(self: GameState): List[Move] {
+  fn genMoves(self: GameState): list[Move] {
     self.printGrid();
     println("");
     self.genWhitePawnMoves();
   }
 
   fn wOccupied(self: GameState): Bitboard {
-    self.wPawns.bitAnd(self.wKnights).bitAnd(self.wBishops).bitAnd(self.wRooks).bitAnd(self.wQueens).bitAnd(self.wKings)
+    self.wPawns & self.wKnights & self.wBishops & self.wRooks & self.wQueens & self.wKings
   }
 
   fn bOccupied(self: GameState): Bitboard {
-    self.bPawns.bitAnd(self.bKnights).bitAnd(self.bBishops).bitAnd(self.bRooks).bitAnd(self.bQueens).bitAnd(self.bKings)
+    self.bPawns & self.bKnights & self.bBishops & self.bRooks & self.bQueens & self.bKings
   }
 
   // todo(cache occupied)
   fn occupied(self: GameState): Bitboard {
-    self.wOccupied().bitAnd(self.bOccupied())
+    self.wOccupied() & self.bOccupied()
   }
 
   // todo(cache not occupied)
   fn notOccupied(self: GameState): Bitboard {
-    self.occupied().bitNot()
+    self.occupied().bit-not()
   }
 
-  fn genWhitePawnMoves(self: GameState): List[Move] {
-     let* moves = List/empty[Move]();
+  fn genWhitePawnMoves(self: GameState): list[Move] {
+     let* _moves = list/empty[Move]();
      let notOccupied = self.notOccupied();
      // Single push: shift pawns up one rank if square is empty
-     let singlePush = (self.wPawns.shiftLeft(8)).bitAnd(notOccupied);
-     let singlePushSources = self.wPawns.bitAnd(singlePush.shiftRight(8));
+     let singlePush = (self.wPawns << 8) & notOccupied;
+     let _singlePushSources = self.wPawns & (singlePush >> 8);
      println("White single push");
      printBitboard(singlePush);
      // Double push: for pawns on rank 2, shift up two ranks if both squares empty
-     let doublePush = ((singlePush.bitAnd(RANK_3)).shiftLeft(8)).bitAnd(notOccupied);
+     let doublePush = ((singlePush & RANK_3) << 8) & notOccupied;
      println("White double push");
      printBitboard(doublePush);
      if self.enPassantFile != -1 {
         let enPassantTargetSquareIndex: u64 = self.enPassantFile.as[u8].as[u64] + 5*8;
         let enPassantTargetSquareBit = indexToBit(enPassantTargetSquareIndex);
-        let enPassantTargetSquareOccupied = enPassantTargetSquareBit.bitAnd(self.bOccupied());
-        let enPassantAttackers = enPassantTargetSquareOccupied.bitAnd(enPassantTargetSquareBit.shiftLeft(1)).bitAnd(enPassantTargetSquareBit.shiftRight(1));
+        let enPassantTargetSquareOccupied = enPassantTargetSquareBit & self.bOccupied();
+        let _enPassantAttackers = 
+          enPassantTargetSquareOccupied & (enPassantTargetSquareBit << 1) & (enPassantTargetSquareBit >> 1);
         printBitboard(enPassantTargetSquareOccupied);
      };
-     List/empty()
+     list/empty()
   }
 }
 
@@ -195,7 +196,7 @@ fn cmdInfo(): string {
   ].join("\n")
 }
 
-fn cmdGo(go: string): string {
+fn cmdGo(_go: string): string {
   "bestmove e2e4"
   // Or if pondering:
   // "bestmove e2e4 ponder e7e5";
@@ -235,7 +236,7 @@ fn handleCommand(context eng: Engine)(command: uci/Command): ?string {
 
 deftype Engine = { game: GameState }
 ns Engine {
-  fn inDebugMode(self: Engine): bool { true }
+  fn inDebugMode(_self: Engine): bool { true }
 }
 
 fn debugLog(context eng: Engine)(s: string) {
@@ -244,17 +245,17 @@ fn debugLog(context eng: Engine)(s: string) {
   }
 }
 
-fn run(args: View[string]): Result[i32, string] {
+fn run(_args: span[string]): result[i32, string] {
   let context eng: Engine = { game: GameState/startPos() };
   loop {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/readLine(2048).try; 
     switch uci/parseCommand(cmd) {
-      .Err(msg) -> eprintln("[debug] {msg}"),
-      .Ok(cmd) -> {
+      .err(msg) -> eprintln("[debug] {msg}"),
+      .ok(cmd) -> {
         let response = handleCommand(cmd);
         // If a command produces output, it goes to stdout with a newline added
-        if response is .Some(r) { println(r) };
+        if response is .some(r) { println(r) };
       }
     }
   };

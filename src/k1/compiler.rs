@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
@@ -371,14 +371,14 @@ pub fn compile_program(
         eprintln!("{}", e);
         return Err(CompileProgramError::TyperFailure(Box::new(p)));
     };
-    let total_elapsed_ms = start_time.elapsed().as_millis();
+    let total_elapsed_ns = start_time.elapsed().as_nanos();
     let warning_count = p.errors.iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
     p.print_timing_info(
         &src_path.to_string_lossy(),
-        total_elapsed_ms as u64,
+        total_elapsed_ns as u64,
         &mut std::io::stderr(),
     )
     .unwrap();
@@ -425,16 +425,10 @@ pub fn write_executable(
     let out_dir = &k1.ast.config.out_dir;
     let clang_time = std::time::Instant::now();
 
-    let llvm_base = PathBuf::from(
-        std::env::var("LLVM_SYS_211_PREFIX").expect("could not find llvm at $LLVM_SYS_211_PREFIX"),
-    );
-    let clang_path = llvm_base.join("bin").join("clang");
-    let mut build_cmd = std::process::Command::new(clang_path);
-    let llvm_lib_base = llvm_base.join("lib");
-    let bc_name = out_dir.join(module_name.with_extension("bc"));
+    let mut build_cmd = std::process::Command::new("cc");
+    let object_name = out_dir.join(module_name.with_extension("o"));
     let out_name = out_dir.join(module_name);
 
-    let llvm_include_path = llvm_base.join("include");
     let macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
     } else {
@@ -454,11 +448,6 @@ pub fn write_executable(
         }
     };
 
-    build_cmd.arg("-L");
-    build_cmd.arg(llvm_lib_base.into_os_string());
-    build_cmd.arg("-I");
-    build_cmd.arg(llvm_include_path);
-
     match target.target_os() {
         TargetOs::MacOs => {
             build_cmd.arg(macos_version_flag.as_ref().unwrap());
@@ -469,8 +458,8 @@ pub fn write_executable(
         TargetOs::Wasm => {}
     }
 
-    // Our actual compiled LLVM bitcode!
-    build_cmd.arg(bc_name);
+    // Our actual compiled k1 code!
+    build_cmd.arg(object_name);
 
     build_cmd.arg("-o");
     build_cmd.arg(out_name);
@@ -500,7 +489,7 @@ pub fn write_executable(
     }
 
     build_cmd.args(extra_options);
-    //eprintln!("Build Command: {:?}", build_cmd);
+    eprintln!("Build Command: {:?}", build_cmd);
     let build_status = build_cmd.status()?;
 
     if !build_status.success() {
@@ -524,6 +513,7 @@ pub fn codegen_module<'ctx, 'module>(
     let module_name = codegen.name().to_string();
     let module_name_path = PathBuf::from(&module_name);
     if let Err(e) = codegen.codegen_program() {
+        let use_color = std::io::stderr().is_terminal();
         write_source_location(
             &mut std::io::stderr(),
             &codegen.k1.ast.spans,
@@ -532,6 +522,7 @@ pub fn codegen_module<'ctx, 'module>(
             MessageLevel::Error,
             6,
             Some(&e.message),
+            use_color,
         )
         .unwrap();
         write_program_dump(codegen.k1);
@@ -546,15 +537,15 @@ pub fn codegen_module<'ctx, 'module>(
     };
 
     if args.write_llvm {
-        let llvm_text = codegen.output_llvm_ir_text();
+        let llvm_text = codegen.emit_llvm_ir_text();
         let mut f = File::create(out_dir.join(module_name_path.with_extension("ll")))
             .expect("Failed to create .ll file");
         f.write_all(llvm_text.as_bytes()).unwrap();
     }
     if do_write_executable {
-        let path = out_dir.join(module_name_path.with_extension("bc"));
-        if !codegen.write_bitcode_to_path(&path) {
-            bail!("Error writing bitcode to path: {}", path.display());
+        let path = out_dir.join(module_name_path.with_extension("o"));
+        if codegen.emit_object_file(&path).is_err() {
+            bail!("Error writing object file to path: {}", path.display());
         }
     }
 

@@ -1,4 +1,4 @@
-deftype Foo = { y: either Bar(Opt[static string]) }
+deftype Foo = { y: either Bar(opt[static string]) }
 
 fn main(): i32 {
   0
