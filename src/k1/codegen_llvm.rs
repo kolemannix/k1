@@ -314,6 +314,7 @@ struct DebugContext<'ctx> {
     debug_builder: DebugInfoBuilder<'ctx>,
     #[allow(unused)]
     compile_unit: DICompileUnit<'ctx>,
+    // TODO: there does not need to be a debug info stack anymore, it can just be the one entry
     debug_stack: Vec<DebugStackEntry<'ctx>>,
     strip_debug: bool,
 }
@@ -494,7 +495,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         debug: bool,
         optimize: bool,
     ) -> Self {
-        eprintln!("init codegen debug={debug} optimize={optimize}");
         let builder = ctx.create_builder();
         let char_type = ctx.i8_type();
         let mut llvm_module = ctx.create_module(&module.ast.name);
@@ -813,14 +813,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     AggType::Array { element_pt, len } => {
                         let element_type = self.codegen_type(element_pt);
                         let array_type = element_type.rich_type().array_type(len);
-                        let layout = self.k1.types.get_pt_layout(element_pt);
+                        let array_layout = self.k1.types.get_pt_layout(pt);
                         let di_type = self
                             .debug
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                layout.size_bits() as u64,
-                                layout.align_bits(),
+                                array_layout.size_bits() as u64,
+                                array_layout.align_bits(),
                                 &[],
                             )
                             .as_type();
@@ -830,7 +830,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             array_type,
                             element_type: self.mem.push_h(element_type),
                             di_type,
-                            layout,
+                            layout: array_layout,
                         })
                     }
                     AggType::Union { members } => {
@@ -1832,7 +1832,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                 }
             },
-            bc::Value::Global { id, .. } => {
+            bc::Value::GlobalAddr { id, .. } => {
                 let global_value = self.codegen_global(id)?;
                 Ok(global_value.as_pointer_value().as_basic_value_enum())
             }
@@ -1923,8 +1923,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     && !var_info.user_hidden
                 {
                     let name_str = self.k1.ident_str(var_info.name);
-                    // nocommit there does not need to be a debug info stack anymore
-                    eprintln!("create_auto_variable {}", name_str);
                     let debug_locn = self.get_debug_location_from_span(var_info.source_span);
                     let local_variable = self.debug.debug_builder.create_auto_variable(
                         self.debug.current_scope(),
@@ -1936,7 +1934,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         0,
                         cg_type.rich_repr_layout().align,
                     );
-                    dbg!(alloca_ptr, alloca_ptr.as_instruction());
                     self.debug.insert_declare_at_end(
                         alloca_ptr,
                         Some(local_variable),

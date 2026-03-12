@@ -1,7 +1,15 @@
-#debug
-fn main() {
-  let x = (1 * 100 * 2) / 2;
-  assert(x == 100);
+#debug fn array-uninit[t, n: static size](): array[t, n] {
+  let a: array[t, n] = uninit;
+  a
+}
+
+#debug fn big-struct(): { x: i64, y: i64, z: i64 } {
+  zeroed()
+}
+
+#debug fn main() {
+  let x = array-uninit[i64, 128];
+  let y = big-struct();
 
   {}
 }

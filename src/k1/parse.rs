@@ -2684,8 +2684,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let mut chars = text.chars().peekable();
                     if first_segment {
                         // Skip opening " or ` or p" or p`
-                        // nocommit: Maybe we just lex the actual strings (with tok_buf)
-                        // because this is very duplicative
+                        // Note(ugh!): Maybe we just lex the actual strings (with tok_buf)
+                        // because this is very duplicative between here and lex
                         let c = chars.next();
                         let c = if c == Some('p') { chars.next() } else { c };
                         if c != Some('"') && c != Some('`') {

@@ -1620,7 +1620,7 @@ fn resolve_value(
             };
             Ok(value)
         }
-        BcValue::Global { t, id } => resolve_global(k1, vm, id, t),
+        BcValue::GlobalAddr { t, id } => resolve_global(k1, vm, id, t),
         BcValue::Empty => Ok(Value(0)),
     }
 }
@@ -1632,7 +1632,8 @@ fn resolve_global(
     global_id: TypedGlobalId,
     t: PhysicalType,
 ) -> TyperResult<Value> {
-    // ** If referencing, allocate layout and perform a store to produce a valid address
+    // Globals in `bc` always represent an Address, or Storage, of the global, not the value
+
     // Case 1: It's a constant, already evaluated, stored in the global static space
     if let Some(v) = k1.vm_global_constant_lookups.get(&global_id) {
         return Ok(*v);

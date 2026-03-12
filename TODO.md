@@ -69,19 +69,24 @@ Simple but missing
 - [ ] Implement at least one format specifier (precision, pretty)
 
 - [ ] Return value binding, or named return values, for guaranteed RVO
-- [ ] Uninit in struct fields - just don't store there
+- [x] Uninit in struct fields - just don't store there
 
 ## [ ] Context ability types
 - [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
   - let context(impl Alloc) temp = mem/AllocMode.Arena;
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 
+## [ ] Distribute builds that work
+- [ ] Test on linux
+- [ ] Link in lld? ugh. For now maybe just ship with it
+- [ ] 
+
 ## Project: Optimize the bytecode a bit
 - [ ] Function inlining
 - [ ] Prune unreachable blocks
 
 ## Project: di. Debug Info tidyups
-- [ ] Fix random jumping to function header
+- [x] Fix random jumping to function header
 - [ ] Annotate U8s with boolean somehow where they are actually booleans
 
 ## Project: Recursive types take 2

@@ -214,7 +214,7 @@ pub enum Value {
     /// `Global` is always a storage location, regardless
     /// of the `k1` global declaration kind (referencing or not!)
     /// This greatly simplifies downstream code
-    Global {
+    GlobalAddr {
         t: PhysicalType,
         id: TypedGlobalId,
     },
@@ -227,6 +227,9 @@ pub enum Value {
         t: PhysicalType,
         index: u32,
     },
+    // FnRetSlot {
+    //     t: PhysicalType,
+    // },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
@@ -560,7 +563,7 @@ impl std::fmt::Display for FloatCmpPred {
 pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: &Value) -> InstKind {
     match value {
         Value::Inst(inst_id) => get_inst_kind(bc, types, *inst_id),
-        Value::Global { t: _, id: _ } => InstKind::PTR,
+        Value::GlobalAddr { t: _, id: _ } => InstKind::PTR,
         Value::StaticValue { t, id: _ } => InstKind::Value(*t),
         Value::FunctionAddr(_) => InstKind::PTR,
         Value::FnParam { t, .. } => InstKind::Value(*t),
@@ -649,16 +652,16 @@ impl InstKind {
     }
 
     fn is_ptr(&self) -> bool {
-        matches!(self, InstKind::Value(ptp) if ptp.is_ptr())
+        matches!(self, InstKind::Value(pt) if pt.is_ptr())
     }
     fn is_int(&self) -> bool {
-        matches!(self, InstKind::Value(ptp) if ptp.is_int())
+        matches!(self, InstKind::Value(pt) if pt.is_int())
     }
     fn is_u8(&self) -> bool {
-        matches!(self, InstKind::Value(ptp) if ptp.is_u8())
+        matches!(self, InstKind::Value(pt) if pt.is_u8())
     }
     fn is_aggregate(&self) -> bool {
-        matches!(self, InstKind::Value(ptp) if ptp.is_agg())
+        matches!(self, InstKind::Value(pt) if pt.is_agg())
     }
     fn is_storage(&self) -> bool {
         self.is_ptr() || self.is_aggregate()
@@ -1490,7 +1493,7 @@ fn compile_expr(
                         Some(r) => r.inner_type,
                     };
                     let value_pt = b.get_physical_type(value_type);
-                    let address = Value::Global { t: value_pt, id: global_id };
+                    let address = Value::GlobalAddr { t: value_pt, id: global_id };
                     match value_pt.to_enum() {
                         PhysicalTypeEnum::Empty => {
                             if is_reference {
@@ -2230,6 +2233,24 @@ fn compile_expr(
         }
         TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
         TypedExpr::Return(typed_return) => {
+            // Call retslot / RVO plan
+            // - Currently return is weird for big types, we return an alloca.
+            // But, we don't look at the inst_kind, and thus dont wrongly return a pointer
+            // The VM and llvm backends look at the function return type and do
+            // the right thing. In VM, we actually have a ret slot on the caller frame
+            // and we store there, and in llvm, we treat 'ret i<myagg>' as a store to sret
+            //
+            // So lets say we add 'retslot' as a function param here in bc
+            // It gets declared on the signature like a param so callers have to provide it
+            // either via fresh alloca or use the dst we have (the optimization case).
+            // Return here in bc actually stores to it, if it exists, or generates straight
+            // into it. We put metadata on this param so LLVM knows its an sret
+            // We remove a ton of complexity from the LLVM backend
+
+            // let ret_pt = b.get_physical_type(expr_type);
+            // match ret_pt.is_agg() {
+
+            // }
             let inst = compile_expr(b, None, typed_return.value)?;
             let ret = b.push_inst(Inst::Ret(inst), "");
             Ok(ret.as_value())
@@ -3066,7 +3087,7 @@ pub fn display_inst(
         }
         Inst::Alloca { t, vm_layout } => {
             write!(w, "alloca ")?;
-            k1.types.display_ptp(w, t)?;
+            k1.types.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
         Inst::Store { dst, value, t } => {
@@ -3089,7 +3110,7 @@ pub fn display_inst(
         }
         Inst::ArrayOffset { element_t, base, element_index } => {
             write!(w, "array_offset ")?;
-            k1.types.display_ptp(w, element_t)?;
+            k1.types.display_pt(w, element_t)?;
             write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { id } => {
@@ -3141,7 +3162,7 @@ pub fn display_inst(
         }
         Inst::CameFrom { t, incomings } => {
             write!(w, "comefrom ")?;
-            k1.types.display_ptp(w, t)?;
+            k1.types.display_pt(w, t)?;
             write!(w, " [")?;
             for (i, incoming) in bc.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
@@ -3152,7 +3173,9 @@ pub fn display_inst(
             write!(w, "]")?;
         }
         Inst::Ret(value) => {
-            write!(w, "ret {}", value)?;
+            write!(w, "ret ")?;
+            display_inst_kind(w, &k1.types, get_value_kind(bc, &k1.types, &value))?;
+            write!(w, " {}", value)?;
         }
         Inst::BoolNegate { v } => {
             write!(w, "bool not {}", v)?;
@@ -3162,7 +3185,7 @@ pub fn display_inst(
         }
         Inst::BitCast { v, to } => {
             write!(w, "bitcast ")?;
-            k1.types.display_ptp(w, to)?;
+            k1.types.display_pt(w, to)?;
             write!(w, " {}", v)?;
         }
         Inst::IntTrunc { v, to } => {
@@ -3300,7 +3323,7 @@ pub fn display_inst_kind(
     kind: InstKind,
 ) -> std::fmt::Result {
     match kind {
-        InstKind::Value(t) => types.display_ptp(w, t),
+        InstKind::Value(t) => types.display_pt(w, t),
         InstKind::Void => write!(w, "void"),
         InstKind::Terminator => write!(w, "terminator"),
     }
@@ -3350,7 +3373,7 @@ impl std::fmt::Display for Value {
 pub fn display_value(w: &mut impl Write, value: &Value) -> std::fmt::Result {
     match value {
         Value::Inst(inst_id) => write!(w, "i{}", inst_id.as_u32()),
-        Value::Global { id, .. } => write!(w, "g{}", id.as_u32()),
+        Value::GlobalAddr { id, .. } => write!(w, "g{}", id.as_u32()),
         Value::StaticValue { id, .. } => write!(w, "static{}", id.as_u32()),
         Value::FunctionAddr(function_id) => write!(w, "f{}", function_id.as_u32()),
         Value::FnParam { index, .. } => write!(w, "p{}", index),
