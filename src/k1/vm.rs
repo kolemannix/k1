@@ -131,7 +131,7 @@ pub mod k1_types {
     /// - buffer, span, and string, same layout
     pub struct K1BufferLike {
         pub len: usize,
-        pub data: *const u8,
+        pub data: *mut u8,
     }
 
     #[repr(u8)]
@@ -275,15 +275,10 @@ impl Vm {
         bc::display_unit_name(w, k1, frame.unit).unwrap();
         writeln!(w, "Base:  {:?}", frame.base_ptr).unwrap();
         write!(w, "ret ").unwrap();
-        match frame.ret_info.place {
-            RetPlace::Empty => w.write_str("{}").unwrap(),
-            RetPlace::ScalarCallInst { frame_index, inst_index } => {
-                write!(w, " [{frame_index}] reg {inst_index}").unwrap()
-            }
-            RetPlace::Addr { addr } => {
-                render_debug_value(w, self, k1, frame.ret_info.pt, Value::ptr(addr.cast_const()))
-                    .unwrap();
-            }
+        match frame.ret_info.ret_layout.size {
+            0 => w.write_str("{}").unwrap(),
+            1..=8 => write!(w, " [{frame_index}] reg {}", frame.ret_info.inst_index).unwrap(),
+            _ => write!(w, " [{frame_index}] store to {}", frame.ret_info.inst_index).unwrap(),
         }
         writeln!(w).unwrap();
         let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
@@ -319,9 +314,9 @@ impl Vm {
             }
         }
 
-        let bytes = self.stack.frame_to_bytes(frame.index);
-        write!(w, "\nDATA ({} bytes)\n", bytes.len()).unwrap();
-        write_bytes(w, bytes).unwrap();
+        // let bytes = self.stack.frame_to_bytes(frame.index);
+        // write!(w, "\nDATA ({} bytes)\n", bytes.len()).unwrap();
+        // write_bytes(w, bytes).unwrap();
         s
     }
 }
@@ -473,8 +468,8 @@ impl Value {
     }
 
     #[track_caller]
-    fn as_ptr(&self) -> *const u8 {
-        let p = self.0 as *const u8;
+    fn as_ptr(&self) -> *mut u8 {
+        let p = self.0 as *mut u8;
         sanity_check_ptr(p);
         p
     }
@@ -539,11 +534,10 @@ fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
     inst_id.as_u32() - offset
 }
 
-pub fn execute_compiled_unit(
+pub fn execute_compiled_expr(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     expr_id: TypedExprId,
-    args: &[StaticValueId],
     // These should have gotten compiled to StaticValue instructions
     _input_parameters: &[(VariableId, StaticValueId)],
 ) -> TyperResult<StaticValueId> {
@@ -553,7 +547,7 @@ pub fn execute_compiled_unit(
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
     //if unit.is_debug {
-    //eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
     //}
 
     match unit.unit_id {
@@ -565,29 +559,38 @@ pub fn execute_compiled_unit(
             // we'll just decode the last value we got I suppose
         }
     };
-    let top_ret_place = match unit.fn_type.return_type.to_enum() {
-        PhysicalTypeEnum::Empty => RetPlace::Empty,
-        PhysicalTypeEnum::Agg(_) | PhysicalTypeEnum::Scalar(_) => {
-            let pt_layout = k1.types.get_pt_layout(unit.fn_type.return_type);
-            let ret_addr = vm.stack.push_layout_uninit(pt_layout);
-            debug!(
-                "Pushing ret place for type {} at addr: {:p}",
-                k1.types.pt_to_string(unit.fn_type.return_type),
-                ret_addr
-            );
-            RetPlace::Addr { addr: ret_addr }
+
+    let top_frame_index = 0;
+
+    debug_assert!(vm.stack.frames.is_empty());
+    let top_ret_info = RetInfo {
+        pt: unit.fn_type.return_type,
+        frame_index: 0,
+        inst_index: 0,
+        ret_layout: unit.ret_layout,
+        ip: 0,
+        block: 0,
+    };
+
+    let logical_return_pt = unit.fn_type.logical_return_type();
+    let pt_layout = k1.types.get_pt_layout(logical_return_pt);
+    let ret_addr = vm.stack.push_layout_uninit(pt_layout);
+    debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
+    eprintln!(
+        "base execution return addr {:?} (offset {})",
+        ret_addr,
+        ret_addr.addr() - vm.stack.base_ptr().addr()
+    );
+    vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
+    debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
+
+    match unit.fn_type.out_param_pt {
+        None => {}
+        Some(_) => {
+            // For out param calls, tell the function about the address using param 0
+            vm.stack.set_param_value(top_frame_index, 0, Value::ptr(ret_addr.cast_const()));
         }
     };
-    let top_ret_info =
-        RetInfo { place: top_ret_place, pt: unit.fn_type.return_type, ip: 0, block: 0 };
-    vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
-    let top_frame_index = vm.stack.current_frame_index();
-    debug_assert_eq!(top_frame_index, 0);
-
-    for (param_index, arg) in args.iter().enumerate() {
-        let value = static_value_to_vm_value(k1, *arg, span);
-        vm.stack.set_param_value(top_frame_index, param_index as u32, value);
-    }
 
     let exit_code = exec_loop(k1, vm, unit)?;
 
@@ -603,25 +606,8 @@ pub fn execute_compiled_unit(
         if unit.fn_type.diverges {
             Ok(k1.static_values.empty_id())
         } else {
-            let vm_value = match top_ret_info.pt.to_enum() {
-                PhysicalTypeEnum::Empty => Value(0),
-                PhysicalTypeEnum::Scalar(scalar_type) => {
-                    // Since we stored the return value to this location, we need to load it
-                    // before invoking static conversion
-                    let RetPlace::Addr { addr } = top_ret_info.place else {
-                        panic!("We set this to Addr")
-                    };
-                    let loaded = load_scalar(scalar_type, addr.cast_const());
-                    loaded
-                }
-                PhysicalTypeEnum::Agg(_) => {
-                    let RetPlace::Addr { addr } = top_ret_info.place else {
-                        panic!("We set this to Addr")
-                    };
-                    Value::ptr(addr.cast_const())
-                }
-            };
-            let returned_value = vm_value_to_static_value(k1, expr_type, vm_value, span)?;
+            let loaded = load_value(logical_return_pt, ret_addr);
+            let returned_value = vm_value_to_static_value(k1, expr_type, loaded, span)?;
             Ok(returned_value)
         }
     }
@@ -708,7 +694,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let dst = resolve_value!(dst);
 
                 let vm_value = resolve_value!(value);
-                store_scalar(t, dst.as_ptr().cast_mut(), vm_value);
+                store_scalar(t, dst.as_ptr(), vm_value);
 
                 // Store Produces no value, no need to set
                 ip += 1;
@@ -727,7 +713,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let dst_ptr = dst_value.as_ptr();
                 let src_ptr = src_value.as_ptr();
 
-                memmove(src_ptr, dst_ptr.cast_mut(), vm_size as usize);
+                memmove(src_ptr, dst_ptr, vm_size as usize);
                 ip += 1
             }
             Inst::StructOffset { base, vm_offset, .. } => {
@@ -754,36 +740,50 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             Inst::Call { id } => {
                 let call = k1.bytecode.calls.get(id);
                 let ret_pt = call.ret_type;
-                // Figure out where we're returning to
-                let return_frame_index = vm.stack.current_frame_index();
-                let ret_place = if call.ret_type.is_empty() {
-                    RetPlace::Empty
-                } else {
-                    match call.dst {
-                        Some(bc_dst) => {
-                            RetPlace::Addr { addr: resolve_value!(bc_dst).as_ptr().cast_mut() }
-                        }
-                        None => {
-                            RetPlace::ScalarCallInst { inst_index, frame_index: return_frame_index }
-                        }
-                    }
+                let ret_layout = k1.types.get_pt_layout(ret_pt);
+                let caller_frame_index = vm.stack.current_frame_index();
+
+                let call = k1.bytecode.calls.get(id);
+                let call_args = call.args;
+
+                // This captures the case where the return type is too large for a
+                // register, and too small for an out param.
+                // We push caller space and store that address in the call's inst register slot,
+                // which gets written to in fulfill_return
+                if ret_layout.size > size_of::<Value>() as u32 {
+                    let dst = vm.stack.push_layout_uninit(ret_layout);
+                    vm.stack.set_inst_value(caller_frame_index, inst_index, Value::ptr(dst));
                 };
-                let ret_info = RetInfo { pt: ret_pt, place: ret_place, ip: ip + 1, block: b };
 
                 macro_rules! builtin_return {
                     ($value:expr) => {{
-                        fulfill_return(k1, vm, ret_info, $value);
+                        fulfill_return(
+                            k1,
+                            vm,
+                            caller_frame_index,
+                            inst_index,
+                            ret_layout.size,
+                            ret_pt,
+                            $value,
+                        );
                         ip += 1;
                         continue 'exec;
                     }};
                     () => {{
-                        fulfill_return(k1, vm, ret_info, Value(0));
+                        // nocommit: remove unnecessary store
+                        fulfill_return(
+                            k1,
+                            vm,
+                            caller_frame_index,
+                            inst_index,
+                            ret_layout.size,
+                            ret_pt,
+                            Value(0),
+                        );
                         ip += 1;
                         continue 'exec;
                     }};
                 }
-                let call = k1.bytecode.calls.get(id);
-                let call_args = call.args;
                 let dispatch_function_id = match call.callee {
                     BcCallee::Extern(lib_name, name, function_id) => {
                         let result: Value = vm_ffi::handle_ffi_call(
@@ -799,209 +799,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         )?;
                         builtin_return!(result)
                     }
-                    BcCallee::Builtin(_, bc_builtin) => match bc_builtin {
-                        bc::BackendBuiltin::TypeSchema => {
-                            // intern fn typeSchema(id: u64): TypeSchema
-                            let type_id_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
-                            let type_id =
-                                TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
-                            let Some(schema_static_value_id) = k1.type_schemas.get(&type_id) else {
-                                vm_ice!(
-                                    k1,
-                                    vm,
-                                    "Missing type schema: {}",
-                                    k1.type_id_to_string(type_id)
-                                )
-                            };
-                            let schema_vm_value =
-                                static_value_to_vm_value(k1, *schema_static_value_id, vm.eval_span);
-                            builtin_return!(schema_vm_value);
-                        }
-                        bc::BackendBuiltin::TypeName => {
-                            // intern fn typeName(id: u64): string
-                            let type_id_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
-                            let type_id =
-                                TypeId::from_nzu32(NonZeroU32::new(type_id_arg as u32).unwrap());
-                            let name_value_id = *k1.type_names.get(&type_id).unwrap();
-
-                            let name_string_value =
-                                static_value_to_vm_value(k1, name_value_id, vm.eval_span);
-                            builtin_return!(name_string_value);
-                        }
-                        bc::BackendBuiltin::Allocate | bc::BackendBuiltin::AllocateZeroed => {
-                            // intern fn allocZeroed(size: uword, align: uword): Pointer
-                            let zero = bc_builtin == bc::BackendBuiltin::AllocateZeroed;
-                            let size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let align: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
-                            let Ok(layout) = std::alloc::Layout::from_size_align(
-                                size.0 as usize,
-                                align.0 as usize,
-                            ) else {
-                                vm_crash(
-                                    k1,
-                                    vm,
-                                    format!(
-                                        "Rust didn't like this layout: size={size}, align={align}"
-                                    ),
-                                )
-                            };
-                            let ptr = allocate(layout, zero);
-
-                            builtin_return!(Value::ptr(ptr.cast_const()));
-                        }
-                        bc::BackendBuiltin::Reallocate => {
-                            // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
-                            let old_ptr: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let old_size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
-                            let align: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
-                            let new_size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 3));
-                            let layout = std::alloc::Layout::from_size_align(
-                                old_size.as_usize(),
-                                align.as_usize(),
-                            )
-                            .unwrap();
-                            let ptr = unsafe {
-                                std::alloc::realloc(
-                                    old_ptr.as_ptr().cast_mut(),
-                                    layout,
-                                    new_size.as_usize(),
-                                )
-                            };
-
-                            builtin_return!(Value::ptr(ptr.cast_const()));
-                        }
-                        bc::BackendBuiltin::Free => {
-                            // intern fn free(ptr: Pointer, size: uword, align: uword): unit
-                            let ptr =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
-                            let size =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).as_usize();
-                            let align =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2)).as_usize();
-
-                            let layout =
-                                std::alloc::Layout::from_size_align(size as usize, align as usize)
-                                    .unwrap();
-                            unsafe { std::alloc::dealloc(ptr as *mut u8, layout) };
-
-                            builtin_return!(Value::ptr(ptr))
-                        }
-                        bc::BackendBuiltin::MemCopy => {
-                            // intern fn copy( dst: Pointer, src: Pointer, count: uword): unit
-                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let src: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
-                            let count: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
-                            memcopy(src.as_ptr(), dst.as_ptr().cast_mut(), count.as_usize());
-
-                            builtin_return!()
-                        }
-                        bc::BackendBuiltin::MemSet => {
-                            //intern fn set(dst: Pointer, value: u8, count: uword): unit
-                            let dst: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let value: u8 =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits() as u8;
-                            let count: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
-                            unsafe {
-                                std::ptr::write_bytes(
-                                    dst.as_ptr().cast_mut(),
-                                    value,
-                                    count.as_usize(),
-                                )
-                            };
-
-                            builtin_return!()
-                        }
-                        bc::BackendBuiltin::MemEquals => {
-                            //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
-                            let p1: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let p2: Value = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
-                            let size: Value =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
-
-                            let p1_ptr = p1.as_ptr();
-                            let p2_ptr = p2.as_ptr();
-                            let size_usize = size.bits() as usize;
-
-                            let p1_slice =
-                                unsafe { slice_from_raw_parts_checked(vm, k1, p1_ptr, size_usize) };
-                            let p2_slice =
-                                unsafe { slice_from_raw_parts_checked(vm, k1, p2_ptr, size_usize) };
-
-                            let eq = p1_slice == p2_slice;
-                            let value = Value::bool(eq);
-
-                            builtin_return!(value)
-                        }
-                        bc::BackendBuiltin::Exit => {
-                            let exit_code =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
-                            break exit_code as i32;
-                        }
-                        bc::BackendBuiltin::CompilerMessage => {
-                            // intern fn emitCompilerMessage(
-                            //    locn: compiler/SourceLocation,
-                            //    level: (either(u8) Info, Warn, Error),
-                            //    msg: string
-                            //  ): unit
-                            // todo!()
-                            let location_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
-                            let level_arg = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
-                            let message_arg =
-                                resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
-                            let location = unsafe {
-                                (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read()
-                            };
-                            let level = unsafe {
-                                (level_arg.as_ptr() as *const k1_types::CompilerMessageLevel).read()
-                            };
-                            let level = match level {
-                                k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
-                                k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
-                                k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
-                            };
-                            let message = value_to_string_id(k1, message_arg).map_err(|msg| {
-                                errf!(
-                                    vm.eval_span,
-                                    "Bad message string passed to EmitCompilerMessage: {msg}"
-                                )
-                            })?;
-                            let filename =
-                                unsafe { location.filename.to_str() }.map_err(|msg| {
-                                    errf!(
-                                        vm.eval_span,
-                                        "Bad filename string passed to EmitCompilerMessage: {msg}"
-                                    )
-                                })?;
-
-                            eprintln!(
-                                "[{}:{} {}] {}",
-                                filename,
-                                location.line,
-                                level.name_str().color(level.color()),
-                                k1.get_string(message)
-                            );
-
-                            vm.compiler_messages.push(CompilerMessage {
-                                level,
-                                message,
-                                filename: filename.to_string(),
-                                line: location.line as u32,
-                            });
-
-                            builtin_return!()
-                        }
-                    },
                     BcCallee::Direct(function_id) => function_id,
                     BcCallee::Indirect(_, value) => {
                         // Decode function id from 'pointer'
@@ -1010,6 +807,247 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         let function_id_nzu32 = NonZeroU32::new(function_id_u64 as u32).unwrap();
                         let function_id = FunctionId::from_nzu32(function_id_nzu32);
                         function_id
+                    }
+                    BcCallee::Builtin(_, bc_builtin) => {
+                        match bc_builtin {
+                            bc::BackendBuiltin::TypeSchema => {
+                                // intern fn typeSchema(id: u64): TypeSchema
+                                let out_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
+                                let type_id_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits();
+                                let type_id = TypeId::from_nzu32(
+                                    NonZeroU32::new(type_id_arg as u32).unwrap(),
+                                );
+                                let Some(schema_static_value_id) = k1.type_schemas.get(&type_id)
+                                else {
+                                    vm_ice!(
+                                        k1,
+                                        vm,
+                                        "Missing type schema: {}",
+                                        k1.type_id_to_string(type_id)
+                                    )
+                                };
+                                // nocommit dumb to have to look this up
+                                let type_schema_type_id =
+                                    k1.static_values.get(*schema_static_value_id).get_type();
+                                let type_schema_pt = k1
+                                    .types
+                                    .get_physical_type(&k1.static_values, type_schema_type_id)
+                                    .unwrap();
+
+                                let schema_vm_value = static_value_to_vm_value(
+                                    k1,
+                                    *schema_static_value_id,
+                                    vm.eval_span,
+                                );
+                                store_value(
+                                    &k1.types,
+                                    type_schema_pt,
+                                    out_arg,
+                                    schema_vm_value,
+                                );
+                                builtin_return!(schema_vm_value);
+                            }
+                            bc::BackendBuiltin::TypeName => {
+                                // intern fn typeName(id: u64): string
+                                let type_id_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
+                                let type_id = TypeId::from_nzu32(
+                                    NonZeroU32::new(type_id_arg as u32).unwrap(),
+                                );
+                                let name_value_id = *k1.type_names.get(&type_id).unwrap();
+
+                                let name_string_value =
+                                    static_value_to_vm_value(k1, name_value_id, vm.eval_span);
+                                builtin_return!(name_string_value);
+                            }
+                            bc::BackendBuiltin::Allocate | bc::BackendBuiltin::AllocateZeroed => {
+                                // intern fn allocZeroed(size: uword, align: uword): Pointer
+                                let zero = bc_builtin == bc::BackendBuiltin::AllocateZeroed;
+                                let size: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let align: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                let Ok(layout) = std::alloc::Layout::from_size_align(
+                                    size.0 as usize,
+                                    align.0 as usize,
+                                ) else {
+                                    vm_crash(
+                                        k1,
+                                        vm,
+                                        format!(
+                                            "Rust didn't like this layout: size={size}, align={align}"
+                                        ),
+                                    )
+                                };
+                                let ptr = allocate(layout, zero);
+
+                                builtin_return!(Value::ptr(ptr));
+                            }
+                            bc::BackendBuiltin::Reallocate => {
+                                // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
+                                let old_ptr: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let old_size: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                let align: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                let new_size: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 3));
+                                let layout = std::alloc::Layout::from_size_align(
+                                    old_size.as_usize(),
+                                    align.as_usize(),
+                                )
+                                .unwrap();
+                                let ptr = unsafe {
+                                    std::alloc::realloc(
+                                        old_ptr.as_ptr(),
+                                        layout,
+                                        new_size.as_usize(),
+                                    )
+                                };
+
+                                builtin_return!(Value::ptr(ptr));
+                            }
+                            bc::BackendBuiltin::Free => {
+                                // intern fn free(ptr: Pointer, size: uword, align: uword): empty
+                                let ptr =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
+                                let size = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1))
+                                    .as_usize();
+                                let align = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2))
+                                    .as_usize();
+
+                                let layout = std::alloc::Layout::from_size_align(
+                                    size as usize,
+                                    align as usize,
+                                )
+                                .unwrap();
+                                unsafe { std::alloc::dealloc(ptr, layout) };
+
+                                builtin_return!(Value::ptr(ptr))
+                            }
+                            bc::BackendBuiltin::MemCopy => {
+                                // intern fn copy( dst: Pointer, src: Pointer, count: uword): empty
+                                let dst: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let src: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                let count: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+
+                                memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
+
+                                builtin_return!()
+                            }
+                            bc::BackendBuiltin::MemSet => {
+                                //intern fn set(dst: Pointer, value: u8, count: uword): empty
+                                let dst: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let value: u8 =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits()
+                                        as u8;
+                                let count: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                unsafe {
+                                    std::ptr::write_bytes(
+                                        dst.as_ptr(),
+                                        value,
+                                        count.as_usize(),
+                                    )
+                                };
+
+                                builtin_return!()
+                            }
+                            bc::BackendBuiltin::MemEquals => {
+                                //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
+                                let p1: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let p2: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                let size: Value =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+
+                                let p1_ptr = p1.as_ptr();
+                                let p2_ptr = p2.as_ptr();
+                                let size_usize = size.bits() as usize;
+
+                                let p1_slice = unsafe {
+                                    slice_from_raw_parts_checked(vm, k1, p1_ptr, size_usize)
+                                };
+                                let p2_slice = unsafe {
+                                    slice_from_raw_parts_checked(vm, k1, p2_ptr, size_usize)
+                                };
+
+                                let eq = p1_slice == p2_slice;
+                                let value = Value::bool(eq);
+
+                                builtin_return!(value)
+                            }
+                            bc::BackendBuiltin::Exit => {
+                                let exit_code =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
+                                break exit_code as i32;
+                            }
+                            bc::BackendBuiltin::CompilerMessage => {
+                                // intern fn emitCompilerMessage(
+                                //    locn: compiler/SourceLocation,
+                                //    level: (either(u8) Info, Warn, Error),
+                                //    msg: string
+                                //  ): unit
+                                // todo!()
+                                let location_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                let level_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                let message_arg =
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                let location = unsafe {
+                                    (location_arg.as_ptr() as *const k1_types::K1SourceLocation)
+                                        .read()
+                                };
+                                let level = unsafe {
+                                    (level_arg.as_ptr() as *const k1_types::CompilerMessageLevel)
+                                        .read()
+                                };
+                                let level = match level {
+                                    k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
+                                    k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
+                                    k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
+                                };
+                                let message = value_to_string_id(k1, message_arg).map_err(|msg| {
+                                errf!(
+                                    vm.eval_span,
+                                    "Bad message string passed to EmitCompilerMessage: {msg}"
+                                )
+                            })?;
+                                let filename =
+                                unsafe { location.filename.to_str() }.map_err(|msg| {
+                                    errf!(
+                                        vm.eval_span,
+                                        "Bad filename string passed to EmitCompilerMessage: {msg}"
+                                    )
+                                })?;
+
+                                eprintln!(
+                                    "[{}:{} {}] {}",
+                                    filename,
+                                    location.line,
+                                    level.name_str().color(level.color()),
+                                    k1.get_string(message)
+                                );
+
+                                vm.compiler_messages.push(CompilerMessage {
+                                    level,
+                                    message,
+                                    filename: filename.to_string(),
+                                    line: location.line as u32,
+                                });
+
+                                builtin_return!()
+                            }
+                        }
                     }
                 };
                 let Some(compiled_function) = k1.bytecode.functions.get(dispatch_function_id)
@@ -1028,27 +1066,33 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let new_frame_index = caller_frame_index + 1;
 
                 // - Push a stack frame
-                vm.stack.push_new_frame(Some(vm.eval_span), compiled_function, ret_info);
+                vm.stack.push_new_frame(
+                    Some(vm.eval_span),
+                    compiled_function,
+                    RetInfo {
+                        pt: ret_pt,
+                        frame_index: caller_frame_index,
+                        inst_index,
+                        ret_layout,
+                        ip: ip + 1,
+                        block: b,
+                    },
+                );
                 if vm.stack.frames.len() >= 1024 {
                     eprintln!("vm stack {}", vm.stack.frames.len());
                     eprintln!("{}", make_stack_trace(k1, &vm.stack))
                 }
                 debug_assert_eq!(new_frame_index, vm.stack.current_frame_index());
 
-                // Prepare the function's arguments
+                // Point the param registers at the function's arguments
                 for (index, arg) in k1.bytecode.mem.getn(call_args).iter().enumerate() {
-                    // Note: These need to execute before we push, in case they access this stack's
-                    // params or instrs by index, which is basically always! The other option would
-                    // be parameterizing 'resolve_value' by stack frame
-
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
+                    vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
 
                     //let arg_pt =
                     //    bc::get_value_kind(&k1.bytecode, &k1.types, arg).expect_value().unwrap();
                     //eprintln!("p{index} = {}", debug_value_to_string(vm, k1, arg_pt, vm_value));
-
-                    vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
                 }
 
                 // - Set 'pc' (which is blocks + b + i)
@@ -1056,29 +1100,41 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::Ret(bc_value) => {
                 let cur_frame = vm.stack.current_frame();
+                let cur_frame_index = cur_frame.index;
                 let ret_info = cur_frame.ret_info;
 
                 let returned_value = resolve_value!(bc_value);
 
-                //eprintln!("Ret: {}", debug_value_to_string(vm, k1, ret_info.t, returned_value));
+                //eprintln!("Ret: {}", debug_value_to_string(vm, k1, ret_info.pt, returned_value));
                 //vm.dump_current_frame(k1);
-                fulfill_return(k1, vm, ret_info, returned_value);
 
-                let _popped = vm.stack.pop_frame();
-
-                match vm.stack.current_frame_opt() {
-                    None => {
-                        break 'exec 0;
-                    }
-                    Some(current) => {
-                        goto_unit!(
-                            current.blocks,
-                            current.inst_offset,
-                            ret_info.block,
-                            ret_info.ip
+                let is_execution_end = cur_frame_index == 0;
+                if !is_execution_end {
+                    fulfill_return(
+                        k1,
+                        vm,
+                        ret_info.frame_index,
+                        ret_info.inst_index,
+                        ret_info.ret_layout.size,
+                        ret_info.pt,
+                        returned_value,
+                    );
+                    let _popped = vm.stack.pop_frame();
+                    let current = vm.stack.current_frame_opt().unwrap();
+                    goto_unit!(current.blocks, current.inst_offset, ret_info.block, ret_info.ip);
+                } else {
+                    // Shove the return value in a special place
+                    if !ret_info.pt.is_empty() {
+                        store_value(
+                            &k1.types,
+                            ret_info.pt,
+                            unsafe { vm.stack.base_ptr().cast_mut().byte_add(8) }, // nocommit
+                            returned_value,
                         );
                     }
-                };
+                    let _popped = vm.stack.pop_frame();
+                    break 'exec 0;
+                }
             }
             Inst::Jump(block_index) => {
                 jump!(block_index);
@@ -1670,28 +1726,35 @@ fn resolve_global(
     if is_constant {
         let dst = k1.vm_static_stack.push_layout_uninit(layout);
         store_value(&k1.types, t, dst, shared_vm_value);
-        let addr = Value::ptr(dst.cast_const());
+        let addr = Value::ptr(dst);
         k1.vm_global_constant_lookups.insert(global_id, addr);
         Ok(addr)
     } else {
         // We need a local copy of this
         let dst = vm.static_stack.push_layout_uninit(layout);
         store_value(&k1.types, t, dst, shared_vm_value);
-        let addr = Value::ptr(dst.cast_const());
+        let addr = Value::ptr(dst);
         vm.globals.insert(global_id, addr);
         Ok(addr)
     }
 }
 
-fn fulfill_return(k1: &TypedProgram, vm: &mut Vm, ret_info: RetInfo, returned_value: Value) {
-    match ret_info.place {
-        RetPlace::Empty => {}
-        RetPlace::ScalarCallInst { inst_index, frame_index } => {
-            vm.stack.set_inst_value(frame_index, inst_index, returned_value);
-        }
-        RetPlace::Addr { addr } => {
-            store_value(&k1.types, ret_info.pt, addr, returned_value);
-        }
+fn fulfill_return(
+    k1: &TypedProgram,
+    vm: &mut Vm,
+    frame_index: u32,
+    inst_index: u32,
+    ret_size: u32,
+    ret_type: PhysicalType,
+    returned_value: Value,
+) {
+    if ret_size > size_of::<Value>() as u32 {
+        let addr = vm.stack.get_inst_value(frame_index, inst_index).as_ptr();
+        //eprintln!("fulfill_return [{}] to {:?}, size: {}", frame_index, addr, ret_size);
+        store_value(&k1.types, ret_type, addr, returned_value);
+    } else {
+        //eprintln!("fulfill_return [{}] to reg {}, size: {}", frame_index, inst_index, ret_size);
+        vm.stack.set_inst_value(frame_index, inst_index, returned_value)
     }
 }
 
@@ -1732,7 +1795,7 @@ pub fn static_value_to_vm_value(
 
             store_static_value(k1, struct_base, static_value_id);
 
-            Value::ptr(struct_base.cast_const())
+            Value::ptr(struct_base)
         }
         StaticValue::Enum(e) => {
             let layout = k1.get_layout(e.enum_type_id);
@@ -1740,7 +1803,7 @@ pub fn static_value_to_vm_value(
 
             store_static_value(k1, enum_base, static_value_id);
 
-            Value::ptr(enum_base.cast_const())
+            Value::ptr(enum_base)
         }
         StaticValue::LinearContainer(container) => {
             let (element_type, _container_kind) =
@@ -1757,13 +1820,12 @@ pub fn static_value_to_vm_value(
 
             match kind {
                 StaticContainerKind::Span => {
-                    let rust_span =
-                        k1_types::K1BufferLike { len, data: array_base_ptr.cast_const() };
+                    let rust_span = k1_types::K1BufferLike { len, data: array_base_ptr };
                     let span_struct_ptr = k1.vm_static_stack.push_t(rust_span);
 
                     Value::ptr(span_struct_ptr)
                 }
-                StaticContainerKind::Array => Value::ptr(array_base_ptr.cast_const()),
+                StaticContainerKind::Array => Value::ptr(array_base_ptr),
             }
         }
     };
@@ -1837,8 +1899,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             match kind {
                 StaticContainerKind::Span => {
                     // Store the struct to dst
-                    let rust_span =
-                        k1_types::K1BufferLike { len, data: array_base_ptr.cast_const() };
+                    let rust_span = k1_types::K1BufferLike { len, data: array_base_ptr };
 
                     unsafe { *(dst as *mut k1_types::K1BufferLike) = rust_span };
                 }
@@ -1873,8 +1934,8 @@ fn store_static_array_elements(
 pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let s = k1.get_string(string_id);
     // This just points into the Rust memory for the string's data. Teehee uwuu
-    // I need to guarantee it can't re-allocate because that's still sadly using the library
-    let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr() };
+    // I need to guarantee it can't re-allocate because that's still sadly using the string interner library
+    let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let char_span_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
         let string_layout = k1.get_layout(STRING_TYPE_ID);
@@ -1930,7 +1991,8 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
     match t.to_enum() {
         PhysicalTypeEnum::Empty => {
-            eprintln!("Storing Empty; should probably be illegal")
+            panic!("Storing Empty; should probably be illegal")
+            // eprintln!("Storing Empty; should probably be illegal")
         }
         PhysicalTypeEnum::Scalar(scalar_type) => store_scalar(scalar_type, dst, value),
         PhysicalTypeEnum::Agg(pt_id) => {
@@ -1942,12 +2004,14 @@ pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value
 }
 
 fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
+    //debug!("memmove src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy(src, dst, size_bytes);
     }
 }
 
 fn memcopy(src: *const u8, dst: *mut u8, size_bytes: usize) {
+    //debug!("memcopy src {:?} dst {:?} size {}", src, dst, size_bytes);
     unsafe {
         core::ptr::copy_nonoverlapping(src, dst, size_bytes);
     }
@@ -1989,17 +2053,16 @@ pub struct Stack {
 }
 
 #[derive(Clone, Copy)]
-enum RetPlace {
-    Empty,
-    ScalarCallInst { frame_index: u32, inst_index: u32 },
-    Addr { addr: *mut u8 },
-}
-
-#[derive(Clone, Copy)]
 pub struct RetInfo {
     pt: PhysicalType,
-    // Where the return value goes. Either a register or an address, or Empty for ZST case ("void")
-    place: RetPlace,
+
+    /// When we Return from a call in the vm
+    /// We either directly write the value into the instruction register at (frame_index, inst_index)
+    /// Or we perform a store to the address in that register. We use pt and size to help us know which
+    frame_index: u32,
+    inst_index: u32,
+
+    ret_layout: Layout,
     ip: u32,
     block: u32,
 }
@@ -2086,7 +2149,15 @@ impl Stack {
         let inst_base = unsafe { base_ptr.byte_add(param_count as usize * size_of::<Value>()) };
         let inst_slice =
             core::ptr::slice_from_raw_parts_mut(inst_base as *mut Value, inst_count as usize);
-        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info, inst_slice);
+
+        let frame = StackFrameRecord::make(
+            index,
+            base_ptr,
+            call_span,
+            owner,
+            ret_info,
+            inst_slice,
+        );
         self.mem.push_slice_uninit::<Value>(param_count as usize + inst_count as usize);
         self.frames.push(frame);
     }
@@ -2112,18 +2183,13 @@ impl Stack {
         self.frames.len() as u32 - 1
     }
 
-    #[allow(unused)]
-    fn caller_frame_index(&self) -> u32 {
-        self.frames.len() as u32 - 2
-    }
-
-    #[allow(unused)]
-    fn caller_frame(&self) -> &StackFrameRecord {
-        self.frames.get(self.caller_frame_index() as usize).unwrap()
-    }
-
     fn current_frame(&self) -> &StackFrameRecord {
         self.frames.last().unwrap()
+    }
+
+    #[allow(unused)]
+    fn current_frame_mut(&mut self) -> &mut StackFrameRecord {
+        self.frames.last_mut().unwrap()
     }
 
     fn current_frame_opt(&self) -> Option<&StackFrameRecord> {

@@ -1,1 +1,16 @@
-fn main(): i32 { 0 }
+fn smallStruct(): { a: u8, b: u8, c: u8 } {
+  { a: 1, b: 2, c: 3 }
+}
+#debug fn main(): i32 { 
+  "{1}{2}";
+
+  let ss = smallStruct();
+  assert(ss.a == 1);
+  assert(ss.b == 2);
+  assert(ss.c == 3);
+
+  
+  0
+}
+
+#static main()

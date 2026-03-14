@@ -15,6 +15,7 @@ mod stack_tests {
             fn_type: bc::PhysicalFunctionType {
                 return_type: PhysicalType::EMPTY,
                 diverges: false,
+                out_param_pt: None,
                 params: MSlice::empty(),
                 abi_mode: AbiMode::Internal,
             },

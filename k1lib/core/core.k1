@@ -120,8 +120,8 @@ ns sys {
 
   fn random(upperBound: u32): u32 {
     #if k1/os == "macos" arc4random_uniform(upperBound)
-    else if k1/OS == "linux" crash("linux 'random' unimpl")
-    else if k1/OS == "wasm" crash("wasm 'random' unimpl")
+    else if k1/os == "linux" crash("linux 'random' unimpl")
+    else if k1/os == "wasm" crash("wasm 'random' unimpl")
     else crash("unreachable os")
   }
 

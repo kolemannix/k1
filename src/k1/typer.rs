@@ -5281,12 +5281,15 @@ impl TypedProgram {
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
+        if is_debug {
+            eprintln!("COMPILED TO BLOCK {}", self.expr_to_string(expr));
+        }
 
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_bytecode()?;
 
-        let execution_result = vm::execute_compiled_unit(self, vm, expr, &[], input_parameters)
-            .map_err(|mut e| {
+        let execution_result =
+            vm::execute_compiled_expr(self, vm, expr, input_parameters).map_err(|mut e| {
                 let stack_trace = vm::make_stack_trace(self, &vm.stack);
                 e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
                 e
@@ -10292,7 +10295,10 @@ impl TypedProgram {
                     return failf!(call_span, "format needs a format string");
                 }
                 if fn_call.args.len() > 2 {
-                    return failf!(call_span, "format takes at most 2 arguments: the format string, and the format values");
+                    return failf!(
+                        call_span,
+                        "format takes at most 2 arguments: the format string, and the format values"
+                    );
                 }
                 let fmt_string_arg = *self.ast.p_call_args.get_nth(fn_call.args, 0);
                 match self.ast.exprs.get(fmt_string_arg.value) {

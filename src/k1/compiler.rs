@@ -450,9 +450,9 @@ pub fn write_executable(
 
     match target.target_os() {
         TargetOs::MacOs => {
-            build_cmd.arg(macos_version_flag.as_ref().unwrap());
-            build_cmd.arg("--sysroot");
-            build_cmd.arg(MAC_SDK_SYSROOT);
+            //build_cmd.arg(macos_version_flag.as_ref().unwrap());
+            //build_cmd.arg("--sysroot");
+            //build_cmd.arg(MAC_SDK_SYSROOT);
         }
         TargetOs::Linux => {}
         TargetOs::Wasm => {}

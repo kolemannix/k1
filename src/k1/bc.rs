@@ -131,6 +131,9 @@ pub struct CompiledUnit {
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
+
+    // Save some vm time for now by having this here
+    pub ret_layout: Layout,
 }
 
 #[derive(Clone, Copy)]
@@ -171,7 +174,7 @@ pub enum BackendBuiltin {
 
 #[derive(Copy, Clone)]
 pub struct PhysicalFunctionParam {
-    pub original_index: u32,
+    pub original_index: Option<u16>,
     pub pt: PhysicalType,
 }
 
@@ -179,8 +182,24 @@ pub struct PhysicalFunctionParam {
 pub struct PhysicalFunctionType {
     pub return_type: PhysicalType,
     pub diverges: bool,
+    pub out_param_pt: Option<PhysicalType>,
     pub params: MSlice<PhysicalFunctionParam, ProgramBytecode>,
     pub abi_mode: AbiMode,
+}
+
+impl PhysicalFunctionType {
+    pub fn logical_return_type(&self) -> PhysicalType {
+        self.out_param_pt.unwrap_or(self.return_type)
+    }
+    const fn nil() -> PhysicalFunctionType {
+        PhysicalFunctionType {
+            return_type: PhysicalType::EMPTY,
+            diverges: false,
+            out_param_pt: None,
+            params: MSlice::empty(),
+            abi_mode: AbiMode::Internal,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -253,7 +272,6 @@ impl Value {
 
 #[derive(Clone, Copy)]
 pub struct BcCall {
-    pub dst: Option<Value>,
     pub ret_type: PhysicalType,
     pub callee: BcCallee,
     pub args: MSlice<Value, ProgramBytecode>,
@@ -706,7 +724,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     let mut b = Builder::new(k1);
 
-    debug!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+    eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
     let intrinsic_type = f.intrinsic_type;
     let is_debug = f.compiler_debug;
@@ -716,8 +734,10 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     // Set up parameters
     let fn_params = f.params;
-    let fn_phys_type = b.get_physical_fn_type(f.type_id);
-    let mut non_empty_index = 0;
+    let phys_fn_type = b.get_physical_fn_type(f.type_id);
+    let is_sret = phys_fn_type.out_param_pt.is_some();
+    b.fn_type = phys_fn_type;
+    let mut non_empty_index = is_sret as i32;
     for param in b.k1.mem.getn(fn_params).iter() {
         let v = b.k1.variables.get(param.variable_id);
         let t = b.get_physical_type(v.type_id);
@@ -758,7 +778,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
             _ => None,
         },
     };
-    let unit = finalize_unit(&mut b, unit_id, fn_phys_type, is_debug, builtin_kind);
+    let unit = finalize_unit(&mut b, unit_id, phys_fn_type, is_debug, builtin_kind);
 
     *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
 
@@ -794,24 +814,32 @@ pub fn compile_top_level_expr(
         })
     }
 
-    debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    b.push_block("expr_");
-
-    let _result = compile_expr(&mut b, None, expr)?;
-    let (return_type, diverges) = b.get_function_return_type(b.k1.exprs.get_type(expr));
+    let (return_type, diverges, maybe_out_param_pt) =
+        b.get_function_return_type(b.k1.exprs.get_type(expr));
+    let needs_out_param = maybe_out_param_pt.is_some();
+    let params = if needs_out_param {
+        let out_param = &[PhysicalFunctionParam { original_index: None, pt: PhysicalType::PTR }];
+        b.k1.bytecode.mem.pushn(out_param)
+    } else {
+        MSlice::empty()
+    };
     let phys_fn_type = PhysicalFunctionType {
         return_type,
         diverges,
-        params: MSlice::empty(),
+        out_param_pt: maybe_out_param_pt,
+        params,
         abi_mode: AbiMode::Internal,
     };
+    b.fn_type = phys_fn_type;
+
+    debug!("Compiling expr {}", b.k1.expr_to_string(expr));
+    b.push_block("expr_");
+    let _result = compile_expr(&mut b, None, expr)?;
     let compiled_expr =
         finalize_unit(&mut b, CompilableUnitId::Expr(expr), phys_fn_type, is_debug, None);
-
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
     let unit_id = CompilableUnitId::Expr(expr);
-
     validate_unit(k1, unit_id)?;
 
     if is_debug {
@@ -833,6 +861,7 @@ fn finalize_unit(
 ) -> CompiledUnit {
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
     let compiled_blocks = b.bake_blocks();
+    let ret_layout = b.k1.types.get_pt_layout(fn_type.return_type);
     //b.k1.bytecode.mem.print_usage("after bake");
     let unit = CompiledUnit {
         unit_id,
@@ -842,6 +871,7 @@ fn finalize_unit(
         blocks: compiled_blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
+        ret_layout,
     };
     b.reset_compilation_unit();
     unit
@@ -862,6 +892,7 @@ pub struct Builder<'k1> {
     // Dependencies
     k1: &'k1 mut TypedProgram,
 
+    fn_type: PhysicalFunctionType,
     inst_offset: u32,
     block_count: u32,
     last_alloca_index: Option<u32>,
@@ -877,6 +908,8 @@ impl<'k1> Builder<'k1> {
         Self {
             inst_offset,
             k1,
+
+            fn_type: PhysicalFunctionType::nil(),
             block_count: 0,
             last_alloca_index: None,
             cur_block: 0,
@@ -890,6 +923,7 @@ impl<'k1> Builder<'k1> {
             b.instrs.clear();
         }
         self.block_count = 0;
+        self.fn_type = PhysicalFunctionType::nil();
         self.k1.bytecode.b_variables.clear();
         self.last_alloca_index = None;
         self.cur_span = SpanId::NONE;
@@ -1133,7 +1167,18 @@ impl<'k1> Builder<'k1> {
             return *pt;
         }
         let function_type = *self.k1.types.get(type_id).expect_function();
-        let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
+        let (return_type, diverges, maybe_out_param_pt) =
+            self.get_function_return_type(function_type.return_type);
+        let needs_out_param = maybe_out_param_pt.is_some();
+
+        let mut phys_params = self
+            .k1
+            .bytecode
+            .mem
+            .new_list(function_type.physical_params.len() + needs_out_param as u32);
+        if needs_out_param {
+            phys_params.push(PhysicalFunctionParam { original_index: None, pt: PhysicalType::PTR })
+        }
         for (index, param) in
             self.k1.types.mem.getn(function_type.physical_params).iter().enumerate()
         {
@@ -1141,12 +1186,15 @@ impl<'k1> Builder<'k1> {
             if pt.is_empty() {
                 continue;
             }
-            phys_params.push(PhysicalFunctionParam { original_index: index as u32, pt })
+            if index >= u16::MAX as usize {
+                b_ice!(self, "Too many parameters; max is {}", u16::MAX);
+            }
+            phys_params.push(PhysicalFunctionParam { original_index: Some(index as u16), pt })
         }
-        let (return_type, diverges) = self.get_function_return_type(function_type.return_type);
         let fn_ty = PhysicalFunctionType {
             params: phys_params.into_handle(&mut self.k1.bytecode.mem),
             diverges,
+            out_param_pt: maybe_out_param_pt,
             return_type,
             abi_mode: function_type.abi_mode,
         };
@@ -1155,12 +1203,24 @@ impl<'k1> Builder<'k1> {
         fn_ty
     }
 
-    fn get_function_return_type(&mut self, type_id: TypeId) -> (PhysicalType, bool) {
-        if type_id == NEVER_TYPE_ID {
-            (PhysicalType::EMPTY, true)
+    // Returns triple: (the function return type, diverges, the out param's real type)
+    fn get_function_return_type(
+        &mut self,
+        return_type_id: TypeId,
+    ) -> (PhysicalType, bool, Option<PhysicalType>) {
+        if return_type_id == NEVER_TYPE_ID {
+            (PhysicalType::EMPTY, true, None)
         } else {
-            let t = self.get_physical_type(type_id);
-            (t, false)
+            let t = self.get_physical_type(return_type_id);
+            let return_layout = self.k1.types.get_pt_layout(t);
+            let needs_out_param = match t.to_enum() {
+                PhysicalTypeEnum::Scalar(_) => false,
+                PhysicalTypeEnum::Agg(_) => return_layout.size > 16,
+                PhysicalTypeEnum::Empty => false,
+                // Eventually, Vectors will go here, and they probably dont get out params even though they
+                // are big, because they have their own register class
+            };
+            if needs_out_param { (PhysicalType::EMPTY, false, Some(t)) } else { (t, false, None) }
         }
     }
 }
@@ -1564,7 +1624,11 @@ fn compile_expr(
                             dst,
                             var_value,
                             false,
-                            "load indirect variable",
+                            if dst.is_some() {
+                                "indirect variable fulfill to dst"
+                            } else {
+                                "load indirect variable"
+                            },
                         );
                         Ok(loaded)
                     } else {
@@ -1578,7 +1642,14 @@ fn compile_expr(
         TypedExpr::Deref(deref) => {
             let src = compile_expr(b, None, deref.target)?;
             let target_pt = b.get_physical_type(expr_type);
-            let loaded = load_or_copy(b, target_pt, dst, src, true, "lang deref");
+            let loaded = load_or_copy(
+                b,
+                target_pt,
+                dst,
+                src,
+                true,
+                if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref" },
+            );
             Ok(loaded)
         }
         TypedExpr::Block(_) => {
@@ -1591,7 +1662,7 @@ fn compile_expr(
             let call = b.k1.calls.get(call_id).clone();
 
             let function_type_id = b.k1.get_callee_function_type(&call.callee);
-            let phys_fn_type = b.get_physical_fn_type(function_type_id);
+            let callee_fn_type = b.get_physical_fn_type(function_type_id);
 
             let maybe_function_id = call.callee.maybe_function_id();
             let (intrinsic_op, linkage) = match maybe_function_id {
@@ -1601,7 +1672,7 @@ fn compile_expr(
                     (f.intrinsic_type, Some(f.linkage))
                 }
             };
-            let (callee, first_arg) = match (intrinsic_op, linkage) {
+            let (callee, environment_arg) = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
                     let backend_builtin = match intrinsic_handler(intrinsic) {
                         BuiltinHandler::BcBakeStaticValue => {
@@ -1619,7 +1690,7 @@ fn compile_expr(
                                 let stored = store_rich_if_dst(
                                     b,
                                     dst,
-                                    phys_fn_type.return_type,
+                                    callee_fn_type.return_type,
                                     bake.as_value(),
                                     "",
                                 );
@@ -1653,7 +1724,6 @@ fn compile_expr(
                                             b_ice!(b, "Missing memset function");
                                         };
                                         let memset_call = BcCall {
-                                            dst: None,
                                             ret_type: PhysicalType::EMPTY,
                                             callee: BcCallee::Builtin(
                                                 memset_function_id,
@@ -1873,11 +1943,11 @@ fn compile_expr(
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
-                        (BcCallee::Indirect(phys_fn_type, fn_ptr), Some(env))
+                        (BcCallee::Indirect(callee_fn_type, fn_ptr), Some(env))
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        (BcCallee::Indirect(phys_fn_type, callee_inst), None)
+                        (BcCallee::Indirect(callee_fn_type, callee_inst), None)
                     }
                     Callee::DynamicAbstract { .. } => {
                         return failf!(b.cur_span, "bc abstract call");
@@ -1906,63 +1976,86 @@ fn compile_expr(
                 }
             }
 
-            let mut args =
-                b.k1.bytecode.mem.new_list(call.args.len() + first_arg.iter().count() as u32);
-            if let Some(first_arg) = first_arg {
-                args.push(first_arg)
+            let mut args = b.k1.bytecode.mem.new_list(
+                call.args.len()
+                    + environment_arg.iter().count() as u32
+                    + callee_fn_type.out_param_pt.is_some() as u32,
+            );
+
+            // Handle out param
+            let out_argument: Option<Value> = match callee_fn_type.out_param_pt {
+                None => None,
+                Some(out_pt) => match dst {
+                    None => {
+                        let out_slot =
+                            b.push_alloca(out_pt, "out param caller stack slot").as_value();
+                        Some(out_slot)
+                    }
+                    Some(dst) => Some(dst),
+                },
+            };
+            if let Some(out_argument) = out_argument {
+                args.push(out_argument)
             }
 
-            for (index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
-                // In case this has a side-effect and produces an Empty value, we still need to
-                // compile this expression!
+            if let Some(environment_arg) = environment_arg {
+                args.push(environment_arg)
+            }
+
+            for (original_index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
+                // Each arg could be of an `empty` type, and if so it will not be passed to the
+                // function.
+                // But in this case we still need to compile this expression!
                 let value = compile_expr(b, None, *arg)?;
 
+                // For this non-physical argument, find the corresponding physical parameter
+                // If there is not one, don't push an argument
                 let phys_param =
                     b.k1.bytecode
                         .mem
-                        .getn(phys_fn_type.params)
+                        .getn(callee_fn_type.params)
                         .iter()
-                        .find(|p| p.original_index as usize == index);
+                        .find(|p| p.original_index == Some(original_index as u16));
 
                 // But only if its not a ZST do we put it in the call's arguments
                 if let Some(_phys_param) = phys_param {
                     args.push(value);
                 }
             }
-            debug_assert_eq!(phys_fn_type.params.len(), args.len() as u32);
-            let call_dst = match dst {
-                Some(dst) => Some(dst),
-                None => match phys_fn_type.return_type.to_enum() {
-                    PhysicalTypeEnum::Agg(_) => {
-                        let return_agg_dst = b
-                            .push_alloca(phys_fn_type.return_type, "call return agg storage")
-                            .as_value();
-                        Some(return_agg_dst)
-                    }
-                    PhysicalTypeEnum::Scalar(_) => None,
-                    PhysicalTypeEnum::Empty => None,
-                },
-            };
+            debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
             let args_handle = b.k1.bytecode.mem.list_to_handle(args);
             let call_id = b.k1.bytecode.calls.add(BcCall {
-                dst: call_dst,
-                ret_type: phys_fn_type.return_type,
+                ret_type: callee_fn_type.return_type,
                 callee,
                 args: args_handle,
             });
             let call_inst = Inst::Call { id: call_id };
             let call_inst_id = b.push_inst_anon(call_inst);
-            match call_dst {
-                Some(dst) => Ok(dst),
+            let value_for_call = match out_argument {
+                Some(out) => out,
                 None => {
-                    if phys_fn_type.diverges {
+                    if callee_fn_type.diverges {
                         let unreachable = b.push_inst_anon(Inst::Unreachable);
-                        Ok(unreachable.as_value())
+                        unreachable.as_value()
                     } else {
-                        Ok(call_inst_id.as_value())
+                        // Its not an sret, but we still have to fulfill the destination
+                        match dst {
+                            Some(dst) => {
+                                store_value(
+                                    b,
+                                    callee_fn_type.return_type,
+                                    dst,
+                                    call_inst_id.as_value(),
+                                    "",
+                                );
+                                dst
+                            }
+                            None => call_inst_id.as_value(),
+                        }
                     }
                 }
-            }
+            };
+            Ok(value_for_call)
         }
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;
@@ -2232,29 +2325,19 @@ fn compile_expr(
             }
         }
         TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
-        TypedExpr::Return(typed_return) => {
-            // Call retslot / RVO plan
-            // - Currently return is weird for big types, we return an alloca.
-            // But, we don't look at the inst_kind, and thus dont wrongly return a pointer
-            // The VM and llvm backends look at the function return type and do
-            // the right thing. In VM, we actually have a ret slot on the caller frame
-            // and we store there, and in llvm, we treat 'ret i<myagg>' as a store to sret
-            //
-            // So lets say we add 'retslot' as a function param here in bc
-            // It gets declared on the signature like a param so callers have to provide it
-            // either via fresh alloca or use the dst we have (the optimization case).
-            // Return here in bc actually stores to it, if it exists, or generates straight
-            // into it. We put metadata on this param so LLVM knows its an sret
-            // We remove a ton of complexity from the LLVM backend
-
-            // let ret_pt = b.get_physical_type(expr_type);
-            // match ret_pt.is_agg() {
-
-            // }
-            let inst = compile_expr(b, None, typed_return.value)?;
-            let ret = b.push_inst(Inst::Ret(inst), "");
-            Ok(ret.as_value())
-        }
+        TypedExpr::Return(typed_return) => match b.fn_type.out_param_pt {
+            Some(ret_pt) => {
+                let ret_slot_value = Value::FnParam { t: ret_pt, index: 0 };
+                compile_expr(b, Some(ret_slot_value), typed_return.value)?;
+                let ret = b.push_inst(Inst::Ret(Value::Empty), "void return; ret slot");
+                Ok(ret.as_value())
+            }
+            None => {
+                let value = compile_expr(b, None, typed_return.value)?;
+                let ret = b.push_inst(Inst::Ret(value), "");
+                Ok(ret.as_value())
+            }
+        },
         TypedExpr::Lambda(lam_expr) => {
             let lambda_type_id = b.k1.types.get(lam_expr.lambda_type).as_lambda().unwrap();
             let l = b.k1.types.lambda_types.get(lambda_type_id);
@@ -2970,10 +3053,18 @@ pub fn display_phys_fn_type(
     k1: &TypedProgram,
     p_fn_ty: &PhysicalFunctionType,
 ) -> std::fmt::Result {
-    w.write_str("\\(")?;
+    w.write_str("fn(")?;
     for (index, param) in k1.bytecode.mem.getn(p_fn_ty.params).iter().enumerate() {
+        write!(w, "p{}: ", index)?;
         k1.types.display_pt(w, param.pt)?;
-        let last = index == p_fn_ty.params.len() as usize;
+        if let Some(out_param_pt) = p_fn_ty.out_param_pt
+            && index == 0
+        {
+            w.write_str("[out: ")?;
+            k1.types.display_pt(w, out_param_pt)?;
+            w.write_str("]")?;
+        }
+        let last = index == p_fn_ty.params.len() as usize - 1;
         if !last {
             w.write_str(", ")?;
         }
@@ -2998,7 +3089,9 @@ pub fn display_unit(
         CompilableUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
-            write!(w, "expr {}:{}", &source.filename, line.line_number())?;
+            w.write_str("expr ")?;
+            display_phys_fn_type(w, k1, &unit.fn_type)?;
+            write!(w, " from {}:{}", &source.filename, line.line_number())?;
         }
     };
     writeln!(w, " (offset={}, inst count={})", unit.inst_offset, unit.inst_count)?;
@@ -3053,7 +3146,7 @@ pub fn display_block(
             let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
             let column = the_span.start + 1 - line.start_char;
-            write!(w, "|  {first_line:80}| L{}:{} |", line.line_number(), column)?;
+            write!(w, "|  {first_line:80}| L{:3}:{} |", line.line_number(), column)?;
         }
 
         write!(w, " i{:3} = ", *inst_id)?;
@@ -3117,9 +3210,6 @@ pub fn display_inst(
             let call = bc.calls.get(id);
             write!(w, "call ")?;
             k1.types.display_pt(w, call.ret_type)?;
-            if let Some(dst) = &call.dst {
-                write!(w, " into {}", dst)?;
-            }
             match &call.callee {
                 BcCallee::Builtin(_, intrinsic_operation) => {
                     write!(w, " builtin {:?}", intrinsic_operation)?;

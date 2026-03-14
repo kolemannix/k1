@@ -343,8 +343,9 @@ impl<Tag> Mem<Tag> {
 
     pub fn align_to_bytes(&mut self, align: usize) {
         unsafe {
+            debug_assert!(align != 0);
             debug_assert!(
-                align.is_power_of_two() && align != 0,
+                align == 1 || align.is_power_of_two(),
                 "Alignment must be a power of two"
             );
             let dst = self.cursor_mut();
@@ -354,9 +355,13 @@ impl<Tag> Mem<Tag> {
     }
 
     pub fn push_layout_uninit(&mut self, size: u32, align: u32) -> *mut u8 {
+        if size == 0 {
+            return self.cursor_mut();
+        }
         unsafe {
+            debug_assert!(align != 0);
             debug_assert!(
-                align.is_power_of_two() && align != 0,
+                align == 1 || align.is_power_of_two(),
                 "Alignment must be a power of two"
             );
             let dst = self.cursor_mut();
@@ -1203,7 +1208,7 @@ mod test {
 
         let empty_h = arena.pushn_iter(std::iter::empty::<u32>());
         assert_eq!(empty_h.len(), 0);
-        assert_eq!(arena.getn(empty_h), &[]);
+        assert!(arena.getn(empty_h).is_empty());
     }
 
     #[test]

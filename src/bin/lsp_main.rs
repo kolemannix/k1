@@ -41,7 +41,7 @@ fn error_to_diagnostic(
     };
     let mut escaped_message = String::with_capacity(message.len() * 2);
     escaped_message.push_str("```txt");
-    escaped_message.push_str(message);
+    escaped_message.push_str(&message);
     escaped_message.push_str("```");
     let diagnostic = Diagnostic {
         range: Range {
