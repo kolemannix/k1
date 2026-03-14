@@ -1211,7 +1211,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder
                     .build_memcpy(
                         integer_ptr,
-                        width,
+                        src_layout.align,
                         k1_value.into_pointer_value(),
                         src_layout.align,
                         self.builtin_types.ptr_sized_int.const_int(src_layout.size as u64, false),
@@ -2553,7 +2553,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         match callconv {
                             CallConv::InternalK1 => {
                                 if size_bytes <= 8 {
-                                    AbiParamMapping::ScalarInRegister
+                                    AbiParamMapping::StructInInteger { width: size_bytes * 8 }
                                 } else if size_bytes <= 16 {
                                     AbiParamMapping::StructByIntPairArray
                                 } else {
@@ -2763,12 +2763,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
             // let typed_param_record =
             //     self.k1.mem.get_nth(typed_function_params, logical_param_index);
-            // self.set_debug_location_from_span(typed_param_record.span);
 
             let name = param.get_name().to_str().unwrap();
             let mapped_value =
                 self.canonicalize_abi_param_value(param_abi_mapping, &param_k1_type, param);
 
+            self.set_debug_location_from_span(function_span);
             let di_local_variable = self.debug.debug_builder.create_parameter_variable(
                 self.debug.current_scope(),
                 name,

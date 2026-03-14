@@ -1,3 +1,4 @@
+use core/types/size-of
 fn array-uninit[t, n: static size](): array[t, n] {
   let a: array[t, n] = uninit;
   a
@@ -29,6 +30,10 @@ fn main() {
   assert(ss.a == 1);
   assert(ss.b == 2);
   assert(ss.c == 3);
+
+  printIt(size-of[?bool]);
+  printIt(some(false));
+  printIt(some(true));
 
   {}
 }
