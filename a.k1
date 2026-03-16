@@ -1,4 +1,7 @@
 use core/types/size-of
+
+// nocommit "all kinds of functions test"
+
 fn array-uninit[t, n: static size](): array[t, n] {
   let a: array[t, n] = uninit;
   a
@@ -10,11 +13,11 @@ fn big-struct(): { x: i64, y: i64, z: i64 } {
 
 fn ret-string(): string { "fdsa" }
 
-fn smallStruct(): { a: u8, b: u8, c: u8 } {
-  { a: 1, b: 2, c: 3 }
+#debug fn small-struct(c: u8): { a: u8, b: u8, c: u8 } {
+  { a: 1, b: 2, c }
 }
 
-fn main() {
+#debug fn main() {
   let x = array-uninit[i64, 128];
   let s = big-struct();
   assertEquals(s.x, 0);
@@ -22,18 +25,17 @@ fn main() {
   assertEquals(s.z, 0);
 
   let x = ret-string();
-  println(x);
+  assertEquals(x, "fdsa");
 
-  printIt(12345);
-
-  let ss = smallStruct();
+  small-struct(100);
+  let ss = small-struct(21);
+  let ss2 = small-struct(22);
   assert(ss.a == 1);
   assert(ss.b == 2);
-  assert(ss.c == 3);
+  assert(ss.c == 21);
 
-  printIt(size-of[?bool]);
-  printIt(some(false));
-  printIt(some(true));
+  assertEquals(some(false), .some(false));
+  assertEquals(some(true), .some(true));
 
   {}
 }

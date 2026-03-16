@@ -24,13 +24,16 @@ mod stack_tests {
             blocks: MSlice::empty(),
             is_debug: false,
             function_builtin_kind: None,
+            ret_layout: Layout::ZERO_SIZED,
         }
     }
 
     fn fake_ret_info() -> RetInfo {
         RetInfo {
             pt: PhysicalType::scalar(ScalarType::U32),
-            place: RetPlace::ScalarCallInst { frame_index: 0, inst_index: 0 },
+            frame_index: 0,
+            inst_index: 0,
+            ret_layout: Layout::ZERO_SIZED,
             ip: 0,
             block: 0,
         }
@@ -174,14 +177,14 @@ mod value_roundtrip_tests {
 
     #[test]
     fn test_pointer_roundtrip() {
-        assert_eq!(Value::NULLPTR.as_ptr(), std::ptr::null());
+        assert_eq!(Value::NULLPTR.as_ptr(), std::ptr::null_mut());
 
-        let data = [1u8, 2, 3, 4];
-        let ptr = data.as_ptr();
+        let mut data = [1u8, 2, 3, 4];
+        let ptr = data.as_mut_ptr();
         assert_eq!(Value::ptr(ptr).as_ptr(), ptr);
 
         let other_data = 42u64;
-        let other_ptr = &other_data as *const u64 as *const u8;
+        let other_ptr = &other_data as *const u64 as *mut u8;
         assert_eq!(Value::ptr(other_ptr).as_ptr(), other_ptr);
     }
 

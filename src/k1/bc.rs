@@ -188,6 +188,9 @@ pub struct PhysicalFunctionType {
 }
 
 impl PhysicalFunctionType {
+    pub fn logical_params(&self) -> MSlice<PhysicalFunctionParam, ProgramBytecode> {
+        if self.out_param_pt.is_some() { self.params.skip(1) } else { self.params }
+    }
     pub fn logical_return_type(&self) -> PhysicalType {
         self.out_param_pt.unwrap_or(self.return_type)
     }
@@ -207,7 +210,12 @@ pub enum BcCallee {
     Builtin(FunctionId, BackendBuiltin),
     Direct(FunctionId),
     Indirect(PhysicalFunctionType, Value),
-    Extern(Option<parse::Ident>, parse::Ident, FunctionId),
+    Extern {
+        library_name: Option<parse::Ident>,
+        function_name: parse::Ident,
+        function_id: FunctionId,
+        out_param_pt: Option<PhysicalType>,
+    },
     // No lambda call; been compiled down to just calls and args by now
 }
 
@@ -215,7 +223,7 @@ impl BcCallee {
     fn known_function_id(&self) -> Option<FunctionId> {
         match self {
             BcCallee::Direct(fid) => Some(*fid),
-            BcCallee::Extern(_, _, fid) => Some(*fid),
+            BcCallee::Extern { function_id, .. } => Some(*function_id),
             _ => None,
         }
     }
@@ -724,7 +732,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
 
     let mut b = Builder::new(k1);
 
-    eprintln!("Compiling function {}", b.k1.function_id_to_string(function_id, false));
+    //eprintln!("bc::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
     let intrinsic_type = f.intrinsic_type;
     let is_debug = f.compiler_debug;
@@ -1902,11 +1910,19 @@ fn compile_expr(
                 }
                 (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
-                    let fn_name = match fn_name {
+                    let function_name = match fn_name {
                         None => b.k1.get_function(function_id).name,
                         Some(fn_name) => fn_name,
                     };
-                    (BcCallee::Extern(lib_name, fn_name, function_id), None)
+                    (
+                        BcCallee::Extern {
+                            library_name: lib_name,
+                            function_name,
+                            function_id,
+                            out_param_pt: callee_fn_type.out_param_pt,
+                        },
+                        None,
+                    )
                 }
                 _ => match &call.callee {
                     Callee::StaticFunction(function_id) => (BcCallee::Direct(*function_id), None),
@@ -2046,7 +2062,7 @@ fn compile_expr(
                                     callee_fn_type.return_type,
                                     dst,
                                     call_inst_id.as_value(),
-                                    "",
+                                    "fulfill call dst",
                                 );
                                 dst
                             }
@@ -3221,13 +3237,12 @@ pub fn display_inst(
                 BcCallee::Indirect(_, callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
                 }
-                BcCallee::Extern(lib_name, name, callee_fn) => {
+                BcCallee::Extern { library_name, function_name, .. } => {
                     write!(
                         w,
-                        " extern {} {} {}",
-                        k1.ident_str_opt(*lib_name),
-                        k1.ident_str(*name),
-                        *callee_fn
+                        " extern {} {}",
+                        k1.ident_str_opt(*library_name),
+                        k1.ident_str(*function_name),
                     )?;
                 }
             };

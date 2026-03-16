@@ -195,6 +195,8 @@ pub struct Vm {
     pub stack: Stack,
     eval_span: SpanId,
     compiler_messages: Vec<CompilerMessage>,
+    // This is just the first valid address in `stack`, before the first frame
+    overall_return_addr: *mut u8,
 }
 
 impl Vm {
@@ -219,6 +221,7 @@ impl Vm {
         self.static_stack.reset();
         self.globals.clear();
         self.compiler_messages.clear();
+        self.overall_return_addr = core::ptr::null_mut();
 
         if let Some(mut arena) = arena_to_preserve {
             // Voila!
@@ -237,6 +240,7 @@ impl Vm {
         Self {
             globals: FxHashMap::with_capacity(8192),
             static_stack,
+            overall_return_addr: core::ptr::null_mut(),
             stack,
             eval_span: SpanId::NONE,
             compiler_messages: Vec::with_capacity(16),
@@ -547,7 +551,7 @@ pub fn execute_compiled_expr(
     let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
 
     //if unit.is_debug {
-    eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    //eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
     //}
 
     match unit.unit_id {
@@ -575,12 +579,9 @@ pub fn execute_compiled_expr(
     let logical_return_pt = unit.fn_type.logical_return_type();
     let pt_layout = k1.types.get_pt_layout(logical_return_pt);
     let ret_addr = vm.stack.push_layout_uninit(pt_layout);
+    vm.overall_return_addr = ret_addr;
+
     debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
-    eprintln!(
-        "base execution return addr {:?} (offset {})",
-        ret_addr,
-        ret_addr.addr() - vm.stack.base_ptr().addr()
-    );
     vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
     debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
 
@@ -592,7 +593,12 @@ pub fn execute_compiled_expr(
         }
     };
 
-    let exit_code = exec_loop(k1, vm, unit)?;
+    let exit_code = match exec_loop(k1, vm, unit) {
+        Ok(exit_code) => exit_code,
+        Err(err) => {
+            return Err(err);
+        }
+    };
 
     let elapsed_nanos = k1.timing.elapsed_nanos(start);
     k1.timing.total_vm_nanos += elapsed_nanos as i64;
@@ -603,13 +609,19 @@ pub fn execute_compiled_expr(
         failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
         let expr_type = k1.exprs.get_type(expr_id);
-        if unit.fn_type.diverges {
+        let result = if unit.fn_type.diverges {
             Ok(k1.static_values.empty_id())
         } else {
-            let loaded = load_value(logical_return_pt, ret_addr);
-            let returned_value = vm_value_to_static_value(k1, expr_type, loaded, span)?;
-            Ok(returned_value)
-        }
+            if logical_return_pt.is_empty() {
+                Ok(k1.static_values.empty_id())
+            } else {
+                let loaded = load_value(logical_return_pt, ret_addr);
+                let returned_value = vm_value_to_static_value(k1, expr_type, loaded, span)?;
+                Ok(returned_value)
+            }
+        };
+        vm.overall_return_addr = core::ptr::null_mut();
+        result
     }
 }
 
@@ -770,22 +782,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         continue 'exec;
                     }};
                     () => {{
-                        // nocommit: remove unnecessary store
-                        fulfill_return(
-                            k1,
-                            vm,
-                            caller_frame_index,
-                            inst_index,
-                            ret_layout.size,
-                            ret_pt,
-                            Value(0),
-                        );
+                        // No one should read 'empty' memory or inst values
+                        // so we don't have to set it
                         ip += 1;
                         continue 'exec;
                     }};
                 }
                 let dispatch_function_id = match call.callee {
-                    BcCallee::Extern(lib_name, name, function_id) => {
+                    BcCallee::Extern { library_name, function_name, function_id, out_param_pt } => {
+                        // nocommit: pass the inst_index in, so we can re-use the out storage
                         let result: Value = vm_ffi::handle_ffi_call(
                             k1,
                             vm,
@@ -793,9 +798,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             inst_offset,
                             ret_pt,
                             call_args,
-                            lib_name,
-                            name,
+                            library_name,
+                            function_name,
                             function_id,
+                            out_param_pt,
                         )?;
                         builtin_return!(result)
                     }
@@ -841,12 +847,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                     *schema_static_value_id,
                                     vm.eval_span,
                                 );
-                                store_value(
-                                    &k1.types,
-                                    type_schema_pt,
-                                    out_arg,
-                                    schema_vm_value,
-                                );
+                                store_value(&k1.types, type_schema_pt, out_arg, schema_vm_value);
                                 builtin_return!(schema_vm_value);
                             }
                             bc::BackendBuiltin::TypeName => {
@@ -951,11 +952,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 let count: Value =
                                     resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
                                 unsafe {
-                                    std::ptr::write_bytes(
-                                        dst.as_ptr(),
-                                        value,
-                                        count.as_usize(),
-                                    )
+                                    std::ptr::write_bytes(dst.as_ptr(), value, count.as_usize())
                                 };
 
                                 builtin_return!()
@@ -1125,12 +1122,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 } else {
                     // Shove the return value in a special place
                     if !ret_info.pt.is_empty() {
-                        store_value(
-                            &k1.types,
-                            ret_info.pt,
-                            unsafe { vm.stack.base_ptr().cast_mut().byte_add(8) }, // nocommit
-                            returned_value,
-                        );
+                        #[cfg(debug_assertions)]
+                        if vm.overall_return_addr.is_null() {
+                            vm_ice!(k1, vm, "Top-level return address not initialized");
+                        }
+                        store_value(&k1.types, ret_info.pt, vm.overall_return_addr, returned_value);
                     }
                     let _popped = vm.stack.pop_frame();
                     break 'exec 0;
@@ -2039,7 +2035,7 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
 pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
     match t.to_enum() {
         PhysicalTypeEnum::Empty => {
-            eprintln!("load_value on Empty");
+            panic!("load_value on Empty");
             Value(0)
         }
         PhysicalTypeEnum::Scalar(st) => load_scalar(st, ptr),
@@ -2150,14 +2146,7 @@ impl Stack {
         let inst_slice =
             core::ptr::slice_from_raw_parts_mut(inst_base as *mut Value, inst_count as usize);
 
-        let frame = StackFrameRecord::make(
-            index,
-            base_ptr,
-            call_span,
-            owner,
-            ret_info,
-            inst_slice,
-        );
+        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info, inst_slice);
         self.mem.push_slice_uninit::<Value>(param_count as usize + inst_count as usize);
         self.frames.push(frame);
     }

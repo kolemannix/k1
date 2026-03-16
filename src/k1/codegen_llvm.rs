@@ -1195,7 +1195,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match mapping {
             AbiParamMapping::VoidReturnEmpty => panic!("VoidReturnEmpty should be handled"),
             AbiParamMapping::ScalarInRegister => k1_value,
-            AbiParamMapping::StructInInteger { width } => {
+            AbiParamMapping::StructInInteger { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
                 let integer_ptr = self.build_alloca(abi_type, "abi_struct_int");
 
@@ -1461,7 +1461,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let (llvm_callee, cg_fn_type) = match callee {
             BcCallee::Builtin(function_id, _)
             | BcCallee::Direct(function_id)
-            | BcCallee::Extern(_, _, function_id) => {
+            | BcCallee::Extern { function_id, .. } => {
                 self.declare_llvm_function(function_id)?;
                 let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type.clone();
                 (CallKind::Direct(function_id), fn_type)
@@ -1740,7 +1740,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         out_storage.as_basic_value_enum(),
                     )
                     .unwrap();
-                eprintln!("from typeName im returning {}", marshalled);
                 self.builder.build_return(Some(&marshalled)).unwrap()
             }
             BackendBuiltin::TypeSchema => {

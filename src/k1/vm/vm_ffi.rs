@@ -4,7 +4,7 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 use log::debug;
 
-use crate::bc::{self, ProgramBytecode};
+use crate::bc::{self, PhysicalFunctionType, ProgramBytecode};
 use crate::errf;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
@@ -23,15 +23,31 @@ pub(super) fn handle_ffi_call(
     lib_name: Option<Ident>,
     fn_name: Ident,
     function_id: FunctionId,
+    // This is a major path-forking argument
+    // If there is an out param, we need to shuffle things around to
+    // tell libffi about the true return type, and use the out param storage as the return storage
+    // that we give to libffi. Essentially, the bytecode generation has already allocated
+    // storage for the return, and injected it as the first parameter, and marked the function as
+    // void (empty) returning.
+    // (This might actually work on x86 since the ret storage actually goes
+    // in the first param slot, but on arm64 it goes in x8 or something )
+    out_param_pt: Option<PhysicalType>,
 ) -> TyperResult<Value> {
     let nargs = args.len() as usize;
-    let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
-    let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
+    let is_out_param = out_param_pt.is_some();
+    let params_offset = is_out_param as usize;
+    let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32 - is_out_param as u32);
+    let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32 - is_out_param as u32);
 
-    let function_params = k1.bytecode.functions.get(function_id).unwrap().fn_type.params;
+    let fn_type = k1.bytecode.functions.get(function_id).unwrap().fn_type;
+    let function_params = fn_type.params;
 
-    for (arg_value, param) in
-        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
+    for (arg_value, param) in k1
+        .bytecode
+        .mem
+        .getn(args.skip(params_offset))
+        .iter()
+        .zip(k1.bytecode.mem.getn(function_params.skip(params_offset)))
     {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
@@ -64,7 +80,7 @@ pub(super) fn handle_ffi_call(
                     k1.ident_str(fn_name)
                 );
             }
-            let cif = prep_ffi_cif(k1, function_id, return_pt, vm.eval_span)?;
+            let cif = prep_ffi_cif(k1, fn_type, vm.eval_span)?;
             let handle = vm::VmFfiHandle {
                 library_handle: handle_for_search,
                 function_pointer: fn_ptr,
@@ -85,50 +101,60 @@ pub(super) fn handle_ffi_call(
     });
 
     let result_storage = unsafe {
-        let ret_size = (*(ffi_handle.cif.rtype)).size;
-        let ret_align = (*(ffi_handle.cif.rtype)).alignment;
-        let result_space: *mut u8 =
-            vm.stack.push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
-        debug!("result space is {} {}", ret_size, ret_align);
+        if is_out_param {
+            let out_param_arg = *k1.bytecode.mem.get_nth(args, 0);
+            let out_param_value =
+                vm::resolve_value(k1, vm, frame_index, inst_offset, out_param_arg)?;
+            let out_param_addr = out_param_value.as_ptr();
+            out_param_addr
+        } else {
+            // TODO: If the result fits in 1 word, we should just use the instruction slot instead
+            let ret_size = (*(ffi_handle.cif.rtype)).size;
+            let ret_align = (*(ffi_handle.cif.rtype)).alignment;
+            let result_space: *mut u8 = vm
+                .stack
+                .push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
+            debug!("result space is {} {}", ret_size, ret_align);
+            result_space
+        }
+    };
 
+    unsafe {
         let args = ffi_args_value_ptrs.as_slice_mut().as_mut_ptr();
         let code_ptr = CodePtr(ffi_handle.function_pointer);
         raw::ffi_call(
             &mut ffi_handle.cif,
             Some(*code_ptr.as_safe_fun()),
-            result_space as *mut c_void,
+            result_storage as *mut c_void,
             args,
         );
-        result_space
-    };
-    let result = vm::load_value(return_pt, result_storage.cast_const());
-    debug!("ffi result is: {}", result);
-    Ok(result)
+    }
+
+    if return_pt.is_empty() {
+        debug!("ffi result is empty");
+        Ok(Value(0))
+    } else {
+        let result = vm::load_value(return_pt, result_storage.cast_const());
+        debug!("ffi result is: {}", result);
+        Ok(result)
+    }
 }
 
 fn prep_ffi_cif(
     k1: &mut TypedProgram,
-    function_id: FunctionId,
-    return_type: PhysicalType,
+    physical_function_type: PhysicalFunctionType,
     span: SpanId,
 ) -> TyperResult<ffi_cif> {
-    let Some(compiled_function) = k1.bytecode.functions.get(function_id) else {
-        return failf!(
-            span,
-            "External call to uncompiled function: {}. ({} are pending)",
-            k1.function_id_to_string(function_id, false),
-            k1.bytecode.b_units_pending_compile.len()
-        );
-    };
-    let nargs = compiled_function.fn_type.params.len() as usize;
-    let fn_params = compiled_function.fn_type.params;
-    let mut ffi_args_types_storage = k1.mem.new_list(nargs as u32);
-    let mut ffi_args_types_ptrs = k1.mem.new_list(nargs as u32);
+    let param_count = physical_function_type.logical_params().len() as usize;
+    let fn_params = physical_function_type.logical_params();
+    let return_type = physical_function_type.logical_return_type();
+    let mut ffi_args_types_storage = k1.mem.new_list(param_count as u32);
+    let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
     for fn_param in k1.bytecode.mem.getn(fn_params) {
         let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
             .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
 
-        // We need a stable-ish address to each Value here; so we push them to
+        // We need a stable address to each type here; so we push them to
         // a parallel collection
         ffi_args_types_storage.push(ffi_type);
         let type_addr: &mut ffi_type = ffi_args_types_storage.last_mut().unwrap();
@@ -145,7 +171,7 @@ fn prep_ffi_cif(
         libffi::low::prep_cif(
             &mut cif,
             ffi_abi_FFI_DEFAULT_ABI,
-            nargs,
+            param_count,
             ffi_ret_type_alloced,
             atypes,
         )
@@ -225,11 +251,11 @@ fn make_struct_ffi_type(
         #[cfg(debug_assertions)]
         {
             let t = ffi_type_storage[i];
-            eprintln!(
+            debug!(
                 "ffi struct elements {i}: size: {}, align: {}, type: {}",
                 t.size, t.alignment, t.type_
             );
-            eprintln!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
+            debug!("ffi struct element ptrs: {:?}", element_ptrs.as_slice());
         }
         element_ptrs.push(&mut ffi_type_storage[i])
     }

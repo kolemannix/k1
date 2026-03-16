@@ -429,7 +429,7 @@ pub fn write_executable(
     let object_name = out_dir.join(module_name.with_extension("o"));
     let out_name = out_dir.join(module_name);
 
-    let macos_version_flag = if target.target_os() == TargetOs::MacOs {
+    let _macos_version_flag = if target.target_os() == TargetOs::MacOs {
         Some(format!("-mmacosx-version-min={}", MAC_SDK_VERSION))
     } else {
         None
