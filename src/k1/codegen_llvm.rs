@@ -63,10 +63,7 @@ pub struct CgFunctionType<'ctx> {
 
     // Does not include sret
     param_abi_mappings: MSlice<AbiParamMapping, CgPerm>,
-    // Should probably wrap this in a handle due to size
     return_logical_cg_type: CgType<'ctx>,
-    return_physical_cg_type: CgType<'ctx>,
-    #[allow(unused)]
     return_abi_mapping: AbiParamMapping,
     is_sret: bool,
 }
@@ -279,6 +276,7 @@ pub struct CgFunction<'ctx> {
     /// sret is excluded, so the first item is the first param the function actually takes
     pub param_values: Vec<BasicValueEnum<'ctx>>,
     pub last_alloca_instr: Option<InstructionValue<'ctx>>,
+    pub returned_sret_variable: Option<InstId>,
     pub instruction_count: usize,
     pub debug_info: DISubprogram<'ctx>,
     pub debug_file: DIFile<'ctx>,
@@ -721,7 +719,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     // FIXME(newcodegen): CgType is too big to return by value
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.types.pt_to_string(pt));
-        match pt.to_enum() {
+        match pt.as_enum() {
             PhysicalTypeEnum::Scalar(st) => {
                 let layout = st.get_layout();
                 let (name, encoding): (&'static str, u32) = match st {
@@ -958,7 +956,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
-        match pt.to_enum() {
+        match pt.as_enum() {
             PhysicalTypeEnum::Empty => self.builtin_types.empty.as_basic_type_enum(),
             PhysicalTypeEnum::Scalar(st) => self.scalar_basic_type(st),
             PhysicalTypeEnum::Agg(_) => self.builtin_types.ptr.as_basic_type_enum(),
@@ -971,15 +969,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> TyperResult<CgFunctionType<'ctx>> {
         let abi_mode = phys_fn_type.abi_mode;
         let param_types = phys_fn_type.params;
-        let logical_return_type = phys_fn_type.logical_return_type();
-        let return_logical_cg_type = self.codegen_type(logical_return_type);
-        let return_physical_cg_type = self.codegen_type(phys_fn_type.return_type);
-        let logical_return_type_abi_mapping =
-            self.get_abi_mapping_for_type(abi_mode, logical_return_type, true);
+        let return_type = phys_fn_type.return_type;
+        let _diverges = phys_fn_type.diverges;
+        let return_logical_cg_type = self.codegen_type(phys_fn_type.return_type);
+        let return_type_abi_mapping = self.get_abi_mapping_for_type(abi_mode, return_type, true);
 
         // If a function returns a big (typically > 2 words) struct, its actually
         // 'returned' in the first parameter, which is a pointer
-        let is_sret = match logical_return_type_abi_mapping {
+        let is_sret = match return_type_abi_mapping {
             AbiParamMapping::VoidReturnEmpty => false,
             AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
@@ -988,11 +985,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
             AbiParamMapping::StructByPtrNoCopy => true,
         };
-        // Assert the bytecode and llvm agree that this should be an sret
-        debug_assert_eq!(phys_fn_type.out_param_pt.is_some(), is_sret);
 
-        let physical_return_mapped_type =
-            self.mapped_abi_type_return(phys_fn_type.return_type, logical_return_type_abi_mapping);
+        let physical_return_mapped_type = if is_sret {
+            None
+        } else {
+            self.mapped_abi_type_return(phys_fn_type.return_type, return_type_abi_mapping)
+        };
 
         let param_count = param_types.len();
 
@@ -1006,7 +1004,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // in a struct, but it need not be; that is, 1 k1 param could result in n llvm params,
         // where n could even be 0 for a ZST or uninhabited type
         let mut function_final_params: MList<BasicMetadataTypeEnum<'ctx>, _> =
-            self.mem.new_list(param_count);
+            self.mem.new_list(param_count + is_sret as u32);
+
+        if is_sret {
+            function_final_params.push(self.builtin_types.ptr.into())
+        }
 
         for param in self.k1.bytecode.mem.getn(param_types) {
             let param_cg_type = self.codegen_type(param.pt);
@@ -1034,8 +1036,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             param_k1_types: self.mem.list_to_handle(param_llvm_types),
             param_abi_mappings: self.mem.list_to_handle(param_abi_mappings),
             return_logical_cg_type,
-            return_physical_cg_type,
-            return_abi_mapping: logical_return_type_abi_mapping,
+            return_abi_mapping: return_type_abi_mapping,
             is_sret,
         })
     }
@@ -1299,13 +1300,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn store_k1_value(
         &self,
         cg_type: &CgType<'ctx>,
-        dest: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
         value: BasicValueEnum<'ctx>,
     ) -> InstructionValue<'ctx> {
         if cg_type.is_aggregate() {
-            self.memcpy_k1_value(dest, value.into_pointer_value(), cg_type)
+            self.memcpy_k1_value(dst, value.into_pointer_value(), cg_type)
         } else {
-            let store = self.builder.build_store(dest, value).unwrap();
+            let store = self.builder.build_store(dst, value).unwrap();
             store.set_alignment(cg_type.rich_repr_layout().align).unwrap();
             store
         }
@@ -1347,15 +1348,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.memcpy_layout(dst, src, layout)
     }
 
-    fn get_insert_function(&self) -> &CgFunction<'ctx> {
+    fn get_current_function(&self) -> &CgFunction<'ctx> {
         let codegened_function = self.llvm_functions.get(&self.current_insert_function).unwrap();
+        codegened_function
+    }
+
+    fn get_current_function_mut(&mut self) -> &mut CgFunction<'ctx> {
+        let codegened_function =
+            self.llvm_functions.get_mut(&self.current_insert_function).unwrap();
         codegened_function
     }
 
     fn get_block_id(&self, block_id: u32) -> TyperResult<BasicBlock<'ctx>> {
         // We skip the 'prelude' block
         let real_index = block_id as usize + 1;
-        match self.get_insert_function().function_value.get_basic_block_iter().nth(real_index) {
+        match self.get_current_function().function_value.get_basic_block_iter().nth(real_index) {
             Some(bb) => Ok(bb),
             None => failf!(self.debug.current_span(), "Failed to get nth block: {real_index}"),
         }
@@ -1417,7 +1424,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// Inserts an alloca in the entry block of the function
     fn build_alloca<T: BasicType<'ctx>>(&mut self, ty: T, name: &str) -> PointerValue<'ctx> {
         let original_block = self.builder.get_insert_block().unwrap();
-        let f = self.get_insert_function();
+        let f = self.get_current_function();
         let function_entry_block = f.function_value.get_first_basic_block().unwrap();
 
         // Position the builder
@@ -1453,6 +1460,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let call = self.k1.bytecode.calls.get(call_id);
         let callee = call.callee;
         let call_args = call.args;
+        let call_dst = call.dst;
 
         enum CallKind<'ctx> {
             Direct(FunctionId),
@@ -1475,6 +1483,26 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
             self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
+
+        let sret_dst = if cg_fn_type.is_sret {
+            match call_dst {
+                Some(dst) => {
+                    let dst_value = self.resolve_value(inst_mappings, dst)?;
+                    Some(dst_value.into_pointer_value())
+                }
+                None => {
+                    let alloca =
+                        self.build_k1_alloca(&cg_fn_type.return_logical_cg_type, "sret_storage\0");
+                    Some(alloca)
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(sret_dst) = sret_dst {
+            args.push(sret_dst.into())
+        }
 
         for (index, arg_bc_value) in self.k1.bytecode.mem.getn(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_bc_value)?;
@@ -1514,14 +1542,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ValueKind::Basic(returned_value) => {
                 let canonical_value = self.canonicalize_abi_param_value(
                     cg_fn_type.return_abi_mapping,
-                    // logical or physical type will be the same here, anyway this feels slightly
-                    // more correct
-                    &cg_fn_type.return_physical_cg_type,
+                    &cg_fn_type.return_logical_cg_type,
                     returned_value,
                 );
-                Ok(Some(canonical_value))
+                match call_dst {
+                    None => Ok(Some(canonical_value)),
+                    Some(dst) => {
+                        let dst_ptr = self.resolve_value(inst_mappings, dst)?;
+                        self.store_k1_value(
+                            &cg_fn_type.return_logical_cg_type,
+                            dst_ptr.into_pointer_value(),
+                            canonical_value,
+                        );
+                        Ok(Some(dst_ptr))
+                    }
+                }
             }
-            ValueKind::Instruction(_instr) => Ok(None),
+            ValueKind::Instruction(_instr) => {
+                if cg_fn_type.is_sret {
+                    Ok(Some(sret_dst.unwrap().as_basic_value_enum()))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -1744,8 +1787,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             BackendBuiltin::TypeSchema => {
                 // intern fn type-schema(id: u64): TypeSchema
-                let out_storage = self.load_function_argument(function_id, 0).into_pointer_value();
-                let type_id_arg = self.load_function_argument(function_id, 1).into_int_value();
+                let cg_fn = self.llvm_functions.get(&function_id).unwrap();
+                debug_assert!(cg_fn.function_type.is_sret);
+                let out_storage =
+                    cg_fn.function_value.get_param_iter().nth(0).unwrap().into_pointer_value();
+                let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let type_schema_cg_type = cg_fn.function_type.return_logical_cg_type;
                 let entry_block = self.builder.get_insert_block().unwrap();
@@ -1837,7 +1883,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(function_value.as_global_value().as_pointer_value().into())
             }
             bc::Value::FnParam { index, .. } => {
-                let function = self.get_insert_function();
+                let function = self.get_current_function();
                 let v = function.param_values[index as usize];
                 Ok(v)
             }
@@ -1904,13 +1950,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::Alloca { t, .. } => {
+            Inst::Alloca { t, returned, .. } => {
                 // task(debug info): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
 
-                // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
-                let alloca_ptr = self.build_k1_alloca(&cg_type, "");
+                let alloca_ptr = if returned {
+                    let cg_function = self.get_current_function_mut();
+                    debug_assert_eq!(
+                        cg_type.pt(),
+                        cg_function.function_type.return_logical_cg_type.pt()
+                    );
+                    if cg_function.function_type.is_sret {
+                        let sret_param_value =
+                            cg_function.function_value.get_param_iter().nth(0).unwrap();
+                        cg_function.returned_sret_variable = Some(inst_id);
+                        sret_param_value.into_pointer_value()
+                    } else {
+                        self.build_k1_alloca(&cg_type, "")
+                    }
+                } else {
+                    // build_k1_alloca hoists the alloca to the top of the function, and sets an explicit align
+                    self.build_k1_alloca(&cg_type, "")
+                };
                 inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
                 let bc_debug_info = self.k1.bytecode.debug_info.get(inst_id);
@@ -2021,19 +2083,41 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
             }
-            Inst::Ret(value) => {
-                let ret_value = self.resolve_value(inst_mappings, value)?;
-                let current_fn = self.get_insert_function();
+            Inst::Ret { v, .. } => {
+                let ret_value = self.resolve_value(inst_mappings, v)?;
+                let current_fn = self.get_current_function();
                 let current_fn_ty = current_fn.function_type.clone();
-                let ret_value_marshalled = self.marshal_abi_return_value(
-                    current_fn_ty.return_abi_mapping,
-                    &current_fn_ty.return_physical_cg_type,
-                    ret_value,
-                );
-                let _return = match ret_value_marshalled {
-                    None => self.builder.build_return(None).unwrap(),
-                    Some(v) => self.builder.build_return(Some(&v)).unwrap(),
-                };
+
+                if current_fn_ty.is_sret {
+                    // We will have already stored the result in the sret slot, since its just an
+                    // alias of the variable
+                    if current_fn.returned_sret_variable.is_some() {
+                        self.builder.build_return(None).unwrap();
+                    } else {
+                        let sret_value = current_fn
+                            .function_value
+                            .get_param_iter()
+                            .next()
+                            .unwrap()
+                            .into_pointer_value();
+                        self.store_k1_value(
+                            &current_fn_ty.return_logical_cg_type,
+                            sret_value,
+                            ret_value,
+                        );
+                        self.builder.build_return(None).unwrap();
+                    }
+                } else {
+                    let ret_value_marshalled = self.marshal_abi_return_value(
+                        current_fn_ty.return_abi_mapping,
+                        &current_fn_ty.return_logical_cg_type,
+                        ret_value,
+                    );
+                    match ret_value_marshalled {
+                        None => self.builder.build_return(None).unwrap(),
+                        Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+                    };
+                }
                 Ok(())
             }
             Inst::BoolNegate { v } => {
@@ -2055,7 +2139,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 // From agg to scalar -> handled by BC
                 // From scalar to agg -> handled by BC
-                match to.to_enum() {
+                match to.as_enum() {
                     PhysicalTypeEnum::Empty => panic!("BitCast on ZST"),
                     // From agg to agg -> canon type is ptr, nothing to do.
                     PhysicalTypeEnum::Agg(_) => {
@@ -2433,7 +2517,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let (di_subprogram, di_file) = self.make_function_debug_info(
             &llvm_name,
             function_span,
-            llvm_function_type.return_physical_cg_type.debug_type(),
+            llvm_function_type.return_logical_cg_type.debug_type(),
             &di_types,
             is_definition,
         )?;
@@ -2501,6 +2585,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 function_type: llvm_function_type,
                 function_value,
                 last_alloca_instr: None,
+                returned_sret_variable: None,
                 instruction_count: 0,
                 debug_info: di_subprogram,
                 debug_file: di_file,
@@ -2532,7 +2617,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
-        match pt.to_enum() {
+        match pt.as_enum() {
             PhysicalTypeEnum::Empty => {
                 if is_return {
                     AbiParamMapping::VoidReturnEmpty
@@ -2649,7 +2734,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             cur_bits: &mut u32,
             t: PhysicalType,
         ) {
-            match t.to_enum() {
+            match t.as_enum() {
                 PhysicalTypeEnum::Empty => {}
                 PhysicalTypeEnum::Scalar(st) => {
                     let class = match st {
@@ -2736,6 +2821,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let codegened_function = self.llvm_functions.get(&function_id).unwrap();
         let cg_function_type = &codegened_function.function_type;
+        let is_sret = cg_function_type.is_sret;
         let param_k1_types = cg_function_type.param_k1_types;
         let param_abi_mappings = cg_function_type.param_abi_mappings;
         let function_value = codegened_function.function_value;
@@ -2750,13 +2836,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let prelude_block = self.ctx.append_basic_block(function_value, "prelude");
         self.builder.position_at_end(prelude_block);
         for (i, param) in function_value.get_param_iter().enumerate() {
-            // let is_sret_param = i == 0 && is_sret;
-            // if is_sret_param {
-            //     continue;
-            // }
+            let is_sret_param = i == 0 && is_sret;
+            if is_sret_param {
+                continue;
+            }
 
-            //let logical_param_index = i - if is_sret { 1 } else { 0 };
-            let logical_param_index = i;
+            let logical_param_index = i - if is_sret { 1 } else { 0 };
             let param_k1_type = *self.mem.get_nth_lt(param_k1_types, logical_param_index);
             let param_abi_mapping = *self.mem.get_nth_lt(param_abi_mappings, logical_param_index);
 
@@ -2820,7 +2905,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         blocks: MSlice<CompiledBlock, ProgramBytecode>,
     ) -> TyperResult<()> {
-        let fv = self.get_insert_function().function_value;
+        let fv = self.get_current_function().function_value;
         for block in self.k1.bytecode.mem.getn_lt(blocks) {
             self.ctx.append_basic_block(fv, block.name.as_str());
         }
@@ -2828,8 +2913,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings.clear();
         for (index, block) in self.k1.bytecode.mem.getn(blocks).iter().enumerate() {
             if index == 0 {
+                let debug_locn = self.builder.get_current_debug_location().unwrap();
+                self.builder.unset_current_debug_location();
+
                 let entry = self.get_block_id(0)?;
                 self.builder.build_unconditional_branch(entry).unwrap();
+
+                self.builder.set_current_debug_location(debug_locn);
             }
             self.codegen_block(inst_mappings, index as u32, block)?;
         }

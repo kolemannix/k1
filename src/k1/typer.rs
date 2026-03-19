@@ -815,6 +815,9 @@ pub struct TypedFunction {
     pub is_concrete: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
+    /// 'let returned', RVO
+    pub returned_variable: Option<VariableId>,
+    pub body_failure: Option<TyperError>,
 }
 
 impl TypedFunction {
@@ -935,6 +938,18 @@ impl_copy_if_small!(4, VariableExpr);
 #[derive(Clone, Copy)]
 pub struct DerefExpr {
     pub target: TypedExprId,
+}
+
+#[derive(Clone, Copy)]
+pub enum AddressOfKind {
+    StackVariable,
+    GlobalVariable,
+}
+
+#[derive(Clone, Copy)]
+pub struct AddressOfExpr {
+    pub target_variable: VariableId,
+    pub kind: AddressOfKind,
 }
 
 #[derive(Clone)]
@@ -1271,6 +1286,7 @@ pub struct TypedCast {
 #[derive(Debug, Clone)]
 pub struct TypedReturn {
     pub value: TypedExprId,
+    pub returned_variable: Option<VariableId>,
 }
 
 #[derive(Debug, Clone)]
@@ -1345,6 +1361,7 @@ pub enum TypedExpr {
     ArrayGetElement(ArrayGetElement),
     Variable(VariableExpr),
     Deref(DerefExpr),
+    AddressOf(AddressOfExpr),
     Block(TypedBlock),
     Call {
         call_id: CallId,
@@ -1388,13 +1405,14 @@ impl From<VariableExpr> for TypedExpr {
 }
 
 impl TypedExpr {
-    pub fn kind_str(&self) -> &'static str {
+    pub fn kind_name(&self) -> &'static str {
         match self {
             TypedExpr::Struct(_) => "struct",
             TypedExpr::StructFieldAccess(_) => "struct_field_access",
             TypedExpr::ArrayGetElement(_) => "array_get_element",
             TypedExpr::Variable(_) => "variable",
             TypedExpr::Deref(_) => "deref",
+            TypedExpr::AddressOf(_) => "addressof",
             TypedExpr::Block(_) => "block",
             TypedExpr::Call { .. } => "call",
             TypedExpr::Match(_) => "match",
@@ -1561,6 +1579,8 @@ bitflags! {
         const Reassigned = 1;
         const Context = 1 << 1;
         const UserHidden = 1 << 2;
+        const Returned = 1 << 3;
+        const Referencing = 1 << 4;
     }
 }
 
@@ -1597,6 +1617,12 @@ impl Variable {
     }
     pub fn user_hidden(&self) -> bool {
         self.flags.contains(VariableFlags::UserHidden)
+    }
+    pub fn returned(&self) -> bool {
+        self.flags.contains(VariableFlags::Returned)
+    }
+    pub fn referencing(&self) -> bool {
+        self.flags.contains(VariableFlags::Referencing)
     }
 }
 
@@ -2265,8 +2291,17 @@ impl TypedExprPool {
         self.exprs.len()
     }
 
-    pub fn add_return(&mut self, return_value: TypedExprId, span: SpanId) -> TypedExprId {
-        self.add(TypedExpr::Return(TypedReturn { value: return_value }), NEVER_TYPE_ID, span)
+    pub fn add_return(
+        &mut self,
+        return_value: TypedExprId,
+        returned_variable: Option<VariableId>,
+        span: SpanId,
+    ) -> TypedExprId {
+        self.add(
+            TypedExpr::Return(TypedReturn { value: return_value, returned_variable }),
+            NEVER_TYPE_ID,
+            span,
+        )
     }
 
     pub fn add_block(
@@ -2765,7 +2800,7 @@ impl TypedProgram {
         {
             let mut exprs_by_kind = FxHashMap::new();
             for expr in self.exprs.exprs.iter() {
-                let i = exprs_by_kind.entry(expr.kind_str()).or_insert(0);
+                let i = exprs_by_kind.entry(expr.kind_name()).or_insert(0);
                 *i += 1
             }
             eprintln!("\tExpression kinds:");
@@ -2986,7 +3021,7 @@ impl TypedProgram {
         let defn_scope_id = self.scopes.add_child_scope(
             scope_id,
             ScopeType::TypeDefn,
-            None,
+            ScopeOwnerId::None,
             Some(parsed_type_defn.name),
         );
         let mut type_params: SV4<NameAndType> =
@@ -5212,7 +5247,7 @@ impl TypedProgram {
         }
     }
 
-    fn compile_all_pending_bytecode(&mut self) -> TyperResult<()> {
+    fn compile_all_pending_bytecode(&mut self, on_behalf_of_span: SpanId) -> TyperResult<()> {
         loop {
             // eprintln!(
             //     "compile_all_pending_bytecode {}",
@@ -5223,21 +5258,10 @@ impl TypedProgram {
             // }
             if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
                 self.eval_function_body(function_id)?;
-                // let is_concrete = self.functions.get(function_id).is_concrete;
-                // if !is_concrete {
-                //     eprintln!("Someone's asking me to compile this non-concrete function")
-                // }
-                // if self.functions.get(function_id).body_block.is_none() {
-                //     debug!(
-                //         "Function with no body (after compile) made it into pending: {}",
-                //         self.function_id_to_string(function_id, false)
-                //     );
-                //     continue;
-                // }
                 if let Err(e) = bc::compile_function(self, function_id) {
                     return failf!(
-                        e.span,
-                        "Failed to compile bytecode for function: {}",
+                        on_behalf_of_span,
+                        "Failed to compile bytecode for function execution: {}",
                         e.message
                     );
                 };
@@ -5275,8 +5299,13 @@ impl TypedProgram {
         //       Currently we'll just fail in bytecode gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let static_block_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let expr_span = parsed_expr_as_block.span;
+        let static_block_scope = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            ScopeOwnerId::None,
+            None,
+        );
         let static_eval_ctx = ctx.with_scope(static_block_scope);
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
@@ -5286,7 +5315,7 @@ impl TypedProgram {
         }
 
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
-        self.compile_all_pending_bytecode()?;
+        self.compile_all_pending_bytecode(expr_span)?;
 
         let execution_result =
             vm::execute_compiled_expr(self, vm, expr, input_parameters).map_err(|mut e| {
@@ -5671,8 +5700,12 @@ impl TypedProgram {
     ) -> TypeId {
         let type_id = self.types.add_anon(Type::TypeParameter(value));
         for ability_sig in ability_impls.into_iter() {
-            let constrained_impl_scope =
-                self.scopes.add_child_scope(value.scope_id, ScopeType::AbilityImpl, None, None);
+            let constrained_impl_scope = self.scopes.add_child_scope(
+                value.scope_id,
+                ScopeType::AbilityImpl,
+                ScopeOwnerId::None,
+                None,
+            );
             let _ = self.scopes.get_scope_mut(constrained_impl_scope).add_type(value.name, type_id);
             self.add_constrained_ability_impl(
                 type_id,
@@ -6009,7 +6042,7 @@ impl TypedProgram {
         let constraint_checking_scope = self.scopes.add_sibling_scope(
             blanket_impl_scope_id,
             ScopeType::AbilityImpl,
-            None,
+            ScopeOwnerId::None,
             None,
         );
         let parsed_blanket_impl = self.ast.get_ability_impl(parsed_id);
@@ -6089,7 +6122,7 @@ impl TypedProgram {
         let new_impl_scope = self.scopes.add_sibling_scope(
             blanket_impl.scope_id,
             ScopeType::AbilityImpl,
-            None,
+            ScopeOwnerId::None,
             None,
         );
 
@@ -6419,7 +6452,7 @@ impl TypedProgram {
                 )
             }
             Some((variable_id, variable_scope_id)) => {
-                let parent_lambda = self.scopes.enclosing_functions.get(scope_id).lambda;
+                let parent_lambda = self.scopes.enclosing_functions.get(scope_id).lambda_scope;
                 let (is_capture, lambda_scope_id) = if let Some(lambda_scope_id) = parent_lambda {
                     let variable_is_above_lambda =
                         self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
@@ -6433,6 +6466,9 @@ impl TypedProgram {
                 };
 
                 let v = self.variables.get(variable_id);
+                if is_assignment_lhs && v.referencing() {
+                    return failf!(variable_name_span, "Cannot reassign a referencing variable");
+                }
                 if is_capture {
                     if is_assignment_lhs {
                         return failf!(
@@ -6822,7 +6858,7 @@ impl TypedProgram {
         });
         let make_error_call = self.exprs.add(TypedExpr::Call { call_id }, block_return_type, span);
         let return_error_expr = self.exprs.add(
-            TypedExpr::Return(TypedReturn { value: make_error_call }),
+            TypedExpr::Return(TypedReturn { value: make_error_call, returned_variable: None }),
             NEVER_TYPE_ID,
             span,
         );
@@ -7045,8 +7081,12 @@ impl TypedProgram {
             }
             ParsedExpr::Block(block) => {
                 let block = block.clone();
-                let block_scope =
-                    self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+                let block_scope = self.scopes.add_child_scope(
+                    ctx.scope_id,
+                    ScopeType::LexicalBlock,
+                    ScopeOwnerId::None,
+                    None,
+                );
                 let block_ctx = ctx.with_scope(block_scope);
                 let needs_terminator = match block.kind {
                     ParsedBlockKind::FunctionBody => true,
@@ -7936,8 +7976,12 @@ impl TypedProgram {
             return failf!(while_expr.span, "'while' body must be a block");
         };
 
-        let condition_block_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let condition_block_scope_id = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            ScopeOwnerId::None,
+            None,
+        );
 
         let condition_or_block = self
             .eval_matching_condition(while_expr.cond, ctx.with_scope(condition_block_scope_id))?;
@@ -7949,7 +7993,7 @@ impl TypedProgram {
         let body_block_scope_id = self.scopes.add_child_scope(
             condition_block_scope_id,
             ScopeType::WhileLoopBody,
-            None,
+            ScopeOwnerId::None,
             None,
         );
         self.scopes.add_loop_info(
@@ -7978,8 +8022,12 @@ impl TypedProgram {
         loop_expr: &ParsedLoopExpr,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let body_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LoopExprBody, None, None);
+        let body_scope = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LoopExprBody,
+            ScopeOwnerId::None,
+            None,
+        );
         self.scopes.add_loop_info(body_scope, ScopeLoopInfo { break_type: ctx.expected_type_id });
 
         // Expected type is handled by loop info above, its needed by 'break's but notably we do not
@@ -8002,37 +8050,13 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        fn fixup_capture_expr_new(
-            k1: &mut TypedProgram,
-            environment_param_variable_id: VariableId,
-            captured_variable_id: VariableId,
-            env_struct_type: TypeId,
-            span: SpanId,
-        ) -> (TypedExpr, TypeId, SpanId) {
-            let v = k1.variables.get(captured_variable_id);
-            let variable_type = v.type_id;
-            let env_struct_reference_type = k1.types.add_reference_type(env_struct_type, false);
-            // Note: Can't capture 2 variables of the same name in a lambda. Might not
-            //       actually be a problem
-            let (field_index, _env_struct_field) =
-                k1.types.get_struct_field_by_name(env_struct_type, v.name).unwrap();
-            let env_variable_expr = k1.exprs.add(
-                TypedExpr::Variable(VariableExpr { variable_id: environment_param_variable_id }),
-                env_struct_reference_type,
-                span,
-            );
-            k1.variables.get_mut(environment_param_variable_id).usage_count += 1;
-            let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
-                base: env_variable_expr,
-                field_index: field_index as u32,
-                struct_type: env_struct_type,
-                access_kind: FieldAccessKind::ValueToValue,
-            });
-            (env_field_access, variable_type, span)
-        }
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
-        let lambda_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, None, None);
+        let lambda_scope_id = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LambdaScope,
+            ScopeOwnerId::None, // To be set later!
+            None,
+        );
         let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
         let span = lambda.span;
@@ -8063,6 +8087,7 @@ impl TypedProgram {
                 expected_return_type,
                 captured_variables: smallvec![],
                 capture_exprs_for_fixup: smallvec![],
+                returned_variable: None,
             },
         );
 
@@ -8166,8 +8191,13 @@ impl TypedProgram {
                 abi_mode: AbiMode::Internal,
             }));
 
-            self.scopes.get_scope_mut(lambda_scope_id).scope_type = ScopeType::FunctionScope;
             let body_function_id = self.functions.next_id();
+            {
+                let scope_mut = self.scopes.get_scope_mut(lambda_scope_id);
+                scope_mut.scope_type = ScopeType::FunctionScope;
+                scope_mut.owner_id = ScopeOwnerId::Function(body_function_id);
+            }
+
             for v in param_variables.iter() {
                 self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
             }
@@ -8188,6 +8218,8 @@ impl TypedProgram {
                 kind: TypedFunctionKind::Lambda,
                 is_concrete: false,
                 dyn_fn_id: None,
+                returned_variable: None,
+                body_failure: None,
             });
 
             let function_pointer_type = self.types.add_function_pointer_type(function_type);
@@ -8319,6 +8351,8 @@ impl TypedProgram {
             // Set by add_function
             is_concrete: false,
             dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
         });
         debug_assert_eq!(actual_body_function_id, body_function_id);
 
@@ -8329,19 +8363,46 @@ impl TypedProgram {
             body_function_id,
             expr_id.into(),
         );
-        self.scopes.set_scope_owner_id(lambda_scope_id, ScopeOwnerId::Lambda(lambda_type_id));
-        debug!(
-            "end eval_lambda {} with is_inference {}. Function id is: {}",
-            lambda_type_id.as_u32(),
-            ctx.is_inference(),
-            body_function_id
+        self.scopes.set_scope_owner_id(
+            lambda_scope_id,
+            ScopeOwnerId::Lambda(lambda_type_id, body_function_id, lambda_scope_id),
         );
-        Ok(self.exprs.add(
+
+        return Ok(self.exprs.add(
             // Seems lambda is the only TypedExpr that is representable as only its type!
             TypedExpr::Lambda(LambdaExpr { lambda_type: lambda_type_id }),
             lambda_type_id,
             span,
-        ))
+        ));
+
+        fn fixup_capture_expr_new(
+            k1: &mut TypedProgram,
+            environment_param_variable_id: VariableId,
+            captured_variable_id: VariableId,
+            env_struct_type: TypeId,
+            span: SpanId,
+        ) -> (TypedExpr, TypeId, SpanId) {
+            let v = k1.variables.get(captured_variable_id);
+            let variable_type = v.type_id;
+            let env_struct_reference_type = k1.types.add_reference_type(env_struct_type, false);
+            // Note: Can't capture 2 variables of the same name in a lambda. Might not
+            //       actually be a problem
+            let (field_index, _env_struct_field) =
+                k1.types.get_struct_field_by_name(env_struct_type, v.name).unwrap();
+            let env_variable_expr = k1.exprs.add(
+                TypedExpr::Variable(VariableExpr { variable_id: environment_param_variable_id }),
+                env_struct_reference_type,
+                span,
+            );
+            k1.variables.get_mut(environment_param_variable_id).usage_count += 1;
+            let env_field_access = TypedExpr::StructFieldAccess(FieldAccess {
+                base: env_variable_expr,
+                field_index: field_index as u32,
+                struct_type: env_struct_type,
+                access_kind: FieldAccessKind::ValueToValue,
+            });
+            (env_field_access, variable_type, span)
+        }
     }
 
     fn ensure_parsed_expr_to_block(
@@ -8373,8 +8434,12 @@ impl TypedProgram {
         if match_parsed_expr.cases.is_empty() {
             return Err(make_error("Match expression with no arms", match_parsed_expr.span));
         }
-        let match_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let match_scope_id = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            ScopeOwnerId::None,
+            None,
+        );
         let subject_expr =
             self.eval_expr(match_parsed_expr.match_subject, ctx.with_no_expected_type())?;
 
@@ -8471,7 +8536,7 @@ impl TypedProgram {
                     let arm_scope_id = self.scopes.add_child_scope(
                         match_scope_id,
                         ScopeType::MatchArm,
-                        None,
+                        ScopeOwnerId::None,
                         None,
                     );
                     let pattern_eval_ctx =
@@ -9117,7 +9182,7 @@ impl TypedProgram {
         // a few local variables in order to achieve this.
 
         let outer_for_expr_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, None, None);
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::ForExpr, ScopeOwnerId::None, None);
 
         let zero_expr = self.synth_i64(0, for_expr.body_block.span);
         let index_variable = self.synth_variable_defn(
@@ -9387,8 +9452,12 @@ impl TypedProgram {
         if if_expr.is_static {
             return self.eval_static_if_expr(if_expr, ctx);
         }
-        let match_scope_id =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let match_scope_id = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            ScopeOwnerId::None,
+            None,
+        );
 
         let condition_or_block = self.eval_matching_condition(
             if_expr.cond,
@@ -9641,8 +9710,12 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> TyperResult<TypedExprId> {
-        let condition_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, None, None);
+        let condition_scope = self.scopes.add_child_scope(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            ScopeOwnerId::None,
+            None,
+        );
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
         let matching_condition = match self.eval_matching_condition(expr_id, condition_ctx)? {
             Either::Left(block) => return Ok(block),
@@ -10043,14 +10116,11 @@ impl TypedProgram {
 
     fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
         match self.scopes.enclosing_functions.get(scope_id) {
-            ScopeEnclosingFunctions { lambda: Some(lambda_scope), .. } => {
+            ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
                 let Some(expected_return_type) =
                     self.scopes.get_lambda_info(*lambda_scope).expected_return_type
                 else {
-                    return failf!(
-                        span,
-                        "Closure must have explicit return type, or known return type from context, to use early returns."
-                    );
+                    return failf!(span, "We don't know the return type of this lambda");
                 };
                 Ok(expected_return_type)
             }
@@ -10058,7 +10128,20 @@ impl TypedProgram {
                 let expected_return_type = self.get_function_type(*function_id).return_type;
                 Ok(expected_return_type)
             }
-            _ => failf!(span, "No parent function; cannot return"),
+            _ => failf!(span, "No parent function"),
+        }
+    }
+
+    fn get_returned_var_for_scope(&self, scope_id: ScopeId) -> Option<VariableId> {
+        match self.scopes.enclosing_functions.get(scope_id) {
+            ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
+                self.scopes.get_lambda_info(*lambda_scope).returned_variable
+            }
+            ScopeEnclosingFunctions { function: Some(function_id), .. } => {
+                let maybe_returned_var = self.functions.get(*function_id).returned_variable;
+                maybe_returned_var
+            }
+            _ => None,
         }
     }
 
@@ -10075,7 +10158,6 @@ impl TypedProgram {
         } else {
             Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
         };
-        debug!("return type: {}", self.type_id_to_string_opt(expected_return_type));
         let return_value = match parsed_expr {
             None => self.synth_empty_struct(span),
             Some(parsed_expr) => self.eval_expr_with_coercion(
@@ -10084,12 +10166,11 @@ impl TypedProgram {
                 true,
             )?,
         };
+        let returned_variable = self.check_returned_value_expr(return_value, ctx.scope_id)?;
+
         let return_value_type = self.exprs.get_type(return_value);
         if return_value_type == NEVER_TYPE_ID {
-            return failf!(
-                span,
-                "return is dead since returned expression is divergent; remove the return"
-            );
+            return Ok(return_value);
         }
         let mut gathered_defers: SV4<ParsedExprId> = smallvec![];
         let mut search_scope_id = ctx.scope_id;
@@ -10111,7 +10192,7 @@ impl TypedProgram {
                 }
             }
         }
-        let return_expr = self.exprs.add_return(return_value, span);
+        let return_expr = self.exprs.add_return(return_value, returned_variable, span);
         if gathered_defers.is_empty() {
             Ok(return_expr)
         } else {
@@ -10315,6 +10396,49 @@ impl TypedProgram {
                 let string =
                     self.synth_interpolated_string(fmt_string_arg.value, ctx, Some(args))?;
                 Ok(Some(string))
+            }
+            "address_of" => {
+                let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
+                let expected_type = match ctx.expected_type_id {
+                    None => None,
+                    Some(t) => Some(self.types.get_type_id_dereferenced(t)),
+                };
+                let input = self.eval_expr(arg.value, ctx.with_expected_type(expected_type))?;
+                let (variable_id, kind) = match self.exprs.get(input) {
+                    TypedExpr::Variable(v) => {
+                        let var = self.variables.get(v.variable_id);
+                        if var.referencing() {
+                            return failf!(
+                                call_span,
+                                "Cannot take address of a referencing variable; you already have it!"
+                            );
+                        }
+                        match var.kind {
+                            VariableKind::FnParam(_) => {
+                                return failf!(
+                                    call_span,
+                                    "Cannot take address of a function parameter; re-declare it or use a & type"
+                                );
+                            }
+                            VariableKind::Let(_) => (v.variable_id, AddressOfKind::StackVariable),
+                            VariableKind::Global(_) => {
+                                (v.variable_id, AddressOfKind::GlobalVariable)
+                            }
+                        }
+                    }
+                    TypedExpr::StructFieldAccess(_) => {
+                        return failf!(call_span, "Unsupported struct field addressof");
+                    }
+                    _ => return failf!(call_span, "This only works on variables "),
+                };
+                let input_type = self.exprs.get_type(input);
+                let reference_type = self.types.add_reference_type(input_type, true);
+                let addr_of_expr = self.exprs.add(
+                    TypedExpr::AddressOf(AddressOfExpr { target_variable: variable_id, kind }),
+                    reference_type,
+                    call_span,
+                );
+                Ok(Some(addr_of_expr))
             }
             _ => Ok(None),
         }
@@ -11302,7 +11426,7 @@ impl TypedProgram {
                     } else if !tolerate_missing_context_args {
                         return failf!(
                             span,
-                            "Failed to find context parameter '{}'. No context variables of type {} are in scope",
+                            "Missing context parameter '{}' of type {}",
                             self.ident_str(context_param.name),
                             self.type_id_to_string(context_param.type_id)
                         );
@@ -11734,7 +11858,7 @@ impl TypedProgram {
                 failf!(
                     self.exprs.get_span(expr_id),
                     "Expression type is unsupported for static lift: {}. For more complex values, use a #static expression instead",
-                    e.kind_str()
+                    e.kind_name()
                 )
             }
         };
@@ -12058,8 +12182,11 @@ impl TypedProgram {
             let generic_function = m.get_function(generic_function_id);
             let spec_num = generic_function.child_specializations.len() + 1;
             write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
-            for nt in m.named_types.get_slice(type_arguments) {
-                m.display_type_id(s, nt.type_id, false).unwrap()
+            for (index, nt) in m.named_types.get_slice(type_arguments).iter().enumerate() {
+                m.display_type_id(s, nt.type_id, false).unwrap();
+                if index < type_arguments.len() - 1 {
+                    write!(s, "_").unwrap();
+                }
             }
             write!(s, "_{spec_num}").unwrap();
         });
@@ -12070,7 +12197,7 @@ impl TypedProgram {
         let spec_fn_scope = self.scopes.add_sibling_scope(
             generic_function_scope,
             ScopeType::FunctionScope,
-            None,
+            ScopeOwnerId::None,
             Some(specialized_name_ident),
         );
 
@@ -12141,6 +12268,8 @@ impl TypedProgram {
             kind: generic_function.kind,
             is_concrete: false,
             dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
         };
         let actual_specialized_function_id = self.add_function(specialized_function);
         debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
@@ -12314,7 +12443,7 @@ impl TypedProgram {
             ParsedStmt::Let(parsed_let) => {
                 static_assert_size!(parse::ParsedLet, 20);
                 let parsed_let = parsed_let.clone();
-                let provided_type = match parsed_let.type_expr.as_ref() {
+                let annotated_type = match parsed_let.type_expr.as_ref() {
                     None => None,
                     Some(&type_expr) => Some(self.eval_type_expr_ext(
                         type_expr,
@@ -12322,6 +12451,27 @@ impl TypedProgram {
                         EvalTypeExprContext::VARIABLE_BINDING,
                     )?),
                 };
+                let maybe_return_type_from_function = if parsed_let.is_returned() {
+                    let expected_return =
+                        self.get_return_type_for_scope(ctx.scope_id, parsed_let.span)?;
+                    Some(expected_return)
+                } else {
+                    None
+                };
+                match (annotated_type, maybe_return_type_from_function) {
+                    (Some(t1), Some(t2)) if t1 != t2 => {
+                        let expected_type_span =
+                            self.ast.get_type_expr_span(parsed_let.type_expr.unwrap());
+                        return failf!(
+                            expected_type_span,
+                            "Must return {}",
+                            self.type_id_to_string(t2)
+                        );
+                    }
+                    _ => {}
+                };
+                let provided_type = maybe_return_type_from_function.or(annotated_type);
+
                 let (expected_rhs_type, provided_reference_mutability) = match provided_type {
                     Some(provided_type) => {
                         if parsed_let.is_referencing() {
@@ -12345,6 +12495,7 @@ impl TypedProgram {
                     }
                     None => (None, None),
                 };
+
                 let value_expr = match parsed_let.value {
                     None => None,
                     Some(value) => Some(self.eval_expr_with_coercion(
@@ -12353,6 +12504,7 @@ impl TypedProgram {
                         true,
                     )?),
                 };
+
                 let actual_type = match value_expr {
                     None => None,
                     Some(value_expr) => Some(self.exprs.get_type(value_expr)),
@@ -12381,6 +12533,8 @@ impl TypedProgram {
                     let mut flags = VariableFlags::empty();
 
                     flags.set(VariableFlags::Context, parsed_let.is_context());
+                    flags.set(VariableFlags::Returned, parsed_let.is_returned());
+                    flags.set(VariableFlags::Referencing, parsed_let.is_referencing());
                     let stmt_id = self.stmts.next_id();
                     let variable_id = self.variables.add(Variable {
                         name: parsed_let.name,
@@ -12390,6 +12544,39 @@ impl TypedProgram {
                         flags,
                         usage_count: 0,
                     });
+
+                    if parsed_let.is_returned() {
+                        if let Some(lambda_scope) =
+                            self.scopes.enclosing_functions.get(ctx.scope_id).lambda_scope
+                        {
+                            let returned_var_ref = &mut self
+                                .scopes
+                                .lambda_info
+                                .get_mut(&lambda_scope)
+                                .unwrap()
+                                .returned_variable;
+                            if let Some(_returned_var_ref) = returned_var_ref {
+                                return failf!(
+                                    parsed_let.span,
+                                    "There is already a returned variable for this lambda"
+                                );
+                            }
+                            *returned_var_ref = Some(variable_id)
+                        } else if let Some(function_id) =
+                            self.scopes.enclosing_functions.get(ctx.scope_id).function
+                        {
+                            let returned_var_ref =
+                                &mut self.functions.get_mut(function_id).returned_variable;
+
+                            if let Some(_returned_var_ref) = returned_var_ref {
+                                return failf!(
+                                    parsed_let.span,
+                                    "There is already a returned variable for this function"
+                                );
+                            }
+                            *returned_var_ref = Some(variable_id)
+                        }
+                    }
                     let val_def_stmt = TypedStmt::Let(LetStmt {
                         variable_type,
                         variable_id,
@@ -12425,7 +12612,7 @@ impl TypedProgram {
                         let else_scope = self.scopes.add_child_scope(
                             ctx.scope_id,
                             ScopeType::LexicalBlock,
-                            None,
+                            ScopeOwnerId::None,
                             None,
                         );
 
@@ -12504,7 +12691,7 @@ impl TypedProgram {
                 let Some(lhs_type) = self.types.get(lhs_type).as_reference() else {
                     return failf!(
                         self.ast.exprs.get_span(set_stmt.lhs),
-                        "Expected a reference type; got {}",
+                        "Expected a reference type for storing with <-; got {}",
                         self.type_id_to_string(lhs_type)
                     );
                 };
@@ -12616,9 +12803,13 @@ impl TypedProgram {
                 } else {
                     match self.stmts.get(stmt_id) {
                         TypedStmt::Expr(expr, _expr_type_id) => {
-                            // Return this expr
-                            let expr_span = self.exprs.get_span(*expr);
-                            let return_expr = self.exprs.add_return(*expr, expr_span);
+                            // Last block expression, and this block needs a termiantor: so return this expr
+                            let expr = *expr;
+                            let returned_variable =
+                                self.check_returned_value_expr(expr, block_scope)?;
+                            let expr_span = self.exprs.get_span(expr);
+                            let return_expr =
+                                self.exprs.add_return(expr, returned_variable, expr_span);
                             let return_stmt =
                                 self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
                             stmts.push(return_stmt);
@@ -12627,12 +12818,13 @@ impl TypedProgram {
                         | TypedStmt::Let(_)
                         | TypedStmt::Require(_)
                         | TypedStmt::Defer(_) => {
-                            let unit = self.synth_empty_struct(stmt_span);
-                            let return_unit_expr = self.exprs.add_return(unit, stmt_span);
-                            let return_unit = TypedStmt::Expr(return_unit_expr, NEVER_TYPE_ID);
-                            let return_unit_id = self.stmts.add(return_unit);
+                            // Return an empty
+                            let empty = self.synth_empty_struct(stmt_span);
+                            let return_empty_expr = self.exprs.add_return(empty, None, stmt_span);
+                            let return_empty = TypedStmt::Expr(return_empty_expr, NEVER_TYPE_ID);
+                            let return_empty_id = self.stmts.add(return_empty);
                             stmts.push(stmt_id);
-                            stmts.push(return_unit_id);
+                            stmts.push(return_empty_id);
                         }
                     };
                 }
@@ -12646,6 +12838,8 @@ impl TypedProgram {
             // the user can decide exactly what to capture at defer-time and what to evaluate at
             // block close time
             // eval_return(...) handles deferred expressions itself
+
+            // Unlike eval_return(), this needs only be concerned with closing out the current block scope, since its not an early return
             if is_last && !is_return {
                 let terminating = self.get_stmt_type(*stmts.last().unwrap()) == NEVER_TYPE_ID;
                 if let Some(this_scope_defers) = self.scopes.block_defers.get(&block_scope) {
@@ -12686,6 +12880,36 @@ impl TypedProgram {
         //eprintln!("  finished block with type:\n{}", self.expr_to_string_with_type(id));
         //eprintln!("  last_expr_type was: {}", self.type_id_to_string(last_expr_type));
         Ok(id)
+    }
+
+    // Handle 'returned variable' case, which lets you return
+    // a pointer to the return type, designed to empower RVO
+    // The bool means the return is indirected from its actual type
+    fn check_returned_value_expr(
+        &mut self,
+        expr: TypedExprId,
+        scope_id: ScopeId,
+    ) -> TyperResult<Option<VariableId>> {
+        let expr_span = self.exprs.get_span(expr);
+        if let Some(returned_variable_id) = self.get_returned_var_for_scope(scope_id) {
+            let err = failf!(
+                expr_span,
+                "Must return declared returned variable {}",
+                self.ident_str(self.variables.get(returned_variable_id).name),
+            );
+            let actual_variable_id = match self.exprs.get(expr) {
+                TypedExpr::Variable(v) => v.variable_id,
+                _ => {
+                    return err;
+                }
+            };
+            if actual_variable_id != returned_variable_id {
+                return err;
+            }
+            Ok(Some(returned_variable_id))
+        } else {
+            Ok(None)
+        }
     }
 
     fn expr_is_return(&self, mut expr_id: TypedExprId) -> bool {
@@ -13196,7 +13420,7 @@ impl TypedProgram {
         let specialized_ability_scope = self.scopes.add_child_scope(
             parent_scope_id,
             ScopeType::AbilityDefn,
-            None,
+            ScopeOwnerId::None,
             Some(ability_name),
         );
 
@@ -13417,7 +13641,7 @@ impl TypedProgram {
         let fn_scope_id = self_.scopes.add_child_scope(
             parent_scope_id,
             ScopeType::FunctionScope,
-            None,
+            ScopeOwnerId::None,
             Some(name),
         );
 
@@ -13725,6 +13949,8 @@ impl TypedProgram {
             type_id: function_type_id,
             is_concrete: false,
             dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
         });
 
         if resolvable_by_name {
@@ -13759,7 +13985,7 @@ impl TypedProgram {
 
     pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
         let function = self.get_function(declaration_id);
-        if function.body_block.is_some() {
+        if function.body_failure.is_some() || function.body_block.is_some() {
             return Ok(());
         }
         let is_debug = function.compiler_debug;
@@ -13868,12 +14094,11 @@ impl TypedProgram {
             return Ok(ability_id);
         }
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
-        let parent_namespace_id =
-            self.scopes.get_scope_owner(scope_id).unwrap().as_namespace().unwrap();
+        let parent_namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
         let ability_scope_id = self.scopes.add_child_scope(
             scope_id,
             ScopeType::AbilityDefn,
-            None,
+            ScopeOwnerId::None,
             Some(parsed_ability.name),
         );
 
@@ -14074,7 +14299,7 @@ impl TypedProgram {
         let parsed_impl_functions = &parsed_ability_impl.functions;
 
         let impl_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, None, None);
+            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None, None);
 
         let mut blanket_type_params: SV4<NameAndType> =
             SmallVec::with_capacity(parsed_ability_impl.generic_impl_params.len());
@@ -14116,8 +14341,12 @@ impl TypedProgram {
             }
 
             if !blanket_impl_param.constraints.is_empty() {
-                let param_constraints_scope_id =
-                    self.scopes.add_child_scope(impl_scope_id, ScopeType::AbilityImpl, None, None);
+                let param_constraints_scope_id = self.scopes.add_child_scope(
+                    impl_scope_id,
+                    ScopeType::AbilityImpl,
+                    ScopeOwnerId::None,
+                    None,
+                );
                 for ability_expr in self
                     .ast
                     .mem
@@ -14382,6 +14611,7 @@ impl TypedProgram {
                 self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
             };
             if let Err(e) = self.eval_function_body(impl_fn) {
+                self.functions.get_mut(impl_fn).body_failure = Some(e.clone());
                 self.ability_impls.get_mut(ability_impl_id).compile_errors.push(e.clone());
                 self.report(e);
             }
@@ -14411,9 +14641,11 @@ impl TypedProgram {
             }
             ParsedId::Function(parsed_function_id) => {
                 if let Some(function_declaration_id) =
-                    self.function_ast_mappings.get(&parsed_function_id)
+                    self.function_ast_mappings.get(&parsed_function_id).copied()
                 {
-                    if let Err(e) = self.eval_function_body(*function_declaration_id) {
+                    if let Err(e) = self.eval_function_body(function_declaration_id) {
+                        self.functions.get_mut(function_declaration_id).body_failure =
+                            Some(e.clone());
                         self.report(e);
                     };
                 }
@@ -14795,12 +15027,16 @@ impl TypedProgram {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name = ast_namespace.name;
 
-        let ns_scope_id =
-            self.scopes.add_child_scope(parent_scope_id, ScopeType::Namespace, None, Some(name));
+        let ns_scope_id = self.scopes.add_child_scope(
+            parent_scope_id,
+            ScopeType::Namespace,
+            ScopeOwnerId::None,
+            Some(name),
+        );
         let parent_ns_id = self
             .scopes
             .get_scope_owner(parent_scope_id)
-            .and_then(|owner| owner.as_namespace())
+            .as_namespace()
             .expect("namespace must be defined directly inside another namespace");
 
         let is_core = parent_scope_id == Scopes::ROOT_SCOPE_ID && name == self.ast.idents.b.core;
@@ -15265,6 +15501,7 @@ impl TypedProgram {
             for function_id in &function_ids {
                 let result = self.specialize_function_body(*function_id);
                 if let Err(e) = result {
+                    self.functions.get_mut(*function_id).body_failure = Some(e.clone());
                     self.report(e)
                 }
             }

@@ -750,11 +750,17 @@ fn crash(context locn: compiler/source-location)(msg: string): never {
     k1/emit-compiler-message(locn, .error, msg);
     sys/exit(111)
   } else {
-    let filename = locn.filename;
-    let line = locn.line;
     sys/printBacktrace();
-    let s = "{msg} at {filename}:{line}\n";
-    eprint(s);
+
+    // We print this way to avoid calling our format code
+    eprint(msg);
+    eprint(" at ");
+    eprint(locn.filename);
+    eprint(":");
+    core/formatUInt(context core/io/stderr)(locn.line, 10);
+    eprint("\n");
+    //let s = "{msg} at {filename}:{line}\n";
+    //eprint(s);
     sys/exit(1)
   }
 }

@@ -110,6 +110,7 @@ impl TypedProgram {
             TypedExpr::Deref(deref) => {
                 recurse!(deref.target);
             }
+            TypedExpr::AddressOf(_) => {}
             TypedExpr::Block(block) => {
                 for stmt in self.mem.getn(block.statements).iter() {
                     recurse_stmt!(*stmt);

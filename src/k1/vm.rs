@@ -571,12 +571,13 @@ pub fn execute_compiled_expr(
         pt: unit.fn_type.return_type,
         frame_index: 0,
         inst_index: 0,
+        has_dst: false,
         ret_layout: unit.ret_layout,
         ip: 0,
         block: 0,
     };
 
-    let logical_return_pt = unit.fn_type.logical_return_type();
+    let logical_return_pt = unit.fn_type.return_type;
     let pt_layout = k1.types.get_pt_layout(logical_return_pt);
     let ret_addr = vm.stack.push_layout_uninit(pt_layout);
     vm.overall_return_addr = ret_addr;
@@ -584,14 +585,6 @@ pub fn execute_compiled_expr(
     debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
     vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
     debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
-
-    match unit.fn_type.out_param_pt {
-        None => {}
-        Some(_) => {
-            // For out param calls, tell the function about the address using param 0
-            vm.stack.set_param_value(top_frame_index, 0, Value::ptr(ret_addr.cast_const()));
-        }
-    };
 
     let exit_code = match exec_loop(k1, vm, unit) {
         Ok(exit_code) => exit_code,
@@ -696,7 +689,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 vm.stack.set_cur_inst_value(inst_index, value);
                 ip += 1
             }
-            Inst::Alloca { t: _, vm_layout } => {
+            Inst::Alloca { t: _, vm_layout, returned } => {
+                // TODO: nocommit optimize 'returned' allocas in vm
                 let ptr = vm.stack.push_layout_uninit(vm_layout);
 
                 vm.stack.set_cur_inst_value(inst_index, Value::ptr(ptr));
@@ -756,15 +750,24 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let caller_frame_index = vm.stack.current_frame_index();
 
                 let call = k1.bytecode.calls.get(id);
+                let callee = call.callee;
                 let call_args = call.args;
 
-                // This captures the case where the return type is too large for a
-                // register, and too small for an out param.
-                // We push caller space and store that address in the call's inst register slot,
-                // which gets written to in fulfill_return
-                if ret_layout.size > size_of::<Value>() as u32 {
-                    let dst = vm.stack.push_layout_uninit(ret_layout);
-                    vm.stack.set_inst_value(caller_frame_index, inst_index, Value::ptr(dst));
+                let has_dst = match call.dst {
+                    Some(dst) => {
+                        let dst_addr = resolve_value!(dst);
+                        vm.stack.set_inst_value(caller_frame_index, inst_index, dst_addr);
+                        true
+                    }
+                    None => {
+                        if ret_pt.is_agg() {
+                            let storage = Value::ptr(vm.stack.push_layout_uninit(ret_layout));
+                            vm.stack.set_inst_value(caller_frame_index, inst_index, storage);
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 };
 
                 macro_rules! builtin_return {
@@ -774,7 +777,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             vm,
                             caller_frame_index,
                             inst_index,
-                            ret_layout.size,
+                            has_dst,
                             ret_pt,
                             $value,
                         );
@@ -788,9 +791,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         continue 'exec;
                     }};
                 }
-                let dispatch_function_id = match call.callee {
-                    BcCallee::Extern { library_name, function_name, function_id, out_param_pt } => {
-                        // nocommit: pass the inst_index in, so we can re-use the out storage
+                let dispatch_function_id = match callee {
+                    BcCallee::Extern { library_name, function_name, function_id } => {
+                        // FIXME: pass the inst_index in, so we can re-use the out storage
                         let result: Value = vm_ffi::handle_ffi_call(
                             k1,
                             vm,
@@ -801,7 +804,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                             library_name,
                             function_name,
                             function_id,
-                            out_param_pt,
                         )?;
                         builtin_return!(result)
                     }
@@ -818,10 +820,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         match bc_builtin {
                             bc::BackendBuiltin::TypeSchema => {
                                 // intern fn typeSchema(id: u64): TypeSchema
-                                let out_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
                                 let type_id_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits();
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
                                 let type_id = TypeId::from_nzu32(
                                     NonZeroU32::new(type_id_arg as u32).unwrap(),
                                 );
@@ -834,26 +834,18 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                         k1.type_id_to_string(type_id)
                                     )
                                 };
-                                // nocommit dumb to have to look this up
-                                let type_schema_type_id =
-                                    k1.static_values.get(*schema_static_value_id).get_type();
-                                let type_schema_pt = k1
-                                    .types
-                                    .get_physical_type(&k1.static_values, type_schema_type_id)
-                                    .unwrap();
 
                                 let schema_vm_value = static_value_to_vm_value(
                                     k1,
                                     *schema_static_value_id,
                                     vm.eval_span,
                                 );
-                                store_value(&k1.types, type_schema_pt, out_arg, schema_vm_value);
                                 builtin_return!(schema_vm_value);
                             }
                             bc::BackendBuiltin::TypeName => {
                                 // intern fn typeName(id: u64): string
                                 let type_id_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call.args, 0)).bits();
+                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
                                 let type_id = TypeId::from_nzu32(
                                     NonZeroU32::new(type_id_arg as u32).unwrap(),
                                 );
@@ -1014,11 +1006,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                     k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
                                 };
                                 let message = value_to_string_id(k1, message_arg).map_err(|msg| {
-                                errf!(
-                                    vm.eval_span,
-                                    "Bad message string passed to EmitCompilerMessage: {msg}"
-                                )
-                            })?;
+                                    errf!(vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
+                                })?;
                                 let filename =
                                 unsafe { location.filename.to_str() }.map_err(|msg| {
                                     errf!(
@@ -1070,6 +1059,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         pt: ret_pt,
                         frame_index: caller_frame_index,
                         inst_index,
+                        has_dst,
                         ret_layout,
                         ip: ip + 1,
                         block: b,
@@ -1095,12 +1085,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 // - Set 'pc' (which is blocks + b + i)
                 goto_unit!(called_blocks, called_inst_offset, 0, 0);
             }
-            Inst::Ret(bc_value) => {
+            Inst::Ret { v, agg: _ } => {
                 let cur_frame = vm.stack.current_frame();
                 let cur_frame_index = cur_frame.index;
                 let ret_info = cur_frame.ret_info;
 
-                let returned_value = resolve_value!(bc_value);
+                let returned_value = resolve_value!(v);
 
                 //eprintln!("Ret: {}", debug_value_to_string(vm, k1, ret_info.pt, returned_value));
                 //vm.dump_current_frame(k1);
@@ -1112,7 +1102,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         vm,
                         ret_info.frame_index,
                         ret_info.inst_index,
-                        ret_info.ret_layout.size,
+                        ret_info.has_dst,
                         ret_info.pt,
                         returned_value,
                     );
@@ -1672,7 +1662,7 @@ fn resolve_value(
             };
             Ok(value)
         }
-        BcValue::GlobalAddr { t, id } => resolve_global(k1, vm, id, t),
+        BcValue::GlobalAddr { storage_pt: t, id } => resolve_global(k1, vm, id, t),
         BcValue::Empty => Ok(Value(0)),
     }
 }
@@ -1735,22 +1725,28 @@ fn resolve_global(
     }
 }
 
+#[inline(always)]
 fn fulfill_return(
     k1: &TypedProgram,
     vm: &mut Vm,
-    frame_index: u32,
-    inst_index: u32,
-    ret_size: u32,
+    call_frame_index: u32,
+    call_inst_index: u32,
+    has_dst: bool,
     ret_type: PhysicalType,
     returned_value: Value,
 ) {
-    if ret_size > size_of::<Value>() as u32 {
-        let addr = vm.stack.get_inst_value(frame_index, inst_index).as_ptr();
+    // If the call has a 'dst', then we have written
+    // its address into the call's inst value. So we grab
+    // that address, then write the result to it
+    //
+    // Otherwise, we just put the value in the call's inst slot
+    if has_dst {
+        let addr = vm.stack.get_inst_value(call_frame_index, call_inst_index).as_ptr();
         //eprintln!("fulfill_return [{}] to {:?}, size: {}", frame_index, addr, ret_size);
         store_value(&k1.types, ret_type, addr, returned_value);
     } else {
         //eprintln!("fulfill_return [{}] to reg {}, size: {}", frame_index, inst_index, ret_size);
-        vm.stack.set_inst_value(frame_index, inst_index, returned_value)
+        vm.stack.set_inst_value(call_frame_index, call_inst_index, returned_value)
     }
 }
 
@@ -1985,7 +1981,7 @@ pub fn store_scalar(t: ScalarType, dst: *mut u8, value: Value) {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn store_value(types: &TypePool, t: PhysicalType, dst: *mut u8, value: Value) {
-    match t.to_enum() {
+    match t.as_enum() {
         PhysicalTypeEnum::Empty => {
             panic!("Storing Empty; should probably be illegal")
             // eprintln!("Storing Empty; should probably be illegal")
@@ -2033,7 +2029,7 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
 }
 
 pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
-    match t.to_enum() {
+    match t.as_enum() {
         PhysicalTypeEnum::Empty => {
             panic!("load_value on Empty");
             Value(0)
@@ -2057,6 +2053,9 @@ pub struct RetInfo {
     /// Or we perform a store to the address in that register. We use pt and size to help us know which
     frame_index: u32,
     inst_index: u32,
+    /// There's a memory address stored in (frame_index, inst_index) that you need to write to
+    /// Otherwise, just write the value
+    has_dst: bool,
 
     ret_layout: Layout,
     ip: u32,
@@ -2498,7 +2497,7 @@ fn render_debug_value(
     pt: PhysicalType,
     value: Value,
 ) -> std::fmt::Result {
-    match pt.to_enum() {
+    match pt.as_enum() {
         PhysicalTypeEnum::Empty => w.write_str("empty")?,
         PhysicalTypeEnum::Scalar(scalar_type) => match scalar_type {
             ScalarType::U8 => write!(w, "u8 {}", value.bits() as u8)?,
@@ -2558,7 +2557,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
             "not a value type; zeroed() for type {} is undefined",
             k1.types.get(type_id).kind_name()
         ),
-        Some(pt) => match pt.to_enum() {
+        Some(pt) => match pt.as_enum() {
             PhysicalTypeEnum::Scalar(_) => Value(0),
             PhysicalTypeEnum::Agg(agg_id) => {
                 let layout = k1.types.agg_types.get(agg_id).layout;

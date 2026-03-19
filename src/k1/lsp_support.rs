@@ -34,7 +34,7 @@ pub fn get_expr_at_point(
         let type_string = k1.type_id_to_string(type_id);
         let layout = k1.types.get_layout_nonmut(type_id).unwrap_or(Layout::ZERO_SIZED);
         let expr_string = k1.expr_to_string(*expr_id);
-        let kind_name = k1.exprs.get(*expr_id).kind_str();
+        let kind_name = k1.exprs.get(*expr_id).kind_name();
         let msg = format!(
             "Kind: {kind_name}\n`{expr_string}`\n`{type_string}`\nSize: {}, Align: {}",
             layout.size, layout.align

@@ -332,16 +332,20 @@ pub struct ParsedLet {
 }
 
 impl ParsedLet {
-    pub const FLAG_CONTEXT: u8 = 1;
-    pub const FLAG_REFERENCING: u8 = 2;
+    pub const FLAG_CONTEXT: u8 = 1 << 0;
+    pub const FLAG_REFERENCING: u8 = 1 << 1;
+    pub const FLAG_RETURNED: u8 = 1 << 2;
 
-    pub fn make_flags(context: bool, referencing: bool) -> u8 {
+    pub fn make_flags(context: bool, referencing: bool, returned: bool) -> u8 {
         let mut flags = 0;
         if context {
             flags |= Self::FLAG_CONTEXT;
         }
         if referencing {
             flags |= Self::FLAG_REFERENCING;
+        }
+        if returned {
+            flags |= Self::FLAG_RETURNED;
         }
         flags
     }
@@ -358,6 +362,13 @@ impl ParsedLet {
     }
     pub fn is_referencing(&self) -> bool {
         self.flags & Self::FLAG_REFERENCING != 0
+    }
+
+    pub fn set_returned(&mut self) {
+        self.flags |= Self::FLAG_RETURNED;
+    }
+    pub fn is_returned(&self) -> bool {
+        self.flags & Self::FLAG_RETURNED != 0
     }
 }
 
@@ -3051,7 +3062,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
         let name = self.expect_kind(K::Ident)?;
         let value = if let Some(_colon) = self.maybe_consume(K::Colon) {
-            if let Some(_) = self.maybe_consume_ident_chars("uninit") {
+            if let Some(_t) = self.maybe_consume_ident_chars("uninit") {
                 StructValueFieldKind::Uninit
             } else {
                 let expr = self.expect_expression()?;
@@ -3822,7 +3833,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         trace!("parse_let");
         let Some(eaten_keyword) = self.maybe_consume(K::KeywordLet) else { return Ok(None) };
         let is_reference = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
-        let is_context = self.maybe_consume(K::KeywordContext).is_some();
+        let mut flags = ParsedLet::FLAG_REFERENCING * is_reference as u8;
+        loop {
+            let p = self.peek();
+            match p.kind {
+                K::KeywordContext => {
+                    self.advance();
+                    flags |= ParsedLet::FLAG_CONTEXT
+                }
+                K::Ident if self.get_token_chars(p) == "returned" => {
+                    self.advance();
+                    flags |= ParsedLet::FLAG_RETURNED
+                }
+                _ => break,
+            }
+        }
         let name_token = self.expect_kind(K::Ident)?;
         let typ = match self.maybe_consume(K::Colon) {
             None => Ok(None),
@@ -3839,7 +3864,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: self.intern_ident_token(name_token),
             type_expr: typ,
             value: initializer_expression,
-            flags: ParsedLet::make_flags(is_context, is_reference),
+            flags,
             span,
         }))
     }

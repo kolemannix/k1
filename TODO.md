@@ -23,6 +23,8 @@ Non-major Ideas
 - [x] Incorporate ffc.h for int and float parsing
 - [ ] Inspired by fast_float, char to digit lookup table
 
+On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
+
 Syntax/elegance
 - [x] replace `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`

@@ -661,6 +661,10 @@ impl TypedProgram {
                 self.display_expr_id(deref.target, w, indentation)?;
                 w.write_str(".*")
             }
+            TypedExpr::AddressOf(addr_of) => {
+                self.write_ident(w, self.variables.get(addr_of.target_variable).name)?;
+                w.write_str(".&")
+            }
             TypedExpr::EnumConstructor(enum_constr) => {
                 w.write_str(".")?;
                 let enum_type = self.types.get(expr_type).expect_enum();

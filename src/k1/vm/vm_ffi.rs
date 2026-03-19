@@ -23,37 +23,22 @@ pub(super) fn handle_ffi_call(
     lib_name: Option<Ident>,
     fn_name: Ident,
     function_id: FunctionId,
-    // This is a major path-forking argument
-    // If there is an out param, we need to shuffle things around to
-    // tell libffi about the true return type, and use the out param storage as the return storage
-    // that we give to libffi. Essentially, the bytecode generation has already allocated
-    // storage for the return, and injected it as the first parameter, and marked the function as
-    // void (empty) returning.
-    // (This might actually work on x86 since the ret storage actually goes
-    // in the first param slot, but on arm64 it goes in x8 or something )
-    out_param_pt: Option<PhysicalType>,
 ) -> TyperResult<Value> {
     let nargs = args.len() as usize;
-    let is_out_param = out_param_pt.is_some();
-    let params_offset = is_out_param as usize;
-    let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32 - is_out_param as u32);
-    let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32 - is_out_param as u32);
+    let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
+    let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
     let fn_type = k1.bytecode.functions.get(function_id).unwrap().fn_type;
     let function_params = fn_type.params;
 
-    for (arg_value, param) in k1
-        .bytecode
-        .mem
-        .getn(args.skip(params_offset))
-        .iter()
-        .zip(k1.bytecode.mem.getn(function_params.skip(params_offset)))
+    for (arg_value, param) in
+        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
     {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
         // If aggregate, you already have the pointer that libffi wants
         if param.pt.is_agg() {
-            ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut u8 as *mut c_void);
+            ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut c_void);
         } else {
             // If scalar, _get_ a pointer to it
             ffi_args_value_storage.push(vm_value.bits());
@@ -101,22 +86,14 @@ pub(super) fn handle_ffi_call(
     });
 
     let result_storage = unsafe {
-        if is_out_param {
-            let out_param_arg = *k1.bytecode.mem.get_nth(args, 0);
-            let out_param_value =
-                vm::resolve_value(k1, vm, frame_index, inst_offset, out_param_arg)?;
-            let out_param_addr = out_param_value.as_ptr();
-            out_param_addr
-        } else {
-            // TODO: If the result fits in 1 word, we should just use the instruction slot instead
-            let ret_size = (*(ffi_handle.cif.rtype)).size;
-            let ret_align = (*(ffi_handle.cif.rtype)).alignment;
-            let result_space: *mut u8 = vm
-                .stack
-                .push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
-            debug!("result space is {} {}", ret_size, ret_align);
-            result_space
-        }
+        // TODO(ffi): We've already allocated space for non-scalar returns; use it
+        // TODO(ffi): If the result fits in 1 word, we should just use the instruction slot instead
+        let ret_size = (*(ffi_handle.cif.rtype)).size;
+        let ret_align = (*(ffi_handle.cif.rtype)).alignment;
+        let result_space: *mut u8 =
+            vm.stack.push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 });
+        debug!("result space is {} {}", ret_size, ret_align);
+        result_space
     };
 
     unsafe {
@@ -145,9 +122,9 @@ fn prep_ffi_cif(
     physical_function_type: PhysicalFunctionType,
     span: SpanId,
 ) -> TyperResult<ffi_cif> {
-    let param_count = physical_function_type.logical_params().len() as usize;
-    let fn_params = physical_function_type.logical_params();
-    let return_type = physical_function_type.logical_return_type();
+    let param_count = physical_function_type.params.len() as usize;
+    let fn_params = physical_function_type.params;
+    let return_type = physical_function_type.return_type;
     let mut ffi_args_types_storage = k1.mem.new_list(param_count as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
     for fn_param in k1.bytecode.mem.getn(fn_params) {
@@ -202,7 +179,7 @@ fn pt_to_ffi_type(
     k1: &mut TypedProgram,
     pt: PhysicalType,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
-    match pt.to_enum() {
+    match pt.as_enum() {
         PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
         PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
         PhysicalTypeEnum::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {

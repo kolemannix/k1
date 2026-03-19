@@ -11,18 +11,15 @@ ns FixList {
   fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
 
-  // Note: Since the zeroed() value is constructed
-  //       directly in the return slot, we get rvo
-  //       But if we had a let first, it would have to be copied
-  //       until we have an explicit rvo feature
-  fn zeroed[T, N: static size](): FixList[T, N] {
-    zeroed()
+  #debug fn zeroed[T, N: static size](): FixList[T, N] {
+    mem/zeroed()
   }
 
-  // TODO: Replace with RVO once implemented
-  // fn uninit[T, N: static size](out: *mut FixList[T, N]) {
-  //   result.used = 0;
-  // }
+  fn uninit[t, n: static size](): core/FixList[t, n] {
+    let returned fl = uninit;
+    address_of(fl).used* <- 0;
+    fl
+  }
 
   fn clear[T, N: static size](self: *mut FixList[T, N]): empty {
     #if k1/debug self.data*.memset(0xCD);

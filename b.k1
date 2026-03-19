@@ -1,16 +1,11 @@
-fn smallStruct(): { a: u8, b: u8, c: u8 } {
-  { a: 1, b: 2, c: 3 }
+fn fixlist-uninit[t, n: static size](): core/FixList[t, n] {
+  let returned a = uninit;
+  address_of(a).used* <- 0;
+  a
 }
-#debug fn main(): i32 { 
-  "{1}{2}";
-
-  let ss = smallStruct();
-  assert(ss.a == 1);
-  assert(ss.b == 2);
-  assert(ss.c == 3);
-
-  
+fn main(): i32 { 
+  let fl = fixlist-uninit[byte, 1024];
   0
 }
 
-#static main()
+//#static main()

@@ -530,7 +530,7 @@ pub fn codegen_module<'ctx, 'module>(
     }
 
     // Sometimes its really nice to inspect optimized IR instead of assembly!
-    let optimize_ir = false;
+    let optimize_ir = true;
     if let Err(e) = codegen.optimize_verify(optimize_ir) {
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)

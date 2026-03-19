@@ -90,13 +90,13 @@ impl Display for ScopeType {
 
 #[derive(Clone, Copy)]
 pub struct ScopeEnclosingFunctions {
-    pub lambda: Option<ScopeId>,
+    pub lambda_scope: Option<ScopeId>,
     pub function: Option<FunctionId>,
 }
 
 impl ScopeEnclosingFunctions {
     pub fn empty() -> Self {
-        ScopeEnclosingFunctions { lambda: None, function: None }
+        ScopeEnclosingFunctions { lambda_scope: None, function: None }
     }
 }
 
@@ -104,6 +104,9 @@ pub struct ScopeLambdaInfo {
     pub expected_return_type: Option<TypeId>,
     pub capture_exprs_for_fixup: SmallVec<[TypedExprId; 8]>,
     pub captured_variables: SmallVec<[VariableId; 8]>,
+    // We have to store this here, instead of on the function, since no function
+    // declaration exists while we're evaluating a lambda body
+    pub returned_variable: Option<VariableId>,
 }
 
 pub struct ScopeLoopInfo {
@@ -136,7 +139,7 @@ pub struct Scopes {
 impl Scopes {
     pub const ROOT_SCOPE_ID: ScopeId = ScopeId(NonZeroU32::new(1).unwrap());
     pub fn make(root_ident: Ident, count_hint: usize) -> Self {
-        let root_scope = Scope::make(ScopeType::Namespace, None, Some(root_ident));
+        let root_scope = Scope::make(ScopeType::Namespace, ScopeOwnerId::None, Some(root_ident));
         let mut scopes = Scopes {
             scopes: VPool::make_with_hint("scopes", count_hint),
             children: VPool::make_with_hint("scope_children", count_hint),
@@ -155,7 +158,7 @@ impl Scopes {
         let id = scopes.add(
             root_scope,
             smallvec![],
-            ScopeEnclosingFunctions { lambda: None, function: None },
+            ScopeEnclosingFunctions { lambda_scope: None, function: None },
         );
         debug_assert_eq!(id, Self::ROOT_SCOPE_ID);
         scopes
@@ -188,7 +191,7 @@ impl Scopes {
         &mut self,
         sibling_scope_id: ScopeId,
         scope_type: ScopeType,
-        scope_owner_id: Option<ScopeOwnerId>,
+        scope_owner_id: ScopeOwnerId,
         name: Option<Ident>,
     ) -> ScopeId {
         let parent = self.get_scope(sibling_scope_id).parent.unwrap();
@@ -199,7 +202,7 @@ impl Scopes {
         &mut self,
         parent_scope_id: ScopeId,
         scope_type: ScopeType,
-        scope_owner_id: Option<ScopeOwnerId>,
+        scope_owner_id: ScopeOwnerId,
         name: Option<Ident>,
     ) -> ScopeId {
         let id = self.scopes.next_id();
@@ -209,10 +212,12 @@ impl Scopes {
 
         let id = self.add(scope, smallvec![], ScopeEnclosingFunctions::empty());
 
-        let enclosing_lambda = self.nearest_parent_lambda(id);
+        let enclosing_lambda_scope = self.nearest_parent_lambda(id);
         let enclosing_function = self.nearest_parent_function(id);
-        *self.enclosing_functions.get_mut(id) =
-            ScopeEnclosingFunctions { lambda: enclosing_lambda, function: enclosing_function };
+        *self.enclosing_functions.get_mut(id) = ScopeEnclosingFunctions {
+            lambda_scope: enclosing_lambda_scope,
+            function: enclosing_function,
+        };
 
         id
     }
@@ -230,10 +235,10 @@ impl Scopes {
     }
 
     pub fn set_scope_owner_id(&mut self, id: ScopeId, owner_id: ScopeOwnerId) {
-        self.get_scope_mut(id).owner_id = Some(owner_id);
+        self.get_scope_mut(id).owner_id = owner_id;
     }
 
-    pub fn get_scope_owner(&self, scope_id: ScopeId) -> Option<ScopeOwnerId> {
+    pub fn get_scope_owner(&self, scope_id: ScopeId) -> ScopeOwnerId {
         self.get_scope(scope_id).owner_id
     }
 
@@ -435,7 +440,7 @@ impl Scopes {
     pub fn nearest_parent_namespace(&self, scope_id: ScopeId) -> NamespaceId {
         let scope = self.get_scope(scope_id);
         match scope.owner_id {
-            Some(ScopeOwnerId::Namespace(ns)) => ns,
+            ScopeOwnerId::Namespace(ns) => ns,
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_namespace(parent),
                 None => panic!("No parent namespace found"),
@@ -446,7 +451,7 @@ impl Scopes {
     pub fn nearest_parent_function(&self, calling_scope: ScopeId) -> Option<FunctionId> {
         let scope = self.get_scope(calling_scope);
         match scope.owner_id {
-            Some(ScopeOwnerId::Function(fn_id)) => Some(fn_id),
+            ScopeOwnerId::Function(fn_id) => Some(fn_id),
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_function(parent),
                 None => None,
@@ -454,14 +459,12 @@ impl Scopes {
         }
     }
 
-    // TODO(scopes perf): We could actually now use the pre-computed `enclosing_functions` of our parents to find these
-    // much more quickly instead
     fn nearest_parent_lambda(&self, scope_id: ScopeId) -> Option<ScopeId> {
         let scope = self.get_scope(scope_id);
         match scope.scope_type {
             ScopeType::LambdaScope => Some(scope_id),
             // We can stop searching once we find a function scope; a lambda won't ever appear
-            // outside of a function!
+            // outside of a function! (And we don't do locally defined named functions
             ScopeType::FunctionScope => None,
             _ => match scope.parent {
                 Some(parent) => self.nearest_parent_lambda(parent),
@@ -671,10 +674,11 @@ impl Scopes {
 /// Useful for going from scope to 'thing that owns the scope', like to a scope's ability or namespace or function
 #[derive(Debug, Clone, Copy)]
 pub enum ScopeOwnerId {
+    None,
     Ability(AbilityId),
     Function(FunctionId),
     Namespace(NamespaceId),
-    Lambda(TypeId),
+    Lambda(TypeId, FunctionId, ScopeId),
 }
 impl ScopeOwnerId {
     pub fn expect_ability(&self) -> AbilityId {
@@ -740,7 +744,7 @@ impl VariableInScope {
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub scope_type: ScopeType,
-    pub owner_id: Option<ScopeOwnerId>,
+    pub owner_id: ScopeOwnerId,
     pub variables: FxHashMap<Ident, VariableInScope>,
     pub context_variables_by_type: FxHashMap<TypeId, VariableId>,
     pub functions: FxHashMap<Ident, FunctionId>,
@@ -753,11 +757,7 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn make(
-        scope_type: ScopeType,
-        owner_id: Option<ScopeOwnerId>,
-        name: Option<Ident>,
-    ) -> Scope {
+    pub fn make(scope_type: ScopeType, owner_id: ScopeOwnerId, name: Option<Ident>) -> Scope {
         Scope {
             variables: FxHashMap::new(),
             context_variables_by_type: FxHashMap::new(),

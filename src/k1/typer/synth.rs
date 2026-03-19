@@ -134,7 +134,8 @@ impl TypedProgram {
         span: SpanId,
         max_len: u32,
     ) -> BlockBuilder {
-        let block_scope_id = self.scopes.add_child_scope(parent_scope, scope_type, None, None);
+        let block_scope_id =
+            self.scopes.add_child_scope(parent_scope, scope_type, ScopeOwnerId::None, None);
         BlockBuilder { statements: self.mem.new_list(max_len), scope_id: block_scope_id, span }
     }
 
@@ -223,6 +224,7 @@ impl TypedProgram {
             })
         };
         let mut flags = VariableFlags::empty();
+        flags.set(VariableFlags::Referencing, is_referencing);
         flags.set(VariableFlags::UserHidden, !no_mangle);
         let reassignable = !is_referencing && is_mutable;
         flags.set(VariableFlags::Reassigned, reassignable);

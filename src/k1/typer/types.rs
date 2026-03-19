@@ -886,7 +886,7 @@ pub struct BuiltinTypes {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarType {
     U8 = 1,
     U16 = 2,
@@ -966,6 +966,16 @@ impl ScalarType {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PhysicalType(u32);
 
+impl std::fmt::Debug for PhysicalType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.as_enum() {
+            PhysicalTypeEnum::Scalar(scalar_type) => write!(f, "{}", scalar_type),
+            PhysicalTypeEnum::Agg(agg_id) => write!(f, "{}", agg_id),
+            PhysicalTypeEnum::Empty => f.write_str("{}"),
+        }
+    }
+}
+
 impl PhysicalType {
     pub const EMPTY: PhysicalType = PhysicalType(0);
     pub const U8: PhysicalType = PhysicalType(ScalarType::U8 as u32);
@@ -1016,7 +1026,7 @@ impl PhysicalType {
             PhysicalTypeEnum::Empty => Self::EMPTY,
         }
     }
-    pub fn to_enum(self) -> PhysicalTypeEnum {
+    pub fn as_enum(self) -> PhysicalTypeEnum {
         match self.0 {
             0 => PhysicalTypeEnum::Empty,
             t @ 1..=11 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
@@ -1034,7 +1044,7 @@ impl PhysicalType {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalTypeEnum {
     Scalar(ScalarType),
     Agg(AggregateTypeId),
@@ -1706,7 +1716,7 @@ impl TypePool {
     // PHYSICAL TYPE STUFF /////////////////////////////////////////////////////
 
     pub fn get_pt_layout(&self, pt: PhysicalType) -> Layout {
-        match pt.to_enum() {
+        match pt.as_enum() {
             PhysicalTypeEnum::Empty => Layout::ZERO_SIZED,
             PhysicalTypeEnum::Scalar(s) => s.get_layout(),
             PhysicalTypeEnum::Agg(agg_id) => self.agg_types.get(agg_id).layout,
@@ -1918,7 +1928,7 @@ impl TypePool {
     ) -> Option<PhysicalType> {
         match self.get_physical_type(static_values, other) {
             None => None,
-            Some(other_pt) => match other_pt.to_enum() {
+            Some(other_pt) => match other_pt.as_enum() {
                 PhysicalTypeEnum::Empty => Some(other_pt),
                 PhysicalTypeEnum::Scalar(_) => Some(other_pt),
                 PhysicalTypeEnum::Agg(agg_id) => {
@@ -2112,7 +2122,7 @@ impl TypePool {
     }
 
     pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {
-        match t.to_enum() {
+        match t.as_enum() {
             PhysicalTypeEnum::Empty => w.write_str("{}"),
             PhysicalTypeEnum::Scalar(st) => write!(w, "{}", st),
             PhysicalTypeEnum::Agg(agg) => match self.agg_types.get(agg).agg_type {
