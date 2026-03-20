@@ -41,8 +41,7 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, STRING_TYPE_ID,
-    ScalarType, TypeDefnInfo, TypeId,
+    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, ScalarType, Type, TypeDefnInfo, TypeId, STRING_TYPE_ID
 };
 use crate::typer::{
     FunctionId, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
@@ -3013,7 +3012,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
-                let pt = self.k1.get_physical_type(*type_id).unwrap();
+                let storage_type_id = match self.k1.types.get(*type_id) {
+                    Type::Reference(r) => r.inner_type,
+                    _ => *type_id,
+                };
+                let pt = self.k1.get_physical_type(storage_type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero = cg_type.rich_type().const_zero();
                 zero.as_basic_value_enum()

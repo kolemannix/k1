@@ -7,6 +7,10 @@ let globalInt: int = 0
 let* globalIntRef: *mut int = 10
 let staticInt: int = 2
 
+// let globalPtr: ptr = ptr/null
+
+let globalString: string = "imglobal"
+
 fn test() {
 
    assertEquals(foo, 42);
@@ -19,6 +23,15 @@ fn test() {
      globalIntRef <- globalIntRef.* - 1;
    };
    assert(globalIntRef.* == 2);
+
+   //globalPtr
+   //let myOwnIntRef: *mut int = globalPtr.as();
+   //myOwnIntRef <- globalIntRef.*;
+   //assertEquals(myOwnIntRef.*, 2);
+   //assert(myOwnIntRef.as[ptr] == globalPtr);
+
+   assertEquals(globalString.len(), 8);
+   assertEquals(globalString, "imglobal");
 
   {}
 }

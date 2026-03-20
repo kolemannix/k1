@@ -11,7 +11,7 @@ ns FixList {
   fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
 
-  #debug fn zeroed[T, N: static size](): FixList[T, N] {
+  fn zeroed[T, N: static size](): FixList[T, N] {
     mem/zeroed()
   }
 

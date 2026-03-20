@@ -1283,12 +1283,12 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             let rich_pt = b.get_physical_type(rich_type_id);
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
-            let returned = typed_var.returned();
+            let returned = typed_var.is_returned();
             let debug_info = BcDebugInfo {
                 variable_info: Some(BcDebugVariableInfo {
                     name: typed_var.name,
                     original_type_id: let_stmt.variable_type,
-                    user_hidden: typed_var.user_hidden(),
+                    user_hidden: typed_var.is_user_hidden(),
                     source_span: b.cur_span,
                 }),
             };
@@ -1308,7 +1308,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 let variable_alloca =
                     b.push_alloca_ext(rich_pt, "source let", debug_info, returned);
 
-                // If there's an initializer, store it in value_ptr
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, Some(variable_alloca.as_value()), init)?;
                 }
@@ -1570,7 +1569,7 @@ fn compile_expr(
                                     dst,
                                     value_pt,
                                     address,
-                                    "load of non-referene global agg",
+                                    "load of non-reference global agg",
                                 );
                                 Ok(stored)
                             }
@@ -1614,61 +1613,10 @@ fn compile_expr(
                 }
             }
         }
-        TypedExpr::Deref(deref) => {
-            let src = compile_expr(b, None, deref.target)?;
-            let target_pt = b.get_physical_type(expr_type);
-            let loaded = load_or_copy(
-                b,
-                target_pt,
-                dst,
-                src,
-                true,
-                if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref" },
-            );
-            Ok(loaded)
-        }
         TypedExpr::AddressOf(address_of) => {
             let variable_id = address_of.target_variable;
-            let variable = b.k1.variables.get(variable_id);
-            let address_value = match variable.global_id() {
-                Some(global_id) => {
-                    // nocommit no referencing globals
-                    let maybe_referencing_type = if variable.referencing() {
-                        b.k1.types.get(variable.type_id).as_reference()
-                    } else {
-                        None
-                    };
-                    let is_reference = maybe_referencing_type.is_some();
-                    debug_assert_eq!(variable.referencing(), is_reference);
-
-                    // By 'value_type' I mean the shape of the allocated memory of the global, not the value,
-                    // so the inner type if its a reference, and just the type if its not
-                    let storage_type = match maybe_referencing_type {
-                        None => variable.type_id,
-                        Some(r) => r.inner_type,
-                    };
-                    let storage_pt = b.get_physical_type(storage_type);
-                    let address = Value::GlobalAddr { storage_pt, id: global_id };
-                    Value::GlobalAddr { storage_pt, id: global_id }
-                }
-                None => {
-                    let Some(var) = b.get_variable(variable_id) else {
-                        eprintln!(
-                            "Variables are: {}",
-                            b.k1.bytecode
-                                .b_variables
-                                .iter()
-                                .map(|bv| format!("{} {}", bv.id, bv.value))
-                                .join("\n")
-                        );
-                        b.k1.ice_with_span("Missing variable", b.cur_span)
-                    };
-                    let var_value = var.value;
-                    let var_indirect = var.indirect;
-                    if var_indirect { var_value } else { var_value }
-                }
-            };
-            Ok(address_value)
+            let (var_addr_value, _is_indirect) = compile_variable_to_address(b, variable_id);
+            Ok(var_addr_value)
         }
         TypedExpr::Deref(deref) => {
             let src = compile_expr(b, None, deref.target)?;
@@ -1679,7 +1627,7 @@ fn compile_expr(
                 dst,
                 src,
                 true,
-                if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref" },
+                if dst.is_some() { "lang deref fulfill to dst" } else { "lang deref no dst" },
             );
             Ok(loaded)
         }
@@ -2403,13 +2351,8 @@ fn compile_expr(
     }
 }
 
-fn compile_variable_expr(
-    b: &mut Builder,
-    dst: Option<Value>,
-    variable_id: VariableId,
-) -> TyperResult<Value> {
+fn compile_variable_to_address(b: &mut Builder, variable_id: VariableId) -> (Value, bool) {
     let variable = b.k1.variables.get(variable_id);
-    // nocommit: Get var addr, DRY with address of, _then_ load it?
     match variable.global_id() {
         Some(global_id) => {
             // Globals are pretty complex. We always generate an instruction
@@ -2418,18 +2361,12 @@ fn compile_variable_expr(
             // the value of the expression referring to the global, but for
             // non-reference types, we must 'load' the value from the address, since
             // the address is just an implementation detail. For aggregate types,
-            // this load is a no-op, since we represent them as their locations anyway
+            // this load is a no-op, since we represent them as their locations anyway,
+            // we call this a 'direct'ly represented variable
 
-            // It matters whether this is a 'referencing' global in K1, for reasons outlined above.
-            // This info gets erased when compiling types (this would become Pointer which
-            // is indistinguishable from a global of type Pointer)
-            let maybe_referencing_type = if variable.referencing() {
-                b.k1.types.get(variable.type_id).as_reference()
-            } else {
-                None
-            };
-            let is_reference = maybe_referencing_type.is_some();
-            debug_assert_eq!(variable.referencing(), is_reference);
+            let is_referencing = variable.is_referencing();
+            let maybe_referencing_type =
+                if is_referencing { b.k1.types.get(variable.type_id).as_reference() } else { None };
 
             // By 'value_type' I mean the shape of the allocated memory of the global, not the value,
             // so the inner type if its a reference, and just the type if its not
@@ -2439,53 +2376,8 @@ fn compile_variable_expr(
             };
             let storage_pt = b.get_physical_type(storage_type);
             let address = Value::GlobalAddr { storage_pt, id: global_id };
-            match storage_pt.as_enum() {
-                PhysicalTypeEnum::Empty => {
-                    if is_reference {
-                        Ok(Value::PTR_ZERO)
-                    } else {
-                        Ok(Value::Empty)
-                    }
-                }
-                PhysicalTypeEnum::Scalar(_) => {
-                    // We have a scalar type, but do we have a pointer to it or just
-                    // a value?
-                    if is_reference {
-                        // If reference, the address of the global is what we're after
-                        let stored = store_scalar_if_dst(b, dst, address);
-                        Ok(stored)
-                    } else {
-                        // The value of the global is what we're after
-                        let stored = load_or_copy(
-                            b,
-                            storage_pt,
-                            dst,
-                            address,
-                            false,
-                            "load of scalar global variable",
-                        );
-                        Ok(stored)
-                    }
-                }
-                PhysicalTypeEnum::Agg(_) => {
-                    if is_reference {
-                        let stored = store_scalar_if_dst(b, dst, address);
-                        Ok(stored)
-                    } else {
-                        // The source code is talking about an aggregate _value_
-                        // So if we have a dst, then it is of the aggregate's layout, not a Ptr-size!
-                        // So we have to copy
-                        let stored = store_rich_if_dst(
-                            b,
-                            dst,
-                            storage_pt,
-                            address,
-                            "load of non-referene global agg",
-                        );
-                        Ok(stored)
-                    }
-                }
-            }
+            let is_direct = if storage_pt.is_agg() { true } else { is_referencing };
+            (address, !is_direct)
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
@@ -2501,25 +2393,7 @@ fn compile_variable_expr(
             };
             let var_value = var.value;
             let var_indirect = var.indirect;
-            let var_pt = b.get_physical_type(variable.type_id);
-            if var_indirect {
-                let loaded = load_or_copy(
-                    b,
-                    var_pt,
-                    dst,
-                    var_value,
-                    false,
-                    if dst.is_some() {
-                        "indirect variable fulfill to dst"
-                    } else {
-                        "load indirect variable"
-                    },
-                );
-                Ok(loaded)
-            } else {
-                let stored = store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
-                Ok(stored)
-            }
+            (var_value, var_indirect)
         }
     }
 }

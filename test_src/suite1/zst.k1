@@ -1,12 +1,12 @@
 ns zst_test;
 
-let g: {} = {}
-let* g2: *{} = {}
+let globalZst: {} = {}
+let* globalZst2: *{} = {}
 
 fn testGlobal(): empty {
-  assertEquals(0, types/size-of[typeOf(g)]);
-  g2;
-  assertEquals(g, g2.*);
+  assertEquals(0, types/size-of[typeOf(globalZst)]);
+  globalZst2;
+  assertEquals(globalZst, globalZst2.*);
 }
 
 fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
@@ -16,9 +16,9 @@ fn testLocal(_a: empty, _b: empty, _c: empty, _d: empty): empty {
 }
 
 fn test() {
-  g; // empty
-  g2; // null ptr
-  g2.*; // no-op yielding Value::Empty
+  globalZst; // empty
+  globalZst2; // null ptr
+  globalZst2.*; // no-op yielding Value::Empty
 
   testLocal({}, {}, {}, {});
   staticZst();

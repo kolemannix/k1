@@ -689,8 +689,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 vm.stack.set_cur_inst_value(inst_index, value);
                 ip += 1
             }
-            Inst::Alloca { t: _, vm_layout, returned } => {
-                // TODO: nocommit optimize 'returned' allocas in vm
+            Inst::Alloca { t: _, vm_layout, returned: _ } => {
+                // TODO: optimize 'returned' allocas in vm
                 let ptr = vm.stack.push_layout_uninit(vm_layout);
 
                 vm.stack.set_cur_inst_value(inst_index, Value::ptr(ptr));

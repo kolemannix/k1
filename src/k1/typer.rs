@@ -1609,19 +1609,19 @@ impl Variable {
         }
     }
 
-    pub fn reassigned(&self) -> bool {
+    pub fn is_reassigned(&self) -> bool {
         self.flags.contains(VariableFlags::Reassigned)
     }
-    pub fn context(&self) -> bool {
+    pub fn is_context(&self) -> bool {
         self.flags.contains(VariableFlags::Context)
     }
-    pub fn user_hidden(&self) -> bool {
+    pub fn is_user_hidden(&self) -> bool {
         self.flags.contains(VariableFlags::UserHidden)
     }
-    pub fn returned(&self) -> bool {
+    pub fn is_returned(&self) -> bool {
         self.flags.contains(VariableFlags::Returned)
     }
-    pub fn referencing(&self) -> bool {
+    pub fn is_referencing(&self) -> bool {
         self.flags.contains(VariableFlags::Referencing)
     }
 }
@@ -5416,13 +5416,16 @@ impl TypedProgram {
         scope_id: ScopeId,
     ) -> TyperResult<VariableId> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
-        let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
-
-        let is_referencing = parsed_global.is_referencing;
         let is_exported = parsed_global.is_export;
         let is_external = parsed_global.is_external;
         let global_name = parsed_global.name;
         let global_span = parsed_global.span;
+        let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
+
+        let is_referencing = parsed_global.is_referencing;
+        if !is_referencing && self.types.get(type_id).as_reference().is_some() {
+            return failf!(global_span, "If you want a global reference, use a referencing let*");
+        }
         let value_expr_id = parsed_global.value_expr;
         let is_mutable = if is_referencing {
             let Some(reference_type) = self.types.get(type_id).as_reference() else {
@@ -6466,7 +6469,7 @@ impl TypedProgram {
                 };
 
                 let v = self.variables.get(variable_id);
-                if is_assignment_lhs && v.referencing() {
+                if is_assignment_lhs && v.is_referencing() {
                     return failf!(variable_name_span, "Cannot reassign a referencing variable");
                 }
                 if is_capture {
@@ -10407,7 +10410,7 @@ impl TypedProgram {
                 let (variable_id, kind) = match self.exprs.get(input) {
                     TypedExpr::Variable(v) => {
                         let var = self.variables.get(v.variable_id);
-                        if var.referencing() {
+                        if var.is_referencing() {
                             return failf!(
                                 call_span,
                                 "Cannot take address of a referencing variable; you already have it!"
@@ -12622,7 +12625,7 @@ impl TypedProgram {
                                 let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
                                 let variable = self.variables.get(stmt.variable_id);
 
-                                if !variable.user_hidden() {
+                                if !variable.is_user_hidden() {
                                     let else_scope = self.scopes.get_scope_mut(else_scope);
                                     else_scope.mask_variable(variable.name);
                                 }
@@ -12659,6 +12662,15 @@ impl TypedProgram {
                 };
                 let (typed_variable_id, lhs) =
                     self.eval_variable(assignment.lhs, ctx.scope_id, true)?;
+                match self.variables.get(typed_variable_id).kind {
+                    VariableKind::FnParam(_) => {
+                        return failf!(assignment.span, "Cannot re-assign a function parameter");
+                    }
+                    VariableKind::Let(_) => {}
+                    VariableKind::Global(_) => {
+                        return failf!(assignment.span, "Cannot re-assign a global");
+                    }
+                };
                 let lhs_type = self.exprs.get_type(lhs);
                 let rhs = self.eval_expr(assignment.rhs, ctx.with_expected_type(Some(lhs_type)))?;
                 let rhs_type = self.exprs.get_type(rhs);

@@ -1,11 +1,28 @@
-fn fixlist-uninit[t, n: static size](): core/FixList[t, n] {
-  let returned a = uninit;
-  address_of(a).used* <- 0;
-  a
-}
-fn main(): i32 { 
-  let fl = fixlist-uninit[byte, 1024];
-  0
-}
+let foo: int = 42
+let bar: int = 31
 
-//#static main()
+let globalInt: int = 0
+let* globalIntRef: *mut int = 10
+let staticInt: int = 2
+
+#debug
+fn main() {
+
+   assertEquals(foo, 42);
+   assertEquals(bar, 31);
+
+   assertEquals(globalInt, 0);
+   assertEquals(staticInt, 2);
+
+   while globalIntRef.* > staticInt {
+     globalIntRef <- globalIntRef.* - 1;
+   };
+   assert(globalIntRef.* == 2);
+
+   globalIntRef2 <- globalIntRef.*;
+   // assertEquals(globalIntRef2.*, 2);
+   // assert(globalIntRef.as[ptr] != globalIntRef2.as[ptr]);
+
+  {}
+}
+#static main()
