@@ -1,27 +1,9 @@
-let foo: int = 42
-let bar: int = 31
-
-let globalInt: int = 0
+let* globalPtr: *mut ptr = ptr/null
 let* globalIntRef: *mut int = 10
-let staticInt: int = 2
 
 #debug
 fn main() {
 
-   assertEquals(foo, 42);
-   assertEquals(bar, 31);
-
-   assertEquals(globalInt, 0);
-   assertEquals(staticInt, 2);
-
-   while globalIntRef.* > staticInt {
-     globalIntRef <- globalIntRef.* - 1;
-   };
-   assert(globalIntRef.* == 2);
-
-   globalIntRef2 <- globalIntRef.*;
-   // assertEquals(globalIntRef2.*, 2);
-   // assert(globalIntRef.as[ptr] != globalIntRef2.as[ptr]);
 
   {}
 }

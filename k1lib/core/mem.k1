@@ -150,11 +150,11 @@ ns mem {
 
   fn new[T](t: T): *mut T { alloc-mode.Current.new(t) }
 
-  let* tls arena: *mut Arena = zeroed()
+  let tls arena: Arena = zeroed()
 
   deftype alias ALLOC_STACK_MAX = 128
-  let* tls allocStack: *mut FixList[alloc-mode, ALLOC_STACK_MAX] = { 
-    let* s = zeroed[FixList[alloc-mode, ALLOC_STACK_MAX]]();
+  let* tls allocStack: *mut fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
+    let* s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]]();
     s.push(.Arena);
     s
   }
@@ -172,12 +172,12 @@ ns mem {
 
   fn initTempArena() {
     if not arena.basePtr.is-null() crash("Arena already initialized");
-    arena <- Arena/default();
+    &arena <- Arena/default();
   }
 
   fn arena(): *mut Arena {
     if arena.basePtr.is-null() { initTempArena() };
-    arena
+    &arena
   }
 
 }

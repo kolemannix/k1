@@ -1587,7 +1587,7 @@ bitflags! {
 #[derive(Clone, Copy)]
 pub enum VariableKind {
     FnParam(FunctionId),
-    Let(TypedStmtId),
+    Stack(TypedStmtId),
     Global(TypedGlobalId),
 }
 
@@ -4695,6 +4695,8 @@ impl TypedProgram {
     /// - Function arguments
     /// - Variable declarations
     /// - List literal elements
+    /// - Return expressions
+    /// - Last statement of a block
     fn check_expr_type<'a>(
         &mut self,
         expected: TypeId,
@@ -4807,6 +4809,19 @@ impl TypedProgram {
                         }
                         Err(_) => {}
                     }
+                }
+            } else {
+                // A reference is expected, and a reference is not provided
+                // If lhs is just a variable, we can inject an address_of
+                match self.exprs.get(expr) {
+                    TypedExpr::Variable(_) => {
+                        let span = self.exprs.get_span(expr);
+                        if let Ok(expr) = self.synth_address_of(expr, span) {
+                            self.report_hint(span, "coerce address of");
+                            return CheckExprTypeResult::Coerce(expr, "address_of".into());
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -6770,6 +6785,56 @@ impl TypedProgram {
         }
     }
 
+    fn compile_address_of(
+        &mut self,
+        base_expr: ParsedExprId,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> TyperResult<TypedExprId> {
+        let expected_type = match ctx.expected_type_id {
+            None => None,
+            Some(t) => Some(self.types.get_type_id_dereferenced(t)),
+        };
+        let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
+        self.synth_address_of(input, span)
+    }
+
+    fn synth_address_of(&mut self, input: TypedExprId, span: SpanId) -> TyperResult<TypedExprId> {
+        let (variable_id, kind) = match self.exprs.get(input) {
+            TypedExpr::Variable(v) => {
+                let var = self.variables.get(v.variable_id);
+                if var.is_referencing() {
+                    return failf!(
+                        span,
+                        "Cannot take address of a referencing variable; you already have it!"
+                    );
+                }
+                match var.kind {
+                    VariableKind::FnParam(_) => {
+                        return failf!(
+                            span,
+                            "Cannot take address of a function parameter; re-declare it or use a & type"
+                        );
+                    }
+                    VariableKind::Stack(_) => (v.variable_id, AddressOfKind::StackVariable),
+                    VariableKind::Global(_) => (v.variable_id, AddressOfKind::GlobalVariable),
+                }
+            }
+            TypedExpr::StructFieldAccess(_) => {
+                return failf!(span, "Unsupported address_of on struct field");
+            }
+            _ => return failf!(span, "This only works on local and global variables"),
+        };
+        let input_type = self.exprs.get_type(input);
+        let reference_type = self.types.add_reference_type(input_type, true);
+        let addr_of_expr = self.exprs.add(
+            TypedExpr::AddressOf(AddressOfExpr { target_variable: variable_id, kind }),
+            reference_type,
+            span,
+        );
+        Ok(addr_of_expr)
+    }
+
     fn eval_try_operator(
         &mut self,
         operand: ParsedExprId,
@@ -7039,6 +7104,7 @@ impl TypedProgram {
                         let negated_expr = self.synth_parsed_bool_not(op.expr);
                         self.eval_expr(negated_expr, ctx)
                     }
+                    ParsedUnaryOpKind::AddressOf => self.compile_address_of(op.expr, ctx, op.span),
                 }
             }
             ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
@@ -10402,46 +10468,8 @@ impl TypedProgram {
             }
             "address_of" => {
                 let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
-                let expected_type = match ctx.expected_type_id {
-                    None => None,
-                    Some(t) => Some(self.types.get_type_id_dereferenced(t)),
-                };
-                let input = self.eval_expr(arg.value, ctx.with_expected_type(expected_type))?;
-                let (variable_id, kind) = match self.exprs.get(input) {
-                    TypedExpr::Variable(v) => {
-                        let var = self.variables.get(v.variable_id);
-                        if var.is_referencing() {
-                            return failf!(
-                                call_span,
-                                "Cannot take address of a referencing variable; you already have it!"
-                            );
-                        }
-                        match var.kind {
-                            VariableKind::FnParam(_) => {
-                                return failf!(
-                                    call_span,
-                                    "Cannot take address of a function parameter; re-declare it or use a & type"
-                                );
-                            }
-                            VariableKind::Let(_) => (v.variable_id, AddressOfKind::StackVariable),
-                            VariableKind::Global(_) => {
-                                (v.variable_id, AddressOfKind::GlobalVariable)
-                            }
-                        }
-                    }
-                    TypedExpr::StructFieldAccess(_) => {
-                        return failf!(call_span, "Unsupported struct field addressof");
-                    }
-                    _ => return failf!(call_span, "This only works on variables "),
-                };
-                let input_type = self.exprs.get_type(input);
-                let reference_type = self.types.add_reference_type(input_type, true);
-                let addr_of_expr = self.exprs.add(
-                    TypedExpr::AddressOf(AddressOfExpr { target_variable: variable_id, kind }),
-                    reference_type,
-                    call_span,
-                );
-                Ok(Some(addr_of_expr))
+                let result = self.compile_address_of(arg.value, ctx, call_span)?;
+                Ok(Some(result))
             }
             _ => Ok(None),
         }
@@ -12543,7 +12571,7 @@ impl TypedProgram {
                         name: parsed_let.name,
                         type_id: variable_type,
                         owner_scope: ctx.scope_id,
-                        kind: VariableKind::Let(stmt_id),
+                        kind: VariableKind::Stack(stmt_id),
                         flags,
                         usage_count: 0,
                     });
@@ -12666,7 +12694,7 @@ impl TypedProgram {
                     VariableKind::FnParam(_) => {
                         return failf!(assignment.span, "Cannot re-assign a function parameter");
                     }
-                    VariableKind::Let(_) => {}
+                    VariableKind::Stack(_) => {}
                     VariableKind::Global(_) => {
                         return failf!(assignment.span, "Cannot re-assign a global");
                     }

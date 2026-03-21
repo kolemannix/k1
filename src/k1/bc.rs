@@ -772,7 +772,8 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
             non_empty_index += 1;
             value
         };
-        let builder_variable = BuilderVariable { id: param.variable_id, value, indirect: false };
+        let builder_variable =
+            BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
         b.k1.bytecode.b_variables.push(builder_variable);
     }
     // debug_assert_eq!(b.k1.bytecode.b_variables.len() as u32, fn_phys_type.params.len());
@@ -823,7 +824,8 @@ pub fn compile_top_level_expr(
         b.k1.bytecode.b_variables.push(BuilderVariable {
             id: *variable_id,
             value: Value::StaticValue { t: pt, id: *static_value_id },
-            indirect: false,
+            storage_pt: pt,
+            indirect: !pt.is_agg(),
         })
     }
 
@@ -881,6 +883,7 @@ fn finalize_unit(
 struct BuilderVariable {
     id: VariableId,
     value: Value,
+    storage_pt: PhysicalType,
     indirect: bool,
 }
 
@@ -1301,6 +1304,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 b.k1.bytecode.b_variables.push(BuilderVariable {
                     id: let_stmt.variable_id,
                     value: Value::Empty,
+                    storage_pt: rich_pt,
                     indirect: false,
                 });
                 Ok(Value::Empty)
@@ -1317,12 +1321,12 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 // slot, so they are 'indirect' (need loading on rvalue access)
                 // non-referencing int -> indirect
                 // non-referencing agg -> direct
-                let is_direct_builder_var =
-                    if rich_pt.is_agg() { true } else { let_stmt.is_referencing };
+                let is_direct = if rich_pt.is_agg() { true } else { let_stmt.is_referencing };
                 b.k1.bytecode.b_variables.push(BuilderVariable {
                     id: let_stmt.variable_id,
                     value: variable_alloca.as_value(),
-                    indirect: !is_direct_builder_var,
+                    storage_pt: rich_pt,
+                    indirect: !is_direct,
                 });
                 Ok(Value::Empty)
             }
@@ -1615,7 +1619,8 @@ fn compile_expr(
         }
         TypedExpr::AddressOf(address_of) => {
             let variable_id = address_of.target_variable;
-            let (var_addr_value, _is_indirect) = compile_variable_to_address(b, variable_id);
+            let (var_addr_value, _is_indirect, _var_storage_pt) =
+                compile_variable_to_address(b, variable_id);
             Ok(var_addr_value)
         }
         TypedExpr::Deref(deref) => {
@@ -2351,7 +2356,10 @@ fn compile_expr(
     }
 }
 
-fn compile_variable_to_address(b: &mut Builder, variable_id: VariableId) -> (Value, bool) {
+fn compile_variable_to_address(
+    b: &mut Builder,
+    variable_id: VariableId,
+) -> (Value, bool, PhysicalType) {
     let variable = b.k1.variables.get(variable_id);
     match variable.global_id() {
         Some(global_id) => {
@@ -2377,7 +2385,7 @@ fn compile_variable_to_address(b: &mut Builder, variable_id: VariableId) -> (Val
             let storage_pt = b.get_physical_type(storage_type);
             let address = Value::GlobalAddr { storage_pt, id: global_id };
             let is_direct = if storage_pt.is_agg() { true } else { is_referencing };
-            (address, !is_direct)
+            (address, !is_direct, storage_pt)
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
@@ -2393,7 +2401,7 @@ fn compile_variable_to_address(b: &mut Builder, variable_id: VariableId) -> (Val
             };
             let var_value = var.value;
             let var_indirect = var.indirect;
-            (var_value, var_indirect)
+            (var_value, var_indirect, var.storage_pt)
         }
     }
 }

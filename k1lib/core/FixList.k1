@@ -1,32 +1,32 @@
 // Represents an inline, 'pushable' contiguous collection of Ts, with a fixed capacity.
 // Storage is inline!
 //  
-// For example, A FixList[byte, 10] is 14 bytes long, and looks like:
+// For example, A fixlist[byte, 10] is 14 bytes long, and looks like:
 // +----+----------+
 // |used|10 items  |
 // +----+----------+
 // 0    4
-deftype FixList[T, N: static size] = { data: array[T, N], used: u32 }
-ns FixList {
-  fn cap[T, N: static size](self: FixList[T, N]): size { self.data.len() }
-  fn len[T, N: static size](self: FixList[T, N]): size { self.used.as[size] }
+deftype fixlist[T, N: static size] = { data: array[T, N], used: u32 }
+ns fixlist {
+  fn cap[T, N: static size](self: fixlist[T, N]): size { self.data.len() }
+  fn len[T, N: static size](self: fixlist[T, N]): size { self.used.as[size] }
 
-  fn zeroed[T, N: static size](): FixList[T, N] {
+  fn zeroed[T, N: static size](): fixlist[T, N] {
     mem/zeroed()
   }
 
-  fn uninit[t, n: static size](): core/FixList[t, n] {
+  fn uninit[t, n: static size](): core/fixlist[t, n] {
     let returned fl = uninit;
     address_of(fl).used* <- 0;
     fl
   }
 
-  fn clear[T, N: static size](self: *mut FixList[T, N]): empty {
+  fn clear[T, N: static size](self: *mut fixlist[T, N]): empty {
     #if k1/debug self.data*.memset(0xCD);
     self.used* <- 0
   }
 
-  fn push[T, N: static size](self: *mut FixList[T, N], value: T): empty {
+  fn push[T, N: static size](self: *mut fixlist[T, N], value: T): empty {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
@@ -37,7 +37,7 @@ ns FixList {
     }
   }
 
-  fn tryPush[T, N: static size](self: *mut FixList[T, N], value: T): result[empty, empty] {
+  fn tryPush[T, N: static size](self: *mut fixlist[T, N], value: T): result[empty, empty] {
     let used: size = self.len();
     if used < self.cap() {
       self.data*.set(used, value);
@@ -48,7 +48,7 @@ ns FixList {
     }
   }
 
-  fn tryPushN[T, N: static size](self: *mut FixList[T, N], values: span[T]): result[empty, empty] {
+  fn tryPushN[T, N: static size](self: *mut fixlist[T, N], values: span[T]): result[empty, empty] {
     let needed = self.len() + values.len();
     if needed <= self.cap() {
       let dstSlice = self.data*.as-buffer().slice(start = self.len(), end = needed);
@@ -61,40 +61,40 @@ ns FixList {
     }
   }
 
-  fn pushN[T, N: static size](self: *mut FixList[T, N], values: span[T]): empty {
+  fn pushN[T, N: static size](self: *mut fixlist[T, N], values: span[T]): empty {
     let result = self.tryPushN[T, N](values);
-    if result is .err(_) crash("FixList out of space")
+    if result is .err(_) crash("fixlist out of space")
   }
 
-  fn asBuffer[T, N: static size](self: *mut FixList[T, N]): buffer[T] {
+  fn asBuffer[T, N: static size](self: *mut fixlist[T, N]): buffer[T] {
     self.data*.as-buffer().slice(0, self.len())
   }
 
-  fn as-span[T, N: static size](self: *FixList[T, N]): span[T] {
+  fn as-span[T, N: static size](self: *fixlist[T, N]): span[T] {
     self.data*.as-span().slice(0, self.len())
   }
 
-  fn get[T, N: static size](self: *FixList[T, N], index: size): T {
+  fn get[T, N: static size](self: *fixlist[T, N], index: size): T {
     self.to-mut.getRef(index).*
   }
 
-  fn getRef[T, N: static size](self: *mut FixList[T, N], index: size): *mut T {
+  fn getRef[T, N: static size](self: *mut fixlist[T, N], index: size): *mut T {
     if index < self.len() {
       self.data*.get-ref(index)
     } else {
-      crash("FixList index out of bounds: {index} > {self.len()}")
+      crash("fixlist index out of bounds: {index} > {self.len()}")
     }
   }
 
-  fn set[T, N: static size](self: *mut FixList[T, N], index: size, value: T): empty {
+  fn set[T, N: static size](self: *mut fixlist[T, N], index: size, value: T): empty {
     self.getRef(index) <- value
   }
 
-  fn last[T, N: static size](self: *FixList[T, N]): ?T {
+  fn last[T, N: static size](self: *fixlist[T, N]): ?T {
     self.as-span().last()
   }
 
-  fn pop[T, N: static size](self: *mut FixList[T, N]): ?T {
+  fn pop[T, N: static size](self: *mut fixlist[T, N]): ?T {
     switch self.last() {
        .some(t) -> {
          self.used* <- self.used - 1;
@@ -104,7 +104,7 @@ ns FixList {
     }
   }
 
-  fn reverse[T, N: static size](self: *mut FixList[T, N]) {
+  fn reverse[T, N: static size](self: *mut fixlist[T, N]) {
     self.asBuffer().reverse()
   }
 

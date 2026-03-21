@@ -1,6 +1,6 @@
-use core/FixList
-fn testFixList() {
-  let* fl: *mut FixList[int, 4] = zeroed();
+use core/fixlist
+fn testfixlist() {
+  let* fl: *mut fixlist[int, 4] = zeroed();
   assertEquals(fl.len(), 0);
   fl.push(40);
   assertEquals(fl.len(), 1);

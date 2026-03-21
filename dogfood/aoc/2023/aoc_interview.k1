@@ -1,5 +1,5 @@
 fn unique(arr: buffer[char]): bool {
-  let* seen: list[char]* = [];
+  let* seen: *mut list[char] = [];
   let ret = true;
   for c in arr {
     for s in seen.* {

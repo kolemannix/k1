@@ -53,7 +53,7 @@ deftype alias c-long   = i64
 ns compiler {
   deftype source-location = { filename: string, line: u64 }
   // Need some way to mark this and is-static as comptime only
-  let* capture-prints: *mut bool = true
+  let capture-prints: bool = true
 }
 
 deftype ordering = either less, equal, greater

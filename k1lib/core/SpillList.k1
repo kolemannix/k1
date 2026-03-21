@@ -1,8 +1,8 @@
-deftype spill-list[T, N: static size] = either Inline(FixList[T, N]), Spilled(list[T])
+deftype spill-list[T, N: static size] = either Inline(fixlist[T, N]), Spilled(list[T])
 ns spill-list {
 
   fn new[T, N: static int](): spill-list[T, N] {
-    .Inline(mem/zeroed[FixList[T, N]]())
+    .Inline(mem/zeroed[fixlist[T, N]]())
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use
@@ -27,7 +27,7 @@ ns spill-list {
     }
   }
 
-  fn _spill[T, N: static size](fixlist: *mut FixList[T, N]): list[T] {
+  fn _spill[T, N: static size](fixlist: *mut fixlist[T, N]): list[T] {
     let* list = list/withCapacityIn[T](context .Current)(fixlist.cap() * 2);
 
     let srcbuffer = fixlist.asBuffer();

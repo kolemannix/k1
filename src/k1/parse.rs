@@ -383,12 +383,14 @@ pub struct BinaryOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedUnaryOpKind {
     BooleanNegation,
+    AddressOf,
 }
 
 impl Display for ParsedUnaryOpKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ParsedUnaryOpKind::BooleanNegation => f.write_str("not "),
+            ParsedUnaryOpKind::AddressOf => f.write_str("&"),
         }
     }
 }
@@ -397,6 +399,7 @@ impl ParsedUnaryOpKind {
     pub fn from_tokenkind(kind: TokenKind) -> Option<ParsedUnaryOpKind> {
         match kind {
             TokenKind::KeywordNot => Some(ParsedUnaryOpKind::BooleanNegation),
+            TokenKind::Amp => Some(ParsedUnaryOpKind::AddressOf),
             _ => None,
         }
     }
@@ -3454,6 +3457,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::KeywordFor => {
                 let for_expr = self.expect_for_expr(false)?;
                 Ok(Some(for_expr))
+            }
+            K::Amp => {
+                self.advance();
+                let name = self.expect_namespaced_ident()?;
+                let var_expr = self.add_expression(ParsedExpr::Variable(ParsedVariable { name }));
+                let span = self.extend_span(first.span, self.get_expression_span(var_expr));
+                Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp {
+                    expr: var_expr,
+                    op_kind: ParsedUnaryOpKind::AddressOf,
+                    span,
+                }))))
             }
             K::KeywordNot => {
                 let Some(op_kind) = ParsedUnaryOpKind::from_tokenkind(first.kind) else {

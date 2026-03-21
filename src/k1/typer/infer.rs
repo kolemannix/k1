@@ -958,10 +958,9 @@ impl TypedProgram {
                 // write and read pointers, since they'll still fail typecheck in the end
                 // but we'd like to infer successfully to get a good message
                 match slot.as_reference() {
-                    None => self.unify_and_find_substitutions_rec(passed_ref.inner_type, slot_type),
-
                     // This performs a single-layer deref.
                     // This improves error messages, and also allows us to infer correctly even when an auto-deref is needed
+                    None => self.unify_and_find_substitutions_rec(passed_ref.inner_type, slot_type),
 
                     // Here in infer/unify, we're really after capturing the programmer's intent as
                     // best as we can, and typechecking/coercion takes care of whether to ultimately
@@ -971,6 +970,12 @@ impl TypedProgram {
                         slot_ref.inner_type,
                     ),
                 }
+            }
+            (passed, Type::Reference(slot_reference)) if passed.as_reference().is_none() => {
+                // We expect a reference and provide a non-reference
+                // Unify as if the address_of rule is applied, but only if the inner type would match
+                // Actually we have to just do it, because it could be a hole or a type variable
+                self.unify_and_find_substitutions_rec(passed_type, slot_reference.inner_type)
             }
             (Type::Struct(passed_struct), Type::Struct(struc)) => {
                 // Structs must have all same field names in same order

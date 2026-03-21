@@ -53,7 +53,7 @@ fn printIt[T: print](value: T) {
 
 fn print(s: string) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
-  if k1/is-static and compiler/capture-prints.* {
+  if k1/is-static and compiler/capture-prints {
     k1/emit-compiler-message(compiler/location(), .info, s)
   } else {
     io/stdout.write-string(s)
@@ -68,7 +68,7 @@ fn println(s: string) {
 }
 
 fn eprint(s: string) {
-  if k1/is-static and compiler/capture-prints.* {
+  if k1/is-static and compiler/capture-prints {
     k1/emit-compiler-message(compiler/location(), .warn, s)
   } else {
     io/stderr.write-string(s)
@@ -91,8 +91,8 @@ ns io {
 
   impl writer for OutStream {
     fn write-byte(self: self, value: u8) {
-      let* valueRef: *u8 = value;
-      posix/write(file-no = self.fileNo, data = valueRef.as[ptr], count = 1);
+      let value_spot = value;
+      posix/write(file-no = self.fileNo, data = &value_spot.as[ptr], count = 1);
       {}
     }
     fn write-bytes(self: self, bytes: span[byte]) {
@@ -135,7 +135,7 @@ ns sys {
   }
 
   fn readLine(maxLengthBytes: size): result[string, string] {
-    let* buffer = buffer/_allocate[byte](maxLengthBytes);
+    let buffer = buffer/_allocate[byte](maxLengthBytes);
     let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
 
     if bytesRead < 0 {
@@ -143,7 +143,7 @@ ns sys {
     };
 
     let length: size = bytesRead - 1;
-    buffer.len* <- length;
+    &buffer.len* <- length;
 
     let result = string/wrapByteBuffer(buffer);
     .ok(result)
@@ -258,8 +258,8 @@ impl scalar-cmp for char {
 
 impl[T: print] show for T {
   fn show(self: self): string { 
-    let* sb = StringBuilder/new();
-    self.printTo(sb);
+    let sb = StringBuilder/new();
+    self.printTo(&sb);
     sb.build()
   }
 }
@@ -291,18 +291,17 @@ fn formatUInt[w: writer](context w: w)(value: u64, base: u64) {
     w.write-char(secondDigit);
   } else {
     let remaining = value;
-    let* digits: *mut FixList[char, 20] = uninit;
-    digits.used* <- 0;
+    let digits = fixlist/uninit[char, 20];
     while remaining > 0 {
       let d = remaining % base;
       let c = u8/toAsciiDigit(d.as[u8]);
-      digits.push(c);
+      &digits.push(c);
       remaining := remaining / base;
     };
 
-    digits.reverse();
+    &digits.reverse();
 
-    w.write-bytes(digits.as-span().as-byte-span());
+    w.write-bytes(&digits.as-span().as-byte-span());
 
     {}
   }
@@ -509,8 +508,8 @@ ns f64 {
     parse-string(s = s, require-total = true);
   }
   fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
-    let* out: *mut f64 = uninit;
-    let result = ffc/parse_double(s.len(), s.dataPtr(), out);
+    let out: f64 = uninit;
+    let result = ffc/parse_double(s.len(), s.dataPtr(), &out);
     if not ffc/result_is_ok(result) {
       .err("Could not parse '{s}' as f64")
     } else {
@@ -518,7 +517,7 @@ ns f64 {
       if require-total and len != s.len() {
         .err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
       } else {
-        .ok({ value: out.*, len })
+        .ok({ value: out, len })
       }
     }
   }

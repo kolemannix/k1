@@ -719,6 +719,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let dst_ptr = dst_value.as_ptr();
                 let src_ptr = src_value.as_ptr();
 
+                if cfg!(debug_assertions) {
+                    if vm_size != 0 && dst_ptr.is_null() {
+                        vm_crash(k1, vm, "Attempt to store to 0 (null)")
+                    }
+                    if vm_size != 0 && src_ptr.is_null() {
+                        vm_crash(k1, vm, "Attempt to read from 0 (null)")
+                    }
+                }
+
                 memmove(src_ptr, dst_ptr, vm_size as usize);
                 ip += 1
             }
