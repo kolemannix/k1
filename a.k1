@@ -1,5 +1,13 @@
 use core/types/size-of
 
+let MODULE_INFO: k1/module-manifest = {
+  mem/zeroed[k1/module-manifest].with(
+    // Takes any type T that's a 'substruct' of module-manifest
+    { multithreading: true, kind: .executable }
+  ) // could also call that .copy() like scala case classes, though those take varargs
+    // and substructure is a lot algebraically cleaner
+}
+
 fn ret-byte(): u8 {
   let returned x: u8 = 0;
   x := 10;

@@ -209,6 +209,10 @@ impl TypedProgram {
                 write!(w, "{}", int_type)?;
                 Ok(())
             }
+            Type::ScalarEnum(se) => {
+                write!(w, "enum {}", se.int_type)?;
+                Ok(())
+            }
             Type::Float(float_type) => match float_type {
                 FloatType::F32 => write!(w, "f32"),
                 FloatType::F64 => write!(w, "f64"),
@@ -273,7 +277,7 @@ impl TypedProgram {
                 self.display_type_id_rec(w, r.inner_type, expand, visited)?;
                 Ok(())
             }
-            Type::Enum(e) => {
+            Type::Sum(e) => {
                 if let Some(defn_info) = defn_info {
                     w.write_str(self.ident_str(defn_info.name))?;
                     if let Some(spec_info) = self.types.get_instance_info(type_id) {
@@ -665,11 +669,11 @@ impl TypedProgram {
                 self.write_ident(w, self.variables.get(addr_of.target_variable).name)?;
                 w.write_str(".&")
             }
-            TypedExpr::EnumConstructor(enum_constr) => {
+            TypedExpr::SumConstructor(enum_constr) => {
                 w.write_str(".")?;
-                let enum_type = self.types.get(expr_type).expect_enum();
+                let enum_type = self.types.get(expr_type).expect_sum();
                 let variant =
-                    self.types.enum_variant_by_index(enum_type.variants, enum_constr.variant_index);
+                    self.types.sum_variant_by_index(enum_type.variants, enum_constr.variant_index);
                 w.write_str(self.ident_str(variant.name))?;
                 if let Some(payload) = &enum_constr.payload {
                     w.write_str("(")?;
@@ -683,13 +687,13 @@ impl TypedProgram {
                 write!(w, ".as({}) ", cast.cast_type)?;
                 self.display_type_id(w, expr_type, false)
             }
-            TypedExpr::EnumGetTag(get_tag) => {
-                self.display_expr_id(get_tag.enum_expr_or_reference, w, indentation)?;
+            TypedExpr::SumGetTag(get_tag) => {
+                self.display_expr_id(get_tag.sum_expr_or_reference, w, indentation)?;
                 w.write_str(".tag")?;
                 Ok(())
             }
-            TypedExpr::EnumGetPayload(get_payload_expr) => {
-                self.display_expr_id(get_payload_expr.enum_expr, w, indentation)?;
+            TypedExpr::SumGetPayload(get_payload_expr) => {
+                self.display_expr_id(get_payload_expr.sum_expr, w, indentation)?;
                 w.write_str(".payload")?;
                 if get_payload_expr.access_kind == FieldAccessKind::ReferenceThrough {
                     w.write_char('*')?;
@@ -697,11 +701,11 @@ impl TypedProgram {
                 w.write_char('[')?;
                 let enum_type = self
                     .types
-                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.enum_expr))
-                    .expect_enum();
+                    .get_type_dereferenced(self.exprs.get_type(get_payload_expr.sum_expr))
+                    .expect_sum();
                 let variant = self
                     .types
-                    .enum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
+                    .sum_variant_by_index(enum_type.variants, get_payload_expr.variant_index);
                 self.write_ident(w, variant.name)?;
                 w.write_char(']')?;
                 Ok(())
@@ -809,9 +813,9 @@ impl TypedProgram {
                 }
                 w.write_str(" }")
             }
-            StaticValue::Enum(static_enum) => {
-                let enum_type = self.types.get(static_enum.enum_type_id).expect_enum();
-                let enum_defn = self.types.get_defn_info(static_enum.enum_type_id);
+            StaticValue::Sum(static_enum) => {
+                let enum_type = self.types.get(static_enum.sum_type_id).expect_sum();
+                let enum_defn = self.types.get_defn_info(static_enum.sum_type_id);
                 match enum_defn {
                     Some(defn) => {
                         self.write_ident(w, defn.name)?;
@@ -820,7 +824,7 @@ impl TypedProgram {
                 };
                 write!(w, ".")?;
                 let variant =
-                    self.types.enum_variant_by_index(enum_type.variants, static_enum.variant_index);
+                    self.types.sum_variant_by_index(enum_type.variants, static_enum.variant_index);
                 self.write_ident(w, variant.name)?;
                 match static_enum.payload {
                     None => {}
@@ -929,7 +933,7 @@ impl TypedProgram {
                 writ.write_str("}")?;
                 Ok(())
             }
-            PatternCtor::Enum { variant_name, inner } => {
+            PatternCtor::Sum { variant_name, inner } => {
                 writ.write_str(self.ident_str(*variant_name))?;
                 if let Some(payload) = inner.as_ref() {
                     writ.write_str("(")?;
@@ -958,7 +962,7 @@ impl TypedProgram {
             }
             TypedPattern::Variable(var) => w.write_str(self.ident_str(var.name)),
             TypedPattern::Wildcard(_) => w.write_str("_"),
-            TypedPattern::Enum(enum_pat) => {
+            TypedPattern::Sum(enum_pat) => {
                 w.write_str(self.ident_str(enum_pat.variant_tag_name))?;
                 if let Some(payload) = enum_pat.payload {
                     w.write_str("(")?;

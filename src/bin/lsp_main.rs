@@ -40,9 +40,9 @@ fn error_to_diagnostic(
         MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
     let mut escaped_message = String::with_capacity(message.len() * 2);
-    escaped_message.push_str("```txt");
+    escaped_message.push_str("```txt\n");
     escaped_message.push_str(&message);
-    escaped_message.push_str("```");
+    escaped_message.push_str("\n```");
     let diagnostic = Diagnostic {
         range: Range {
             start: Position {
@@ -148,7 +148,7 @@ impl Backend {
         if let CompiledProgram::Typed(module) = &*self.module.lock().unwrap() {
             all_errors.extend(
                 module
-                    .errors
+                    .messages
                     .iter()
                     .map(|e| error_to_diagnostic(&module.ast, e.message.clone(), e.level, e.span)),
             );

@@ -150,16 +150,16 @@ impl TypedProgram {
             TypedExpr::LoopExpr(loop_expr) => {
                 recurse!(loop_expr.body_block);
             }
-            TypedExpr::EnumConstructor(constr) => {
+            TypedExpr::SumConstructor(constr) => {
                 if let Some(payload) = constr.payload {
                     recurse!(payload)
                 }
             }
-            TypedExpr::EnumGetTag(get_enum_tag) => {
-                recurse!(get_enum_tag.enum_expr_or_reference);
+            TypedExpr::SumGetTag(get_enum_tag) => {
+                recurse!(get_enum_tag.sum_expr_or_reference);
             }
-            TypedExpr::EnumGetPayload(enum_get_payload) => {
-                recurse!(enum_get_payload.enum_expr);
+            TypedExpr::SumGetPayload(enum_get_payload) => {
+                recurse!(enum_get_payload.sum_expr);
             }
             TypedExpr::Cast(cast) => recurse!(cast.base_expr),
             TypedExpr::Return(ret) => recurse!(ret.value),

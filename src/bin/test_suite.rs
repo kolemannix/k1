@@ -13,7 +13,10 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
-use k1::compiler::{self, Command, CompileProgramError};
+use k1::{
+    compiler::{self, Command, CompileProgramError},
+    typer::MessageLevel,
+};
 use std::os::unix::prelude::ExitStatusExt;
 
 #[derive(Parser, Debug, Clone)]
@@ -118,7 +121,8 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileProgramError::TyperFailure(module)) => {
-            let Some(err) = module.errors.first() else {
+            let Some(err) = module.messages.iter().find(|e| e.level == MessageLevel::Error)
+            else {
                 if let Some(parse_error) = module.ast.errors.first() {
                     bail!("{filename}: Failed parsing: {}", parse_error)
                 } else {

@@ -4,11 +4,11 @@
   extern("mach_absolute_time") fn mach_absolute_time(): u64
   extern("mach_timebase_info") fn mach_timebase_info(timebase: *mut mach_timebase_info_data_t): u64
 
-  let* timebase: *mut mach_timebase_info_data_t = { numer: 0, denom: 0 }
+  let mutable timebase: mach_timebase_info_data_t = { numer: 0, denom: 0 }
 
   fn counter-to-nanos(counter: u64): u64 {
     if (timebase.denom == 0) {
-      mach_timebase_info(timebase);
+      mach_timebase_info(&timebase);
     };
     eprintln("timebase is {timebase.numer} / {timebase.denom}");
     (counter * (timebase.numer.as[u64])) / (timebase.denom.as[u64]);

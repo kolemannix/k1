@@ -15,8 +15,8 @@ pub struct StaticStruct {
 }
 
 #[derive(Clone, Copy)]
-pub struct StaticEnum {
-    pub enum_type_id: TypeId,
+pub struct StaticSum {
+    pub sum_type_id: TypeId,
     pub variant_index: u32,
     pub payload: Option<StaticValueId>,
 }
@@ -61,7 +61,7 @@ pub enum StaticValue {
     String(StringId),
     Zero(TypeId),
     Struct(StaticStruct),
-    Enum(StaticEnum),
+    Sum(StaticSum),
     LinearContainer(StaticContainer),
 }
 
@@ -76,7 +76,7 @@ impl StaticValue {
             StaticValue::String(_) => "string",
             StaticValue::Zero(_) => "zero",
             StaticValue::Struct(_) => "struct",
-            StaticValue::Enum(_) => "enum",
+            StaticValue::Sum(_) => "sum",
             StaticValue::LinearContainer(c) => match c.kind {
                 StaticContainerKind::Span => "span",
                 StaticContainerKind::Array => "array",
@@ -94,7 +94,7 @@ impl StaticValue {
             StaticValue::String(_) => STRING_TYPE_ID,
             StaticValue::Zero(type_id) => *type_id,
             StaticValue::Struct(s) => s.type_id,
-            StaticValue::Enum(e) => e.enum_type_id,
+            StaticValue::Sum(e) => e.sum_type_id,
             StaticValue::LinearContainer(v) => v.type_id,
         }
     }
@@ -106,9 +106,9 @@ impl StaticValue {
         }
     }
 
-    pub fn as_enum(&self) -> Option<&StaticEnum> {
+    pub fn as_sum(&self) -> Option<&StaticSum> {
         match self {
-            StaticValue::Enum(e) => Some(e),
+            StaticValue::Sum(sum) => Some(sum),
             _ => None,
         }
     }
@@ -161,8 +161,8 @@ impl DepHash<StaticValuePool> for StaticValue {
                     field_id.hash(state);
                 }
             }
-            StaticValue::Enum(e) => {
-                e.enum_type_id.hash(state);
+            StaticValue::Sum(e) => {
+                e.sum_type_id.hash(state);
                 e.variant_index.hash(state);
                 if let Some(payload_id) = e.payload {
                     d.get(payload_id).dep_hash(d, state);
@@ -194,8 +194,8 @@ impl DepEq<StaticValuePool> for StaticValue {
                     && a.fields.len() == b.fields.len()
                     && pool.mem.getn(a.fields) == pool.mem.getn(b.fields)
             }
-            (StaticValue::Enum(a), StaticValue::Enum(b)) => {
-                a.enum_type_id == b.enum_type_id
+            (StaticValue::Sum(a), StaticValue::Sum(b)) => {
+                a.sum_type_id == b.sum_type_id
                     && a.variant_index == b.variant_index
                     && match (a.payload, b.payload) {
                         (None, None) => true,

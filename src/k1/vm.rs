@@ -22,9 +22,9 @@ use crate::typer::types::{
     STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticEnum, StaticStruct,
+    FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticStruct, StaticSum,
     StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-    TypedIntValue, TypedProgram, TyperError, TyperResult, VariableId,
+    TypedIntValue, TypedProgram, TyperMessage, TyperResult, VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -1798,13 +1798,13 @@ pub fn static_value_to_vm_value(
 
             Value::ptr(struct_base)
         }
-        StaticValue::Enum(e) => {
-            let layout = k1.get_layout(e.enum_type_id);
-            let enum_base = k1.vm_static_stack.push_layout_uninit(layout);
+        StaticValue::Sum(sum) => {
+            let layout = k1.get_layout(sum.sum_type_id);
+            let sum_base = k1.vm_static_stack.push_layout_uninit(layout);
 
-            store_static_value(k1, enum_base, static_value_id);
+            store_static_value(k1, sum_base, static_value_id);
 
-            Value::ptr(enum_base)
+            Value::ptr(sum_base)
         }
         StaticValue::LinearContainer(container) => {
             let (element_type, _container_kind) =
@@ -1862,18 +1862,18 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                 store_static_value(k1, field_ptr, *field_value_id);
             }
         }
-        StaticValue::Enum(e) => {
+        StaticValue::Sum(e) => {
             let variant_index = e.variant_index;
             let payload = e.payload;
-            let enum_agg_id = k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
-            let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
-            let variant_pt = k1.types.mem.get_nth(enum_pt.variants, variant_index as usize);
+            let sum_agg_id = k1.get_physical_type(e.sum_type_id).unwrap().expect_agg();
+            let sum_pt = k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let variant_pt = k1.types.mem.get_nth(sum_pt.variants, variant_index as usize);
 
             store_typed_int(dst, variant_pt.tag);
 
             if let Some(payload_value_id) = payload {
-                let Some(payload_offset) = enum_pt.payload_offset else {
-                    panic!("enum variant has payload but enum has no payload offset")
+                let Some(payload_offset) = sum_pt.payload_offset else {
+                    panic!("sum variant has payload but sum has no payload offset")
                 };
                 let payload_ptr = unsafe { dst.byte_add(payload_offset as usize) };
                 store_static_value(k1, payload_ptr, payload_value_id);
@@ -2040,7 +2040,7 @@ pub fn load_scalar(t: ScalarType, ptr: *const u8) -> Value {
 pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
     match t.as_enum() {
         PhysicalTypeEnum::Empty => {
-            panic!("load_value on Empty");
+            eprintln!("load_value on Empty");
             Value(0)
         }
         PhysicalTypeEnum::Scalar(st) => load_scalar(st, ptr),
@@ -2333,6 +2333,10 @@ pub fn vm_value_to_static_value(
             let int_value = vm_value.as_typed_int(*integer_type);
             k1.static_values.add(StaticValue::Int(int_value))
         }
+        Type::ScalarEnum(se) => {
+            let int_value = vm_value.as_typed_int(se.int_type);
+            k1.static_values.add(StaticValue::Int(int_value))
+        }
         Type::Float(float_type) => {
             let float_value = vm_value.as_typed_float(*float_type);
             k1.static_values.add(StaticValue::Float(float_value))
@@ -2420,18 +2424,18 @@ pub fn vm_value_to_static_value(
                 }))
             }
         }
-        Type::Enum(typed_enum) => {
-            let enum_ptr = vm_value.as_ptr();
+        Type::Sum(typed_sum) => {
+            let sum_ptr = vm_value.as_ptr();
 
-            let tag_type = typed_enum.tag_type;
-            let variants = typed_enum.variants;
-            let enum_agg_id = k1.get_physical_type(type_id).unwrap().expect_agg();
-            let enum_pt = k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
-            let payload_offset = enum_pt.payload_offset;
+            let tag_type = typed_sum.tag_type;
+            let variants = typed_sum.variants;
+            let sum_agg_id = k1.get_physical_type(type_id).unwrap().expect_agg();
+            let sum_pt = k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let payload_offset = sum_pt.payload_offset;
 
             let tag_int_type = k1.types.get(tag_type).expect_integer();
-            let tag_scalar_type = enum_pt.tag_type;
-            let tag = load_scalar(tag_scalar_type, enum_ptr).as_typed_int(tag_int_type);
+            let tag_scalar_type = sum_pt.tag_type;
+            let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
             let Some(variant) = k1.types.mem.getn(variants).iter().find(|v| v.tag_value == tag)
             else {
                 return failf!(span, "No variant found with tag value {}", tag);
@@ -2443,7 +2447,7 @@ pub fn vm_value_to_static_value(
                 Some(payload_type_id) => {
                     let payload_pt = k1.get_physical_type(payload_type_id).unwrap();
                     let payload_offset = payload_offset.unwrap();
-                    let payload_ptr = unsafe { enum_ptr.byte_add(payload_offset as usize) };
+                    let payload_ptr = unsafe { sum_ptr.byte_add(payload_offset as usize) };
 
                     let payload_value = load_value(payload_pt, payload_ptr);
                     let static_value_id =
@@ -2451,8 +2455,8 @@ pub fn vm_value_to_static_value(
                     Some(static_value_id)
                 }
             };
-            k1.static_values.add(StaticValue::Enum(StaticEnum {
-                enum_type_id: type_id,
+            k1.static_values.add(StaticValue::Sum(StaticSum {
+                sum_type_id: type_id,
                 variant_index,
                 payload,
             }))
@@ -2662,7 +2666,7 @@ fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit
         };
     }
     let level = MessageLevel::Info;
-    k1.report_ext(TyperError { message: formatted_messages, span, level }, true);
+    k1.report_ext(TyperMessage { message: formatted_messages, span, level }, true);
 }
 
 #[track_caller]

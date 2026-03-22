@@ -633,14 +633,14 @@ pub struct ParsedStruct {
 impl_copy_if_small!(16, ParsedStruct);
 
 #[derive(Debug, Clone)]
-pub struct AnonEnumConstructor {
+pub struct AnonSumConstructor {
     pub variant_name: Ident,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedEnumConstructor {
+pub struct ParsedSumConstructor {
     pub variant_name: Ident,
     pub span: SpanId,
 }
@@ -784,7 +784,7 @@ pub enum ParsedExpr {
     /// ```
     Variable(ParsedVariable),
     /// ```md
-    /// x.b, Opt.None[i32] (overloaded to handle enum constrs)
+    /// x.b, Opt.None[i32] (overloaded to handle sum constrs)
     /// ```
     FieldAccess(FieldAccess),
     /// ```md
@@ -819,7 +819,7 @@ pub enum ParsedExpr {
     /// .<ident>
     /// .<ident>(<expr>)
     /// ```
-    AnonEnumConstructor(AnonEnumConstructor),
+    AnonSumConstructor(AnonSumConstructor),
     /// ```md
     /// <expr> is <pat>
     /// ```
@@ -869,7 +869,7 @@ impl ParsedExpr {
             Self::Struct(struc) => struc.span,
             Self::ListLiteral(list_expr) => list_expr.span,
             Self::For(for_expr) => for_expr.span,
-            Self::AnonEnumConstructor(tag_expr) => tag_expr.span,
+            Self::AnonSumConstructor(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::Cast(as_cast) => as_cast.span,
@@ -917,8 +917,8 @@ pub struct ParsedStructPattern {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ParsedEnumPattern {
-    pub enum_name: Option<Ident>,
+pub struct ParsedSumPattern {
+    pub sum_name: Option<Ident>,
     pub variant_name: Ident,
     pub payload_pattern: Option<ParsedPatternId>,
     pub span: SpanId,
@@ -938,11 +938,11 @@ pub struct ParsedTypePattern {
 }
 
 // https://bnfplayground.pauliankline.com/?bnf=%3Cpattern%3E%20%3A%3A%3D%20%3Cliteral%3E%20%7C%20%3Cvariable%3E%20%7C%20%3Cenum%3E%20%7C%20%3Cstruct%3E%0A%3Cliteral%3E%20%3A%3A%3D%20%22(%22%20%22)%22%20%7C%20%22%5C%22%22%20%3Cident%3E%20%22%5C%22%22%20%7C%20%5B0-9%5D%2B%20%7C%20%22%27%22%20%5Ba-z%5D%20%22%27%22%20%7C%20%22None%22%0A%3Cvariable%3E%20%3A%3A%3D%20%3Cident%3E%0A%3Cident%3E%20%3A%3A%3D%20%5Ba-z%5D*%0A%3Cenum%3E%20%3A%3A%3D%20%22.%22%20%3Cident%3E%20(%20%22(%22%20%3Cpattern%3E%20%22)%22%20)%3F%0A%3Cstruct%3E%20%3A%3A%3D%20%22%7B%22%20(%20%3Cident%3E%20%22%3A%20%22%20%3Cpattern%3E%20%22%2C%22%3F%20)*%20%22%7D%22%20&name=
-// <pattern> ::= <literal> | <variable> | <enum> | <struct>
+// <pattern> ::= <literal> | <variable> | <sum> | <struct>
 // <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
 // <variable> ::= <ident>
 // <ident> ::= [a-z]*
-// <enum> ::= "." <ident> ( "(" <pattern> ")" )?
+// <sum> ::= "." <ident> ( "(" <pattern> ")" )?
 // <struct> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 
 #[derive(Debug, Clone)]
@@ -950,7 +950,7 @@ pub enum ParsedPattern {
     Literal(ParsedExprId),
     Variable(Ident, SpanId),
     Struct(ParsedStructPattern),
-    Enum(ParsedEnumPattern),
+    Sum(ParsedSumPattern),
     Wildcard(SpanId),
     Reference(ParsedReferencePattern),
     Type(ParsedTypePattern),
@@ -1096,15 +1096,15 @@ pub struct ParsedArrayType {
 impl_copy_if_small!(12, ParsedArrayType);
 
 #[derive(Debug, Clone)]
-pub struct ParsedEnumVariant {
+pub struct ParsedSumVariant {
     pub tag_name: Ident,
     pub payload_expression: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedEnumType {
-    pub variants: Vec<ParsedEnumVariant>,
+pub struct ParsedSumType {
+    pub variants: Vec<ParsedSumVariant>,
     pub tag_type: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
@@ -1197,7 +1197,7 @@ pub enum ParsedTypeExpr {
     Optional(ParsedOptional),
     Reference(ParsedReference),
     Array(ParsedArrayType),
-    Enum(ParsedEnumType),
+    Sum(ParsedSumType),
     DotMemberAccess(ParsedDotMemberAccess),
     Function(ParsedFunctionType),
     TypeOf(ParsedTypeOf),
@@ -1218,7 +1218,7 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::Optional(opt) => opt.span,
             ParsedTypeExpr::Reference(r) => r.span,
             ParsedTypeExpr::Array(arr) => arr.span,
-            ParsedTypeExpr::Enum(e) => e.span,
+            ParsedTypeExpr::Sum(e) => e.span,
             ParsedTypeExpr::DotMemberAccess(a) => a.span,
             ParsedTypeExpr::Function(f) => f.span,
             ParsedTypeExpr::TypeOf(tof) => tof.span,
@@ -1334,9 +1334,9 @@ pub struct ParsedGlobal {
     pub value_expr: Option<ParsedExprId>,
     pub span: SpanId,
     pub id: ParsedGlobalId,
-    pub is_referencing: bool,
     pub is_thread_local: bool,
     pub is_export: bool,
+    pub is_mutable: bool,
     pub is_external: bool,
 }
 
@@ -1693,7 +1693,7 @@ impl ParsedProgram {
     pub fn get_pattern_span(&self, id: ParsedPatternId) -> SpanId {
         match self.patterns.get_pattern(id) {
             ParsedPattern::Literal(literal_id) => self.exprs.get(*literal_id).get_span(),
-            ParsedPattern::Enum(enum_pattern) => enum_pattern.span,
+            ParsedPattern::Sum(sum_pattern) => sum_pattern.span,
             ParsedPattern::Variable(_var_pattern, span) => *span,
             ParsedPattern::Struct(struct_pattern) => struct_pattern.span,
             ParsedPattern::Wildcard(span) => *span,
@@ -2389,12 +2389,12 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Dot || (first.kind == K::Ident && second.kind == K::Dot) {
-            let enum_name = if first.kind == K::Ident {
+            let sum_name = if first.kind == K::Ident {
                 // Eats the Dot
                 self.advance();
-                let enum_name = self.intern_ident_token(first);
+                let sum_name = self.intern_ident_token(first);
                 self.expect_kind(K::Dot)?;
-                Some(enum_name)
+                Some(sum_name)
             } else {
                 // Eats the Dot
                 self.advance();
@@ -2410,13 +2410,12 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             } else {
                 (None, self.ast.spans.extend(first.span, variant_name_token.span))
             };
-            let pattern_id =
-                self.ast.patterns.add_pattern(ParsedPattern::Enum(ParsedEnumPattern {
-                    enum_name,
-                    variant_name: variant_name_ident,
-                    payload_pattern,
-                    span,
-                }));
+            let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Sum(ParsedSumPattern {
+                sum_name,
+                variant_name: variant_name_ident,
+                payload_pattern,
+                span,
+            }));
             Ok(pattern_id)
         } else if first.kind == K::Ident {
             // Variable
@@ -2891,8 +2890,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::Ident {
             let ident_chars = self.get_token_chars(first);
             if ident_chars == "either" {
-                let enumm = self.expect_enum_type_expression()?;
-                let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Enum(enumm));
+                let sum = self.expect_sum_type_expression()?;
+                let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
                 Ok(Some(type_expr_id))
             } else if ident_chars == "typeOf" {
                 self.advance();
@@ -2998,7 +2997,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(self.ast.type_exprs.add(ParsedTypeExpr::Function(function_type)))
     }
 
-    fn expect_enum_type_expression(&mut self) -> ParseResult<ParsedEnumType> {
+    fn expect_sum_type_expression(&mut self) -> ParseResult<ParsedSumType> {
         let (keyword, _) = self.expect_ident()?;
         let explicit_tag_type_expr =
             if self.maybe_consume_next_no_whitespace(K::OpenParen).is_some() {
@@ -3022,7 +3021,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
             let tag = self.peek();
             if tag.kind != K::Ident {
-                return Err(error_expected("Identifier for enum variant", tag));
+                return Err(error_expected("Identifier for sum variant", tag));
             }
             let tag_name = self.intern_ident_token(tag);
             self.advance();
@@ -3039,13 +3038,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 None => tag.span,
                 Some(expr) => self.ast.type_exprs.get(expr).get_span(),
             };
-            variants.push(ParsedEnumVariant { tag_name, payload_expression, span });
+            variants.push(ParsedSumVariant { tag_name, payload_expression, span });
             first = false;
         }
         let last_variant_span =
             variants.last().ok_or_else(|| error_expected("At least one variant", keyword))?.span;
         let span = self.extend_span(keyword.span, last_variant_span);
-        Ok(ParsedEnumType { variants, tag_type: explicit_tag_type_expr, span })
+        Ok(ParsedSumType { variants, tag_type: explicit_tag_type_expr, span })
     }
 
     fn expect_fn_arg(&mut self, is_explicit_context: bool) -> ParseResult<ParsedCallArg> {
@@ -3490,19 +3489,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let variant_name = self.intern_ident_token(second);
 
                 if third.kind == K::OpenParen {
-                    // Enum Constructor
+                    // Sum Constructor
                     self.advance();
                     let payload = self.expect_expression()?;
                     let close_paren = self.expect_kind(K::CloseParen)?;
                     let span = self.extend_token_span(first, close_paren);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
-                        AnonEnumConstructor { variant_name, payload: Some(payload), span },
+                    Ok(Some(self.add_expression(ParsedExpr::AnonSumConstructor(
+                        AnonSumConstructor { variant_name, payload: Some(payload), span },
                     ))))
                 } else {
                     // Tag Literal
                     let span = self.extend_token_span(first, second);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonEnumConstructor(
-                        AnonEnumConstructor { variant_name, payload: None, span },
+                    Ok(Some(self.add_expression(ParsedExpr::AnonSumConstructor(
+                        AnonSumConstructor { variant_name, payload: None, span },
                     ))))
                 }
             }
@@ -3902,10 +3901,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(keyword_let_token) = self.maybe_consume(K::KeywordLet) else {
             return Ok(None);
         };
-        let is_referencing = self.maybe_consume_next_no_whitespace(K::Asterisk).is_some();
         let mut is_thread_local = false;
         let mut is_export = false;
         let mut is_external = false;
+        let mut is_mutable = false;
         let name_token = loop {
             let ident = self.expect_kind(K::Ident)?;
             let tok_chars = self.token_chars(ident);
@@ -3913,6 +3912,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 "tls" => is_thread_local = true,
                 "export" => is_export = true,
                 "extern" => is_external = true,
+                "mutable" => is_mutable = true,
                 _ => break ident,
             }
         };
@@ -3932,9 +3932,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             value_expr,
             span,
             id: ParsedGlobalId::PENDING,
-            is_referencing,
             is_thread_local,
             is_export,
+            is_mutable,
             is_external,
         });
         Ok(Some(global_id))
@@ -4756,10 +4756,10 @@ impl ParsedProgram {
             }
             ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
             ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpr::AnonEnumConstructor(anon_enum) => {
+            ParsedExpr::AnonSumConstructor(anon_sum) => {
                 w.write_char('.')?;
-                w.write_str(self.idents.get_name(anon_enum.variant_name))?;
-                if let Some(payload) = anon_enum.payload.as_ref() {
+                w.write_str(self.idents.get_name(anon_sum.variant_name))?;
+                if let Some(payload) = anon_sum.payload.as_ref() {
                     w.write_str("(")?;
                     self.display_expr_id(w, *payload)?;
                     w.write_str(")")?;
@@ -4962,8 +4962,8 @@ impl ParsedProgram {
                 self.display_type_expr_id(refer.base, w)?;
                 Ok(())
             }
-            ParsedTypeExpr::Enum(e) => {
-                w.write_str("enum ")?;
+            ParsedTypeExpr::Sum(e) => {
+                w.write_str("either ")?;
                 for variant in &e.variants {
                     w.write_str(self.idents.get_name(variant.tag_name))?;
                     if let Some(payload) = &variant.payload_expression {

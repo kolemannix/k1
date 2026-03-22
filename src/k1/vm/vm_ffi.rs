@@ -183,8 +183,8 @@ fn pt_to_ffi_type(
         PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
         PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
         PhysicalTypeEnum::Agg(agg_id) => match k1.types.agg_types.get(agg_id).agg_type {
-            AggType::Enum(_e) => {
-                let (tag_field, payload_field) = k1.types.get_enum_struct_layout(agg_id);
+            AggType::Sum(_e) => {
+                let (tag_field, payload_field) = k1.types.get_sums_struct_layout(agg_id);
                 let count = if payload_field.is_some() { 2 } else { 1 };
                 let mut element_storage = k1.mem.new_list(count as u32);
 

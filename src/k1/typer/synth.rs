@@ -101,7 +101,7 @@ impl TypedProgram {
         let optional_type = self.synth_optional_type(inner_type);
 
         let some_expr = self.exprs.add(
-            TypedExpr::EnumConstructor(TypedEnumConstructor {
+            TypedExpr::SumConstructor(TypedSumConstructor {
                 variant_index: 1,
                 payload: Some(expr_id),
             }),
@@ -114,7 +114,7 @@ impl TypedProgram {
     pub(super) fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
         let optional_type = self.synth_optional_type(type_id);
         let none_expr = self.exprs.add(
-            TypedExpr::EnumConstructor(TypedEnumConstructor { variant_index: 0, payload: None }),
+            TypedExpr::SumConstructor(TypedSumConstructor { variant_index: 0, payload: None }),
             optional_type,
             span,
         );
@@ -429,7 +429,7 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    pub(super) fn synth_enum_is_variant(
+    pub(super) fn synth_sum_is_variant(
         &mut self,
         enum_expr_or_reference: TypedExprId,
         variant_index: u32,
@@ -440,13 +440,13 @@ impl TypedProgram {
         let enum_type = self
             .types
             .get_type_dereferenced(self.exprs.get_type(enum_expr_or_reference))
-            .expect_enum();
+            .expect_sum();
         let tag_type = enum_type.tag_type;
         let variant_tag =
-            self.types.enum_variant_by_index(enum_type.variants, variant_index).tag_value;
+            self.types.sum_variant_by_index(enum_type.variants, variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
         let get_tag = self.exprs.add(
-            TypedExpr::EnumGetTag(GetEnumTag { enum_expr_or_reference, is_reference }),
+            TypedExpr::SumGetTag(GetSumTag { sum_expr_or_reference: enum_expr_or_reference, is_reference }),
             tag_type,
             span,
         );
@@ -516,7 +516,7 @@ impl TypedProgram {
                 | Type::Float(_)
                 | Type::Reference(_)
                 | Type::Array(_)
-                | Type::Enum(_) => Ok(args),
+                | Type::Sum(_) => Ok(args),
                 Type::Struct(s) => {
                     if n >= s.fields.len() as usize {
                         return failf!(
@@ -672,11 +672,11 @@ pub(super) fn synth_static_option(
     value_id: Option<StaticValueId>,
 ) -> StaticValueId {
     let static_enum = match value_id {
-        None => StaticEnum { enum_type_id: option_type_id, variant_index: 0, payload: None },
+        None => StaticSum { sum_type_id: option_type_id, variant_index: 0, payload: None },
         Some(value_id) => {
-            StaticEnum { enum_type_id: option_type_id, variant_index: 1, payload: Some(value_id) }
+            StaticSum { sum_type_id: option_type_id, variant_index: 1, payload: Some(value_id) }
         }
     };
 
-    static_values.add(StaticValue::Enum(static_enum))
+    static_values.add(StaticValue::Sum(static_enum))
 }

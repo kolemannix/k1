@@ -4,8 +4,8 @@ set -x
 # Exit on errors
 set -e
 export RUST_BACKTRACE=1
-cargo build --features=llvm-sys/prefer-dynamic --bin test_suite --bin k1
 cargo test
+cargo build --features=llvm-sys/prefer-dynamic --bin test_suite --bin k1
 
 
 export MallocScribble=1

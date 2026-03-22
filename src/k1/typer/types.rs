@@ -227,7 +227,7 @@ pub struct ArrayType {
 impl_copy_if_small!(8, ArrayType);
 
 #[derive(Clone, Copy)]
-pub struct TypedEnumVariant {
+pub struct TypedSumVariant {
     pub name: Ident,
     pub index: u32,
     pub payload: Option<TypeId>,
@@ -235,12 +235,24 @@ pub struct TypedEnumVariant {
 }
 
 #[derive(Clone)]
-pub struct EnumType {
-    pub variants: MSlice<TypedEnumVariant, TypePool>,
+pub struct SumType {
+    pub variants: MSlice<TypedSumVariant, TypePool>,
     pub tag_type: TypeId,
 }
 
-impl EnumType {}
+#[derive(Copy, Clone)]
+pub struct ScalarEnumValue {
+    pub name: Ident,
+    pub value_bits: u64,
+}
+
+#[derive(Copy, Clone)]
+pub struct ScalarEnumType {
+    pub values: MSlice<ScalarEnumValue, TypePool>,
+    pub int_type: IntegerType,
+}
+
+impl SumType {}
 
 #[derive(Clone)]
 pub struct GenericType {
@@ -442,7 +454,8 @@ pub enum Type {
     Reference(ReferenceType),
     Array(ArrayType),
     Struct(StructType),
-    Enum(EnumType),
+    Sum(SumType),
+    ScalarEnum(ScalarEnumType),
 
     /// An uninhabited type; used to indicate divergent control flow
     Never,
@@ -476,6 +489,21 @@ impl TypePool {
         match (t1, t2) {
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
+            (Type::ScalarEnum(se1), Type::ScalarEnum(se2)) => {
+                if defn1 != defn2 {
+                    return false;
+                }
+                if se1.values.len() != se2.values.len() {
+                    return false;
+                }
+                for (v1, v2) in self.mem.getn(se1.values).iter().zip(self.mem.getn(se2.values)) {
+                    let mismatch = v1.name != v2.name || v1.value_bits != v2.value_bits;
+                    if mismatch {
+                        return false;
+                    }
+                }
+                true
+            }
             (Type::Float(f1), Type::Float(f2)) => f1.size() == f2.size(),
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
@@ -511,7 +539,7 @@ impl TypePool {
             (Type::InferenceHole(h1), Type::InferenceHole(h2)) => {
                 h1.index == h2.index && h1.static_type == h2.static_type
             }
-            (Type::Enum(e1), Type::Enum(e2)) => {
+            (Type::Sum(e1), Type::Sum(e2)) => {
                 if defn1 != defn2 {
                     return false;
                 }
@@ -582,6 +610,9 @@ impl TypePool {
         match typ {
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
+            Type::ScalarEnum(_se) => {
+                defn.hash(state);
+            }
             Type::Bool => {}
             Type::Struct(s) => {
                 defn.hash(state);
@@ -608,7 +639,7 @@ impl TypePool {
                 hole.index.hash(state);
                 hole.static_type.hash(state);
             }
-            Type::Enum(e) => {
+            Type::Sum(e) => {
                 defn.hash(state);
                 e.variants.len().hash(state);
                 for v in self.mem.getn(e.variants) {
@@ -676,7 +707,8 @@ impl Type {
             Type::TypeParameter(_) => "param",
             Type::FunctionTypeParameter(_) => "ftp",
             Type::InferenceHole(_) => "hole",
-            Type::Enum(_) => "enum",
+            Type::Sum(_) => "sum",
+            Type::ScalarEnum(_) => "enum",
             Type::Never => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
@@ -719,25 +751,25 @@ impl Type {
     }
 
     #[track_caller]
-    pub fn expect_enum_mut(&mut self) -> &mut EnumType {
+    pub fn expect_sum_mut(&mut self) -> &mut SumType {
         match self {
-            Type::Enum(e) => e,
-            _ => panic!("expected enum type"),
+            Type::Sum(s) => s,
+            _ => panic!("expected sum type"),
         }
     }
 
-    pub fn as_enum(&self) -> Option<&EnumType> {
+    pub fn as_sum(&self) -> Option<&SumType> {
         match self {
-            Type::Enum(e) => Some(e),
+            Type::Sum(sum) => Some(sum),
             _ => None,
         }
     }
 
     #[track_caller]
-    pub fn expect_enum(&self) -> &EnumType {
+    pub fn expect_sum(&self) -> &SumType {
         match self {
-            Type::Enum(e) => e,
-            _ => panic!("expected enum on {}", self.kind_name()),
+            Type::Sum(sum) => sum,
+            _ => panic!("expected sum on {}", self.kind_name()),
         }
     }
 
@@ -1109,15 +1141,15 @@ pub struct StructField {
 }
 
 #[derive(Clone, Copy)]
-pub struct EnumPt {
+pub struct SumPt {
     pub tag_type: ScalarType,
     pub struct_repr: AggregateTypeId,
-    pub variants: MSlice<EnumVariantPt, TypePool>,
+    pub variants: MSlice<SumVariantPt, TypePool>,
     pub payload_offset: Option<u32>,
 }
 
 #[derive(Clone, Copy)]
-pub struct EnumVariantPt {
+pub struct SumVariantPt {
     pub tag: TypedIntValue,
     pub payload: Option<PhysicalType>,
 }
@@ -1133,7 +1165,7 @@ pub enum AggType {
     Struct { fields: MSlice<StructField, TypePool> },
     Array { element_pt: PhysicalType, len: u32 },
     Union { members: MSlice<UnionMember, TypePool> },
-    Enum(EnumPt),
+    Sum(SumPt),
 }
 
 impl AggType {
@@ -1146,10 +1178,10 @@ impl AggType {
     }
 
     #[track_caller]
-    pub fn expect_enum(&self) -> &EnumPt {
+    pub fn expect_sum(&self) -> &SumPt {
         match self {
-            AggType::Enum(e) => e,
-            _ => panic!("Expected enum agg type"),
+            AggType::Sum(sum) => sum,
+            _ => panic!("Expected sum agg type"),
         }
     }
 
@@ -1337,9 +1369,9 @@ impl TypePool {
         // - manage the hash
         // - Update the 3 SoA fields: variable counts, phys_type_mapping, and instance_info
         // - Manage both the resolve vs insert paths
-        // - Handle enums since they are self-referential
+        // - Handle sums since they are self-referential
         //
-        // Update: Mostly fixed this by making enum variants not their own types
+        // Update: Mostly fixed this by making sum variants not their own types
 
         let variable_counts = self.count_type_variables(unresolved_type_id);
         *self.type_variable_counts.get_mut(unresolved_type_id) = variable_counts;
@@ -1476,9 +1508,9 @@ impl TypePool {
         }
     }
 
-    pub fn get_as_enum(&self, type_id: TypeId) -> Option<&EnumType> {
+    pub fn get_as_sum(&self, type_id: TypeId) -> Option<&SumType> {
         match self.get(type_id) {
-            Type::Enum(e) => Some(e),
+            Type::Sum(e) => Some(e),
             _ => None,
         }
     }
@@ -1659,7 +1691,7 @@ impl TypePool {
                 result
             }
             Type::Reference(refer) => self.count_type_variables_rec(refer.inner_type, visited),
-            Type::Enum(e) => {
+            Type::Sum(e) => {
                 let mut result = EMPTY;
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = v.payload {
@@ -1668,6 +1700,7 @@ impl TypePool {
                 }
                 result
             }
+            Type::ScalarEnum(_) => EMPTY,
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
@@ -1759,7 +1792,10 @@ impl TypePool {
                 let st = i.get_scalar_type();
                 Some(PhysicalType::scalar(st))
             }
-
+            Type::ScalarEnum(se) => {
+                let st = se.int_type.get_scalar_type();
+                Some(PhysicalType::scalar(st))
+            }
             Type::Float(FloatType::F32) => Some(PhysicalType::scalar(ScalarType::F32)),
             Type::Float(FloatType::F64) => Some(PhysicalType::scalar(ScalarType::F64)),
             Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
@@ -1825,7 +1861,7 @@ impl TypePool {
                     }
                 }
             }
-            Type::Enum(e) => {
+            Type::Sum(e) => {
                 let variant_count = e.variants.len();
 
                 let tag_scalar =
@@ -1836,7 +1872,7 @@ impl TypePool {
                 let mut union_members = self.mem.new_list(variant_count);
                 let mut is_physical = true;
 
-                let e = self.get(type_id).expect_enum();
+                let e = self.get(type_id).expect_sum();
 
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = &v.payload {
@@ -1847,14 +1883,14 @@ impl TypePool {
                             Some(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });
 
-                                physical_variants.push(EnumVariantPt {
+                                physical_variants.push(SumVariantPt {
                                     tag: v.tag_value,
                                     payload: Some(payload_pt),
                                 });
                             }
                         }
                     } else {
-                        physical_variants.push(EnumVariantPt { tag: v.tag_value, payload: None });
+                        physical_variants.push(SumVariantPt { tag: v.tag_value, payload: None });
                     }
                 }
 
@@ -1886,18 +1922,18 @@ impl TypePool {
                         origin_type_id: type_id,
                         layout: struct_layout,
                     });
-                    let agg_enum = AggType::Enum(EnumPt {
+                    let agg_sum = AggType::Sum(SumPt {
                         tag_type: tag_scalar,
                         struct_repr,
                         variants: self.mem.list_to_handle(physical_variants),
                         payload_offset: union_offset,
                     });
-                    let enum_agg_id = self.agg_types.add(AggregateTypeRecord {
-                        agg_type: agg_enum,
+                    let sum_agg_id = self.agg_types.add(AggregateTypeRecord {
+                        agg_type: agg_sum,
                         origin_type_id: type_id,
                         layout: struct_layout,
                     });
-                    Some(PhysicalType::agg(enum_agg_id))
+                    Some(PhysicalType::agg(sum_agg_id))
                 } else {
                     None
                 }
@@ -1952,7 +1988,7 @@ impl TypePool {
         field_index: u32,
     ) -> Option<u32> {
         match self.agg_types.get(agg_id).agg_type {
-            AggType::Enum(e) => self.get_struct_field_offset(e.struct_repr, field_index),
+            AggType::Sum(e) => self.get_struct_field_offset(e.struct_repr, field_index),
             AggType::Struct { fields } => {
                 if field_index < fields.len() {
                     let field_type = self.mem.get_nth(fields, field_index as usize);
@@ -1968,36 +2004,36 @@ impl TypePool {
 
     pub fn get_agg_struct_layout(&self, struct_agg_id: AggregateTypeId) -> SV4<StructField> {
         match self.agg_types.get(struct_agg_id).agg_type {
-            AggType::Enum(e) => self.get_agg_struct_layout(e.struct_repr),
+            AggType::Sum(e) => self.get_agg_struct_layout(e.struct_repr),
             AggType::Struct { fields } => self.mem.getn_sv4(fields),
             AggType::Array { .. } => panic!("Array is not a struct"),
             AggType::Union { .. } => panic!("not a struct"),
         }
     }
 
-    pub fn get_enum_struct_layout(
+    pub fn get_sums_struct_layout(
         &self,
-        enum_agg_id: AggregateTypeId,
+        sum_agg_id: AggregateTypeId,
     ) -> (StructField, Option<StructField>) {
-        let struct_id = self.agg_types.get(enum_agg_id).agg_type.expect_enum().struct_repr;
+        let struct_id = self.agg_types.get(sum_agg_id).agg_type.expect_sum().struct_repr;
         let fields = self.agg_types.get(struct_id).agg_type.expect_struct();
         let tag = *self.mem.get_nth(fields, 0);
         let payload = self.mem.get_nth_opt(fields, 1).copied();
         (tag, payload)
     }
 
-    pub fn enum_variant_by_name(
+    pub fn sum_variant_by_name(
         &self,
-        variants: MSlice<TypedEnumVariant, TypePool>,
+        variants: MSlice<TypedSumVariant, TypePool>,
         name: Ident,
-    ) -> Option<&'static TypedEnumVariant> {
+    ) -> Option<&'static TypedSumVariant> {
         self.mem.getn(variants).iter().find(|v| v.name == name)
     }
-    pub fn enum_variant_by_index(
+    pub fn sum_variant_by_index(
         &self,
-        variants: MSlice<TypedEnumVariant, TypePool>,
+        variants: MSlice<TypedSumVariant, TypePool>,
         index: u32,
-    ) -> &TypedEnumVariant {
+    ) -> &TypedSumVariant {
         self.mem.getn(variants).iter().find(|v| v.index == index).unwrap()
     }
 
@@ -2126,8 +2162,8 @@ impl TypePool {
             PhysicalTypeEnum::Empty => w.write_str("{}"),
             PhysicalTypeEnum::Scalar(st) => write!(w, "{}", st),
             PhysicalTypeEnum::Agg(agg) => match self.agg_types.get(agg).agg_type {
-                AggType::Enum(e) => {
-                    w.write_str("enum ")?;
+                AggType::Sum(e) => {
+                    w.write_str("sum ")?;
                     self.display_pt(w, PhysicalType::agg(e.struct_repr))?;
                     Ok(())
                 }

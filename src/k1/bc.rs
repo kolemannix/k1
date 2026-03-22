@@ -731,7 +731,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     //eprintln!("bc::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
     if let Some(err) = f.body_failure.clone() {
-        return Err(TyperError {
+        return Err(TyperMessage {
             message: format!(
                 "Cannot generate bytecode for function {}, which failed compilation",
                 b.k1.ident_str(f.name)
@@ -1283,6 +1283,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
             } else {
                 let_stmt.variable_type
             };
+            let var_pt = b.get_physical_type(let_stmt.variable_type);
             let rich_pt = b.get_physical_type(rich_type_id);
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
@@ -1325,7 +1326,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> Typer
                 b.k1.bytecode.b_variables.push(BuilderVariable {
                     id: let_stmt.variable_id,
                     value: variable_alloca.as_value(),
-                    storage_pt: rich_pt,
+                    storage_pt: var_pt,
                     indirect: !is_direct,
                 });
                 Ok(Value::Empty)
@@ -1508,113 +1509,18 @@ fn compile_expr(
             Ok(result)
         }
         TypedExpr::Variable(variable_expr) => {
-            let variable = b.k1.variables.get(variable_expr.variable_id);
-            match variable.global_id() {
-                Some(global_id) => {
-                    // Globals are pretty complex. We always generate an instruction
-                    // representing the **address** of the global, because they are always
-                    // addresses to static memory. For reference types, that address _is_
-                    // the value of the expression referring to the global, but for
-                    // non-reference types, we must 'load' the value from the address, since
-                    // the address is just an implementation detail. For aggregate types,
-                    // this load is a no-op, since we represent them as their locations anyway
-
-                    // It matters whether this is a reference in K1, for reasons outlined above.
-                    // This info gets erased when compiling types (this would become Pointer which
-                    // is indistinguishable from a global of type Pointer)
-                    let is_reference = b.k1.types.get(variable.type_id).as_reference().is_some();
-
-                    // By 'value_type' I mean the shape of the allocated memory of the global, not the value,
-                    // so the inner type if its a reference, and just the type if its not
-                    let value_type = match b.k1.types.get(variable.type_id).as_reference() {
-                        None => variable.type_id,
-                        Some(r) => r.inner_type,
-                    };
-                    let value_pt = b.get_physical_type(value_type);
-                    let address = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
-                    match value_pt.as_enum() {
-                        PhysicalTypeEnum::Empty => {
-                            if is_reference {
-                                Ok(Value::PTR_ZERO)
-                            } else {
-                                Ok(Value::Empty)
-                            }
-                        }
-                        PhysicalTypeEnum::Scalar(_) => {
-                            // We have a scalar type, but do we have a pointer to it or just
-                            // a value?
-                            if is_reference {
-                                // If reference, the address of the global is what we're after
-                                let stored = store_scalar_if_dst(b, dst, address);
-                                Ok(stored)
-                            } else {
-                                // The value of the global is what we're after
-                                let stored = load_or_copy(
-                                    b,
-                                    value_pt,
-                                    dst,
-                                    address,
-                                    false,
-                                    "load of scalar global variable",
-                                );
-                                Ok(stored)
-                            }
-                        }
-                        PhysicalTypeEnum::Agg(_) => {
-                            if is_reference {
-                                let stored = store_scalar_if_dst(b, dst, address);
-                                Ok(stored)
-                            } else {
-                                // The source code is talking about an aggregate _value_
-                                // So if we have a dst, then it is of the aggregate's layout, not a Ptr-size!
-                                // So we have to copy
-                                let stored = store_rich_if_dst(
-                                    b,
-                                    dst,
-                                    value_pt,
-                                    address,
-                                    "load of non-reference global agg",
-                                );
-                                Ok(stored)
-                            }
-                        }
-                    }
-                }
-                None => {
-                    let Some(var) = b.get_variable(variable_expr.variable_id) else {
-                        eprintln!(
-                            "Variables are: {}",
-                            b.k1.bytecode
-                                .b_variables
-                                .iter()
-                                .map(|bv| format!("{} {}", bv.id, bv.value))
-                                .join("\n")
-                        );
-                        b.k1.ice_with_span("Missing variable", expr_span)
-                    };
-                    let var_value = var.value;
-                    let var_indirect = var.indirect;
-                    let var_pt = b.get_physical_type(expr_type);
-                    if var_indirect {
-                        let loaded = load_or_copy(
-                            b,
-                            var_pt,
-                            dst,
-                            var_value,
-                            false,
-                            if dst.is_some() {
-                                "indirect variable fulfill to dst"
-                            } else {
-                                "load indirect variable"
-                            },
-                        );
-                        Ok(loaded)
-                    } else {
-                        let stored =
-                            store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
-                        Ok(stored)
-                    }
-                }
+            let (var_value, var_pt, is_indirect) =
+                compile_variable_to_address(b, variable_expr.variable_id);
+            if is_indirect {
+                // indirect; var_value is storage that holds the variable's type
+                let loaded_or_copied =
+                    load_or_copy(b, var_pt, dst, var_value, false, "fulfill global usage");
+                Ok(loaded_or_copied)
+            } else {
+                // direct; var_value is already a canonical representation of the value; just have to
+                // fulfill dst
+                let stored = store_rich_if_dst(b, dst, var_pt, var_value, "direct variable");
+                Ok(stored)
             }
         }
         TypedExpr::AddressOf(address_of) => {
@@ -2185,69 +2091,69 @@ fn compile_expr(
                 Ok(jmp.as_value())
             }
         }
-        TypedExpr::EnumConstructor(enumc) => {
-            let enum_pt = b.get_physical_type(expr_type);
-            let enum_agg_id = enum_pt.expect_agg();
-            let enum_pt_agg = b.k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
-            let variants = enum_pt_agg.variants;
-            let enum_struct_repr = enum_pt_agg.struct_repr;
-            let enum_base = match dst {
+        TypedExpr::SumConstructor(sum_c) => {
+            let sum_pt = b.get_physical_type(expr_type);
+            let sum_agg_id = sum_pt.expect_agg();
+            let sum_pt_agg = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let variants = sum_pt_agg.variants;
+            let sum_struct_repr = sum_pt_agg.struct_repr;
+            let sum_base = match dst {
                 Some(dst) => dst,
-                None => b.push_alloca(enum_pt, "enum literal storage").as_value(),
+                None => b.push_alloca(sum_pt, "sum literal storage").as_value(),
             };
 
-            let tag_base = enum_base;
-            let enum_variant = b.k1.types.mem.get_nth(variants, enumc.variant_index as usize);
-            let tag_int_value = enum_variant.tag;
-            let int_imm = b.make_int_value(&tag_int_value, "enum tag");
-            b.push_store(tag_base, int_imm, "store enum lit tag");
+            let tag_base = sum_base;
+            let sum_variant = b.k1.types.mem.get_nth(variants, sum_c.variant_index as usize);
+            let tag_int_value = sum_variant.tag;
+            let int_imm = b.make_int_value(&tag_int_value, "sum tag");
+            b.push_store(tag_base, int_imm, "store sum lit tag");
 
-            if let Some(payload_expr) = &enumc.payload {
+            if let Some(payload_expr) = &sum_c.payload {
                 let payload_offset =
-                    b.push_struct_offset(enum_struct_repr, enum_base, 1, "enum payload ptr");
+                    b.push_struct_offset(sum_struct_repr, sum_base, 1, "sum payload ptr");
                 let _payload_value = compile_expr(b, Some(payload_offset), *payload_expr)?;
             }
 
-            Ok(enum_base)
+            Ok(sum_base)
         }
-        TypedExpr::EnumGetTag(e_get_tag) => {
-            let enum_base = compile_expr(b, None, e_get_tag.enum_expr_or_reference)?;
-            let enum_type =
+        TypedExpr::SumGetTag(sum_get_tag) => {
+            let sum_base = compile_expr(b, None, sum_get_tag.sum_expr_or_reference)?;
+            let sum_type =
                 b.k1.types
-                    .get_type_dereferenced(b.k1.exprs.get_type(e_get_tag.enum_expr_or_reference))
-                    .expect_enum();
-            let tag_type = enum_type.tag_type;
+                    .get_type_dereferenced(b.k1.exprs.get_type(sum_get_tag.sum_expr_or_reference))
+                    .expect_sum();
+            let tag_type = sum_type.tag_type;
             let tag_scalar = b.get_physical_type(tag_type);
 
-            // Load straight from the enum base, dont bother with a struct gep
+            // Load straight from the sum base, dont bother with a struct gep
             Ok(load_or_copy(
                 b,
                 tag_scalar,
                 dst,
-                enum_base,
+                sum_base,
                 false,
-                "get enum tag, load or copy to dst",
+                "get sum tag, load or copy to dst",
             ))
         }
-        TypedExpr::EnumGetPayload(e_get_payload) => {
-            let variant_index = e_get_payload.variant_index;
-            let enum_base_value = compile_expr(b, None, e_get_payload.enum_expr)?;
+        TypedExpr::SumGetPayload(sum_get_payload) => {
+            let variant_index = sum_get_payload.variant_index;
+            let sum_base_value = compile_expr(b, None, sum_get_payload.sum_expr)?;
 
-            let base_expr_type_id = b.k1.exprs.get_type(e_get_payload.enum_expr);
+            let base_expr_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
             let base_t = b.k1.types.get(base_expr_type_id);
-            let enum_type_id = match e_get_payload.access_kind {
+            let sum_type_id = match sum_get_payload.access_kind {
                 FieldAccessKind::ValueToValue => base_expr_type_id,
                 FieldAccessKind::Dereference | FieldAccessKind::ReferenceThrough => {
                     base_t.expect_reference().inner_type
                 }
             };
-            let enum_agg_id = b.k1.get_physical_type(enum_type_id).unwrap().expect_agg();
-            let enum_pt = b.k1.types.agg_types.get(enum_agg_id).agg_type.expect_enum();
-            let variants = enum_pt.variants;
-            let enum_struct_repr = enum_pt.struct_repr;
+            let sum_agg_id = b.k1.get_physical_type(sum_type_id).unwrap().expect_agg();
+            let sum_pt = b.k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
+            let variants = sum_pt.variants;
+            let sum_struct_repr = sum_pt.struct_repr;
             let payload_offset =
-                b.push_struct_offset(enum_struct_repr, enum_base_value, 1, "enum payload offset");
-            if e_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
+                b.push_struct_offset(sum_struct_repr, sum_base_value, 1, "sum payload offset");
+            if sum_get_payload.access_kind == FieldAccessKind::ReferenceThrough {
                 // We're generating a pointer to the payload. The variant itself is a reference
                 // and the value we produce here is just a pointer to the payload
                 let stored = store_scalar_if_dst(b, dst, payload_offset);
@@ -2257,20 +2163,20 @@ fn compile_expr(
                 // If it's a reference, we need to do a copying load to avoid incorrect aliasing
                 // If it's not, we don't need to make a copy since the source is just a value
                 // (albeit represented as an address)
-                let make_copy = match e_get_payload.access_kind {
+                let make_copy = match sum_get_payload.access_kind {
                     FieldAccessKind::ValueToValue => false,
                     FieldAccessKind::Dereference => true,
                     FieldAccessKind::ReferenceThrough => unreachable!(),
                 };
-                let enum_variant = b.k1.types.mem.get_nth(variants, variant_index as usize);
-                let payload_pt = enum_variant.payload.unwrap();
+                let sum_variant = b.k1.types.mem.get_nth(variants, variant_index as usize);
+                let payload_pt = sum_variant.payload.unwrap();
                 let copied = load_or_copy(
                     b,
                     payload_pt,
                     dst,
                     payload_offset,
                     make_copy,
-                    "deliver enum payload",
+                    "deliver sum payload",
                 );
                 Ok(copied)
             }
@@ -2345,7 +2251,7 @@ fn compile_expr(
                 StaticValue::String(_)
                 | StaticValue::Zero(_)
                 | StaticValue::Struct(_)
-                | StaticValue::Enum(_)
+                | StaticValue::Sum(_)
                 | StaticValue::LinearContainer(_) => {
                     let value = Value::StaticValue { t, id: stat.value_id };
                     let stored = store_rich_if_dst(b, dst, t, value, "store static value to dst");
@@ -2359,33 +2265,21 @@ fn compile_expr(
 fn compile_variable_to_address(
     b: &mut Builder,
     variable_id: VariableId,
-) -> (Value, bool, PhysicalType) {
+) -> (Value, PhysicalType, bool) {
     let variable = b.k1.variables.get(variable_id);
     match variable.global_id() {
         Some(global_id) => {
             // Globals are pretty complex. We always generate an instruction
             // representing the **address** of the global, because they are always
-            // addresses to static memory. For reference types, that address _is_
+            // addresses to static memory. For aggregate types, that address _is_
             // the value of the expression referring to the global, but for
             // non-reference types, we must 'load' the value from the address, since
-            // the address is just an implementation detail. For aggregate types,
-            // this load is a no-op, since we represent them as their locations anyway,
-            // we call this a 'direct'ly represented variable
-
-            let is_referencing = variable.is_referencing();
-            let maybe_referencing_type =
-                if is_referencing { b.k1.types.get(variable.type_id).as_reference() } else { None };
-
-            // By 'value_type' I mean the shape of the allocated memory of the global, not the value,
-            // so the inner type if its a reference, and just the type if its not
-            let storage_type = match maybe_referencing_type {
-                None => variable.type_id,
-                Some(r) => r.inner_type,
-            };
-            let storage_pt = b.get_physical_type(storage_type);
-            let address = Value::GlobalAddr { storage_pt, id: global_id };
-            let is_direct = if storage_pt.is_agg() { true } else { is_referencing };
-            (address, !is_direct, storage_pt)
+            // the address is just an implementation detail
+            let value_type = variable.type_id;
+            let value_pt = b.get_physical_type(value_type);
+            let address = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
+            let is_direct = value_pt.is_agg();
+            (address, value_pt, !is_direct)
         }
         None => {
             let Some(var) = b.get_variable(variable_id) else {
@@ -2401,7 +2295,7 @@ fn compile_variable_to_address(
             };
             let var_value = var.value;
             let var_indirect = var.indirect;
-            (var_value, var_indirect, var.storage_pt)
+            (var_value, var.storage_pt, var_indirect)
         }
     }
 }
@@ -3009,7 +2903,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
     }
     if !errors.is_empty() {
         let error_string = errors.into_iter().join("\n");
-        Err(TyperError {
+        Err(TyperMessage {
             span,
             message: format!(
                 "Bytecode Unit failed validation\n{}\n{}",

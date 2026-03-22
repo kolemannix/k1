@@ -11,7 +11,7 @@ extern("waitpid") fn waitpid(pid: i32, status: *mut i32, options: i32): i32
 // Convert span[string] to null-terminated *char array for execve  
 fn make-argv(context alloc: mem/alloc-mode)(program: string, args: span[string]): list[ptr] {
     let array-len = 1 + args.len() + 1; // program + args + null terminator
-    let* argv = list/withCapacity[ptr](array-len);
+    let argv = list/withCapacity[ptr](array-len);
     
     // Set program name as argv[0] 
     argv.push(program.toCString().ptr);
@@ -39,9 +39,9 @@ fn run-command(context alloc: mem/alloc-mode)(program: string, args: span[string
         crash("execve failed; TODO check errno");
     } else if pid > 0 {
         // Parent process - wait for child
-        let* status: *mut i32 = 0;
-        waitpid(pid, status, 0);
-        .ok(status.*);
+        let status = 0i32;
+        waitpid(pid, &status, 0);
+        .ok(status);
     } else {
         // Fork failed
         .err({})

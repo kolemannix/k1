@@ -1,6 +1,6 @@
 fn testAll() {
   hash_test/test();
-  testFixList();
+  test-fixlist();
   testBitfield();
   testFormat();
   json_test/test();

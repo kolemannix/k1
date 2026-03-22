@@ -26,11 +26,11 @@ Non-major Ideas
 On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
 
 Syntax/elegance
-- [x] replace `\` with 'fn' for lambda notation, one more character and we
-      can be similarly elegant, `\x.x` becomes `fn x.x`
 - [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [x] replace `\` with 'fn' for lambda notation, one more character and we
+      can be similarly elegant, `\x.x` becomes `fn x.x`
 - [x] Rename `view` to `span`
 - [x] Rename 'static' types to 'static value' types
 - [x] Need a way to write an interpolated string to a Writer that you already have
@@ -61,7 +61,7 @@ Simple but missing
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work
-- [ ] Require that a blanket impl's params appear in the Self type
+- [ ] Require that a blanket impls params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
@@ -70,7 +70,7 @@ Simple but missing
 - [x] Allow for named non-interpolated args into holes with a struct
 - [ ] Implement at least one format specifier (precision, pretty)
 
-- [ ] Return value binding, or named return values, for guaranteed RVO
+- [x] Return value binding, or named return values, for guaranteed RVO
 - [x] Uninit in struct fields - just don't store there
 
 ## [ ] Context ability types
@@ -94,7 +94,6 @@ Simple but missing
 ## Project: Recursive types take 2
 - [x] Remove RecursiveReference; make visitors detect cycles
 - [x] add test with co-recursion and infinite recursion
-- [ ] Support deeper pattern matching on recursive types
 
 ## VM Profiler: Instrument the vm itself
 

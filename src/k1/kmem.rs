@@ -17,6 +17,11 @@
 /// if our slice handle is 8 bytes, which it should be, if I'm willing to
 /// address less than 4GB in here and can use a 32-bit offset. Actually I can use
 /// 48 bits for the offset and 16 for the length
+///
+/// Around 9 months later and I allocate pretty much everything in these kmems now
+/// Have enhanced with inline types, a pushable list, everything but linked and chained
+/// lists, really, and its great. We only put Copy types in here, and avoid drop glue with
+/// a passion in general so this POD approach can actually cook
 use smallvec::SmallVec;
 
 use crate::{static_assert_size, typer::dump::DepDisplay};
@@ -623,7 +628,7 @@ macro_rules! k1_format_user {
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg: String = k1_format_user!($k1, $fmt, $($arg),*).to_string();
-        TyperError {
+        TyperMessage {
             span: $span,
             message: msg,
             level: MessageLevel::Error

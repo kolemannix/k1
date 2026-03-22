@@ -1,6 +1,6 @@
 ns ability_default_fns;
 
-let* I32_SPEC_COUNTER: *mut int = 0
+let mutable I32_SPEC_COUNTER: int = 0
 
 ability Increment {
   fn inc(self: self): self
@@ -14,7 +14,7 @@ ability Increment {
 impl Increment for i32 {
   fn inc(self: self): self { self + 1 }
   fn incTwice(self: self): i32 {
-    I32_SPEC_COUNTER <- I32_SPEC_COUNTER.* + 1;
+    &I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1;
     // Testing scope bindings
     let me: self = self;
     let again: i32 = me;
@@ -51,7 +51,7 @@ fn test() {
   assertEquals(u.incTwice(), 2);
 
   // Ensures that our specialized implementation is used over the default
-  assertEquals(I32_SPEC_COUNTER.*, 6);
+  assertEquals(I32_SPEC_COUNTER, 6);
   
   {}
 }

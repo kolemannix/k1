@@ -1,6 +1,6 @@
 ns test_uninit;
 
-let* GLOB: *int = 50
+let GLOB: int = 50
 
 fn test() {
   // pointer is initialized, but value is not
@@ -14,8 +14,8 @@ fn test() {
 
   // pointer itself is uninitialized
   let p: *int = uninit;
-  p := GLOB;
-  assertEquals(p.as[ptr], GLOB.as[ptr]);
+  p := &GLOB;
+  assertEquals(p.as[ptr], &GLOB.as[ptr]);
   assertEquals(p.*, 50);
 
   {}

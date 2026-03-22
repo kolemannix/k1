@@ -995,7 +995,7 @@ impl TypedProgram {
                 }
                 TypeUnificationResult::Matching
             }
-            (Type::Enum(passed_enum), Type::Enum(param_enum_type)) => {
+            (Type::Sum(passed_enum), Type::Sum(param_enum_type)) => {
                 // Enum example
                 // type Result<T, E> = enum Ok(T) | Err(E)
                 // fn unwrap<T, E>(self: Result<T, E>): T {

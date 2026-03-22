@@ -7,19 +7,18 @@ let MODULE_INFO: core/k1/module-manifest = {
   m.*
 }
 
-let* tls myvar: *mut i32 = 0
+let mutable tls myvar: i32 = 0
 
 fn run(input: *mut int): ptr {
-  let value = myvar.*;
   assertEquals(input.*, 42);
-  myvar <- myvar.* + 1;
+  &myvar <- myvar + 1;
   input <- input.* + 1;
-  assertEquals(myvar.*, 1);
+  assertEquals(myvar, 1);
   input.as()
 }
 
 fn main(): i32 {
-  myvar <- 1000;
+  &myvar <- 1000;
   let* arena = Arena/default();
   let input = arena.push(42);
   let output = arena.pushUninit[*int]();
@@ -32,6 +31,6 @@ fn main(): i32 {
   assertEquals(output.*.*, 43);
 
   // myvar is unchanged by the thread since its threadlocal
-  assertEquals(myvar.*, 1000);
+  assertEquals(myvar, 1000);
   0
 }

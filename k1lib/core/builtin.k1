@@ -64,7 +64,19 @@ deftype alias empty = {}
 
 deftype alias byte = u8
 
+// nocommit build this
+//ability struct {
+//
+// intern fn set[
+//   substruct: is types/substruct[self]
+// ](self: self, sub: substruct): empty 
+//
+//}
+
 ns types {
+
+  // nocommit build this
+  // intern fn substruct[t, u](): bool
 
   intern fn size-of[t](): int
   intern fn size-of-stride[t](): int

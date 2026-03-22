@@ -867,7 +867,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             di_type,
                         })
                     }
-                    AggType::Enum(e) => {
+                    AggType::Sum(e) => {
                         let struct_repr_cg_type =
                             self.codegen_type(PhysicalType::agg(e.struct_repr));
 
@@ -2628,7 +2628,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             PhysicalTypeEnum::Agg(agg_id) => {
                 let agg_record = self.k1.types.agg_types.get(agg_id);
                 match agg_record.agg_type {
-                    AggType::Enum(_)
+                    AggType::Sum(_)
                     | AggType::Union { .. }
                     | AggType::Struct { .. }
                     | AggType::Array { .. } => {
@@ -2771,7 +2771,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             RegisterClass::Int,
                             agg_record.layout.size_bits(),
                         ),
-                        AggType::Enum(e) => {
+                        AggType::Sum(e) => {
                             // Just handle the enum's struct
                             handle_type_rec(
                                 c,
@@ -3055,23 +3055,23 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 );
                 struct_value.as_basic_value_enum()
             }
-            StaticValue::Enum(e) => {
-                let e = *e;
+            StaticValue::Sum(sum) => {
+                let sum = *sum;
                 let mut packed_values = self.tmp.new_list(4);
 
-                let enum_agg_id = self.k1.get_physical_type(e.enum_type_id).unwrap().expect_agg();
-                let enum_agg_record = self.k1.types.agg_types.get(enum_agg_id);
-                let enum_pt = enum_agg_record.agg_type.expect_enum();
-                let variant = self.k1.types.mem.get_nth(enum_pt.variants, e.variant_index as usize);
+                let sum_agg_id = self.k1.get_physical_type(sum.sum_type_id).unwrap().expect_agg();
+                let sum_agg_record = self.k1.types.agg_types.get(sum_agg_id);
+                let sum_pt = sum_agg_record.agg_type.expect_sum();
+                let variant = self.k1.types.mem.get_nth(sum_pt.variants, sum.variant_index as usize);
                 let variant_tag = variant.tag;
-                let envelope_layout = enum_agg_record.layout;
+                let envelope_layout = sum_agg_record.layout;
                 let variant_payload_pt = variant.payload;
-                let payload_offset = enum_pt.payload_offset;
+                let payload_offset = sum_pt.payload_offset;
 
                 let tag_llvm_value = self.codegen_int_value(variant_tag);
                 let tag_layout = variant_tag.get_scalar_type().get_layout();
                 packed_values.push(tag_llvm_value);
-                match e.payload {
+                match sum.payload {
                     None => {
                         let padding_to_end = envelope_layout.size - tag_layout.size;
                         if padding_to_end > 0 {
@@ -3191,11 +3191,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(global) = self.static_values_globals.get(&static_value_id) {
             return Ok(*global);
         };
-        let struct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
+        let direct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
         let type_id = self.k1.static_values.get(static_value_id).get_type();
         let layout = self.k1.get_layout(type_id);
         let global = self.make_global_from_value(
-            struct_value,
+            direct_value,
             layout.align,
             &format!("static_{}\0", static_value_id.as_u32()),
             true,
@@ -3291,7 +3291,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let global = self.make_global_for_static_value(static_value_id)?;
                 global.as_pointer_value().as_basic_value_enum()
             }
-            StaticValue::Enum(_) => {
+            StaticValue::Sum(_) => {
                 let global = self.make_global_for_static_value(static_value_id)?;
                 global.as_pointer_value().as_basic_value_enum()
             }
