@@ -765,20 +765,20 @@ dependencies = [
 
 [[package]]
 name = "inkwell"
-version = "0.7.1"
-source = "git+https://github.com/TheDan64/inkwell#7abf48a2cf4fc3e338fbeb1780ac7507cbb13e98"
+version = "0.8.0"
+source = "git+https://github.com/TheDan64/inkwell#07fa9f2435a9ee0521b88008324f229ff51a5b3e"
 dependencies = [
+ "bitflags 2.10.0",
  "inkwell_internals",
  "libc",
  "llvm-sys",
- "once_cell",
  "thiserror 2.0.17",
 ]
 
 [[package]]
 name = "inkwell_internals"
-version = "0.12.0"
-source = "git+https://github.com/TheDan64/inkwell#7abf48a2cf4fc3e338fbeb1780ac7507cbb13e98"
+version = "0.13.0"
+source = "git+https://github.com/TheDan64/inkwell#07fa9f2435a9ee0521b88008324f229ff51a5b3e"
 dependencies = [
  "proc-macro2",
  "quote",

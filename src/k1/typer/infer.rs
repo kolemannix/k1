@@ -36,7 +36,7 @@ impl TypedProgram {
         inference_pairs: &[InferenceInputPair],
         span: SpanId,
         scope_id: ScopeId,
-    ) -> TyperResult<(NamedTypeSlice, NamedTypeSlice)> {
+    ) -> K1Result<(NamedTypeSlice, NamedTypeSlice)> {
         if self.inference_context_stack.is_empty() {
             self.ictx_push();
         }
@@ -295,7 +295,7 @@ impl TypedProgram {
         solution_type_id: TypeId,
         scope_id: ScopeId,
         span: SpanId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let infer_depth = self.ictx().origin_stack.len();
         if let Some(static_type) = self.types.get_type_parameter(type_param_id).static_constraint {
             debug!(
@@ -421,7 +421,7 @@ impl TypedProgram {
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,
-    ) -> TyperResult<NamedTypeSlice> {
+    ) -> K1Result<NamedTypeSlice> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
         let passed_type_args = fn_call.type_args;
@@ -430,7 +430,7 @@ impl TypedProgram {
         let type_params = self.named_types.copy_slice_sv8(generic_function_sig.type_params);
         // Fuse these two paths; where for a given type param,
         // - X *if ALL PASSED, special case to skip inference altogether of course
-        let passed_type_args = self.ast.p_type_args.copy_slice_sv8(passed_type_args);
+        let passed_type_args = self.ast.mem.getn(passed_type_args);
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
             return failf!(
                 fn_call.span,
@@ -443,8 +443,7 @@ impl TypedProgram {
             && passed_type_args.iter().all(|nt| nt.type_expr.is_some());
         debug!("all_passed={all_params_were_passed}");
         let solved_type_params = if all_params_were_passed {
-            let mut evaled_params: SV4<NameAndType> =
-                SmallVec::with_capacity(passed_type_args_count);
+            let mut evaled_params: SV4<NameAndType> = smallvec![];
             for (type_param, type_arg) in type_params.iter().zip(passed_type_args.iter()) {
                 let passed_expr = type_arg.type_expr.unwrap(); // checked by all_passed
                 let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
@@ -568,7 +567,7 @@ impl TypedProgram {
         type_args: NamedTypeSlice,
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
-    ) -> TyperResult<(NamedTypeSlice, SV8<TypedExprId>)> {
+    ) -> K1Result<(NamedTypeSlice, SV8<TypedExprId>)> {
         // Ok here's what we need for function params. We need to know just the _kind_ of function that
         // was passed: ref, lambda, or lambda obj, and we need to specialize the function shape on
         // the other type params, as in: some (T -> T) -> some (int -> int), THEN just create
@@ -726,7 +725,7 @@ impl TypedProgram {
     fn calculate_inference_substitutions(
         &mut self,
         span: SpanId,
-    ) -> TyperResult<SV4<TypeSubstitutionPair>> {
+    ) -> K1Result<SV4<TypeSubstitutionPair>> {
         let mut ctx = self.ictx_take();
 
         debug!(

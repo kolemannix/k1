@@ -24,7 +24,7 @@ env_logger = "0.10.0"
 log = "0.4.17"
 itertools = "0.13.0"
 bitflags = { version = "2.9.1" }
-smallvec = "1.13.2"
+smallvec = "1.15.1"
 string-interner = "0.17.0"
 either = "1.9.0"
 ahash = "0.8.11"
@@ -39,7 +39,7 @@ libc = "0.2.177"
 
 # LLVM / compiler toolchain stuff
 llvm-sys = { version = "211.0.0" }
-inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.7.1", features = ["llvm21-1"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", version = "0.8.0", features = ["llvm21-1"] }
 zstd-sys = "2.0.8"
 libffi = "5.0.0"
 # libffi-sys = "4.0.0"

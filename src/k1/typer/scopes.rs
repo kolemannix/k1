@@ -16,7 +16,7 @@ use crate::{
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
-        TyperResult, VariableId,
+        K1Result, VariableId,
     },
 };
 
@@ -183,7 +183,7 @@ impl Scopes {
     }
 
     #[inline]
-    pub fn get_root_scope_id(&self) -> ScopeId {
+    pub fn root_scope_id(&self) -> ScopeId {
         Self::ROOT_SCOPE_ID
     }
 
@@ -227,7 +227,7 @@ impl Scopes {
     }
 
     pub fn get_root_scope(&self) -> &Scope {
-        self.get_scope(self.get_root_scope_id())
+        self.get_scope(self.root_scope_id())
     }
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
@@ -259,7 +259,7 @@ impl Scopes {
         name: &QIdent,
         namespaces: &Namespaces,
         identifiers: &IdentPool,
-    ) -> TyperResult<Option<(VariableId, ScopeId)>> {
+    ) -> K1Result<Option<(VariableId, ScopeId)>> {
         if name.path.is_empty() {
             Ok(self.find_variable(scope, name.name))
         } else {
@@ -332,7 +332,7 @@ impl Scopes {
         name: &QIdent,
         namespaces: &Namespaces,
         identifiers: &IdentPool,
-    ) -> TyperResult<Option<FunctionId>> {
+    ) -> K1Result<Option<FunctionId>> {
         if name.path.is_empty() {
             Ok(self.find_function(scope, name.name))
         } else {
@@ -390,7 +390,7 @@ impl Scopes {
         type_name: &QIdent,
         namespaces: &Namespaces,
         identifiers: &IdentPool,
-    ) -> TyperResult<Option<(TypeId, ScopeId)>> {
+    ) -> K1Result<Option<(TypeId, ScopeId)>> {
         if type_name.path.is_empty() {
             Ok(self.find_type(scope_id, type_name.name))
         } else {
@@ -519,7 +519,7 @@ impl Scopes {
         namespaces: &Namespaces,
         idents: &IdentPool,
         span: SpanId,
-    ) -> TyperResult<ScopeId> {
+    ) -> K1Result<ScopeId> {
         let mut ns_iter = idents.slices.get_slice(namespace_chain).iter();
         let mut cur_scope_id = scope_id;
         let Some(first) = ns_iter.next() else {
@@ -529,7 +529,7 @@ impl Scopes {
         let Some(first_ns) = self.find_namespace(cur_scope_id, *first) else {
             return Err(errf!(
                 span,
-                "Namespace not found: {} from scope: {:?}",
+                "Namespace not found: {} from scope: {}",
                 idents.get_name(*first),
                 self.scope_name_to_string(self.get_scope(cur_scope_id), idents)
             ));
@@ -617,7 +617,7 @@ impl Scopes {
         ability_name: &QIdent,
         namespaces: &Namespaces,
         identifiers: &IdentPool,
-    ) -> TyperResult<Option<AbilityId>> {
+    ) -> K1Result<Option<AbilityId>> {
         if ability_name.path.is_empty() {
             Ok(self.find_ability(scope_id, ability_name.name))
         } else {

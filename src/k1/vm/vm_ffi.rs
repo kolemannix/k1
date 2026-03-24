@@ -8,7 +8,7 @@ use crate::bc::{self, PhysicalFunctionType, ProgramBytecode};
 use crate::errf;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
-use crate::typer::{FunctionId, TypedProgram, TyperResult};
+use crate::typer::{FunctionId, TypedProgram, K1Result};
 use crate::vm;
 use crate::vm::{Value, Vm};
 use crate::{failf, kmem::MSlice, parse::Ident};
@@ -23,7 +23,7 @@ pub(super) fn handle_ffi_call(
     lib_name: Option<Ident>,
     fn_name: Ident,
     function_id: FunctionId,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     let nargs = args.len() as usize;
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
@@ -121,7 +121,7 @@ fn prep_ffi_cif(
     k1: &mut TypedProgram,
     physical_function_type: PhysicalFunctionType,
     span: SpanId,
-) -> TyperResult<ffi_cif> {
+) -> K1Result<ffi_cif> {
     let param_count = physical_function_type.params.len() as usize;
     let fn_params = physical_function_type.params;
     let return_type = physical_function_type.return_type;

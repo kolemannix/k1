@@ -129,7 +129,7 @@ impl std::hash::Hash for TypeDefnInfo {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct StructType {
     pub fields: MSlice<StructTypeField, TypePool>,
 }
@@ -256,7 +256,7 @@ impl SumType {}
 
 #[derive(Clone)]
 pub struct GenericType {
-    pub params: SliceHandle<NameAndTypeId>,
+    pub params: MSlice<NameAndType, TypedProgram>,
     pub inner: TypeId,
 }
 
@@ -650,7 +650,7 @@ impl TypePool {
             // Inherently unique as well
             Type::Generic(generic) => {
                 generic.inner.hash(state);
-                generic.params.index().hash(state);
+                generic.params.raw_offset().hash(state);
                 generic.params.len().hash(state);
             }
             Type::Function(fun) => {

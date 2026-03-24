@@ -33,6 +33,7 @@ fn low() {
 }
 
 fn moderate() {
+  rvo_test/test();
   recurse_basic/test();
   defer_test/test();
   zst_test/test();

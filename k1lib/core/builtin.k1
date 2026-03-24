@@ -64,15 +64,6 @@ deftype alias empty = {}
 
 deftype alias byte = u8
 
-// nocommit build this
-//ability struct {
-//
-// intern fn set[
-//   substruct: is types/substruct[self]
-// ](self: self, sub: substruct): empty 
-//
-//}
-
 ns types {
 
   // nocommit build this
@@ -780,4 +771,3 @@ fn crash(context locn: compiler/source-location)(msg: string): never {
 fn crash-bounds(context locn: compiler/source-location)(size: size, index: size, msg: string): never {
   crash("{msg}: {index} >= {size}")
 }
-

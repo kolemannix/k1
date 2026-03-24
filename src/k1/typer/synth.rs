@@ -25,7 +25,7 @@ impl TypedProgram {
         rhs: TypedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         self.synth_typed_call_typed_args(
             self.ast.idents.f.equals__equals.with_span(span),
             &[],
@@ -41,7 +41,7 @@ impl TypedProgram {
         rhs: TypedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         self.synth_typed_call_typed_args(
             self.ast.idents.f.add__add.with_span(span),
             &[],
@@ -171,7 +171,7 @@ impl TypedProgram {
             match i {
                 MatchingConditionInstr::Binding { let_stmt } => b.statements.push(*let_stmt),
                 MatchingConditionInstr::Cond { value } => {
-                    self.push_expr_id_to_block(&mut b, *value);
+                    self.push_block_expr_id(&mut b, *value);
                 }
             }
         }
@@ -268,11 +268,9 @@ impl TypedProgram {
     ) -> ParsedExprId {
         let span = name.span;
         let type_args_iter = type_args.iter().map(|id| NamedTypeArg::unnamed(*id, span));
-        let type_args = self.ast.p_type_args.add_slice_from_iter(type_args_iter);
-        let args = self
-            .ast
-            .p_call_args
-            .add_slice_from_iter(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
+        let type_args = self.ast.mem.pushn_iter(type_args_iter);
+        let args =
+            self.ast.mem.pushn_iter(args.iter().map(|id| parse::ParsedCallArg::unnamed(*id)));
         self.ast.exprs.add_expression(
             ParsedExpr::Call(ParsedCall {
                 name,
@@ -294,7 +292,7 @@ impl TypedProgram {
         args: &[TypedExprId],
         ctx: EvalExprContext,
         is_method: bool,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let call_id = self.synth_parsed_function_call(name, &[], &[], is_method);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, Some((type_args, args)), ctx, None)
@@ -306,7 +304,7 @@ impl TypedProgram {
         type_args: &[ParsedTypeExprId],
         args: &[ParsedExprId],
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let call_id = self.synth_parsed_function_call(name, type_args, args, false);
         let call = self.ast.exprs.get(call_id).expect_call().clone();
         self.eval_function_call(&call, None, ctx, None)
@@ -327,7 +325,7 @@ impl TypedProgram {
         to_print: TypedExprId,
         writer: TypedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(to_print);
         let writer_type_id = self.exprs.get_type(writer);
         self.synth_typed_call_typed_args(
@@ -380,7 +378,7 @@ impl TypedProgram {
         message: &str,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let message_string_id = self.ast.strings.intern(message);
         let message_expr = self.synth_string_literal(message_string_id, span);
         self.synth_typed_call_typed_args(
@@ -396,7 +394,7 @@ impl TypedProgram {
         &mut self,
         value: TypedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(value);
         self.synth_typed_call_typed_args(
             self.ast.idents.f.core_discard.with_span(span),
@@ -429,6 +427,44 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
+    // nocommit
+    pub(super) fn synth_struct_field_access(
+        &mut self,
+        struct_expr: TypedExprId,
+        field_index: usize,
+        access_kind: FieldAccessKind,
+        span: SpanId,
+    ) -> K1Result<TypedExprId> {
+        if access_kind == FieldAccessKind::ValueToValue {
+            let struct_type_id = self.exprs.get_type(struct_expr);
+            let Type::Struct(_s) = self.types.get(struct_type_id) else {
+                self.ice_with_span("bad struct field access: base is not a struct", span);
+            };
+            let field = self.types.get_struct_field(struct_type_id, field_index);
+            let expr_id = self.exprs.add(
+                TypedExpr::StructFieldAccess(FieldAccess {
+                    base: struct_expr,
+                    field_index: field_index as u32,
+                    struct_type: struct_type_id,
+                    access_kind,
+                }),
+                field.type_id,
+                span,
+            );
+            Ok(expr_id)
+        } else {
+            self.ice_with_span("unsupported access kind for synth", span);
+        }
+    }
+
+    pub(super) fn synth_parsed_variable_expr(&mut self, name: Ident, span: SpanId) -> ParsedExprId {
+        self.ast.exprs.add_expression(
+            ParsedExpr::Variable(parse::ParsedVariable { name: QIdent::naked(name, span) }),
+            false,
+            None,
+        )
+    }
+
     pub(super) fn synth_sum_is_variant(
         &mut self,
         enum_expr_or_reference: TypedExprId,
@@ -436,7 +472,7 @@ impl TypedProgram {
         is_reference: bool,
         ctx: EvalExprContext,
         span: Option<SpanId>,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let enum_type = self
             .types
             .get_type_dereferenced(self.exprs.get_type(enum_expr_or_reference))
@@ -446,7 +482,10 @@ impl TypedProgram {
             self.types.sum_variant_by_index(enum_type.variants, variant_index).tag_value;
         let span = span.unwrap_or(self.exprs.get_span(enum_expr_or_reference));
         let get_tag = self.exprs.add(
-            TypedExpr::SumGetTag(GetSumTag { sum_expr_or_reference: enum_expr_or_reference, is_reference }),
+            TypedExpr::SumGetTag(GetSumTag {
+                sum_expr_or_reference: enum_expr_or_reference,
+                is_reference,
+            }),
             tag_type,
             span,
         );
@@ -464,7 +503,7 @@ impl TypedProgram {
         args_expr: TypedExprId,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
@@ -481,11 +520,7 @@ impl TypedProgram {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
                 Type::Struct(_) => {
-                    let Some((field_index, field)) =
-                        k1.types.get_struct_field_by_name(type_id, name)
-                    else {
-                        return None;
-                    };
+                    let (field_index, field) = k1.types.get_struct_field_by_name(type_id, name)?;
                     let field_expr = k1.exprs.add(
                         TypedExpr::StructFieldAccess(FieldAccess {
                             base: args,
@@ -506,7 +541,7 @@ impl TypedProgram {
             args: TypedExprId,
             n: usize,
             span: SpanId,
-        ) -> TyperResult<TypedExprId> {
+        ) -> K1Result<TypedExprId> {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
                 Type::Char
@@ -553,7 +588,7 @@ impl TypedProgram {
                         let string_expr = self.synth_string_literal(*string_id, span);
                         let print_call =
                             self.synth_printto_call(string_expr, writer_expr, block_ctx)?;
-                        self.push_expr_id_to_block(&mut block, print_call);
+                        self.push_block_expr_id(&mut block, print_call);
                     }
                 }
                 parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
@@ -581,14 +616,14 @@ impl TypedProgram {
                     };
 
                     let print_expr_call = self.synth_printto_call(typed_expr, writer_expr, ctx)?;
-                    self.push_expr_id_to_block(&mut block, print_expr_call);
+                    self.push_block_expr_id(&mut block, print_expr_call);
                 }
                 parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
                     // Grab the hole_index'th argument from args_expr.
                     let arg = get_nth_arg(self, args_expr, hole_index, *span)?;
                     hole_index += 1;
                     let print_expr_call = self.synth_printto_call(arg, writer_expr, ctx)?;
-                    self.push_expr_id_to_block(&mut block, print_expr_call);
+                    self.push_block_expr_id(&mut block, print_expr_call);
                 }
             };
         }
@@ -602,7 +637,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
         args_expr: Option<TypedExprId>,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let span = self.ast.exprs.get_span(expr_id);
         let ParsedExpr::InterpolatedString(interpolated_string) = *self.ast.exprs.get(expr_id)
         else {
@@ -641,7 +676,7 @@ impl TypedProgram {
             true, // is_referencing
             block.scope_id,
         );
-        self.push_stmt_id_to_block(&mut block, string_builder_var.defn_stmt);
+        self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_struct(span));
         let format_block = self.synth_format_calls(
             string_builder_var.variable_expr,
@@ -650,7 +685,7 @@ impl TypedProgram {
             span,
             ctx,
         )?;
-        self.push_expr_id_to_block(&mut block, format_block);
+        self.push_block_expr_id(&mut block, format_block);
         let build_call = self.synth_typed_call_typed_args(
             self.ast.idents.f.StringBuilder_buildTmp.with_span(span),
             &[],
@@ -658,7 +693,7 @@ impl TypedProgram {
             block_ctx,
             false,
         )?;
-        self.push_expr_id_to_block(&mut block, build_call);
+        self.push_block_expr_id(&mut block, build_call);
 
         // build_call_type should definitely be string
         let build_call_type = self.exprs.get_type(build_call);

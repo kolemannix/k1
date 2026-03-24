@@ -1,0 +1,64 @@
+ns rvo_test;
+
+fn ret-byte(): u8 {
+  let returned x: u8 = 0;
+  x := 10;
+  x := 30;
+  let f = fn(-> u8) {
+    let returned x = 10;
+    x
+  };
+  assertEquals(f(), 10);
+  x
+}
+
+fn big-struct(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
+  { x: 10, y: 20, z: 30, foo: uninit }
+}
+
+fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
+  let returned v = zeroed();
+  &v.x* <- 10;
+  &v.y* <- 20;
+  &v.z* <- 30;
+  v
+}
+
+fn ret-string(): string { "fdsa" }
+
+fn small-struct(c: u8): { a: u8, b: u8, c: u8 } {
+  { a: 1, b: 2, c }
+}
+
+fn test() {
+  let fl = core/fixlist/uninit[i64, 128];
+  fl.push(0); fl.push(0); fl.push(0);
+  assertEquals(fl.len(), 3);
+  let flz = core/fixlist/zeroed[i64, 16];
+  assertEquals(flz.len(), 0);
+  let s = big-struct();
+  assertEquals(s.x, 10);
+  assertEquals(s.y, 20);
+  assertEquals(s.z, 30);
+  let s-rvo = big-struct-rvo();
+  assertEquals(s-rvo.x, 10);
+  assertEquals(s-rvo.y, 20);
+  assertEquals(s-rvo.z, 30);
+
+  let byte = ret-byte();
+  assertEquals(byte, 30);
+
+  let x = ret-string();
+  assertEquals(x, "fdsa");
+
+  small-struct(100);
+  let ss = small-struct(21);
+  assert(ss.a == 1);
+  assert(ss.b == 2);
+  assert(ss.c == 21);
+
+  assertEquals(some(false), .some(false));
+  assertEquals(some(true), .some(true));
+
+  {}
+}

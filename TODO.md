@@ -27,6 +27,7 @@ On ai confidence, and how the conclusions truly precede the reasoning: https://c
 
 Syntax/elegance
 - [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
+  - [ ] Going to go with & for pointers, and .* for deref
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [x] replace `\` with 'fn' for lambda notation, one more character and we
@@ -105,7 +106,7 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
 - [x] Represent enums as `{ tag, union }`,
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
-- [ ] Rename `Enum` -> `Sum` or `DUnion` in the code
+- [x] Rename `Enum` -> `Sum` in the code
 - [ ] Optimize no-payload enums into non-aggregates, at the typer level.
 
 ## Project: Instruction-level IR ('bytecode')
@@ -125,12 +126,12 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: Ability objects; dyn[<ability expr>]
 
 ## Project: Static Improvements
-- [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
 - [x] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
 - [ ] 'Type predicate': functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
 - [ ] 'Type predicate' functions as type bounds
+- [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
 
 ## Introduce Warnings
 - [x] Unused var

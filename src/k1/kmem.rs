@@ -94,6 +94,10 @@ impl<T, Tag> MSlice<T, Tag> {
         Self::make(offset, count)
     }
 
+    pub fn raw_offset(&self) -> u32 {
+        self.offset.get()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -539,6 +543,13 @@ impl<Tag> Mem<Tag> {
         self.getn_lt(handle).iter()
     }
 
+    pub fn find<T, F>(&self, handle: MSlice<T, Tag>, mut f: F) -> Option<&'static T>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.getn(handle).iter().find(|item| f(item))
+    }
+
     pub fn iter_with_is_last<'a, T: 'a>(
         &'a self,
         handle: MSlice<T, Tag>,
@@ -628,7 +639,7 @@ macro_rules! k1_format_user {
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg: String = k1_format_user!($k1, $fmt, $($arg),*).to_string();
-        TyperMessage {
+        K1Message {
             span: $span,
             message: msg,
             level: MessageLevel::Error
@@ -664,7 +675,7 @@ impl<Tag> Mem<Tag> {
 }
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
-/// Can behave like an auto-growing list if the _grow variants are used
+/// Can behave like an auto-growing list if the `_grow` variants are used
 pub struct MList<T, Tag = ()> {
     buf: *mut [T],
     len: usize,

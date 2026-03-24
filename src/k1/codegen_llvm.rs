@@ -45,7 +45,7 @@ use crate::typer::types::{
 };
 use crate::typer::{
     FunctionId, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, TyperResult,
+    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, K1Result,
 };
 use crate::{SV8, bc, failf, kmem};
 
@@ -544,7 +544,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     /// `codegen_program` is the module Entrypoint
-    pub fn codegen_program(&mut self) -> TyperResult<()> {
+    pub fn codegen_program(&mut self) -> K1Result<()> {
         let start = std::time::Instant::now();
 
         let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
@@ -597,7 +597,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    fn codegen_global(&mut self, global_id: TypedGlobalId) -> TyperResult<GlobalValue<'ctx>> {
+    fn codegen_global(&mut self, global_id: TypedGlobalId) -> K1Result<GlobalValue<'ctx>> {
         if let Some(g) = self.globals.get(&global_id) {
             return Ok(*g);
         }
@@ -965,7 +965,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_cg_function_type(
         &mut self,
         phys_fn_type: &PhysicalFunctionType,
-    ) -> TyperResult<CgFunctionType<'ctx>> {
+    ) -> K1Result<CgFunctionType<'ctx>> {
         let abi_mode = phys_fn_type.abi_mode;
         let param_types = phys_fn_type.params;
         let return_type = phys_fn_type.return_type;
@@ -1358,7 +1358,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         codegened_function
     }
 
-    fn get_block_id(&self, block_id: u32) -> TyperResult<BasicBlock<'ctx>> {
+    fn get_block_id(&self, block_id: u32) -> K1Result<BasicBlock<'ctx>> {
         // We skip the 'prelude' block
         let real_index = block_id as usize + 1;
         match self.get_current_function().function_value.get_basic_block_iter().nth(real_index) {
@@ -1455,7 +1455,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         call_id: bc::BcCallId,
         span: SpanId,
-    ) -> TyperResult<Option<BasicValueEnum<'ctx>>> {
+    ) -> K1Result<Option<BasicValueEnum<'ctx>>> {
         let call = self.k1.bytecode.calls.get(call_id);
         let callee = call.callee;
         let call_args = call.args;
@@ -1585,7 +1585,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         builtin_type: BackendBuiltin,
         function_id: FunctionId,
-    ) -> TyperResult<InstructionValue<'ctx>> {
+    ) -> K1Result<InstructionValue<'ctx>> {
         let function = self.k1.get_function(function_id);
         let function_span =
             self.k1.ast.get_function(function.parsed_id.as_function_id().unwrap()).signature_span;
@@ -1845,7 +1845,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         block_id: u32,
         block: &bc::CompiledBlock,
-    ) -> TyperResult<BasicBlock<'ctx>> {
+    ) -> K1Result<BasicBlock<'ctx>> {
         let llvm_block = self.get_block_id(block_id)?;
         self.builder.position_at_end(llvm_block);
         for inst in self.k1.bytecode.mem.getn(block.instrs) {
@@ -1858,7 +1858,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         value: bc::Value,
-    ) -> TyperResult<BasicValueEnum<'ctx>> {
+    ) -> K1Result<BasicValueEnum<'ctx>> {
         //eprintln!("codegen_value {}", value);
         match value {
             bc::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
@@ -1928,7 +1928,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         inst_id: InstId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let bc = &self.k1.bytecode;
         let span = *bc.sources.get(inst_id);
         self.set_debug_location_from_span(span);
@@ -2422,7 +2422,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         return_type: DIType<'ctx>,
         param_debug_types: &[DIType<'ctx>],
         is_definition: bool,
-    ) -> TyperResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
+    ) -> K1Result<(DISubprogram<'ctx>, DIFile<'ctx>)> {
         let span_id = function_span;
         let function_file_id = self.k1.ast.spans.get(span_id).file_id;
         let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
@@ -2455,7 +2455,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn declare_llvm_function(
         &mut self,
         function_id: FunctionId,
-    ) -> TyperResult<FunctionValue<'ctx>> {
+    ) -> K1Result<FunctionValue<'ctx>> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
@@ -2804,7 +2804,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         // eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, true));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
@@ -2903,7 +2903,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         blocks: MSlice<CompiledBlock, ProgramBytecode>,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let fv = self.get_current_function().function_value;
         for block in self.k1.bytecode.mem.getn_lt(blocks) {
             self.ctx.append_basic_block(fv, block.name.as_str());
@@ -2974,7 +2974,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         llvm_value.as_basic_value_enum()
     }
 
-    fn codegen_float_value(&mut self, float: TypedFloatValue) -> TyperResult<BasicValueEnum<'ctx>> {
+    fn codegen_float_value(&mut self, float: TypedFloatValue) -> K1Result<BasicValueEnum<'ctx>> {
         let cg_ty = self.codegen_type(PhysicalType::scalar(float.get_scalar_type()));
         let llvm_float_ty = cg_ty.rich_type().into_float_type();
         let llvm_value = llvm_float_ty.const_float(float.as_f64());
@@ -2985,7 +2985,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
         depth: usize,
-    ) -> TyperResult<BasicValueEnum<'ctx>> {
+    ) -> K1Result<BasicValueEnum<'ctx>> {
         if let Some(basic) = self.static_values_basics.get(&static_value_id) {
             return Ok(*basic);
         }
@@ -3161,7 +3161,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         element_type: TypeId,
         elements: &[StaticValueId],
         depth: usize,
-    ) -> TyperResult<StructValue<'ctx>> {
+    ) -> K1Result<StructValue<'ctx>> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
@@ -3187,7 +3187,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_global_for_static_value(
         &mut self,
         static_value_id: StaticValueId,
-    ) -> TyperResult<GlobalValue<'ctx>> {
+    ) -> K1Result<GlobalValue<'ctx>> {
         if let Some(global) = self.static_values_globals.get(&static_value_id) {
             return Ok(*global);
         };
@@ -3252,7 +3252,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_static_value_canonical(
         &mut self,
         static_value_id: StaticValueId,
-    ) -> TyperResult<BasicValueEnum<'ctx>> {
+    ) -> K1Result<BasicValueEnum<'ctx>> {
         debug!(
             "codegen_static_value_canonical {}",
             self.k1.static_value_to_string(static_value_id)
@@ -3307,7 +3307,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         string_id: StringId,
         name: Option<&str>,
-    ) -> TyperResult<GlobalValue<'ctx>> {
+    ) -> K1Result<GlobalValue<'ctx>> {
         let string_name = match name {
             None => "string_data",
             Some(n) => &format!("string_data_{n}\0"),
@@ -3371,7 +3371,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         string_id: StringId,
         name: Option<&str>,
-    ) -> TyperResult<GlobalValue<'ctx>> {
+    ) -> K1Result<GlobalValue<'ctx>> {
         if let Some(cached_string) = self.strings.get(&string_id) {
             Ok(*cached_string)
         } else {
@@ -3386,7 +3386,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         struct_type: StructType<'ctx>,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> TyperResult<StructValue<'ctx>> {
+    ) -> K1Result<StructValue<'ctx>> {
         let buffer_struct_value = struct_type.const_named_struct(&[
             self.builtin_types.ptr_sized_int.const_int(len, false).as_basic_value_enum(),
             data.as_basic_value_enum(),
@@ -3399,7 +3399,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         span_type_id: TypeId,
         len: u64,
         data: PointerValue<'ctx>,
-    ) -> TyperResult<StructValue<'ctx>> {
+    ) -> K1Result<StructValue<'ctx>> {
         let buffer_type_id = self
             .k1
             .types

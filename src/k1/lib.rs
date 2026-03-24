@@ -126,6 +126,19 @@ fn nzu32_from_incr(n: u32) -> std::num::NonZeroU32 {
 }
 
 #[macro_export]
+macro_rules! impl_copy_if_reg {
+    ($struct_name:ident) => {
+        const _: () = {
+            if std::mem::size_of::<$struct_name>() > (size_of::<usize>() * 2)  {
+                panic!("impl_copy_if_reg: Larger than 2 words");
+            }
+        };
+
+        impl std::marker::Copy for $struct_name where Self: Sized {}
+    };
+}
+
+#[macro_export]
 macro_rules! impl_copy_if_small {
     ($size:expr, $struct_name:ident) => {
         const _: () = {

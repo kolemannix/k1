@@ -11,14 +11,10 @@ ns fixlist {
   fn cap[T, N: static size](self: fixlist[T, N]): size { self.data.len() }
   fn len[T, N: static size](self: fixlist[T, N]): size { self.used.as[size] }
 
-  fn zeroed[T, N: static size](): fixlist[T, N] {
-    mem/zeroed()
-  }
+  fn zeroed[T, N: static size](): fixlist[T, N] { mem/zeroed() }
 
   fn uninit[t, n: static size](): core/fixlist[t, n] {
-    let returned fl = uninit;
-    address_of(fl).used* <- 0;
-    fl
+    { used: 0, data: uninit }
   }
 
   fn clear[T, N: static size](self: *mut fixlist[T, N]): empty {

@@ -720,7 +720,7 @@ impl InstKind {
     }
 }
 
-pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> TyperResult<()> {
+pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
     let start = k1.timing.clock.raw();
     if k1.bytecode.functions.get(function_id).is_some() {
         return Ok(());
@@ -731,7 +731,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     //eprintln!("bc::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
     if let Some(err) = f.body_failure.clone() {
-        return Err(TyperMessage {
+        return Err(K1Message {
             message: format!(
                 "Cannot generate bytecode for function {}, which failed compilation",
                 b.k1.ident_str(f.name)
@@ -787,7 +787,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> Typer
     let unit_id = CompilableUnitId::Function(function_id);
     let builtin_kind = match intrinsic_type {
         None => None,
-        Some(i) => match intrinsic_handler(i) {
+        Some(i) => match builtin_handler(i) {
             BuiltinHandler::Backend(bc_builtin) => Some(bc_builtin),
             _ => None,
         },
@@ -813,7 +813,7 @@ pub fn compile_top_level_expr(
     expr: TypedExprId,
     input_parameters: &[(VariableId, StaticValueId)],
     is_debug: bool,
-) -> TyperResult<()> {
+) -> K1Result<()> {
     let start = k1.timing.clock.raw();
 
     let mut b = Builder::new(k1);
@@ -1245,7 +1245,7 @@ fn compile_block_stmts(
     b: &mut Builder,
     dst: Option<Value>,
     body: TypedExprId,
-) -> TyperResult<Option<Value>> {
+) -> K1Result<Option<Value>> {
     let TypedExpr::Block(body) = b.k1.exprs.get(body) else {
         return failf!(b.cur_span, "body is not a block");
     };
@@ -1262,7 +1262,7 @@ fn compile_block_stmts(
     Ok(last_ret)
 }
 
-fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> TyperResult<Value> {
+fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Result<Value> {
     debug!("compiling stmt {}", b.k1.stmt_to_string(stmt));
     let prev_span = b.cur_span;
     let stmt_span = b.k1.get_stmt_span(stmt);
@@ -1395,7 +1395,7 @@ pub enum BuiltinHandler {
     Typer,
     Backend(BackendBuiltin),
 }
-pub fn intrinsic_handler(intrinsic_op: Builtin) -> BuiltinHandler {
+pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
     use BuiltinHandler as H;
     match intrinsic_op {
         Builtin::SizeOf => H::Typer,
@@ -1436,7 +1436,7 @@ fn compile_expr(
     // Where to put the result; aka value placement or destination-aware codegen
     dst: Option<Value>,
     expr: TypedExprId,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     let prev_span = b.cur_span;
     let expr_span = b.k1.exprs.get_span(expr);
     b.cur_span = expr_span;
@@ -1564,7 +1564,7 @@ fn compile_expr(
             };
             let (callee, environment_arg) = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
-                    let backend_builtin = match intrinsic_handler(intrinsic) {
+                    let backend_builtin = match builtin_handler(intrinsic) {
                         BuiltinHandler::BcBakeStaticValue => {
                             return {
                                 // intern fn bakeStaticValue[T](value: T): u64
@@ -2336,7 +2336,7 @@ fn compile_cast(
     dst: Option<Value>,
     c: &TypedCast,
     expr_id: TypedExprId,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     let target_type_id = b.k1.exprs.get_type(expr_id);
     match c.cast_type {
         CastType::ReferenceToReference
@@ -2496,7 +2496,7 @@ fn compile_arith_binop(
     op: ArithOpKind,
     call: &Call,
     dst: Option<Value>,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     let arg0 = *b.k1.mem.get_nth(call.args, 0);
     let lhs = compile_expr(b, None, arg0)?;
     let arg1 = *b.k1.mem.get_nth(call.args, 1);
@@ -2647,7 +2647,7 @@ fn compile_matching_condition(
     mc: &MatchingCondition,
     cons_block: BlockId,
     condition_fail_block: BlockId,
-) -> TyperResult<()> {
+) -> K1Result<()> {
     if mc.instrs.is_empty() {
         // Always true
         b.push_jump(cons_block, "empty condition");
@@ -2711,7 +2711,7 @@ pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnitId) -> SpanId {
 
 ////////////////////////////// Validation //////////////////////////////
 
-pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResult<()> {
+pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<()> {
     let mut errors = Vec::new();
     let bc = &k1.bytecode;
     let span = get_unit_span(k1, unit_id);
@@ -2903,7 +2903,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> TyperResul
     }
     if !errors.is_empty() {
         let error_string = errors.into_iter().join("\n");
-        Err(TyperMessage {
+        Err(K1Message {
             span,
             message: format!(
                 "Bytecode Unit failed validation\n{}\n{}",

@@ -85,7 +85,6 @@ pub(crate) struct BuiltinIdents {
     pub fn_ptr: Ident,
     pub env_ptr: Ident,
     pub asterisk: Ident,
-    pub amp: Ident,
     pub bang: Ident,
     pub payload: Ident,
     pub try_: Ident,
@@ -151,6 +150,13 @@ pub(crate) struct BuiltinIdents {
     pub t: Ident,
     pub phony: Ident,
     pub some: Ident,
+    pub with: Ident,
+    pub return_: Ident,
+    pub break_: Ident,
+    pub continue_: Ident,
+    pub testCompile: Ident,
+    pub writef: Ident,
+    pub stringf: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -253,7 +259,6 @@ impl IdentPool {
             fn_ptr: intern!("fn_ptr"),
             env_ptr: intern!("env_ptr"),
             asterisk: intern!("*"),
-            amp: intern!("&"),
             bang: intern!("!"),
             payload: intern!("payload"),
             try_: intern!("try"),
@@ -319,6 +324,13 @@ impl IdentPool {
             t: intern!("t"),
             phony: intern!("phony"),
             some: intern!("some"),
+            with: intern!("with"),
+            return_: intern!("return"),
+            break_: intern!("break"),
+            continue_: intern!("continue"),
+            testCompile: intern!("testCompile"),
+            writef: intern!("writef"),
+            stringf: intern!("stringf"),
         };
 
         macro_rules! make_fn {
@@ -332,7 +344,6 @@ impl IdentPool {
         let Iterator_next = make_fn!(&[b.iterator], b.next);
 
         let Iterable_iterator = make_fn!(&[b.iterable], intern!("iterator"));
-
 
         let bool_negated = make_fn!(&[intern!("bool")], intern!("negated"));
 

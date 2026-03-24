@@ -11,6 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
+use crate::bc::BuiltinHandler;
 use crate::typer::dump::K1DisplayArgs;
 use crate::{bc, clock, compiler, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
@@ -52,13 +53,14 @@ use crate::compiler::CompilerConfig;
 use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, InterpolatedStringPart, NamedTypeArg,
-    NamedTypeArgId, NumericWidth, ParseError, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
+    NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
     ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral, ParsedLoopExpr,
-    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
-    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId, ParsedVariable,
-    ParsedWhileExpr, QIdent, Sources, StringId, StructValueField, StructValueFieldKind,
+    ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral,
+    ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedSlice,
+    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
+    ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
+    StructValueFieldKind,
 };
 use crate::pool::{SliceHandle, VPool};
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -374,7 +376,7 @@ struct PatternCtorTrialEntry {
     alive: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AbilitySpec9nInfo {
     generic_parent: AbilityId,
     specialized_child: AbilityId,
@@ -382,7 +384,7 @@ pub struct AbilitySpec9nInfo {
 }
 impl_copy_if_small!(16, AbilitySpec9nInfo);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TypedAbilityKind {
     Concrete,
     Generic { specializations: Vec<AbilitySpec9nInfo> },
@@ -393,8 +395,8 @@ impl TypedAbilityKind {
     pub fn arguments(&self) -> NamedTypeSlice {
         match self {
             TypedAbilityKind::Specialized(specialization) => specialization.arguments,
-            TypedAbilityKind::Concrete => SliceHandle::empty(),
-            TypedAbilityKind::Generic { .. } => SliceHandle::empty(),
+            TypedAbilityKind::Concrete => MSlice::empty(),
+            TypedAbilityKind::Generic { .. } => MSlice::empty(),
         }
     }
 
@@ -463,7 +465,7 @@ impl From<&TypedAbilityParam> for NameAndType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 /// An ability signature encompasses an ability's entire 'type' story:
 /// - Base type, generic type params, and impl-provided type params
 ///```md
@@ -727,7 +729,7 @@ pub struct TypedBlock {
     pub statements: MSlice<TypedStmtId, TypedProgram>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SpecializationInfo {
     pub parent_function: FunctionId,
     pub type_arguments: NamedTypeSlice,
@@ -780,7 +782,7 @@ impl FunctionSignature {
         FunctionSignature {
             name,
             function_type,
-            type_params: SliceHandle::empty(),
+            type_params: MSlice::empty(),
             function_type_params: MSlice::empty(),
         }
     }
@@ -817,7 +819,7 @@ pub struct TypedFunction {
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let returned', RVO
     pub returned_variable: Option<VariableId>,
-    pub body_failure: Option<TyperMessage>,
+    pub body_failure: Option<K1Message>,
 }
 
 impl TypedFunction {
@@ -886,18 +888,13 @@ impl<T> NamedType for T where T: HasTypeId + HasName {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // TODO(perf): We could certainly do a pass where we remove the name from tons and tons of places;
-// this would cut size in half which is meaningful considering how many Vecs of these we have; and
-// would like to use smallvec
+// this would cut size in half which is meaningful considering how many of these we have
 pub struct NameAndType {
     pub name: Ident,
     pub type_id: TypeId,
 }
 
-nz_u32_id!(NameAndTypeId);
-
-pub type NamedTypeSlice = SliceHandle<NameAndTypeId>;
-
-nz_u32_id!(TypeSliceId);
+pub type NamedTypeSlice = MSlice<NameAndType, TypedProgram>;
 
 pub type TypeIdSlice = MSlice<TypeId, TypePool>;
 
@@ -1538,27 +1535,27 @@ impl Display for MessageLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TyperMessage {
+pub struct K1Message {
     pub message: String,
     pub span: SpanId,
     pub level: MessageLevel,
 }
 
-impl TyperMessage {
-    fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> TyperMessage {
-        TyperMessage { message: message.as_ref().to_owned(), span, level }
+impl K1Message {
+    fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> K1Message {
+        K1Message { message: message.as_ref().to_owned(), span, level }
     }
 }
 
-impl Display for TyperMessage {
+impl Display for K1Message {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}: {}", self.level, self.message))
     }
 }
 
-impl Error for TyperMessage {}
+impl Error for K1Message {}
 
-pub type TyperResult<A> = Result<A, TyperMessage>;
+pub type K1Result<A> = Result<A, K1Message>;
 
 #[derive(Debug, Clone)]
 struct SynthedVariable {
@@ -1807,47 +1804,19 @@ pub enum Builtin {
 
 impl Builtin {
     pub fn is_typer_phase(self) -> bool {
-        match self {
-            Builtin::SizeOf => true,
-            Builtin::SizeOfStride => true,
-            Builtin::AlignOf => true,
-            Builtin::TypeId => true,
-            Builtin::CompilerSourceLocation => true,
-            Builtin::GetStaticValue => true,
-            Builtin::StaticTypeToValue => true,
-            //
-            Builtin::Zeroed => false,
-            Builtin::BoolNegate => false,
-            Builtin::BitNot => false,
-            Builtin::BitCast => false,
-            Builtin::ArithBinop(_) => false,
-            Builtin::BitwiseBinop(_) => false,
-            Builtin::PointerIndex => false,
-            Builtin::CompilerMessage => false,
-            Builtin::Allocate => false,
-            Builtin::AllocateZeroed => false,
-            Builtin::Reallocate => false,
-            Builtin::Free => false,
-            Builtin::MemCopy => false,
-            Builtin::MemSet => false,
-            Builtin::MemEquals => false,
-            Builtin::Exit => false,
-            Builtin::TypeName => false,
-            Builtin::TypeSchema => false,
-            Builtin::BakeStaticValue => false,
-        }
+        matches!(bc::builtin_handler(self), BuiltinHandler::Typer)
     }
 }
 
-pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> TyperMessage {
-    TyperMessage::make(message.as_ref(), span, MessageLevel::Error)
+pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> K1Message {
+    K1Message::make(message.as_ref(), span, MessageLevel::Error)
 }
 
-pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> TyperMessage {
-    TyperMessage::make(message.as_ref(), span, MessageLevel::Warn)
+pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> K1Message {
+    K1Message::make(message.as_ref(), span, MessageLevel::Warn)
 }
 
-pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> TyperResult<A> {
+pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> K1Result<A> {
     Err(make_error(message, span))
 }
 
@@ -1931,7 +1900,7 @@ fn make_fail_ast_id<A, T: AsRef<str>>(
     ast: &ParsedProgram,
     message: T,
     parsed_id: ParsedId,
-) -> TyperResult<A> {
+) -> K1Result<A> {
     let span = ast.get_span_for_id(parsed_id);
     Err(make_error(message, span))
 }
@@ -2015,7 +1984,7 @@ pub struct TypedAbilityImpl {
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
     /// typechecking
-    pub compile_errors: Vec<TyperMessage>,
+    pub compile_errors: Vec<K1Message>,
 }
 
 impl TypedAbilityImpl {
@@ -2382,7 +2351,7 @@ pub struct TypedProgram {
     pub type_schemas: FxHashMap<TypeId, StaticValueId>,
     pub type_names: FxHashMap<TypeId, StaticValueId>,
     pub scopes: Scopes,
-    pub messages: Vec<TyperMessage>,
+    pub messages: Vec<K1Message>,
     pub namespaces: Namespaces,
     pub abilities: VPool<TypedAbility, AbilityId>,
     pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
@@ -2425,8 +2394,6 @@ pub struct TypedProgram {
     // Buffers that we prefer to re-use to avoid thousands of allocations
     // Clear them after you use them, but leave the memory allocated
     buffers: TypedModuleBuffers,
-
-    pub named_types: VPool<NameAndType, NameAndTypeId>,
 
     pub patterns: TypedPatternPool,
     pub pattern_ctors: VPool<PatternCtor, PatternCtorId>,
@@ -2606,7 +2573,6 @@ impl TypedProgram {
                 int_parse: String::with_capacity(128),
                 visited_types: RefCell::new(FxHashMap::with_capacity(128)),
             },
-            named_types: VPool::make_with_hint("named_types", 32768),
             patterns: TypedPatternPool::make(),
             pattern_ctors,
             vm: Box::new(Some(vm::Vm::make())),
@@ -2931,13 +2897,18 @@ impl TypedProgram {
         }
     }
 
-    fn push_stmt_id_to_block(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
+    fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
         block.statements.push(stmt);
     }
 
     fn push_block_stmt(&mut self, block: &mut BlockBuilder, stmt: TypedStmt) {
         let id = self.stmts.add(stmt);
         block.statements.push(id);
+    }
+
+    fn push_block_expr_id(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
+        let ty = self.exprs.get_type(expr);
+        self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
     }
 
     pub fn get_stmt_type(&self, stmt: TypedStmtId) -> TypeId {
@@ -2965,17 +2936,12 @@ impl TypedProgram {
         self.stmts.add(TypedStmt::Expr(expr, type_id))
     }
 
-    fn push_expr_id_to_block(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
-        let ty = self.exprs.get_type(expr);
-        self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
-    }
-
     fn eval_type_defn(
         &mut self,
         parsed_type_defn_id: ParsedTypeDefnId,
         scope_id: ScopeId,
         defn_layout_depth: u32,
-    ) -> TyperResult<TypeId> {
+    ) -> K1Result<TypeId> {
         let parsed_type_defn = self.ast.get_type_defn(parsed_type_defn_id);
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
 
@@ -3021,8 +2987,8 @@ impl TypedProgram {
             ScopeOwnerId::None,
             Some(parsed_type_defn.name),
         );
-        let mut type_params: SV4<NameAndType> =
-            SmallVec::with_capacity(parsed_type_defn.type_params.len() as usize);
+        let mut type_params: MList<NameAndType, _> =
+            self.mem.new_list(parsed_type_defn.type_params.len());
         for type_param in self.ast.mem.getn(parsed_type_defn.type_params).iter() {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
@@ -3068,7 +3034,7 @@ impl TypedProgram {
                 );
             }
         }
-        let type_params_handle = self.named_types.add_slice_copy(&type_params);
+        let type_params_handle = self.mem.list_to_handle(type_params);
 
         let type_eval_context = EvalTypeExprContext {
             // For generics, we want the RHS to be its own type, then we make a Generic wrapper
@@ -3124,7 +3090,7 @@ impl TypedProgram {
         &mut self,
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
-    ) -> TyperResult<TypeId> {
+    ) -> K1Result<TypeId> {
         self.eval_type_expr_ext(type_expr_id, scope_id, EvalTypeExprContext::EMPTY)
     }
 
@@ -3136,7 +3102,7 @@ impl TypedProgram {
         // with respect to the source language. Is this a type definition? A function parameter
         // type? Are we immediately inside a function parameter?
         context: EvalTypeExprContext,
-    ) -> TyperResult<TypeId> {
+    ) -> K1Result<TypeId> {
         let base = match self.ast.type_exprs.get(type_expr_id) {
             ParsedTypeExpr::Builtin(span) => {
                 let defn_type_id =
@@ -3212,7 +3178,7 @@ impl TypedProgram {
                 let parsed_ty_app = ParsedTypeExpr::TypeApplication(parse::TypeApplication {
                     span: opt.span,
                     name: QIdent::naked(self.ast.idents.b.opt, opt.span),
-                    args: self.ast.p_type_args.add_slice_copy(&[NamedTypeArg {
+                    args: self.ast.mem.pushn(&[NamedTypeArg {
                         name: None,
                         type_expr: Some(opt.base),
                         span: opt.span,
@@ -3376,8 +3342,8 @@ impl TypedProgram {
                 if let Some(spec_info) = self.types.get_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     if let Some(matching_type_var_pos) = self
-                        .named_types
-                        .get_slice(generic.params)
+                        .mem
+                        .getn(generic.params)
                         .iter()
                         .position(|tp| tp.name == dot_acc.member_name)
                     {
@@ -3608,7 +3574,7 @@ impl TypedProgram {
         parsed_literal: &ParsedLiteral,
         scope_id: ScopeId,
         expected_type_hint: Option<TypeId>,
-    ) -> TyperResult<(StaticValueId, TypeId)> {
+    ) -> K1Result<(StaticValueId, TypeId)> {
         match parsed_literal {
             ParsedLiteral::Char(byte, _) => {
                 Ok((self.static_values.add(StaticValue::Char(*byte)), CHAR_TYPE_ID))
@@ -3652,7 +3618,7 @@ impl TypedProgram {
         ty_app_id: ParsedTypeExprId,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
-    ) -> TyperResult<Option<TypeId>> {
+    ) -> K1Result<Option<TypeId>> {
         let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
@@ -3665,8 +3631,7 @@ impl TypedProgram {
                 if ty_app.args.len() != 1 {
                     return failf!(ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let Some(fn_type_expr_id) = self.ast.p_type_args.get_nth(ty_app.args, 0).type_expr
-                else {
+                let Some(fn_type_expr_id) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
                 let inner = self.eval_type_expr_ext(
@@ -3693,7 +3658,7 @@ impl TypedProgram {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
-                let args = self.ast.p_type_args.get_slice(ty_app.args);
+                let args = self.ast.mem.getn(ty_app.args);
                 let Some(arg1_expr) = args[0].type_expr else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
@@ -3711,18 +3676,16 @@ impl TypedProgram {
                     context.descended_layout_direct(),
                 )?;
 
-                let struct1 = self
+                let struct1 = *self
                     .types
                     .get(arg1)
                     .as_struct()
-                    .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?
-                    .clone();
-                let struct2 = self
+                    .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
+                let struct2 = *self
                     .types
                     .get(arg2)
                     .as_struct()
-                    .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?
-                    .clone();
+                    .ok_or_else(|| errf!(ty_app.span, "Expected struct"))?;
 
                 let mut combined_fields =
                     self.types.mem.new_list(struct1.fields.len() + struct2.fields.len());
@@ -3759,7 +3722,7 @@ impl TypedProgram {
                 if ty_app.args.len() != 2 {
                     return failf!(ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
-                let args = self.ast.p_type_args.get_slice(ty_app.args);
+                let args = self.ast.mem.getn(ty_app.args);
                 let Some(arg1_expr) = args[0].type_expr else {
                     return failf!(ty_app.span, "Wildcard type `_` not accepted here");
                 };
@@ -3817,7 +3780,7 @@ impl TypedProgram {
         ty_app_id: ParsedTypeExprId,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
-    ) -> TyperResult<TypeId> {
+    ) -> K1Result<TypeId> {
         let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
@@ -3887,14 +3850,11 @@ impl TypedProgram {
                             );
                         }
                         let g_params = g.params;
-                        let mut type_arguments = self.tmp.new_list(ty_app.args.len() as u32);
+                        let mut type_arguments = self.tmp.new_list(ty_app.args.len());
                         let mut subst_pairs: MList<TypeSubstitutionPair, MemTmp> =
-                            self.tmp.new_list(ty_app.args.len() as u32);
-                        for (param, parsed_arg) in self
-                            .named_types
-                            .copy_slice_sv4(g_params)
-                            .iter()
-                            .zip(self.ast.p_type_args.copy_slice_sv8(ty_app.args))
+                            self.tmp.new_list(ty_app.args.len());
+                        for (param, parsed_arg) in
+                            self.mem.getn(g_params).iter().zip(self.ast.mem.getn(ty_app.args))
                         {
                             let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                                 return failf!(
@@ -3911,11 +3871,8 @@ impl TypedProgram {
                             type_arguments.push(arg_type_id);
                         }
                         // Repeat the loop, this time checking constraints
-                        for (param, arg_type) in self
-                            .named_types
-                            .copy_slice_sv4(g_params)
-                            .iter()
-                            .zip(type_arguments.as_slice())
+                        for (param, arg_type) in
+                            self.mem.getn(g_params).iter().zip(type_arguments.as_slice())
                         {
                             self.check_type_constraints(
                                 param.name,
@@ -3975,13 +3932,13 @@ impl TypedProgram {
                 existing
             }
             None => {
-                debug_assert!(gen_type.params.len() == type_arguments.len() as usize);
+                debug_assert!(gen_type.params.len() == type_arguments.len());
                 let defn_info = self.types.get_defn_info(generic_type).unwrap();
                 // Note: This is where we'd check constraints on the pairs:
                 // that each passed params meets the constraints of the generic param
                 let substitution_pairs: SV8<TypeSubstitutionPair> = self
-                    .named_types
-                    .get_slice(gen_type.params)
+                    .mem
+                    .getn(gen_type.params)
                     .iter()
                     .zip(self.types.mem.getn(type_arguments))
                     .map(|(type_param, passed_type_arg)| TypeSubstitutionPair {
@@ -4329,7 +4286,7 @@ impl TypedProgram {
     fn get_module_manifest(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
-    ) -> TyperResult<Option<ModuleManifest>> {
+    ) -> K1Result<Option<ModuleManifest>> {
         let namespace = self.ast.namespaces.get(parsed_namespace_id);
         let Some(manifest_function) = namespace
             .definitions
@@ -4413,7 +4370,7 @@ impl TypedProgram {
         target_type_id: TypeId,
         scope_id: ScopeId,
         allow_bindings: bool,
-    ) -> TyperResult<TypedPatternId> {
+    ) -> K1Result<TypedPatternId> {
         let parsed_pattern_expr = self.ast.patterns.get_pattern(pat_expr);
         match parsed_pattern_expr {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
@@ -4576,16 +4533,13 @@ impl TypedProgram {
             ParsedPattern::Struct(struct_pattern) => {
                 let target_type = self.types.get(target_type_id);
                 let struct_pattern = struct_pattern.clone();
-                let expected_struct = target_type
-                    .as_struct()
-                    .ok_or_else(|| {
-                        errf!(
-                            struct_pattern.span,
-                            "Impossible pattern: Match target '{}' is not a struct",
-                            self.type_id_to_string(target_type_id)
-                        )
-                    })?
-                    .clone();
+                let expected_struct = *target_type.as_struct().ok_or_else(|| {
+                    errf!(
+                        struct_pattern.span,
+                        "Impossible pattern: Match target '{}' is not a struct",
+                        self.type_id_to_string(target_type_id)
+                    )
+                })?;
                 let mut fields = self.patterns.mem.new_list(struct_pattern.fields.len() as u32);
                 for (field_name, field_parsed_pattern_id) in &struct_pattern.fields {
                     let (expected_field_index, expected_field) = expected_struct
@@ -4813,7 +4767,7 @@ impl TypedProgram {
                     TypedExpr::Variable(_) => {
                         let span = self.exprs.get_span(expr);
                         if let Ok(expr) = self.synth_address_of(expr, span) {
-                            self.report_hint(span, "coerce address of");
+                            // self.report_hint(span, "coerce address of");
                             return CheckExprTypeResult::Coerce(expr, "address_of".into());
                         }
                     }
@@ -4916,7 +4870,7 @@ impl TypedProgram {
         expected: TypeId,
         expr: TypedExprId,
         scope_id: ScopeId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         debug!(
             "check_and_coerce `{}`, expected: {}",
             self.expr_to_string(expr),
@@ -4925,7 +4879,7 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get_span(expr);
-                Err(TyperMessage { message: msg, span, level: MessageLevel::Error })
+                Err(K1Message { message: msg, span, level: MessageLevel::Error })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
                 debug!(
@@ -4984,7 +4938,7 @@ impl TypedProgram {
                     );
                     if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
                         let generic = self.types.get(spec1.generic_parent).expect_generic();
-                        let param = self.named_types.get_nth(generic.params, index);
+                        let param = self.mem.get_nth(generic.params, index);
                         let msg = k1_format_user!(
                             self,
                             "Expected {} but got {}: Param '{}' is incorrect: {}",
@@ -5214,7 +5168,7 @@ impl TypedProgram {
         &mut self,
         parsed_expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<Option<StaticValueId>> {
+    ) -> K1Result<Option<StaticValueId>> {
         match self.ast.exprs.get(parsed_expr_id) {
             ParsedExpr::Literal(_) => {}
             ParsedExpr::Variable(_) => {}
@@ -5258,7 +5212,7 @@ impl TypedProgram {
         }
     }
 
-    fn compile_all_pending_bytecode(&mut self, on_behalf_of_span: SpanId) -> TyperResult<()> {
+    fn compile_all_pending_bytecode(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
             // eprintln!(
             //     "compile_all_pending_bytecode {}",
@@ -5289,7 +5243,7 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
-    ) -> TyperResult<StaticValueId> {
+    ) -> K1Result<StaticValueId> {
         if let Some(shortcut_value_id) = self.eval_trivial_static_expr(parsed_expr, ctx)? {
             //eprintln!(
             //    "shortcut value {} expected type: {}",
@@ -5322,7 +5276,7 @@ impl TypedProgram {
         let expr_metadata = self.ast.exprs.get_metadata(parsed_expr);
         let is_debug = expr_metadata.is_debug;
         if is_debug {
-            eprintln!("COMPILED TO BLOCK {}", self.expr_to_string(expr));
+            eprintln!("COMPILED TO BLOCK\n\n{}", self.expr_to_string(expr));
         }
 
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
@@ -5347,7 +5301,7 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
-    ) -> TyperResult<StaticValueId> {
+    ) -> K1Result<StaticValueId> {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let span = self.ast.get_expr_span(parsed_expr);
@@ -5401,11 +5355,7 @@ impl TypedProgram {
         }
     }
 
-    fn execute_static_bool(
-        &mut self,
-        cond: ParsedExprId,
-        ctx: EvalExprContext,
-    ) -> TyperResult<bool> {
+    fn execute_static_bool(&mut self, cond: ParsedExprId, ctx: EvalExprContext) -> K1Result<bool> {
         let vm_cond_result = self.execute_static_expr(
             cond,
             ctx.with_expected_type(Some(BOOL_TYPE_ID)).with_static_ctx(Some(StaticExecContext {
@@ -5425,7 +5375,7 @@ impl TypedProgram {
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
-    ) -> TyperResult<VariableId> {
+    ) -> K1Result<VariableId> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let is_exported = parsed_global.is_export;
         let is_external = parsed_global.is_external;
@@ -5481,7 +5431,7 @@ impl TypedProgram {
         Ok(variable_id)
     }
 
-    pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> TyperResult<()> {
+    pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> K1Result<()> {
         let parsed_global = self.ast.get_global(parsed_global_id).clone();
         let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
             // This means we failed to compile the definition; or we have a bug!
@@ -5625,7 +5575,7 @@ impl TypedProgram {
             None => ability.parameters,
             Some(parent) => self.abilities.get(parent).parameters,
         };
-        let ability_args = self.named_types.get_slice(ability.kind.arguments());
+        let ability_args = self.mem.getn(ability.kind.arguments());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         // Add self
         subst_pairs.push(spair! {ability.self_type_id => type_variable_id});
@@ -5643,7 +5593,7 @@ impl TypedProgram {
             .getn(all_params)
             .iter()
             .filter(|p| p.is_impl_param)
-            .zip(self.named_types.get_slice(impl_signature.impl_arguments).iter())
+            .zip(self.mem.getn(impl_signature.impl_arguments).iter())
         {
             subst_pairs.push(spair! {parent_impl_param.type_variable_id => impl_arg.type_id});
             let _ = self.scopes.add_type(scope_id, impl_arg.name, impl_arg.type_id);
@@ -5662,10 +5612,9 @@ impl TypedProgram {
             // since it's the only one of the ability params that gets 'encoded' as a type
             // parameter to the function
             let type_params_minus_self = {
-                let mut type_params_minus_self =
-                    self.named_types.copy_slice_sv::<4>(generic_sig.type_params);
+                let mut type_params_minus_self = self.mem.getn_sv4(generic_sig.type_params);
                 type_params_minus_self.retain(|tp| tp.type_id != ability_self_type);
-                self.named_types.add_slice_copy(&type_params_minus_self)
+                self.mem.pushn(&type_params_minus_self)
             };
             debug_assert_eq!(type_params_minus_self.len() + 1, generic_sig.type_params.len());
             let specialized_signature = FunctionSignature {
@@ -5682,7 +5631,7 @@ impl TypedProgram {
         }
         self.add_ability_impl(TypedAbilityImpl {
             kind: impl_kind,
-            blanket_type_params: SliceHandle::empty(),
+            blanket_type_params: MSlice::empty(),
             self_type_id: type_variable_id,
             base_ability_id,
             ability_id: impl_signature.specialized_ability_id,
@@ -5870,8 +5819,8 @@ impl TypedProgram {
         }
         let specialized_ability = self.abilities.get(impl_handle.specialized_ability_id);
         for (impl_arg, maybe_constraint) in self
-            .named_types
-            .get_slice(specialized_ability.kind.arguments())
+            .mem
+            .getn(specialized_ability.kind.arguments())
             .iter()
             .zip(parameter_requirements.iter())
         {
@@ -5900,7 +5849,7 @@ impl TypedProgram {
         let base_ability = specialized_ability.base_ability_id;
         let args = specialized_ability.kind.arguments();
         let parameter_constraints: SV4<Option<TypeId>> =
-            self.named_types.get_slice(args).iter().map(|nt| Some(nt.type_id)).collect();
+            self.mem.getn(args).iter().map(|nt| Some(nt.type_id)).collect();
 
         self.find_ability_impl_for_type_or_generate_new(
             self_type_id,
@@ -5953,11 +5902,11 @@ impl TypedProgram {
         debug!(
             "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
             self.ident_str(blanket_ability.name),
-            self.pretty_print_named_types(self.named_types.get_slice(blanket_arguments), ", "),
+            self.pretty_print_named_types(self.mem.getn(blanket_arguments), ", "),
             self.pretty_print_named_type_slice(blanket_impl.impl_arguments, ", "),
         );
 
-        if blanket_arguments.len() != target_ability_args.len() {
+        if blanket_arguments.len() as usize != target_ability_args.len() {
             debug!("Wrong arg count {} vs {}", blanket_arguments.len(), target_ability_args.len());
             return None;
         }
@@ -5968,7 +5917,7 @@ impl TypedProgram {
 
         //let mut solution_set = TypeSolutionSet::from(blanket_impl.type_params.iter());
         let mut args_and_params: SV8<InferenceInputPair> =
-            SmallVec::with_capacity(blanket_arguments.len() + 1);
+            SmallVec::with_capacity(blanket_arguments.len() as usize + 1);
         //
         // For each argument A to the blanket impl, solve for [Self, ...Params] using
         args_and_params.push(InferenceInputPair {
@@ -5977,7 +5926,7 @@ impl TypedProgram {
             allow_mismatch: true,
         });
         for (arg_to_blanket, arg_to_target) in
-            self.named_types.get_slice(blanket_arguments).iter().zip(target_ability_args)
+            self.mem.getn(blanket_arguments).iter().zip(target_ability_args)
         {
             match arg_to_target {
                 None => {
@@ -5993,9 +5942,8 @@ impl TypedProgram {
 
         let blanket_impl_type_params_handle =
             self.ability_impls.get(blanket_impl_id).blanket_type_params;
-        let root_scope_id = self.scopes.get_root_scope_id();
-        let blanket_impl_type_params =
-            self.named_types.copy_slice_sv8(blanket_impl_type_params_handle);
+        let root_scope_id = self.scopes.root_scope_id();
+        let blanket_impl_type_params = self.mem.getn(blanket_impl_type_params_handle);
         let solutions_result = self.infer_types(
             &blanket_impl_type_params,
             blanket_impl_type_params_handle,
@@ -6019,7 +5967,7 @@ impl TypedProgram {
         let solutions_as_pairs: SV4<TypeSubstitutionPair> =
             self.zip_named_types_to_subst_pairs(blanket_impl_type_params_handle, solutions);
         for (blanket_arg, required_arg) in
-            self.named_types.copy_slice_sv4(blanket_arguments).iter().zip(target_ability_args)
+            self.mem.getn(blanket_arguments).iter().zip(target_ability_args)
         {
             if let Some(required_arg) = required_arg {
                 let actual_value =
@@ -6049,11 +5997,11 @@ impl TypedProgram {
         let parsed_blanket_impl = self.ast.get_ability_impl(parsed_id);
 
         for ((typed_param, parsed_param), solution) in self
-            .named_types
-            .copy_slice_sv4(blanket_impl_type_params_handle)
+            .mem
+            .getn(blanket_impl_type_params_handle)
             .iter()
             .zip(parsed_blanket_impl.generic_impl_params.clone().iter())
-            .zip(self.named_types.copy_slice_sv4(solutions).iter())
+            .zip(self.mem.getn(solutions).iter())
         {
             let _ = self.scopes.add_type(
                 constraint_checking_scope,
@@ -6109,7 +6057,7 @@ impl TypedProgram {
         self_type_id: TypeId,
         blanket_impl_id: AbilityImplId,
         solutions: NamedTypeSlice,
-    ) -> TyperResult<AbilityImplHandle> {
+    ) -> K1Result<AbilityImplHandle> {
         let blanket_impl = self.ability_impls.get(blanket_impl_id).clone();
 
         let generic_base_ability_id = blanket_impl.kind.blanket_parent().unwrap();
@@ -6128,12 +6076,12 @@ impl TypedProgram {
         );
 
         let pairs: SV4<TypeSubstitutionPair> = self
-            .named_types
-            .get_slice(blanket_impl.blanket_type_params)
+            .mem
+            .getn(blanket_impl.blanket_type_params)
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                let solution = self.named_types.get_nth(solutions, index);
+                let solution = *self.mem.get_nth(solutions, index);
                 let _ = self.scopes.add_type(new_impl_scope, param.name, solution.type_id);
                 TypeSubstitutionPair { from: param.type_id, to: solution.type_id }
             })
@@ -6141,9 +6089,9 @@ impl TypedProgram {
 
         let blanket_ability_args_handle =
             self.abilities.get(blanket_impl.ability_id).kind.arguments();
-        let mut substituted_ability_args: SV4<NameAndType> =
-            SmallVec::with_capacity(blanket_ability_args_handle.len());
-        for blanket_arg in self.named_types.copy_slice_sv::<4>(blanket_ability_args_handle) {
+        let mut substituted_ability_args: MList<NameAndType, _> =
+            self.mem.new_list(blanket_ability_args_handle.len());
+        for blanket_arg in self.mem.getn(blanket_ability_args_handle) {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_arg.name, type_id: substituted_type };
@@ -6152,8 +6100,7 @@ impl TypedProgram {
                 panic!("blanket impl scope unexpectedly contained type name")
             };
         }
-        let substituted_ability_args_handle =
-            self.named_types.add_slice_copy(&substituted_ability_args);
+        let substituted_ability_args_handle = self.mem.list_to_handle(substituted_ability_args);
         let concrete_ability_id = self.specialize_ability(
             generic_base_ability_id,
             substituted_ability_args_handle,
@@ -6161,9 +6108,9 @@ impl TypedProgram {
             blanket_impl.scope_id,
         );
 
-        let mut substituted_impl_arguments: SV8<NameAndType> =
-            SmallVec::with_capacity(blanket_impl.impl_arguments.len());
-        for blanket_impl_arg in self.named_types.copy_slice_sv::<8>(blanket_impl.impl_arguments) {
+        let mut substituted_impl_arguments: MList<NameAndType, _> =
+            self.mem.new_list(blanket_impl.impl_arguments.len());
+        for blanket_impl_arg in self.mem.getn(blanket_impl.impl_arguments) {
             // Substitute T, U, V, in for each
             let substituted_type = self.substitute_in_type(blanket_impl_arg.type_id, &pairs);
             let nt = NameAndType { name: blanket_impl_arg.name, type_id: substituted_type };
@@ -6213,11 +6160,10 @@ impl TypedProgram {
             specialized_functions.push(specialized_function);
         }
 
-        let substituted_impl_arguments_handle =
-            self.named_types.add_slice_copy(&substituted_impl_arguments);
+        let substituted_impl_arguments_handle = self.mem.list_to_handle(substituted_impl_arguments);
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind,
-            blanket_type_params: SliceHandle::empty(),
+            blanket_type_params: MSlice::empty(),
             self_type_id,
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
@@ -6238,7 +6184,7 @@ impl TypedProgram {
         &mut self,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<StaticValueId> {
+    ) -> K1Result<StaticValueId> {
         let parsed_text = self.ast.get_span_content(span);
         let is_float = parsed_text.contains('.');
         if is_float {
@@ -6252,7 +6198,7 @@ impl TypedProgram {
         }
     }
 
-    fn eval_float_value(&self, span: SpanId, ctx: EvalExprContext) -> TyperResult<TypedFloatValue> {
+    fn eval_float_value(&self, span: SpanId, ctx: EvalExprContext) -> K1Result<TypedFloatValue> {
         let parsed_text = self.ast.get_span_content(span);
         let expected_width = match ctx.expected_type_id {
             None => NumericWidth::B32,
@@ -6276,7 +6222,7 @@ impl TypedProgram {
         &mut self,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedIntValue> {
+    ) -> K1Result<TypedIntValue> {
         let parsed_text = self.ast.get_span_content(span);
 
         let maybe_suffix_char = parsed_text.chars().find_position(|&c| c == 'u' || c == 'i');
@@ -6365,7 +6311,7 @@ impl TypedProgram {
                 })
             }};
         }
-        let ret: Result<TypedIntValue, TyperMessage> = match expected_int_type {
+        let ret: Result<TypedIntValue, K1Message> = match expected_int_type {
             IntegerType::U8 => parse_int!(U8, u8, base),
             IntegerType::U16 => parse_int!(U16, u16, base),
             IntegerType::U32 => parse_int!(U32, u32, base),
@@ -6435,7 +6381,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         // Currently, only used to determine if this counts as a usage
         is_assignment_lhs: bool,
-    ) -> TyperResult<(VariableId, TypedExprId)> {
+    ) -> K1Result<(VariableId, TypedExprId)> {
         let ParsedExpr::Variable(variable) = self.ast.exprs.get(variable_expr_id) else { panic!() };
         let variable_name_span = variable.name.span;
         let variable_id = self.scopes.find_variable_namespaced(
@@ -6526,7 +6472,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         field_access: &parse::FieldAccess,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         // Special case: Sum Constructor
         let span = field_access.span;
         let base_span = self.ast.exprs.get_span(field_access.base);
@@ -6543,7 +6489,7 @@ impl TypedProgram {
 
         if !field_access.type_args.is_empty() {
             // Treat it like a call; foo.<field_name>[u32]
-            let args = self.ast.p_call_args.add_slice_copy(&[ParsedCallArg {
+            let args = self.ast.mem.pushn(&[ParsedCallArg {
                 name: None,
                 value: field_access.base,
                 is_explicit_context: false,
@@ -6773,7 +6719,7 @@ impl TypedProgram {
         base_expr: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let expected_type = match ctx.expected_type_id {
             None => None,
             Some(t) => Some(self.types.get_type_id_dereferenced(t)),
@@ -6782,7 +6728,7 @@ impl TypedProgram {
         self.synth_address_of(input, span)
     }
 
-    fn synth_address_of(&mut self, input: TypedExprId, span: SpanId) -> TyperResult<TypedExprId> {
+    fn synth_address_of(&mut self, input: TypedExprId, span: SpanId) -> K1Result<TypedExprId> {
         let (variable_id, kind) = match self.exprs.get(input) {
             TypedExpr::Variable(v) => {
                 let var = self.variables.get(v.variable_id);
@@ -6823,7 +6769,7 @@ impl TypedProgram {
         operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let scope_id = ctx.scope_id;
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
         let block_try_impl = self.expect_ability_impl(
@@ -6842,17 +6788,13 @@ impl TypedProgram {
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type = self
-            .named_types
-            .get_slice(block_impl_args)
-            .iter()
-            .find(|nt| nt.name == get_ident!(self, "e"))
+            .mem
+            .find(block_impl_args, |nt| nt.name == get_ident!(self, "e"))
             .map(|nt| nt.type_id)
             .unwrap();
         let error_type = self
-            .named_types
-            .get_slice(value_impl_args)
-            .iter()
-            .find(|nt| nt.name == get_ident!(self, "e"))
+            .mem
+            .find(value_impl_args, |nt| nt.name == get_ident!(self, "e"))
             .map(|nt| nt.type_id)
             .unwrap();
         if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
@@ -6862,10 +6804,8 @@ impl TypedProgram {
             );
         };
         let value_success_type = self
-            .named_types
-            .get_slice(value_impl_args)
-            .iter()
-            .find(|nt| nt.name == get_ident!(self, "t"))
+            .mem
+            .find(value_impl_args, |nt| nt.name == get_ident!(self, "t"))
             .map(|nt| nt.type_id)
             .unwrap();
         let mut result_block = self.synth_block(scope_id, ScopeType::LexicalBlock, span, 2);
@@ -6903,7 +6843,7 @@ impl TypedProgram {
         let call_id = self.calls.add(Call {
             callee: Callee::from_ability_impl_fn(block_make_error_fn),
             args: self.mem.pushn(&[get_error_call]),
-            type_args: SliceHandle::empty(),
+            type_args: MSlice::empty(),
             return_type: block_return_type,
             span,
         });
@@ -6921,8 +6861,8 @@ impl TypedProgram {
             span,
         );
 
-        self.push_stmt_id_to_block(&mut result_block, try_value_var.defn_stmt);
-        self.push_expr_id_to_block(&mut result_block, if_expr);
+        self.push_block_stmt_id(&mut result_block, try_value_var.defn_stmt);
+        self.push_block_expr_id(&mut result_block, if_expr);
 
         Ok(self.exprs.add_block(&mut self.mem, result_block, value_success_type))
     }
@@ -6932,7 +6872,7 @@ impl TypedProgram {
         operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
         let operand_type = self.exprs.get_type(operand_expr);
         let _try_impl =
@@ -6951,7 +6891,7 @@ impl TypedProgram {
         operand: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         // Example:
         // let x: int = intptr.*
         // The expected_type when we get `intptr.*` is int, so
@@ -6999,7 +6939,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         mut ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let expr_metadata = self.ast.exprs.get_metadata(expr_id);
         let is_debug = expr_metadata.is_debug;
         if is_debug {
@@ -7040,7 +6980,7 @@ impl TypedProgram {
         if log::log_enabled!(log::Level::Debug) {
             let expr_span = self_.ast.exprs.get_span(expr_id);
             debug!(
-                "COMPILED `{}` (hint {})\n`{}`",
+                "DEBUG COMPILE DONE\n\n{}\n  type hint: {}`\n{}`",
                 self_.ast.get_span_content(expr_span),
                 self_.type_id_to_string_opt(ctx.expected_type_id),
                 self_.expr_to_string_with_type(result_expr)
@@ -7053,7 +6993,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         debug!(
             "eval_expr_inner: {} (hint {})",
             self.ast.get_span_content(self.ast.exprs.get_span(expr_id)),
@@ -7173,7 +7113,7 @@ impl TypedProgram {
                     None,
                     anon_sum.variant_name,
                     anon_sum.payload,
-                    SliceHandle::empty(),
+                    MSlice::empty(),
                     sum_ctx,
                     span,
                 )?
@@ -7338,7 +7278,7 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
         fail: bool,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let expr = self.eval_expr(expr_id, ctx)?;
         match ctx.expected_type_id {
             None => Ok(expr),
@@ -7385,7 +7325,7 @@ impl TypedProgram {
         _expr_id: ParsedExprId,
         list_expr: &ParsedList,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let (expected_element_type, list_kind) = match ctx.expected_type_id.as_ref() {
             Some(&type_id) => {
                 if let Some((element_type, container_kind)) =
@@ -7516,7 +7456,7 @@ impl TypedProgram {
             };
             let type_id = self.exprs.get_type(push_call);
             let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-            self.push_stmt_id_to_block(&mut list_lit_block, push_stmt);
+            self.push_block_stmt_id(&mut list_lit_block, push_stmt);
         }
         let final_expr = match list_kind {
             ContainerKind::List => self.synth_dereference(dest_coll_variable.variable_expr),
@@ -7530,7 +7470,7 @@ impl TypedProgram {
             )?,
             ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
-        self.push_expr_id_to_block(&mut list_lit_block, final_expr);
+        self.push_block_expr_id(&mut list_lit_block, final_expr);
         let final_expr_type = self.exprs.get_type(final_expr);
         Ok(self.exprs.add_block(&mut self.mem, list_lit_block, final_expr_type))
     }
@@ -7541,7 +7481,7 @@ impl TypedProgram {
         _expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<StaticExecutionResult> {
+    ) -> K1Result<StaticExecutionResult> {
         let span = stat.span;
         let base_expr = stat.base_expr;
 
@@ -7752,7 +7692,7 @@ impl TypedProgram {
         file_id: FileId,
         code_str: &str,
         kind: ParseAdHocKind,
-    ) -> TyperResult<ParseAdHocResult> {
+    ) -> K1Result<ParseAdHocResult> {
         let module = self.modules.get(self.module_in_progress.unwrap());
         let parsed_namespace_id =
             self.namespaces.get(module.namespace_id).parsed_id.as_namespace_id().unwrap();
@@ -7799,7 +7739,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
@@ -7808,14 +7748,7 @@ impl TypedProgram {
         for ast_field in self.ast.mem.getn(parsed_struct.fields) {
             let parsed_expr = match ast_field.value {
                 StructValueFieldKind::VarShorthand => {
-                    let variable_expr = self.ast.exprs.add_expression(
-                        ParsedExpr::Variable(parse::ParsedVariable {
-                            name: QIdent::naked(ast_field.name, ast_field.span),
-                        }),
-                        false,
-                        None,
-                    );
-                    variable_expr
+                    self.synth_parsed_variable_expr(ast_field.name, ast_field.span)
                 }
                 StructValueFieldKind::Expr(parsed_expr) => parsed_expr,
                 StructValueFieldKind::Uninit => {
@@ -7841,7 +7774,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_with_span("expected struct", self.ast.get_expr_span(expr_id))
         };
@@ -7850,8 +7783,9 @@ impl TypedProgram {
         else {
             self.ice_with_span("expected an expected struct type", self.ast.get_expr_span(expr_id))
         };
+        let original_expected_struct = *original_expected_struct;
         let expected_struct_id = original_expected_struct_id;
-        let expected_struct = self.types.get(expected_struct_id).expect_struct().clone();
+        let expected_struct = *self.types.get(expected_struct_id).expect_struct();
         let expected_struct_defn_info = self.types.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
@@ -7878,14 +7812,7 @@ impl TypedProgram {
             };
             let parsed_expr = match passed_field.value {
                 StructValueFieldKind::VarShorthand => {
-                    let variable_expr = self.ast.exprs.add_expression(
-                        ParsedExpr::Variable(parse::ParsedVariable {
-                            name: QIdent::naked(passed_field.name, passed_field.span),
-                        }),
-                        false,
-                        None,
-                    );
-                    Some(variable_expr)
+                    Some(self.synth_parsed_variable_expr(passed_field.name, passed_field.span))
                 }
                 StructValueFieldKind::Expr(parsed_expr) => Some(parsed_expr),
                 StructValueFieldKind::Uninit => None,
@@ -7982,10 +7909,9 @@ impl TypedProgram {
                             allow_mismatch: true,
                         });
                     }
-                    let generic_params_owned: SV8<NameAndType> =
-                        self.named_types.copy_slice_sv8(generic_params);
+                    let generic_params_slice = self.mem.getn(generic_params);
                     let (solutions, _all_solutions) = self.infer_types(
-                        &generic_params_owned,
+                        generic_params_slice,
                         generic_params,
                         &subst_pairs,
                         struct_span,
@@ -7995,9 +7921,10 @@ impl TypedProgram {
                         "I reverse-engineered these: {}",
                         self.pretty_print_named_type_slice(solutions, ", ")
                     );
-                    gi.type_args = self.types.mem.pushn_iter(
-                        self.named_types.get_slice(solutions).iter().map(|s| s.type_id),
-                    );
+                    gi.type_args = self
+                        .types
+                        .mem
+                        .pushn_iter(self.mem.getn(solutions).iter().map(|s| s.type_id));
                     Some(gi)
                 } else {
                     Some(gi)
@@ -8023,7 +7950,7 @@ impl TypedProgram {
         &mut self,
         while_expr: &ParsedWhileExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let ParsedExpr::Block(parsed_block) = self.ast.exprs.get(while_expr.body).clone() else {
             return failf!(while_expr.span, "'while' body must be a block");
         };
@@ -8073,7 +8000,7 @@ impl TypedProgram {
         &mut self,
         loop_expr: &ParsedLoopExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let body_scope = self.scopes.add_child_scope(
             ctx.scope_id,
             ScopeType::LoopExprBody,
@@ -8101,7 +8028,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
         let lambda_scope_id = self.scopes.add_child_scope(
             ctx.scope_id,
@@ -8257,7 +8184,7 @@ impl TypedProgram {
                 name,
                 scope: lambda_scope_id,
                 params: self.mem.list_to_handle(param_variables),
-                type_params: SliceHandle::empty(),
+                type_params: MSlice::empty(),
                 function_type_params: MSlice::empty(),
                 body_block: Some(body_expr_id),
                 intrinsic_type: None,
@@ -8389,7 +8316,7 @@ impl TypedProgram {
             name,
             scope: lambda_scope_id,
             params: self.mem.list_to_handle(param_variables),
-            type_params: SliceHandle::empty(),
+            type_params: MSlice::empty(),
             function_type_params: MSlice::empty(),
             body_block: Some(body_expr_id),
             intrinsic_type: None,
@@ -8481,7 +8408,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         partial: bool,
         allow_bindings: bool,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let match_parsed_expr = self.ast.exprs.get(match_expr_id).as_match().unwrap().clone();
         if match_parsed_expr.cases.is_empty() {
             return Err(make_error("Match expression with no arms", match_parsed_expr.span));
@@ -8749,7 +8676,7 @@ impl TypedProgram {
         instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let target_expr_type = self.exprs.get_type(target_expr);
         let pat = self.patterns.get(pattern_id);
         match pat {
@@ -9025,7 +8952,7 @@ impl TypedProgram {
         target_type: TypeId,
         span: SpanId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
         let base_expr_type = self.exprs.get_type(base_expr);
         if base_expr_type == target_type {
@@ -9178,11 +9105,7 @@ impl TypedProgram {
         Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
     }
 
-    fn eval_for_expr(
-        &mut self,
-        for_expr: &ForExpr,
-        ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    fn eval_for_expr(&mut self, for_expr: &ForExpr, ctx: EvalExprContext) -> K1Result<TypedExprId> {
         // Basically no overlap here in what we need to do.
         if for_expr.is_static {
             return self.eval_static_for_expr(for_expr, ctx);
@@ -9218,14 +9141,14 @@ impl TypedProgram {
                     Ok(iterator_impl) => {
                         let impl_args =
                             self.ability_impls.get(iterator_impl.full_impl_id).impl_arguments;
-                        let item_type = self.named_types.get_nth(impl_args, 0).type_id;
+                        let item_type = self.mem.get_nth(impl_args, 0).type_id;
                         (true, item_type)
                     }
                 }
             }
             Ok(iterable_impl) => {
                 let impl_args = self.ability_impls.get(iterable_impl.full_impl_id).impl_arguments;
-                let item_type = self.named_types.get_nth(impl_args, 0).type_id;
+                let item_type = self.mem.get_nth(impl_args, 0).type_id;
                 (false, item_type)
             }
         };
@@ -9307,7 +9230,7 @@ impl TypedProgram {
             false,
         )?;
 
-        self.push_stmt_id_to_block(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
+        self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
         let user_body_block_id = body_block;
         let user_block_variable = self.synth_variable_defn_simple(
@@ -9345,7 +9268,7 @@ impl TypedProgram {
             break_expr,
             body_span,
         );
-        self.push_expr_id_to_block(&mut loop_block, if_next_loop_else_break_expr);
+        self.push_block_expr_id(&mut loop_block, if_next_loop_else_break_expr);
 
         // Append the index increment to the body block
         let one_expr = self.synth_i64(1, iterable_span);
@@ -9394,7 +9317,7 @@ impl TypedProgram {
         &mut self,
         for_expr: &ForExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let iteree_value_id =
             self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
         let iteree_value = self.static_values.get(iteree_value_id);
@@ -9423,8 +9346,8 @@ impl TypedProgram {
             let elem_expr = self.add_static_constant_expr(*elem, iteree_span);
             let v = self.synth_variable_defn_visible(binding_name, elem_expr, block.scope_id);
             let user_expr = self.eval_block(&for_expr.body_block, eval_context, false)?;
-            self.push_stmt_id_to_block(&mut block, v.defn_stmt);
-            self.push_expr_id_to_block(&mut block, user_expr);
+            self.push_block_stmt_id(&mut block, v.defn_stmt);
+            self.push_block_expr_id(&mut block, user_expr);
         }
         let block_id = self.exprs.add_block(&mut self.mem, block, self.types.builtins.empty);
 
@@ -9437,7 +9360,7 @@ impl TypedProgram {
         base_ability_id: AbilityId,
         scope_id: ScopeId,
         span_for_error: SpanId,
-    ) -> TyperResult<AbilityImplHandle> {
+    ) -> K1Result<AbilityImplHandle> {
         self.find_ability_impl_for_type_or_generate_new(
             type_id,
             base_ability_id,
@@ -9470,7 +9393,7 @@ impl TypedProgram {
         &mut self,
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         if ctx.is_generic_pass() {
             let filler_expr =
                 self.synth_phony(ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID), if_expr.span);
@@ -9500,7 +9423,7 @@ impl TypedProgram {
         &mut self,
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         if if_expr.is_static {
             return self.eval_static_if_expr(if_expr, ctx);
         }
@@ -9600,7 +9523,7 @@ impl TypedProgram {
         &mut self,
         condition: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<Either<TypedExprId, MatchingCondition>> {
+    ) -> K1Result<Either<TypedExprId, MatchingCondition>> {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
         let mut allow_bindings: bool = true;
@@ -9691,7 +9614,7 @@ impl TypedProgram {
         all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
         instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
         ctx: EvalExprContext,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
         match self.ast.exprs.get(parsed_expr_id) {
             ParsedExpr::Is(is_expr) => {
@@ -9761,7 +9684,7 @@ impl TypedProgram {
         &mut self,
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let condition_scope = self.scopes.add_child_scope(
             ctx.scope_id,
             ScopeType::LexicalBlock,
@@ -9793,7 +9716,7 @@ impl TypedProgram {
         &mut self,
         binary_op_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
@@ -9892,7 +9815,7 @@ impl TypedProgram {
         rhs: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         // LHS must implement Try and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
@@ -9906,7 +9829,7 @@ impl TypedProgram {
                 )
             })?;
         let try_impl = self.ability_impls.get(try_impl.full_impl_id);
-        let output_type = self.named_types.get_nth(try_impl.impl_arguments, 0).type_id;
+        let output_type = self.mem.get_nth(try_impl.impl_arguments, 0).type_id;
 
         let rhs = self.eval_expr(rhs, ctx.with_expected_type(Some(output_type)))?;
         let rhs_type = self.exprs.get_type(rhs);
@@ -9936,8 +9859,8 @@ impl TypedProgram {
         )?;
 
         let if_else = self.synth_if_else(output_type, lhs_has_value, lhs_get_expr, rhs, span);
-        self.push_stmt_id_to_block(&mut coalesce_block, lhs_variable.defn_stmt);
-        self.push_expr_id_to_block(&mut coalesce_block, if_else);
+        self.push_block_stmt_id(&mut coalesce_block, lhs_variable.defn_stmt);
+        self.push_block_expr_id(&mut coalesce_block, if_else);
         Ok(self.exprs.add_block(&mut self.mem, coalesce_block, output_type))
     }
 
@@ -9945,7 +9868,7 @@ impl TypedProgram {
         &mut self,
         binary_op_id: ParsedExprId,
         ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let ParsedExpr::BinaryOp(binary_op) = self.ast.exprs.get(binary_op_id).clone() else {
             unreachable!()
         };
@@ -9979,16 +9902,13 @@ impl TypedProgram {
         rhs: ParsedExprId,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let new_fn_call = match self.ast.exprs.get(rhs) {
             ParsedExpr::Variable(var) => {
-                let args = self
-                    .ast
-                    .p_call_args
-                    .add_slice_from_iter([ParsedCallArg::unnamed(lhs)].into_iter());
+                let args = self.ast.mem.pushn(&[ParsedCallArg::unnamed(lhs)]);
                 ParsedCall {
                     name: var.name,
-                    type_args: SliceHandle::empty(),
+                    type_args: MSlice::empty(),
                     args,
                     span,
                     is_method: false,
@@ -9996,14 +9916,14 @@ impl TypedProgram {
                 }
             }
             ParsedExpr::Call(fn_call) => {
-                let mut args: SV8<ParsedCallArg> = SmallVec::with_capacity(fn_call.args.len() + 1);
-                args.push(ParsedCallArg::unnamed(lhs));
-                args.extend_from_slice(self.ast.p_call_args.get_slice(fn_call.args));
-                let args_with_piped = self.ast.p_call_args.add_slice_copy(&args);
+                let mut args_with_piped = self.ast.mem.new_list(fn_call.args.len() + 1);
+                args_with_piped.push(ParsedCallArg::unnamed(lhs));
+                args_with_piped.extend(self.ast.mem.getn(fn_call.args));
+                let args_with_piped_h = self.ast.mem.list_to_handle(args_with_piped);
                 ParsedCall {
                     name: fn_call.name,
                     type_args: fn_call.type_args,
-                    args: args_with_piped,
+                    args: args_with_piped_h,
                     span,
                     is_method: false,
                     id: ParsedExprId::PENDING,
@@ -10029,7 +9949,7 @@ impl TypedProgram {
         fn_call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<CallResolution> {
+    ) -> K1Result<CallResolution> {
         let call_span = fn_call.span;
         if let Some(builtin_result) = self.handle_builtin_function_call_lookalikes(fn_call, ctx)? {
             return Ok(CallResolution::Other(builtin_result));
@@ -10039,13 +9959,7 @@ impl TypedProgram {
             Some((_, args)) if !args.is_empty() => {
                 Some(MaybeTypedExpr::Typed(*args.first().unwrap()))
             }
-            _ => match self
-                .ast
-                .p_call_args
-                .get_slice(fn_call.args)
-                .iter()
-                .find(|a| !a.is_explicit_context)
-            {
+            _ => match self.ast.mem.find(fn_call.args, |a| !a.is_explicit_context) {
                 None => None,
                 Some(first) => Some(MaybeTypedExpr::Parsed(first.value)),
             },
@@ -10166,7 +10080,7 @@ impl TypedProgram {
         }
     }
 
-    fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> TyperResult<TypeId> {
+    fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> K1Result<TypeId> {
         match self.scopes.enclosing_functions.get(scope_id) {
             ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
                 let Some(expected_return_type) =
@@ -10202,7 +10116,7 @@ impl TypedProgram {
         parsed_expr: Option<ParsedExprId>,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let expected_return_type = if ctx.is_static() {
             // When _typechecking_, not executing, inside #static blocks
             // The expected return type should just be the expected type of the static block
@@ -10277,32 +10191,37 @@ impl TypedProgram {
         &mut self,
         fn_call: &ParsedCall,
         ctx: EvalExprContext,
-    ) -> TyperResult<Option<TypedExprId>> {
+    ) -> K1Result<Option<TypedExprId>> {
         let call_span = fn_call.span;
         let calling_scope = ctx.scope_id;
         if !fn_call.name.path.is_empty() {
             return Ok(None);
         }
-        if fn_call.is_method {
-            return Ok(None);
+        let n = fn_call.name.name;
+
+        // Method or f(x) syntax
+        if n == self.ast.idents.b.with {
+            let base = MaybeTypedExpr::Parsed(self.ast.mem.get_nth(fn_call.args, 0).value);
+            let res = self.compile_patch_struct(base, fn_call, ctx)?;
+            return Ok(Some(res));
         }
-        match self.ident_str(fn_call.name.name) {
-            "return" => {
+
+        if !fn_call.is_method {
+            if n == self.ast.idents.b.return_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
                     return failf!(fn_call.span, "return cannot be used inside `defer` blocks");
                 }
                 let ret_value = match fn_call.args.len() {
                     0 => Ok(None),
                     1 => {
-                        let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
+                        let arg = self.ast.mem.get_nth(fn_call.args, 0);
                         Ok(Some(arg.value))
                     }
                     _ => failf!(fn_call.span, "return(...) must have 0 or 1 arguments"),
                 }?;
                 let return_expr_id = self.eval_return(ret_value, ctx, call_span)?;
                 Ok(Some(return_expr_id))
-            }
-            "break" => {
+            } else if n == self.ast.idents.b.break_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
                     return failf!(fn_call.span, "break cannot be used inside `defer` blocks");
                 }
@@ -10318,7 +10237,7 @@ impl TypedProgram {
                 let expected_break_type: Option<TypeId> =
                     self.scopes.get_loop_info(enclosing_loop_scope_id).unwrap().break_type;
 
-                let arg = self.ast.p_call_args.get_first(fn_call.args);
+                let arg = self.ast.mem.get_nth_opt(fn_call.args, 0);
                 let break_value = match arg {
                     None => self.synth_empty_struct(call_span),
                     Some(fn_call_arg) => {
@@ -10370,18 +10289,16 @@ impl TypedProgram {
                     NEVER_TYPE_ID,
                     call_span,
                 )))
-            }
-            "continue" => {
+            } else if n == self.ast.idents.b.continue_ {
                 if ctx.flags.contains(EvalExprFlags::Defer) {
                     return failf!(fn_call.span, "continue cannot be used inside `defer` blocks");
                 }
                 todo!("implement continue")
-            }
-            "testCompile" => {
+            } else if n == self.ast.idents.b.testCompile {
                 if fn_call.args.len() != 1 {
                     return failf!(call_span, "testCompile takes one argument");
                 }
-                let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
+                let arg = self.ast.mem.get_nth(fn_call.args, 0);
                 let result = self.eval_expr(arg.value, ctx.with_no_expected_type());
                 let expr = match result {
                     Err(typer_error) => {
@@ -10392,12 +10309,11 @@ impl TypedProgram {
                     Ok(_expr) => self.synth_optional_none(STRING_TYPE_ID, call_span),
                 };
                 Ok(Some(expr))
-            }
-            "writef" => {
+            } else if n == self.ast.idents.b.writef {
                 if fn_call.args.len() < 2 {
                     return failf!(call_span, "write requires 2 arguments");
                 }
-                let writer_arg = self.ast.p_call_args.get_nth(fn_call.args, 0);
+                let writer_arg = self.ast.mem.get_nth(fn_call.args, 0);
                 let writer = self.eval_expr(writer_arg.value, ctx.with_no_expected_type())?;
                 self.expect_ability_impl(
                     self.exprs.get_type(writer),
@@ -10405,7 +10321,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     self.exprs.get_span(writer),
                 )?;
-                let fmt_string_arg = self.ast.p_call_args.get_nth(fn_call.args, 1);
+                let fmt_string_arg = self.ast.mem.get_nth(fn_call.args, 1);
                 let fmt_string = match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
                         kbail!(self, call_span, "String has no format slots; lets not use write")
@@ -10413,7 +10329,7 @@ impl TypedProgram {
                     ParsedExpr::InterpolatedString(is) => is.parts,
                     _ => kbail!(self, call_span, "Expected a format string first"),
                 };
-                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 2) {
+                let args = match self.ast.mem.get_nth_opt(fn_call.args, 2) {
                     None => self.synth_empty_struct(call_span),
                     Some(args_arg) => {
                         self.eval_expr(args_arg.value, ctx.with_no_expected_type())?
@@ -10422,8 +10338,7 @@ impl TypedProgram {
                 let format_block =
                     self.synth_format_calls(writer, fmt_string, args, call_span, ctx)?;
                 Ok(Some(format_block))
-            }
-            "stringf" => {
+            } else if n == self.ast.idents.b.stringf {
                 if fn_call.args.is_empty() {
                     return failf!(call_span, "format needs a format string");
                 }
@@ -10433,7 +10348,7 @@ impl TypedProgram {
                         "format takes at most 2 arguments: the format string, and the format values"
                     );
                 }
-                let fmt_string_arg = *self.ast.p_call_args.get_nth(fn_call.args, 0);
+                let fmt_string_arg = *self.ast.mem.get_nth(fn_call.args, 0);
                 match self.ast.exprs.get(fmt_string_arg.value) {
                     ParsedExpr::Literal(ParsedLiteral::String(_, _)) => {
                         kbail!(self, call_span, "String has no format slots; lets not use format")
@@ -10441,20 +10356,18 @@ impl TypedProgram {
                     ParsedExpr::InterpolatedString(is) => is.parts,
                     _ => kbail!(self, call_span, "Expected a format string first"),
                 };
-                let args = match self.ast.p_call_args.get_nth_opt(fn_call.args, 1) {
+                let args = match self.ast.mem.get_nth_opt(fn_call.args, 1) {
                     None => self.synth_empty_struct(call_span),
                     Some(arg) => self.eval_expr(arg.value, ctx.with_no_expected_type())?,
                 };
                 let string =
                     self.synth_interpolated_string(fmt_string_arg.value, ctx, Some(args))?;
                 Ok(Some(string))
+            } else {
+                Ok(None)
             }
-            "address_of" => {
-                let arg = self.ast.p_call_args.get_first(fn_call.args).unwrap();
-                let result = self.compile_address_of(arg.value, ctx, call_span)?;
-                Ok(Some(result))
-            }
-            _ => Ok(None),
+        } else {
+            Ok(None)
         }
     }
 
@@ -10464,7 +10377,7 @@ impl TypedProgram {
         array_type_id: TypeId,
         call: &ParsedCall,
         ctx: EvalExprContext,
-    ) -> TyperResult<CallResolution> {
+    ) -> K1Result<CallResolution> {
         let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
@@ -10487,7 +10400,7 @@ impl TypedProgram {
                 if call.args.len() != 2 {
                     return failf!(span, "Array get takes 1 argument, the index");
                 }
-                let index_arg = self.ast.p_call_args.get_nth(call.args, 1);
+                let index_arg = self.ast.mem.get_nth(call.args, 1);
                 let index_expr =
                     self.eval_expr(index_arg.value, ctx.with_expected_type(Some(SIZE_TYPE_ID)))?;
                 let index_expr = self
@@ -10598,12 +10511,12 @@ impl TypedProgram {
         call: &ParsedCall,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<CallResolution> {
+    ) -> K1Result<CallResolution> {
         debug_assert!(call.name.path.is_empty());
         let fn_name = call.name.name;
         let call_span = call.span;
 
-        let args = self.ast.p_call_args.get_slice(call.args);
+        let args = self.ast.mem.getn(call.args);
         let first_arg = args.first().copied();
         let second_arg = args.get(1).copied();
 
@@ -10620,9 +10533,7 @@ impl TypedProgram {
                 return Ok(CallResolution::Other(sum_constr));
             }
 
-            let is_fn_convert =
-                fn_name == self.ast.idents.b.toRef || fn_name == self.ast.idents.b.toDyn;
-            if is_fn_convert {
+            if fn_name == self.ast.idents.b.toRef || fn_name == self.ast.idents.b.toDyn {
                 // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
                 //       if you literally name the function on the lhs of the dot; you can't store
                 //       it in a variable, because the function name on its own isn't a valid
@@ -10666,7 +10577,7 @@ impl TypedProgram {
                     }
                 }
             } else if fn_name == self.ast.idents.b.as_ {
-                let dest_type = match self.ast.p_type_args.get_first(call.type_args) {
+                let dest_type = match self.ast.mem.get_nth_opt(call.type_args, 0) {
                     None => match ctx.expected_type_id {
                         None => return failf!(call_span, "Cannot use as() with no expected type"),
                         Some(et) => et,
@@ -10774,7 +10685,7 @@ impl TypedProgram {
                 .collect::<Vec<_>>()
         );
 
-        let mut errors: SV4<TyperMessage> = smallvec![];
+        let mut errors: SV4<K1Message> = smallvec![];
         for ability_id in abilities_for_function.clone().iter() {
             let in_scope = abilities_in_scope.contains(ability_id);
             if in_scope {
@@ -10926,6 +10837,142 @@ impl TypedProgram {
         self.types.add(Type::Function(new_function_type), defn_info, None)
     }
 
+    /// Compiles 'patching' structs using the 'with' construct.
+    /// myStructFoo.with({ a: 1, b: false })
+    fn compile_patch_struct(
+        &mut self,
+        base_expr: MaybeTypedExpr,
+        call: &ParsedCall,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = call.span;
+        let base_struct_expr = match base_expr {
+            MaybeTypedExpr::Parsed(parsed) => {
+                // We use the expected type
+                self.eval_expr(parsed, ctx)?
+            }
+            MaybeTypedExpr::Typed(typed_expr_id) => typed_expr_id,
+        };
+        let base_struct_type_id = self.exprs.get_type(base_struct_expr);
+        let Type::Struct(base_struct_type) = self.types.get(base_struct_type_id) else {
+            return failf!(span, "'with' receiver must be a struct");
+        };
+        let base_struct_fields = base_struct_type.fields;
+        let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
+        let base_struct_name = self.ast.idents.intern("base_struct");
+        let base_struct_var =
+            self.synth_variable_defn_simple(base_struct_name, base_struct_expr, block.scope_id);
+        self.push_block_stmt_id(&mut block, base_struct_var.defn_stmt);
+        let patch_arg = *self.ast.mem.get_nth(call.args, 1);
+        enum ProvidedPatchStruct {
+            ParsedFields(ParsedSlice<StructValueField>),
+            TypedExpr(TypedExprId),
+        }
+        let patch_struct = match self.ast.exprs.get(patch_arg.value) {
+            ParsedExpr::Struct(parsed_struct) => {
+                ProvidedPatchStruct::ParsedFields(parsed_struct.fields)
+            }
+            _other => ProvidedPatchStruct::TypedExpr(
+                self.eval_expr(patch_arg.value, ctx.with_no_expected_type())?,
+            ),
+        };
+
+        let mut final_fields = self.mem.new_list(base_struct_fields.len());
+        for (base_field_index, base_field) in
+            self.types.mem.getn(base_struct_fields).iter().enumerate()
+        {
+            let name = base_field.name;
+            let expr_value_for_field: TypedExprId = match patch_struct {
+                ProvidedPatchStruct::ParsedFields(parsed) => {
+                    let patch_parsed_field =
+                        self.ast.mem.getn(parsed).iter().find(|f| f.name == name);
+                    match patch_parsed_field {
+                        None => self.synth_struct_field_access(
+                            base_struct_var.variable_expr,
+                            base_field_index,
+                            FieldAccessKind::ValueToValue,
+                            span,
+                        )?,
+                        Some(parsed_field) => {
+                            let parsed_expr = match parsed_field.value {
+                                StructValueFieldKind::VarShorthand => self
+                                    .synth_parsed_variable_expr(
+                                        parsed_field.name,
+                                        parsed_field.span,
+                                    ),
+                                StructValueFieldKind::Expr(parsed_expr) => parsed_expr,
+                                StructValueFieldKind::Uninit => {
+                                    return failf!(
+                                        parsed_field.span,
+                                        "uninit is not permitted here"
+                                    );
+                                }
+                            };
+
+                            let typed_expr = self
+                                .eval_expr_with_coercion(
+                                    parsed_expr,
+                                    ctx.with_expected_type(Some(base_field.type_id)),
+                                    true,
+                                )
+                                .map_err(|mut e| {
+                                    e.message = format!(
+                                        "Field {} has incorrect type: {}",
+                                        self.ident_str(name),
+                                        e.message
+                                    );
+                                    e
+                                })?;
+                            typed_expr
+                        }
+                    }
+                }
+                ProvidedPatchStruct::TypedExpr(patch_struct_expr) => {
+                    let patch_struct_type_id = self.exprs.get_type(patch_struct_expr);
+                    if let Some((matching_patch_field_index, matching_patch_field)) =
+                        self.types.get_struct_field_by_name(patch_struct_type_id, base_field.name)
+                    {
+                        if base_field.type_id != matching_patch_field.type_id {
+                            return failf!(
+                                span,
+                                "Mismatching types for field {}",
+                                self.ident_str(base_field.name)
+                            );
+                        }
+                        let patch_field_access_expr_id = self.synth_struct_field_access(
+                            patch_struct_expr,
+                            matching_patch_field_index,
+                            FieldAccessKind::ValueToValue,
+                            span,
+                        )?;
+                        patch_field_access_expr_id
+                    } else {
+                        let base_field_access_expr_id = self.synth_struct_field_access(
+                            base_struct_var.variable_expr,
+                            base_field_index,
+                            FieldAccessKind::ValueToValue,
+                            span,
+                        )?;
+                        base_field_access_expr_id
+                    }
+                }
+            };
+            final_fields.push(StructLiteralField {
+                name: base_field.name,
+                expr: Some(expr_value_for_field),
+            })
+        }
+        let final_fields_handle = self.mem.list_to_handle(final_fields);
+        let new_struct = self.exprs.add(
+            TypedExpr::Struct(StructLiteral { fields: final_fields_handle }),
+            base_struct_type_id,
+            span,
+        );
+        self.push_block_expr_id(&mut block, new_struct);
+        let block_id = self.exprs.add_block(&mut self.mem, block, base_struct_type_id);
+        Ok(block_id)
+    }
+
     /// After resolving to a particular root AbilityId + function index using just names,
     /// we have to use the information in the call to 'solve' for Self using the rest
     /// of the information available in the `ParsedCall`, and ultimately come back with either
@@ -10937,7 +10984,7 @@ impl TypedProgram {
         receiver_if_method: Option<TypedExprId>,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-    ) -> TyperResult<AbilityImplFunction> {
+    ) -> K1Result<AbilityImplFunction> {
         let call_span = fn_call.span;
         let function_type_id = self.get_function(ability_function_ref.function_id).type_id;
         let base_ability_id = ability_function_ref.ability_id;
@@ -10946,7 +10993,7 @@ impl TypedProgram {
         let ability_params = self.abilities.get(base_ability_id).parameters;
         let ability_self_type_id = self.abilities.get(base_ability_id).self_type_id;
 
-        let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len());
+        let passed_len = known_args.map(|ka| ka.1.len()).unwrap_or(fn_call.args.len() as usize);
         if passed_len != ability_fn_type.logical_params().len() as usize {
             return failf!(
                 call_span,
@@ -10967,10 +11014,9 @@ impl TypedProgram {
                 .map(|p| NameAndType { name: p.name, type_id: p.type_variable_id }),
         );
 
-        let self_only_type_params_handle = self.named_types.add_slice_copy(&[NameAndType {
-            name: self.ast.idents.b.self_,
-            type_id: ability_self_type_id,
-        }]);
+        let self_only_type_params_handle = self
+            .mem
+            .pushn(&[NameAndType { name: self.ast.idents.b.self_, type_id: ability_self_type_id }]);
 
         let mut passed_args: MList<MaybeTypedExpr, MemTmp> = self.tmp.new_list(passed_len as u32);
         match known_args {
@@ -10985,7 +11031,7 @@ impl TypedProgram {
                 }
                 let rest =
                     if receiver_if_method.is_some() { fn_call.args.skip(1) } else { fn_call.args };
-                for arg in self.ast.p_call_args.get_slice(rest) {
+                for arg in self.ast.mem.getn(rest) {
                     passed_args.push(MaybeTypedExpr::Parsed(arg.value))
                 }
             }
@@ -11039,11 +11085,10 @@ impl TypedProgram {
             if ab_param.is_impl_param {
                 continue;
             }
-            let solution =
-                self.named_types.get_slice(other_solved).iter().find(|nt| nt.name == ab_param.name);
+            let solution = self.mem.find(other_solved, |nt| nt.name == ab_param.name);
             parameter_constraints.push(solution.map(|nt| nt.type_id));
         }
-        let solved_self = self.named_types.get_nth(self_solution, 0).type_id;
+        let solved_self = self.mem.get_nth(self_solution, 0).type_id;
 
         let solved_self = self.types.get_static_family_id_if_static(solved_self);
         let impl_handle = self
@@ -11059,7 +11104,7 @@ impl TypedProgram {
                     self,
                     call_span,
                     "Call to {}/{} with self := {} does not work\n{}\nFunction type: {}",
-                    &self.ability_impl_signature_to_string(base_ability_id, SliceHandle::empty()),
+                    &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
                     fn_call.name.name,
                     solved_self,
                     msg,
@@ -11078,7 +11123,7 @@ impl TypedProgram {
         &mut self,
         base_expr_id: TypedExprId,
         span: SpanId,
-    ) -> TyperResult<Option<TypedExprId>> {
+    ) -> K1Result<Option<TypedExprId>> {
         let original_type = self.exprs.get_type(base_expr_id);
         let (sum_type, is_reference) = match self.types.get(original_type) {
             Type::Sum(e) => (e, false),
@@ -11103,7 +11148,7 @@ impl TypedProgram {
         base_expr: TypedExprId,
         fn_call: &ParsedCall,
         ctx: EvalExprContext,
-    ) -> TyperResult<Option<TypedExprId>> {
+    ) -> K1Result<Option<TypedExprId>> {
         let fn_name = self.ident_str(fn_call.name.name);
         let preconditions =
             fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1;
@@ -11180,10 +11225,10 @@ impl TypedProgram {
         base_expr: Option<ParsedExprId>,
         variant_name: Ident,
         payload_parsed_expr: Option<ParsedExprId>,
-        type_args: SliceHandle<NamedTypeArgId>,
+        type_args: ParsedSlice<NamedTypeArg>,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<Option<TypedExprId>> {
+    ) -> K1Result<Option<TypedExprId>> {
         let base_type_id = match base_expr {
             Some(base_expr) => {
                 let ParsedExpr::Variable(v) = self.ast.exprs.get(base_expr) else {
@@ -11303,17 +11348,16 @@ impl TypedProgram {
                                 // We're expecting a specific instance of a generic sum
                                 if spec_info.generic_parent == base_type_id {
                                     // Solved params
-                                    let solved_params_iter: SV4<NameAndType> = self
-                                        .named_types
-                                        .get_slice(g_params)
+                                    let solved_params_iter = self
+                                        .mem
+                                        .getn(g_params)
                                         .iter()
                                         .zip(self.types.mem.getn(spec_info.type_args))
                                         .map(|(g_param, expected_specialized_type)| NameAndType {
                                             name: g_param.name,
                                             type_id: *expected_specialized_type,
-                                        })
-                                        .collect();
-                                    self.named_types.add_slice_copy(&solved_params_iter)
+                                        });
+                                    self.mem.pushn_iter(solved_params_iter)
                                 } else {
                                     return failf!(
                                         span,
@@ -11350,9 +11394,9 @@ impl TypedProgram {
                             param_type: generic_variant_payload,
                             allow_mismatch: false,
                         });
-                        let g_params_owned = self.named_types.copy_slice_sv8(g_params);
+                        let g_params_slice = self.mem.getn(g_params);
                         let (solutions, _all_solutions) = self.infer_types(
-                            &g_params_owned,
+                            g_params_slice,
                             g_params,
                             &args_and_params,
                             span,
@@ -11362,10 +11406,9 @@ impl TypedProgram {
                     }
                 }
             } else {
-                let mut passed_params: SV4<NameAndType> = SmallVec::with_capacity(g_params.len());
-                let type_args_owned = self.ast.p_type_args.copy_slice_sv4(type_args);
+                let mut passed_params: MList<NameAndType, _> = self.mem.new_list(g_params.len());
                 for (generic_param, passed_type_arg) in
-                    self.named_types.copy_slice_sv4(g_params).iter().zip(type_args_owned.iter())
+                    self.mem.getn(g_params).iter().zip(self.ast.mem.getn(type_args))
                 {
                     let Some(passed_type_expr) = passed_type_arg.type_expr else {
                         return failf!(span, "Wildcard type _ is not yet supported here");
@@ -11373,12 +11416,12 @@ impl TypedProgram {
                     let type_id = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
                     passed_params.push(NameAndType { name: generic_param.name, type_id });
                 }
-                self.named_types.add_slice_copy(&passed_params)
+                self.mem.list_to_handle(passed_params)
             };
 
             let passed_type_ids = self.types.mem.pushn_iter(
-                self.named_types
-                    .get_slice(solved_or_passed_type_params)
+                self.mem
+                    .getn(solved_or_passed_type_params)
                     .iter()
                     .map(|type_param| type_param.type_id),
             );
@@ -11406,10 +11449,10 @@ impl TypedProgram {
         known_typed_args: Option<&[TypedExprId]>,
         calling_scope: ScopeId,
         tolerate_missing_context_args: bool,
-    ) -> TyperResult<ArgsAndParams> {
+    ) -> K1Result<ArgsAndParams> {
         let fn_name = fn_call.name.name;
         let span = fn_call.span;
-        let args_slice = self.ast.p_call_args.get_slice(fn_call.args);
+        let args_slice = self.ast.mem.getn(fn_call.args);
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
         let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
         let mut final_args: SV8<MaybeTypedExpr> = SmallVec::new();
@@ -11453,7 +11496,7 @@ impl TypedProgram {
             }
         }
 
-        let args_slice = self.ast.p_call_args.get_slice(fn_call.args);
+        let args_slice = self.ast.mem.getn(fn_call.args);
         let is_lambda = self.types.mem.get_nth_opt(params, 0).is_some_and(|p| p.is_lambda_env);
         let params = if is_lambda { params.skip(1) } else { params };
         let explicit_param_count =
@@ -11599,7 +11642,7 @@ impl TypedProgram {
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let span = fn_call.span;
         debug!("eval_function_call {}", self.qident_to_string(&fn_call.name));
         assert!(
@@ -11656,7 +11699,7 @@ impl TypedProgram {
                     };
                     typechecked_args.push(checked_expr);
                 }
-                (callee, typechecked_args.into_handle(&mut self.mem), SliceHandle::empty())
+                (callee, typechecked_args.into_handle(&mut self.mem), MSlice::empty())
             }
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
@@ -11672,18 +11715,17 @@ impl TypedProgram {
                 let type_args = match &known_args {
                     Some((type_args, _va)) if !type_args.is_empty() => {
                         // Need the name
-                        if type_args.len() != signature.type_params.len() {
+                        if type_args.len() != signature.type_params.len() as usize {
                             self.ice_with_span("Bad known type args, wrong count", span)
                         }
-                        let args: SV4<NameAndType> = type_args
+                        let args_with_names = type_args
                             .iter()
-                            .zip(self.named_types.get_slice(signature.type_params).iter())
+                            .zip(self.mem.getn(signature.type_params))
                             .map(|(type_arg, type_param)| NameAndType {
                                 name: type_param.name,
                                 type_id: *type_arg,
-                            })
-                            .collect();
-                        self.named_types.add_slice_copy(&args)
+                            });
+                        self.mem.pushn_iter(args_with_names)
                     }
                     _ => self.infer_and_constrain_call_type_args(
                         fn_call,
@@ -11848,7 +11890,7 @@ impl TypedProgram {
     ////////////////////////////////
     // End of handling function calls
 
-    fn attempt_static_lift(&mut self, expr_id: TypedExprId) -> TyperResult<TypedExprId> {
+    fn attempt_static_lift(&mut self, expr_id: TypedExprId) -> K1Result<TypedExprId> {
         // Take an arbitrary expression and do our very best to turn it into a statically-known
         // value. Easy examples that must work include:
         // - all scalar literals,
@@ -11888,7 +11930,7 @@ impl TypedProgram {
         call: Call,
         intrinsic: Builtin,
         _ctx: EvalExprContext,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let span = call.span;
         match intrinsic {
             Builtin::GetStaticValue => {
@@ -11917,7 +11959,7 @@ impl TypedProgram {
             Builtin::StaticTypeToValue => {
                 // intern fn staticTypeToValue[T, ST: value T](): T
                 // let inner_type_arg = self.named_types.get_nth(call.type_args, 0);
-                let value_type_arg = self.named_types.get_nth(call.type_args, 1);
+                let value_type_arg = *self.mem.get_nth(call.type_args, 1);
 
                 let return_type = call.return_type;
                 let Type::StaticValue(value_type) = self.types.get(value_type_arg.type_id) else {
@@ -11943,7 +11985,7 @@ impl TypedProgram {
                 Ok(source_location)
             }
             Builtin::TypeId => {
-                let type_arg = self.named_types.get_nth(call.type_args, 0);
+                let type_arg = self.mem.get_nth(call.type_args, 0);
                 let type_id = type_arg.type_id;
                 let type_id_u64 = type_arg.type_id.as_u32() as u64;
 
@@ -11957,7 +11999,7 @@ impl TypedProgram {
                 Ok(int_expr)
             }
             Builtin::SizeOf | Builtin::SizeOfStride | Builtin::AlignOf => {
-                let type_id = self.named_types.get_nth(call.type_args, 0).type_id;
+                let type_id = self.mem.get_nth(call.type_args, 0).type_id;
                 let layout = self.get_layout(type_id);
                 let value_bytes = match intrinsic {
                     Builtin::SizeOf => layout.size as u64,
@@ -11976,11 +12018,11 @@ impl TypedProgram {
         call: &Call,
         intrinsic: Builtin,
         _ctx: EvalExprContext,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         match intrinsic {
             Builtin::BitCast => {
-                let type_from = self.named_types.get_nth(call.type_args, 0).type_id;
-                let type_to = self.named_types.get_nth(call.type_args, 1).type_id;
+                let type_from = self.mem.get_nth(call.type_args, 0).type_id;
+                let type_to = self.mem.get_nth(call.type_args, 1).type_id;
                 let layout_from = self.get_layout(type_from);
                 let layout_to = self.get_layout(type_to);
                 if layout_from.size == 0 {
@@ -12031,12 +12073,12 @@ impl TypedProgram {
             ),
             self.pretty_print_type_substitutions(set, ", ")
         );
-        let mut ability_args_new: SV8<NameAndType> = smallvec![];
-        let mut impl_args_new: SV4<NameAndType> = smallvec![];
+        let mut ability_args_new: MList<NameAndType, _> = self.mem.new_list(all_base_params.len());
+        let mut impl_args_new: MList<NameAndType, _> = self.mem.new_list(all_base_params.len());
         for (index, ability_param) in
             self.mem.getn(all_base_params).iter().filter(|p| !p.is_impl_param).enumerate()
         {
-            let previous_value = self.named_types.get_nth(old_impl_ability_arguments, index);
+            let previous_value = self.mem.get_nth(old_impl_ability_arguments, index);
             let substituted = self.substitute_in_type(previous_value.type_id, set);
             ability_args_new.push(NameAndType { name: ability_param.name, type_id: substituted });
             debug!(
@@ -12048,7 +12090,7 @@ impl TypedProgram {
         for (index, impl_param) in
             self.mem.getn(all_base_params).iter().filter(|p| p.is_impl_param).enumerate()
         {
-            let previous_value = self.named_types.get_nth(old_impl_arguments, index);
+            let previous_value = self.mem.get_nth(old_impl_arguments, index);
             let substituted = self.substitute_in_type(previous_value.type_id, set);
             impl_args_new.push(NameAndType { name: impl_param.name, type_id: substituted });
             debug!(
@@ -12057,8 +12099,8 @@ impl TypedProgram {
                 self.type_id_to_string_ext(substituted, true)
             );
         }
-        let ability_args_new_handle = self.named_types.add_slice_copy(&ability_args_new);
-        let impl_args_new_handle = self.named_types.add_slice_copy(&impl_args_new);
+        let ability_args_new_handle = self.mem.list_to_handle(ability_args_new);
+        let impl_args_new_handle = self.mem.list_to_handle(impl_args_new);
         let specialized_base =
             self.specialize_ability(base_ability_id, ability_args_new_handle, span, scope_id);
         TypedAbilitySignature {
@@ -12115,7 +12157,7 @@ impl TypedProgram {
             .mem
             .getn(generic_function_sig.function_type_params)
             .iter()
-            .zip(self.named_types.get_slice(fnlike_type_arguments))
+            .zip(self.mem.getn(fnlike_type_arguments))
         {
             subst_pairs.push(TypeSubstitutionPair {
                 from: function_type_param.type_id,
@@ -12126,10 +12168,10 @@ impl TypedProgram {
         // Here, we're substituting the actual 'normal' type params as well,
         // such as T, U in fn makePair[T, U](t: T, u: U)
         subst_pairs.extend(
-            self.named_types
-                .get_slice(generic_function_sig.type_params)
+            self.mem
+                .getn(generic_function_sig.type_params)
                 .iter()
-                .zip(self.named_types.get_slice(type_arguments))
+                .zip(self.mem.getn(type_arguments))
                 .map(|(gen_param, type_arg)| TypeSubstitutionPair {
                     from: gen_param.type_id,
                     to: type_arg.type_id,
@@ -12151,16 +12193,14 @@ impl TypedProgram {
         // Must 'zip' up with each function type param
         fnlike_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
-    ) -> TyperResult<FunctionId> {
+    ) -> K1Result<FunctionId> {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_param_variables = generic_function.params;
         let generic_function_scope = generic_function.scope;
 
         for existing_specialization in &generic_function.child_specializations {
-            if self
-                .named_types
-                .slices_equal_copy(existing_specialization.type_arguments, type_arguments)
-                && self.named_types.slices_equal_copy(
+            if self.mem.slices_equal_copy(existing_specialization.type_arguments, type_arguments)
+                && self.mem.slices_equal_copy(
                     existing_specialization.fnlike_type_arguments,
                     fnlike_type_arguments,
                 )
@@ -12194,9 +12234,9 @@ impl TypedProgram {
             let generic_function = m.get_function(generic_function_id);
             let spec_num = generic_function.child_specializations.len() + 1;
             write!(s, "{}__", m.ident_str(generic_function.name)).unwrap();
-            for (index, nt) in m.named_types.get_slice(type_arguments).iter().enumerate() {
+            for (index, nt) in m.mem.getn(type_arguments).iter().enumerate() {
                 m.display_type_id(s, nt.type_id, false).unwrap();
-                if index < type_arguments.len() - 1 {
+                if index < type_arguments.len() as usize - 1 {
                     write!(s, "_").unwrap();
                 }
             }
@@ -12213,7 +12253,7 @@ impl TypedProgram {
             Some(specialized_name_ident),
         );
 
-        for nt in self.named_types.get_slice(type_arguments) {
+        for nt in self.mem.getn(type_arguments) {
             let _ = self.scopes.add_type(spec_fn_scope, nt.name, nt.type_id);
         }
 
@@ -12266,7 +12306,7 @@ impl TypedProgram {
             scope: spec_fn_scope,
             params: self.mem.list_to_handle(param_variables),
             // Must be empty for correctness; a specialized function has no type parameters!
-            type_params: SliceHandle::empty(),
+            type_params: MSlice::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
             function_type_params: MSlice::empty(),
             body_block: None,
@@ -12302,7 +12342,7 @@ impl TypedProgram {
         Ok(specialized_function_id)
     }
 
-    fn specialize_function_body(&mut self, function_id: FunctionId) -> TyperResult<()> {
+    fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
         let specialized_function = self.get_function(function_id);
         // eprintln!("specialize_function_body\n  {}", self.function_id_to_string(function_id, false));
         // eprintln!(
@@ -12407,12 +12447,12 @@ impl TypedProgram {
         // Example: fn typeOnly[T: static u32](): unit
         // If specialized on static[u32, <none>], wouldn't have any generics in its signature
         if let Some(spec_info) = function.specialization_info {
-            for t in self.named_types.get_slice(spec_info.type_arguments) {
+            for t in self.mem.getn(spec_info.type_arguments) {
                 if self.types.type_variable_counts.get(t.type_id).is_abstract() {
                     return false;
                 }
             }
-            for t in self.named_types.get_slice(spec_info.fnlike_type_arguments) {
+            for t in self.mem.getn(spec_info.fnlike_type_arguments) {
                 if self.types.type_variable_counts.get(t.type_id).is_abstract() {
                     return false;
                 }
@@ -12428,7 +12468,7 @@ impl TypedProgram {
         stmt: ParsedStmtId,
         ctx: EvalExprContext,
         coerce_expr: bool,
-    ) -> TyperResult<Option<TypedStmtId>> {
+    ) -> K1Result<Option<TypedStmtId>> {
         match self.ast.stmts.get(stmt) {
             ParsedStmt::Use(use_stmt) => {
                 let parsed_use = self.ast.uses.get_use(use_stmt.use_id);
@@ -12779,7 +12819,7 @@ impl TypedProgram {
         // This block's scope is ALREADY PROVIDED AND SET IN CTX
         ctx: EvalExprContext,
         needs_terminator: bool,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let block_scope = ctx.scope_id;
         if block.stmts.is_empty() {
             return failf!(block.span, "Blocks must contain at least one statement or expression");
@@ -12920,7 +12960,7 @@ impl TypedProgram {
         &mut self,
         expr: TypedExprId,
         scope_id: ScopeId,
-    ) -> TyperResult<Option<VariableId>> {
+    ) -> K1Result<Option<VariableId>> {
         let expr_span = self.exprs.get_span(expr);
         if let Some(returned_variable_id) = self.get_returned_var_for_scope(scope_id) {
             let err = failf!(
@@ -13170,7 +13210,7 @@ impl TypedProgram {
         payload: Option<ParsedExprId>,
         ctx: EvalExprContext,
         span: SpanId,
-    ) -> TyperResult<TypedExprId> {
+    ) -> K1Result<TypedExprId> {
         let e = self.types.get(concrete_sum_type).expect_sum();
         let Some(variant) = self.types.sum_variant_by_name(e.variants, variant_name) else {
             return failf!(
@@ -13236,7 +13276,7 @@ impl TypedProgram {
         name: Ident,
         scope_id: ScopeId,
         span: SpanId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         debug!(
             "Checking constraint {}: {}",
             self.type_id_to_string(target_type,),
@@ -13254,10 +13294,10 @@ impl TypedProgram {
             let found_impl = self.ability_impls.get(impl_handle.full_impl_id);
             debug_assert!(signature.impl_arguments.len() == found_impl.impl_arguments.len());
             for (constraint_arg, passed_arg) in self
-                .named_types
-                .get_slice(signature.impl_arguments)
+                .mem
+                .getn(signature.impl_arguments)
                 .iter()
-                .zip(self.named_types.get_slice(found_impl.impl_arguments).iter())
+                .zip(self.mem.getn(found_impl.impl_arguments).iter())
             {
                 debug_assert!(constraint_arg.name == passed_arg.name);
 
@@ -13296,7 +13336,7 @@ impl TypedProgram {
         substitution_pairs: &[TypeSubstitutionPair],
         scope_id: ScopeId,
         span: SpanId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let tp = self.types.get_type_parameter(param_type);
         if let Some(static_constraint) = tp.static_constraint {
             let specialized_constraint =
@@ -13335,6 +13375,9 @@ impl TypedProgram {
         Ok(())
     }
 
+    /// Checks a list of arguments against an ability's signature.
+    /// Are all arguments provided? If they have constraints, are they met?
+    /// skip_impl_check: Sometimes we only apply the ability-side params
     fn check_ability_arguments(
         &mut self,
         ability_id: AbilityId,
@@ -13342,12 +13385,12 @@ impl TypedProgram {
         span: SpanId,
         scope_id: ScopeId,
         skip_impl_check: bool,
-    ) -> TyperResult<(NamedTypeSlice, NamedTypeSlice)> {
+    ) -> K1Result<(NamedTypeSlice, NamedTypeSlice)> {
         let ability = self.abilities.get(ability_id);
         let ability_parameters = ability.parameters;
 
         // Catch unrecognized arguments first
-        for arg in self.named_types.get_slice(arguments) {
+        for arg in self.mem.getn(arguments) {
             let has_matching_param =
                 self.mem.getn(ability_parameters).iter().any(|param| param.name == arg.name);
             if !has_matching_param {
@@ -13355,9 +13398,8 @@ impl TypedProgram {
             }
         }
 
-        // TODO: Most of these temporary SV8s can be replaced with tmp arena usage
-        let mut ability_arguments: SV8<NameAndType> = smallvec![];
-        let mut impl_arguments: SV8<NameAndType> = SmallVec::with_capacity(arguments.len());
+        let mut ability_arguments: MList<NameAndType, _> = self.mem.new_list(arguments.len());
+        let mut impl_arguments: MList<NameAndType, _> = self.mem.new_list(arguments.len());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         for param in self
             .mem
@@ -13365,12 +13407,8 @@ impl TypedProgram {
             .iter()
             .filter(|p| !skip_impl_check || p.is_ability_side_param())
         {
-            let Some(matching_arg) = self
-                .named_types
-                .get_slice(arguments)
-                .iter()
-                .find(|a| a.name == param.name)
-                .copied()
+            let Some(matching_arg) =
+                self.mem.getn(arguments).iter().find(|a| a.name == param.name).copied()
             else {
                 return failf!(
                     span,
@@ -13412,14 +13450,16 @@ impl TypedProgram {
             )?;
         }
 
-        let ability_arguments_handle = self.named_types.add_slice_copy(&ability_arguments);
-        let impl_arguments_handle = self.named_types.add_slice_copy(&impl_arguments);
+        let ability_arguments_handle = self.mem.list_to_handle(ability_arguments);
+        let impl_arguments_handle = self.mem.list_to_handle(impl_arguments);
         Ok((ability_arguments_handle, impl_arguments_handle))
     }
 
     fn specialize_ability(
         &mut self,
         ability_id: AbilityId,
+        // We take this as an interned slice
+        // because we have to store it on the specialization info anyway
         arguments: NamedTypeSlice,
         span: SpanId,
         parent_scope_id: ScopeId,
@@ -13434,12 +13474,12 @@ impl TypedProgram {
         let ability_parameters = ability.parameters;
         let ability_namespace_id = ability.namespace_id;
         let specializations = self.abilities.get(generic_ability_id).kind.specializations();
-        if arguments.len() > ability_parameters.len() as usize {
+        if arguments.len() > ability_parameters.len() {
             panic!("Passed too many arguments to specialize_ability; probably passed impl args");
         }
         if let Some(cached_specialization) = specializations
             .iter()
-            .find(|spec| self.named_types.slices_equal_copy(spec.arguments, arguments))
+            .find(|spec| self.mem.slices_equal_copy(spec.arguments, arguments))
         {
             debug!(
                 "Using cached ability specialization for {}",
@@ -13455,11 +13495,8 @@ impl TypedProgram {
             Some(ability_name),
         );
 
-        for (arg_type, param) in self
-            .named_types
-            .copy_slice_sv::<4>(arguments)
-            .iter()
-            .zip(self.mem.getn(ability_parameters).iter())
+        for (arg_type, param) in
+            self.mem.getn(arguments).iter().zip(self.mem.getn(ability_parameters).iter())
         {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, arg_type.type_id);
         }
@@ -13554,15 +13591,15 @@ impl TypedProgram {
 
     fn check_ability_expr(
         &mut self,
-        ability_expr_id: parse::ParsedAbilityExprId,
+        ability_expr_id: ParsedHandle<ParsedAbilityExpr>,
         scope_id: ScopeId,
         skip_impl_check: bool,
-    ) -> TyperResult<(AbilityId, NamedTypeSlice, NamedTypeSlice)> {
-        let ability_expr = self.ast.p_ability_exprs.get(ability_expr_id).clone();
+    ) -> K1Result<(AbilityId, NamedTypeSlice, NamedTypeSlice)> {
+        let ability_expr = self.ast.mem.get(ability_expr_id).clone();
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
 
-        let mut arguments: SV4<NameAndType> = SmallVec::with_capacity(ability_expr.arguments.len());
-        for arg in self.ast.p_type_args.copy_slice_sv4(ability_expr.arguments).iter() {
+        let mut arguments: MList<NameAndType, _> = self.mem.new_list(ability_expr.arguments.len());
+        for arg in self.ast.mem.getn(ability_expr.arguments) {
             // TODO: Possible now to pass 'dont cares'. I think we allow them in ability exprs that are constraints but
             //       nowhere else
             let Some(arg_type_expr) = arg.type_expr else {
@@ -13575,7 +13612,7 @@ impl TypedProgram {
             arguments.push(NameAndType { name, type_id: arg_type });
         }
 
-        let arguments_handle = self.named_types.add_slice_copy(&arguments);
+        let arguments_handle = self.mem.list_to_handle(arguments);
         let (ability_args, impl_args) = self.check_ability_arguments(
             ability_id,
             arguments_handle,
@@ -13588,13 +13625,13 @@ impl TypedProgram {
 
     fn eval_ability_expr(
         &mut self,
-        ability_expr_id: parse::ParsedAbilityExprId,
+        ability_expr_id: ParsedHandle<ParsedAbilityExpr>,
         skip_impl_check: bool,
         scope_id: ScopeId,
-    ) -> TyperResult<TypedAbilitySignature> {
+    ) -> K1Result<TypedAbilitySignature> {
         let (base_ability_id, ability_arguments, impl_arguments) =
             self.check_ability_expr(ability_expr_id, scope_id, skip_impl_check)?;
-        let span = self.ast.p_ability_exprs.get(ability_expr_id).span;
+        let span = self.ast.mem.get(ability_expr_id).span;
         let new_ability_id =
             self.specialize_ability(base_ability_id, ability_arguments, span, scope_id);
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
@@ -13606,13 +13643,12 @@ impl TypedProgram {
         parent_scope_id: ScopeId,
         ability_info: Option<FunctionAbilityContextInfo>,
         namespace_id: NamespaceId,
-    ) -> TyperResult<Option<FunctionId>> {
+    ) -> K1Result<Option<FunctionId>> {
         let namespace = self.namespaces.get(namespace_id);
         let companion_type_id = namespace.companion_type_id;
-        let parsed_function = self.ast.get_function(parsed_function_id).clone();
-        let is_debug = parsed_function.compiler_debug;
-        let should_compile =
-            self.execute_static_condition(parsed_function.condition, parent_scope_id);
+        let ast_fn = self.ast.get_function(parsed_function_id).clone();
+        let is_debug = ast_fn.compiler_debug;
+        let should_compile = self.execute_static_condition(ast_fn.condition, parent_scope_id);
         if !should_compile {
             return Ok(None);
         }
@@ -13624,13 +13660,6 @@ impl TypedProgram {
                 s.pop_debug_level()
             }
         });
-        let parsed_function_linkage = parsed_function.linkage;
-        let parsed_function_name = parsed_function.name;
-        let parsed_function_span = parsed_function.span;
-        let parsed_function_params = &parsed_function.params;
-        let parsed_function_context_params = &parsed_function.context_params;
-        let signature_span = parsed_function.signature_span;
-        let parsed_type_params = &parsed_function.type_params;
 
         let is_ability_decl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_none());
         let is_ability_impl = ability_info.as_ref().is_some_and(|info| info.impl_info.is_some());
@@ -13661,12 +13690,12 @@ impl TypedProgram {
                     self_.ident_str(self_.abilities.get(ability_id.unwrap()).name),
                     self_.type_id_to_string(impl_info.self_type_id),
                     ability_id.unwrap().0,
-                    self_.ident_str(parsed_function_name),
+                    self_.ident_str(ast_fn.name),
                 )
                 .unwrap();
                 self_.ast.idents.intern(s)
             }
-            None => parsed_function.name,
+            None => ast_fn.name,
         };
 
         let fn_scope_id = self_.scopes.add_child_scope(
@@ -13677,22 +13706,20 @@ impl TypedProgram {
         );
 
         // Instantiate type arguments.
-        let mut type_params: SmallVec<[NameAndType; 8]> =
-            SmallVec::with_capacity(parsed_type_params.len());
-        let mut function_type_params: MList<FunctionTypeParam, TypedProgram> =
-            self_.mem.new_list(0);
+        let mut type_params: MList<NameAndType, _> = self_.mem.new_list(ast_fn.type_params.len());
+        let mut fnlike_type_params: MList<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
             let self_type_id = self_.abilities.get(ability_id.unwrap()).self_type_id;
             type_params.push(NameAndType { name: self_.ast.idents.b.self_, type_id: self_type_id })
         }
-        for type_parameter in parsed_type_params.iter() {
+        for type_parameter in self_.ast.mem.getn(ast_fn.type_params) {
             let mut ability_constraints = SmallVec::new();
             let mut static_constraint: Option<TypeId> = None;
 
             for parsed_constraint in self_.ast.mem.getn(type_parameter.constraints).iter().chain(
-                parsed_function
+                ast_fn
                     .additional_where_constraints
                     .iter()
                     .filter(|c| c.name == type_parameter.name)
@@ -13740,11 +13767,16 @@ impl TypedProgram {
         }
 
         // Process parameters
-        let param_count = parsed_function_context_params.len() + parsed_function_params.len();
+        let param_count = ast_fn.context_params.len() + ast_fn.params.len();
         let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count as u32);
         let mut params = self_.mem.new_list(param_count as u32);
-        for (idx, fn_param) in
-            parsed_function_context_params.iter().chain(parsed_function_params.iter()).enumerate()
+        for (idx, fn_param) in self_
+            .ast
+            .mem
+            .getn(ast_fn.context_params)
+            .iter()
+            .chain(self_.ast.mem.getn(ast_fn.params).iter())
+            .enumerate()
         {
             let type_id = self_.eval_type_expr_ext(
                 fn_param.type_expr,
@@ -13762,7 +13794,7 @@ impl TypedProgram {
                 Type::FunctionTypeParameter(ftp) => {
                     let name = ftp.name;
                     let span = ftp.span;
-                    function_type_params.push_grow(
+                    fnlike_type_params.push_grow(
                         &mut self_.mem,
                         FunctionTypeParam { name, type_id, value_param_index: idx as u32, span },
                     );
@@ -13859,24 +13891,22 @@ impl TypedProgram {
             }
         }
 
-        let intrinsic_type = if parsed_function_linkage == Linkage::Intrinsic {
+        let intrinsic_type = if ast_fn.linkage == Linkage::Intrinsic {
             // Note(perf): name_chain isn't efficient,
             // but we don't have a lot of intrinsics
             let mut namespace_chain = self_.namespaces.name_chain(namespace_id);
             let resolved = self_
                 .resolve_intrinsic_function_type(
-                    parsed_function_name,
+                    ast_fn.name,
                     namespace_chain.make_contiguous(),
                     ability_id.zip(impl_self_type),
                 )
-                .map_err(|msg| {
-                    errf!(parsed_function_span, "Error typechecking function: {}", msg,)
-                })?;
+                .map_err(|msg| errf!(ast_fn.span, "Error typechecking function: {}", msg,))?;
             Some(resolved)
         } else {
             None
         };
-        let return_type = match parsed_function.ret_type {
+        let return_type = match ast_fn.ret_type {
             None => self_.types.builtins.empty,
             Some(parsed_ret_type) => self_.eval_type_expr(parsed_ret_type, fn_scope_id)?,
         };
@@ -13884,7 +13914,7 @@ impl TypedProgram {
         // Typecheck 'main': It must take argc and argv of correct types, or nothing
         // And it must return an i32
         let is_main_fn =
-            namespace_id == ROOT_NAMESPACE_ID && parsed_function_name == self_.ast.idents.b.main;
+            namespace_id == ROOT_NAMESPACE_ID && ast_fn.name == self_.ast.idents.b.main;
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -13907,7 +13937,7 @@ impl TypedProgram {
                 }
                 n => {
                     return failf!(
-                        signature_span,
+                        ast_fn.signature_span,
                         "main must take exactly 0 or 2 parameters, got {}",
                         n
                     );
@@ -13916,7 +13946,7 @@ impl TypedProgram {
             match return_type {
                 I32_TYPE_ID => {}
                 _other => {
-                    return failf!(parsed_function_span, "main must return i32");
+                    return failf!(ast_fn.span, "main must return i32");
                 }
             }
         };
@@ -13944,7 +13974,7 @@ impl TypedProgram {
         };
 
         let param_types_handle = self_.types.mem.list_to_handle(param_types);
-        let call_conv = match parsed_function_linkage {
+        let call_conv = match ast_fn.linkage {
             Linkage::Standard => AbiMode::Internal,
             Linkage::External { .. } => AbiMode::Native,
             Linkage::Intrinsic => AbiMode::Internal,
@@ -13956,8 +13986,8 @@ impl TypedProgram {
             abi_mode: call_conv,
         }));
 
-        let type_params_handle = self_.named_types.add_slice_copy(&type_params);
-        let function_type_params_handle = self_.mem.list_to_handle(function_type_params);
+        let type_params_handle = self_.mem.list_to_handle(type_params);
+        let function_type_params_handle = self_.mem.list_to_handle(fnlike_type_params);
         let function_id = self_.functions.next_id();
         for v in params.iter() {
             self_.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
@@ -13971,7 +14001,7 @@ impl TypedProgram {
             function_type_params: function_type_params_handle,
             body_block: None,
             intrinsic_type,
-            linkage: parsed_function_linkage,
+            linkage: ast_fn.linkage,
             child_specializations: vec![],
             specialization_info: None,
             parsed_id: parsed_function_id.into(),
@@ -13985,12 +14015,12 @@ impl TypedProgram {
         });
 
         if resolvable_by_name {
-            if !self_.scopes.add_function(parent_scope_id, parsed_function_name, function_id) {
-                let signature_span = parsed_function.signature_span;
+            if !self_.scopes.add_function(parent_scope_id, ast_fn.name, function_id) {
+                let signature_span = ast_fn.signature_span;
                 let error = errf!(
                     signature_span,
                     "Function name {} is taken",
-                    self_.ident_str(parsed_function_name)
+                    self_.ident_str(ast_fn.name)
                 );
                 self_.report(error);
             }
@@ -14014,7 +14044,7 @@ impl TypedProgram {
         Ok(Some(function_id))
     }
 
-    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> TyperResult<()> {
+    pub fn eval_function_body(&mut self, declaration_id: FunctionId) -> K1Result<()> {
         let function = self.get_function(declaration_id);
         if function.body_failure.is_some() || function.body_block.is_some() {
             return Ok(());
@@ -14120,7 +14150,7 @@ impl TypedProgram {
         &mut self,
         parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
-    ) -> TyperResult<AbilityId> {
+    ) -> K1Result<AbilityId> {
         if let Some(ability_id) = self.types.find_ability_mapping(parsed_ability_id) {
             return Ok(ability_id);
         }
@@ -14289,7 +14319,7 @@ impl TypedProgram {
         &mut self,
         ability_name: &QIdent,
         scope_id: ScopeId,
-    ) -> TyperResult<AbilityId> {
+    ) -> K1Result<AbilityId> {
         let found_ability_id = self.scopes.find_ability_namespaced(
             scope_id,
             ability_name,
@@ -14323,17 +14353,17 @@ impl TypedProgram {
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
-    ) -> TyperResult<AbilityImplId> {
+    ) -> K1Result<AbilityImplId> {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
-        let ability_expr = self.ast.p_ability_exprs.get(parsed_ability_impl.ability_expr).clone();
+        let ability_expr = self.ast.mem.get(parsed_ability_impl.ability_expr).clone();
         let parsed_impl_functions = &parsed_ability_impl.functions;
 
         let impl_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None, None);
 
-        let mut blanket_type_params: SV4<NameAndType> =
-            SmallVec::with_capacity(parsed_ability_impl.generic_impl_params.len());
+        let mut blanket_type_params: MList<NameAndType, _> =
+            self.mem.new_list(parsed_ability_impl.generic_impl_params.len() as u32);
         for blanket_impl_param in &parsed_ability_impl.generic_impl_params {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
@@ -14387,7 +14417,7 @@ impl TypedProgram {
                 {
                     let constrained_ability_sig =
                         self.eval_ability_expr(ability_expr, false, impl_scope_id)?;
-                    let constraint_span = self.ast.p_ability_exprs.get(ability_expr).span;
+                    let constraint_span = self.ast.mem.get(ability_expr).span;
                     self.add_constrained_ability_impl(
                         type_variable_id,
                         constrained_ability_sig,
@@ -14440,7 +14470,7 @@ impl TypedProgram {
 
         // We also need to bind any ability parameters that this
         // ability is already specialized on; they aren't in our fresh scope
-        for argument in self.named_types.get_slice(ability.kind.arguments()) {
+        for argument in self.mem.getn(ability.kind.arguments()) {
             if !self.scopes.get_scope_mut(impl_scope_id).add_type(argument.name, argument.type_id) {
                 return failf!(
                     span,
@@ -14450,13 +14480,12 @@ impl TypedProgram {
             }
         }
 
-        let mut impl_arguments: SV8<NameAndType> =
-            SmallVec::with_capacity(ability.parameters.len() as usize);
+        let mut impl_arguments: MList<NameAndType, _> = self.mem.new_list(ability.parameters.len());
         for impl_param in self.mem.getn(ability.parameters).iter().filter(|p| p.is_impl_param) {
             let Some(&matching_arg) = self
                 .ast
-                .p_type_args
-                .get_slice(ability_expr.arguments)
+                .mem
+                .getn(ability_expr.arguments)
                 .iter()
                 .find(|arg| arg.name == Some(impl_param.name))
             else {
@@ -14598,8 +14627,8 @@ impl TypedProgram {
             typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
         }
 
-        let blanked_type_params_handle = self.named_types.add_slice_copy(&blanket_type_params);
-        let impl_arguments_handle = self.named_types.add_slice_copy(&impl_arguments);
+        let blanked_type_params_handle = self.mem.list_to_handle(blanket_type_params);
+        let impl_arguments_handle = self.mem.list_to_handle(impl_arguments);
         let typed_impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind,
             blanket_type_params: blanked_type_params_handle,
@@ -14627,7 +14656,7 @@ impl TypedProgram {
         &mut self,
         parsed_ability_impl_id: ParsedAbilityImplId,
         _scope_id: ScopeId,
-    ) -> TyperResult<()> {
+    ) -> K1Result<()> {
         let Some(&ability_impl_id) = self.ability_impl_ast_mappings.get(&parsed_ability_impl_id)
         else {
             // Missing mapping means, likely, we failed to compile the signature
@@ -14776,7 +14805,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         name: &QIdent,
         fail_on_traverse_fail: bool,
-    ) -> TyperResult<SV4<UseableSymbol>> {
+    ) -> K1Result<SV4<UseableSymbol>> {
         let scope_id_to_search = match self.scopes.traverse_namespace_chain(
             scope_id,
             name.path,
@@ -15054,7 +15083,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope_id: ScopeId,
-    ) -> TyperResult<NamespaceId> {
+    ) -> K1Result<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let name = ast_namespace.name;
 
@@ -15131,7 +15160,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
-    ) -> TyperResult<NamespaceId> {
+    ) -> K1Result<NamespaceId> {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id).clone();
 
         let direct_parent = self.scopes.get_scope(parent_scope);
@@ -15270,7 +15299,7 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
         skip_defns: &[ParsedId],
-    ) -> TyperResult<NamespaceId> {
+    ) -> K1Result<NamespaceId> {
         let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
         self.declare_namespaces_in_namespace(parsed_namespace_id, skip_defns);
         Ok(ns_id)
@@ -15288,11 +15317,11 @@ impl TypedProgram {
         let is_core = module_id == MODULE_ID_CORE;
 
         // Namespace phase
-        debug!(">> Phase 0 declare root namespace");
-        let root_namespace_declare_result =
+        debug!(">> Phase 0 declare module root namespace");
+        let module_root_namespace_declare_result =
             self.declare_namespace(module_root_parsed_namespace, Scopes::ROOT_SCOPE_ID);
 
-        if let Err(e) = root_namespace_declare_result {
+        if let Err(e) = module_root_namespace_declare_result {
             self.report(e);
             bail!(
                 "{} failed namespace declaration phase with {} errors",
@@ -15300,22 +15329,23 @@ impl TypedProgram {
                 self.messages.len()
             )
         }
-        let typed_namespace_id = root_namespace_declare_result.unwrap();
-        let root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
+        let typed_namespace_id = module_root_namespace_declare_result.unwrap();
+        let module_root_namespace_scope_id = self.namespaces.get(typed_namespace_id).scope_id;
         *self.modules.get_mut(module_id) = Module {
             id: module_id,
             name: module_name,
             home_dir,
             manifest,
             namespace_id: typed_namespace_id,
-            namespace_scope_id: root_namespace_scope_id,
+            namespace_scope_id: module_root_namespace_scope_id,
 
             parse_elapsed_ms: 0,
             typecheck_elapsed_ms: 0,
         };
 
         if !is_core {
-            self.add_core_uses_to_scope(root_namespace_scope_id, SpanId::NONE)?;
+            // takes 14us last I checked
+            self.add_core_uses_to_scope(module_root_namespace_scope_id, SpanId::NONE)?;
         }
 
         // Meta phase: Find pre namespace, if exists, and fully compile it
@@ -15329,7 +15359,7 @@ impl TypedProgram {
                 .find(|id| self.ast.namespaces.get(*id).name == self.ast.idents.b.pre)
             {
                 debug!(">> Phase 0.5 compile pre namespace");
-                self.declare_namespace(pre_ns_parsed_id, root_namespace_scope_id)?;
+                self.declare_namespace(pre_ns_parsed_id, module_root_namespace_scope_id)?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
                 pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
             }
@@ -15341,6 +15371,12 @@ impl TypedProgram {
         };
 
         self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, skip_defns)?;
+
+        if is_core {
+            // Some of these will be redundant, but this lets us use the core prelude from
+            // module manifests, and 'pre' modules
+            self.add_core_uses_to_scope(self.scopes.root_scope_id(), SpanId::NONE)?;
+        }
 
         Ok(module_id)
     }
@@ -15866,7 +15902,7 @@ impl TypedProgram {
         }
     }
 
-    fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> TyperResult<()> {
+    fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> K1Result<()> {
         let root_ns: IdentSlice =
             self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.root_module_name]);
         let core_ns: IdentSlice = self.ast.idents.slices.add_slice_copy(&[self.ast.idents.b.core]);
@@ -16009,7 +16045,7 @@ impl TypedProgram {
                     make_variant(self, get_ident!(self, "int"), Some(payload_value_id));
                 enum_value
             }
-            Type::ScalarEnum(se) => todo!("scalar enum schema"),
+            Type::ScalarEnum(_se) => todo!("scalar enum schema"),
             Type::Float(_float_type) => todo!("float schema"),
             Type::Struct(_struct_type) if chased_type_id == STRING_TYPE_ID => {
                 make_variant(self, get_ident!(self, "string"), None)
@@ -16371,7 +16407,7 @@ impl TypedProgram {
         function_id: FunctionId,
         lib_name_ident: Ident,
         span: SpanId,
-    ) -> TyperResult<*mut std::ffi::c_void> {
+    ) -> K1Result<*mut std::ffi::c_void> {
         let Linkage::External { module_id, .. } = self.functions.get(function_id).linkage else {
             ice_span!(self, span, "get_dylib_handle called for non-external function");
         };
@@ -16468,10 +16504,10 @@ impl TypedProgram {
 
     // Errors and logging
 
-    pub fn report(&mut self, e: TyperMessage) {
+    pub fn report(&mut self, e: K1Message) {
         self.report_ext(e, false)
     }
-    pub fn report_ext(&mut self, e: TyperMessage, no_print: bool) {
+    pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
         // Check for exact duplicates; happens a lot with generic code
         if self.messages.contains(&e) {
             return;
@@ -16495,7 +16531,7 @@ impl TypedProgram {
     }
 
     pub fn report_hint(&mut self, span: SpanId, message: impl AsRef<str>) {
-        self.report(TyperMessage {
+        self.report(K1Message {
             message: message.as_ref().to_string(),
             span,
             level: MessageLevel::Hint,
@@ -16505,14 +16541,14 @@ impl TypedProgram {
     pub fn log_hint(&self, span: SpanId, message: impl AsRef<str>) {
         let use_color = std::io::stderr().is_terminal();
         let hint =
-            TyperMessage { message: message.as_ref().to_string(), span, level: MessageLevel::Hint };
+            K1Message { message: message.as_ref().to_string(), span, level: MessageLevel::Hint };
         self.write_error(&mut std::io::stderr(), &hint, use_color).unwrap();
     }
 
     pub fn write_error(
         &self,
         w: &mut impl std::io::Write,
-        error: &TyperMessage,
+        error: &K1Message,
         use_color: bool,
     ) -> std::io::Result<()> {
         write_error(
@@ -16562,7 +16598,7 @@ impl TypedProgram {
     }
 
     #[track_caller]
-    pub fn ice(&self, msg: impl AsRef<str>, error: Option<&TyperMessage>) -> ! {
+    pub fn ice(&self, msg: impl AsRef<str>, error: Option<&K1Message>) -> ! {
         let use_color = std::io::stderr().is_terminal();
         if let Some(error) = error {
             self.write_error(&mut std::io::stderr(), error, use_color).unwrap();
@@ -16632,10 +16668,10 @@ impl TypedProgram {
             self.bytecode.instrs.len(),
             self.timing.total_bytecode_nanos / 1_000_000
         );
-        self.tmp.print_usage("\ttmp used");
-        self.mem.print_usage("\tperm used");
-        self.types.mem.print_usage("\tmem types used");
-        self.bytecode.mem.print_usage("\tmem bytecode used");
+        self.tmp.print_usage("\ttmp");
+        self.mem.print_usage("\tperm");
+        self.types.mem.print_usage("\tmem types");
+        self.bytecode.mem.print_usage("\tmem bytecode");
         writeln!(
             out,
             "\t{} infers: {:.2}ms. avg: {:.2}ms ",

@@ -24,7 +24,7 @@ use crate::typer::types::{
 use crate::typer::{
     FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticStruct, StaticSum,
     StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-    TypedIntValue, TypedProgram, TyperMessage, TyperResult, VariableId,
+    TypedIntValue, TypedProgram, K1Message, K1Result, VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -544,7 +544,7 @@ pub fn execute_compiled_expr(
     expr_id: TypedExprId,
     // These should have gotten compiled to StaticValue instructions
     _input_parameters: &[(VariableId, StaticValueId)],
-) -> TyperResult<StaticValueId> {
+) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     let span = k1.exprs.get_span(expr_id);
     vm.eval_span = span;
@@ -618,7 +618,7 @@ pub fn execute_compiled_expr(
     }
 }
 
-fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) -> TyperResult<i32> {
+fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) -> K1Result<i32> {
     let mut prev_b: u32 = 0;
     let mut b: u32 = 0;
     let mut ip: u32 = 0;
@@ -1633,7 +1633,7 @@ fn resolve_value(
     frame_index: u32,
     inst_offset: u32,
     value: BcValue,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     match value {
         BcValue::Inst(inst_id) => {
             let inst_index = inst_to_index(inst_id, inst_offset);
@@ -1682,7 +1682,7 @@ fn resolve_global(
     vm: &mut Vm,
     global_id: TypedGlobalId,
     t: PhysicalType,
-) -> TyperResult<Value> {
+) -> K1Result<Value> {
     // Globals in `bc` always represent an Address, or Storage, of the global, not the value
 
     // Case 1: It's a constant, already evaluated, stored in the global static space
@@ -2305,7 +2305,7 @@ pub fn vm_value_to_static_value(
     type_id: TypeId,
     vm_value: Value,
     span: SpanId,
-) -> TyperResult<StaticValueId> {
+) -> K1Result<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
     let Some(pt) = k1.get_physical_type(type_id) else {
         return failf!(
@@ -2666,7 +2666,7 @@ fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit
         };
     }
     let level = MessageLevel::Info;
-    k1.report_ext(TyperMessage { message: formatted_messages, span, level }, true);
+    k1.report_ext(K1Message { message: formatted_messages, span, level }, true);
 }
 
 #[track_caller]
