@@ -62,7 +62,7 @@ use crate::parse::{
     ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
     StructValueFieldKind,
 };
-use crate::pool::{SliceHandle, VPool};
+use crate::pool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
 
 #[cfg(test)]
@@ -5945,7 +5945,7 @@ impl TypedProgram {
         let root_scope_id = self.scopes.root_scope_id();
         let blanket_impl_type_params = self.mem.getn(blanket_impl_type_params_handle);
         let solutions_result = self.infer_types(
-            &blanket_impl_type_params,
+            blanket_impl_type_params,
             blanket_impl_type_params_handle,
             &args_and_params,
             span,
@@ -13706,7 +13706,7 @@ impl TypedProgram {
         );
 
         // Instantiate type arguments.
-        let mut type_params: MList<NameAndType, _> = self_.mem.new_list(ast_fn.type_params.len());
+        let mut type_params: MList<NameAndType, _> = self_.mem.new_list(ast_fn.type_params.len() + 1);
         let mut fnlike_type_params: MList<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
@@ -13768,8 +13768,8 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = ast_fn.context_params.len() + ast_fn.params.len();
-        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count as u32);
-        let mut params = self_.mem.new_list(param_count as u32);
+        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count);
+        let mut params = self_.mem.new_list(param_count);
         for (idx, fn_param) in self_
             .ast
             .mem

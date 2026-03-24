@@ -313,9 +313,9 @@ impl TypedProgram {
                 let defn_info = defn_info.unwrap();
                 w.write_str(self.ident_str(defn_info.name))?;
                 w.write_str("[")?;
-                for (idx, param) in self.named_types.get_slice(generic.params).iter().enumerate() {
+                for (idx, param) in self.mem.getn(generic.params).iter().enumerate() {
                     w.write_str(self.ident_str(param.name))?;
-                    let last = idx == generic.params.len() - 1;
+                    let last = idx == generic.params.len() as usize - 1;
                     if !last {
                         w.write_str(", ")?;
                     }
@@ -1026,7 +1026,7 @@ impl TypedProgram {
             return Ok(());
         }
         write!(w, "[")?;
-        for arg in self.named_types.get_slice(ability.kind.arguments()) {
+        for arg in self.mem.getn(ability.kind.arguments()) {
             self.display_named_type(w, arg)?;
             w.write_str(", ")?;
         }
@@ -1044,7 +1044,7 @@ impl TypedProgram {
         self.display_ability_signature(
             &mut s,
             sig.specialized_ability_id,
-            self.named_types.get_slice(sig.impl_arguments),
+            self.mem.getn(sig.impl_arguments),
         )
         .unwrap();
         s
@@ -1059,7 +1059,7 @@ impl TypedProgram {
         self.display_ability_signature(
             &mut s,
             ability_id,
-            self.named_types.get_slice(impl_arguments),
+            self.mem.getn(impl_arguments),
         )
         .unwrap();
         s
@@ -1082,7 +1082,7 @@ impl TypedProgram {
         self.display_ability_signature(
             w,
             i.ability_id,
-            self.named_types.get_slice(i.impl_arguments),
+            self.mem.getn(i.impl_arguments),
         )?;
         write!(w, " for ")?;
         self.display_type_id(w, i.self_type_id, false)?;
@@ -1153,10 +1153,10 @@ impl TypedProgram {
 
     pub fn pretty_print_named_type_slice(
         &self,
-        types: SliceHandle<NameAndTypeId>,
+        types: MSlice<NameAndType, TypedProgram>,
         sep: &str,
     ) -> String {
-        self.pretty_print_named_types(self.named_types.get_slice(types), sep)
+        self.pretty_print_named_types(self.mem.getn(types), sep)
     }
 
     pub fn pretty_print_named_types(&self, types: &[impl NamedType], sep: &str) -> String {
@@ -1207,7 +1207,7 @@ impl TypedProgram {
         }
         if signature.has_type_params() {
             w.write_char('[')?;
-            for (idx, tp) in self.named_types.get_slice(signature.type_params).iter().enumerate() {
+            for (idx, tp) in self.mem.getn(signature.type_params).iter().enumerate() {
                 if idx > 0 {
                     w.write_str(", ")?;
                 }

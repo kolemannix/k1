@@ -410,11 +410,11 @@ impl TypedProgram {
     /// crash, but transmuted to the expected type, or a special Unreachable node
     pub(super) fn synth_phony(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
         let type_args =
-            self.named_types.add_slice_copy(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
+            self.mem.pushn(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
         let specialized_phony_fn_id = self
-            .specialize_function_signature(type_args, SliceHandle::empty(), phony_fn_id)
+            .specialize_function_signature(type_args, MSlice::empty(), phony_fn_id)
             .unwrap();
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),

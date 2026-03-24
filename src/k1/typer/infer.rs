@@ -226,16 +226,18 @@ impl TypedProgram {
             );
         }
 
+        let mut solutions: MList<NameAndType, _> = self_.mem.new_list(must_solve_params.len());
+        let mut unsolved_params: SV8<NameAndType> = smallvec![];
+        let mut all_solutions: MList<NameAndType, _> =
+            self_.mem.new_list(all_type_params.len() as u32);
+
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
         let final_substitutions = &self_.ictx().substitutions;
 
-        let mut solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
-        let mut unsolved_params: SV8<NameAndType> = smallvec![];
-        let mut all_solutions: SV4<NameAndType> = SmallVec::with_capacity(must_solve_params.len());
         for param in all_type_params.iter() {
             let param_to_hole = params_to_holes.iter().find(|p| p.from == param.type_id()).unwrap();
             let corresponding_hole = param_to_hole.to;
-            let is_must_solve = self_.named_types.slice_contains(must_solve_params, param);
+            let is_must_solve = self_.mem.slice_contains(must_solve_params, param);
             if let Some(solution) = final_substitutions.get(&corresponding_hole) {
                 all_solutions.push(NameAndType { name: param.name(), type_id: *solution });
                 if is_must_solve {
@@ -272,8 +274,8 @@ impl TypedProgram {
             );
         }
         debug!("INFER DONE {}", self_.pretty_print_named_types(&solutions, ", "));
-        let solutions_handle = self_.named_types.add_slice_copy(&solutions);
-        let all_solutions_handle = self_.named_types.add_slice_copy(&all_solutions);
+        let solutions_handle = self_.mem.list_to_handle(solutions);
+        let all_solutions_handle = self_.mem.list_to_handle(all_solutions);
         Ok((solutions_handle, all_solutions_handle))
     }
 
@@ -364,19 +366,17 @@ impl TypedProgram {
                 Ok(impl_id) => {
                     let the_impl = self.ability_impls.get(impl_id.full_impl_id);
                     let ability_arg_iterator = self
-                        .named_types
-                        .copy_slice_sv::<4>(
-                            self.abilities.get(sig.specialized_ability_id).kind.arguments(),
-                        )
+                        .mem
+                        .getn(self.abilities.get(sig.specialized_ability_id).kind.arguments())
                         .into_iter()
-                        .zip(self.named_types.copy_slice_sv::<4>(
-                            self.abilities.get(the_impl.ability_id).kind.arguments(),
-                        ));
+                        .zip(
+                            self.mem.getn(self.abilities.get(the_impl.ability_id).kind.arguments()),
+                        );
                     let impl_arg_iterator = self
-                        .named_types
-                        .copy_slice_sv::<4>(sig.impl_arguments)
+                        .mem
+                        .getn(sig.impl_arguments)
                         .into_iter()
-                        .zip(self.named_types.copy_slice_sv::<4>(the_impl.impl_arguments));
+                        .zip(self.mem.getn(the_impl.impl_arguments));
                     for (constrained_type, found_impl_type) in
                         ability_arg_iterator.chain(impl_arg_iterator)
                     {
@@ -426,11 +426,10 @@ impl TypedProgram {
         debug_assert!(generic_function_sig.has_type_params());
         let passed_type_args = fn_call.type_args;
         let passed_type_args_count = passed_type_args.len();
-        let type_params_handle = generic_function_sig.type_params;
-        let type_params = self.named_types.copy_slice_sv8(generic_function_sig.type_params);
+        let type_params = generic_function_sig.type_params;
         // Fuse these two paths; where for a given type param,
         // - X *if ALL PASSED, special case to skip inference altogether of course
-        let passed_type_args = self.ast.mem.getn(passed_type_args);
+        let passed_type_args = passed_type_args;
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
             return failf!(
                 fn_call.span,
@@ -440,16 +439,18 @@ impl TypedProgram {
             );
         }
         let all_params_were_passed = passed_type_args.len() == type_params.len()
-            && passed_type_args.iter().all(|nt| nt.type_expr.is_some());
+            && self.ast.mem.getn(passed_type_args).iter().all(|nt| nt.type_expr.is_some());
         debug!("all_passed={all_params_were_passed}");
         let solved_type_params = if all_params_were_passed {
-            let mut evaled_params: SV4<NameAndType> = smallvec![];
-            for (type_param, type_arg) in type_params.iter().zip(passed_type_args.iter()) {
+            let mut evaled_params: MList<NameAndType, _> = self.mem.new_list(type_params.len());
+            for (type_param, type_arg) in
+                self.mem.getn(type_params).iter().zip(self.ast.mem.getn(passed_type_args).iter())
+            {
                 let passed_expr = type_arg.type_expr.unwrap(); // checked by all_passed
                 let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
                 evaled_params.push(NameAndType { name: type_param.name, type_id: passed_type });
             }
-            self.named_types.add_slice_copy(&evaled_params)
+            self.mem.list_to_handle(evaled_params)
         } else {
             let generic_function_type =
                 *self.types.get(generic_function_sig.function_type).as_function().unwrap();
@@ -462,14 +463,15 @@ impl TypedProgram {
             // We add these first so that they get applied first, and following conflicts are
             // framed in terms of these being true; if users says T := Pointer, we later say
             // "expected Pointer" when other params dont line up.
-            for (index, type_arg) in passed_type_args.iter().enumerate() {
+            for (index, type_arg) in self.ast.mem.getn(passed_type_args).iter().enumerate() {
                 if let Some(passed_type_expr) = type_arg.type_expr {
                     let matching_param = if let Some(passed_name) = type_arg.name {
-                        let matching_param = type_params.iter().find(|nt| nt.name == passed_name);
+                        let matching_param =
+                            self.mem.find(type_params, |nt| nt.name == passed_name);
                         matching_param
                     } else {
                         // Use position
-                        type_params.get(index)
+                        self.mem.get_nth_opt(type_params, index)
                     };
                     let passed_type = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
                     if let Some(matching_param) = matching_param {
@@ -517,8 +519,8 @@ impl TypedProgram {
 
             let (solutions, _all_solutions) = self
                 .infer_types(
-                    &type_params,
-                    type_params_handle,
+                    self.mem.getn(type_params),
+                    type_params,
                     &inference_pairs,
                     fn_call.span,
                     ctx.scope_id,
@@ -536,9 +538,9 @@ impl TypedProgram {
 
         // Enforce ability constraints
         let params_to_solutions_pairs: SV4<TypeSubstitutionPair> =
-            self.zip_named_types_to_subst_pairs(type_params_handle, solved_type_params);
+            self.zip_named_types_to_subst_pairs(type_params, solved_type_params);
         for (solution, type_param) in
-            self.named_types.copy_slice_sv4(solved_type_params).iter().zip(type_params.iter())
+            self.mem.getn(solved_type_params).iter().zip(self.mem.getn(type_params).iter())
         {
             self.check_type_constraints(
                 type_param.name,
@@ -577,110 +579,108 @@ impl TypedProgram {
         // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
         //
         // This method is risk-free in terms of 'leaking' inference types out
-        let mut fnlike_type_args: SV8<NameAndType> = smallvec![];
-        let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
-        if !original_function_sig.function_type_params.is_empty() {
-            let subst_pairs: SV8<_> = self
-                .named_types
-                .get_slice(original_function_sig.type_params)
-                .iter()
-                .zip(self.named_types.get_slice(type_args).iter())
-                .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
-                .collect();
-            for function_type_param in self.mem.getn(original_function_sig.function_type_params) {
-                let (corresponding_arg, corresponding_value_param) =
-                    args_and_params.get(function_type_param.value_param_index as usize);
-                debug!(
-                    "The param for function_type_param {} {} is {} and passed: {:?}",
-                    function_type_param.type_id,
-                    self.ident_str(function_type_param.name),
-                    self.ident_str(corresponding_value_param.name),
-                    corresponding_arg
-                );
+        if original_function_sig.function_type_params.is_empty() {
+            return Ok((MSlice::empty(), smallvec![]));
+        }
 
-                enum PhysicalPassedFunction {
-                    Lambda(TypedExprId, TypeId),
-                    FunctionPointer(TypedExprId),
-                    LambdaObject(TypedExprId, TypeId),
+        let mut fnlike_type_args: MList<NameAndType, _> =
+            self.mem.new_list(original_function_sig.function_type_params.len());
+        let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
+        let subst_pairs: SV8<_> = self
+            .mem
+            .getn(original_function_sig.type_params)
+            .iter()
+            .zip(self.mem.getn(type_args).iter())
+            .map(|(param, arg)| TypeSubstitutionPair { from: param.type_id, to: arg.type_id })
+            .collect();
+
+        for function_type_param in self.mem.getn(original_function_sig.function_type_params) {
+            let (corresponding_arg, corresponding_value_param) =
+                args_and_params.get(function_type_param.value_param_index as usize);
+            debug!(
+                "The param for function_type_param {} {} is {} and passed: {:?}",
+                function_type_param.type_id,
+                self.ident_str(function_type_param.name),
+                self.ident_str(corresponding_value_param.name),
+                corresponding_arg
+            );
+
+            enum PhysicalPassedFunction {
+                Lambda(TypedExprId, TypeId),
+                FunctionPointer(TypedExprId),
+                LambdaObject(TypedExprId, TypeId),
+            }
+            let physical_passed_function = match corresponding_arg {
+                MaybeTypedExpr::Typed(_) => {
+                    unreachable!("Synthesizing calls with function type params is unsupported")
                 }
-                let physical_passed_function = match corresponding_arg {
-                    MaybeTypedExpr::Typed(_) => {
-                        unreachable!("Synthesizing calls with function type params is unsupported")
+                MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
+                    ParsedExpr::Lambda(_lam) => {
+                        debug!(
+                            "substituting type for an ftp lambda so that it can infer (is_inf={})",
+                            ctx.is_inference()
+                        );
+                        let substituted_param_type =
+                            self.substitute_in_type(function_type_param.type_id, &subst_pairs);
+                        let the_lambda = self
+                            .eval_expr(p, ctx.with_expected_type(Some(substituted_param_type)))?;
+                        let lambda_type = self.exprs.get_type(the_lambda);
+                        debug!("Using a Lambda as an ftp: {}", self.type_id_to_string(lambda_type));
+                        PhysicalPassedFunction::Lambda(the_lambda, lambda_type)
                     }
-                    MaybeTypedExpr::Parsed(p) => match self.ast.exprs.get(p) {
-                        ParsedExpr::Lambda(_lam) => {
-                            debug!(
-                                "substituting type for an ftp lambda so that it can infer (is_inf={})",
-                                ctx.is_inference()
-                            );
-                            let substituted_param_type =
-                                self.substitute_in_type(function_type_param.type_id, &subst_pairs);
-                            let the_lambda = self.eval_expr(
-                                p,
-                                ctx.with_expected_type(Some(substituted_param_type)),
-                            )?;
-                            let lambda_type = self.exprs.get_type(the_lambda);
-                            debug!(
-                                "Using a Lambda as an ftp: {}",
-                                self.type_id_to_string(lambda_type)
-                            );
-                            PhysicalPassedFunction::Lambda(the_lambda, lambda_type)
-                        }
-                        _other => {
-                            let expr = self.eval_expr(p, ctx.with_no_expected_type())?;
-                            let type_id = self.exprs.get_type(expr);
-                            match self.types.get(type_id) {
-                                Type::Lambda(_) => PhysicalPassedFunction::Lambda(expr, type_id),
-                                Type::LambdaObject(_) => {
-                                    debug!("Using a LambdaObject as an ftp");
-                                    PhysicalPassedFunction::LambdaObject(expr, type_id)
-                                }
-                                Type::FunctionPointer(_) => {
-                                    debug!("Using a FunctionPointer as an ftp");
-                                    PhysicalPassedFunction::FunctionPointer(expr)
-                                }
-                                _ => {
-                                    let span = self.exprs.get_span(expr);
-                                    return failf!(
-                                        span,
-                                        "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
-                                        self.type_id_to_string(function_type_param.type_id),
-                                        self.type_id_to_string(type_id)
-                                    );
-                                }
+                    _other => {
+                        let expr = self.eval_expr(p, ctx.with_no_expected_type())?;
+                        let type_id = self.exprs.get_type(expr);
+                        match self.types.get(type_id) {
+                            Type::Lambda(_) => PhysicalPassedFunction::Lambda(expr, type_id),
+                            Type::LambdaObject(_) => {
+                                debug!("Using a LambdaObject as an ftp");
+                                PhysicalPassedFunction::LambdaObject(expr, type_id)
+                            }
+                            Type::FunctionPointer(_) => {
+                                debug!("Using a FunctionPointer as an ftp");
+                                PhysicalPassedFunction::FunctionPointer(expr)
+                            }
+                            _ => {
+                                let span = self.exprs.get_span(expr);
+                                return failf!(
+                                    span,
+                                    "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
+                                    self.type_id_to_string(function_type_param.type_id),
+                                    self.type_id_to_string(type_id)
+                                );
                             }
                         }
-                    },
-                };
-                let (final_type, final_value) = match physical_passed_function {
-                    PhysicalPassedFunction::Lambda(value, lambda_type) => {
-                        // Can use as-is since we rebuilt this lambda already
-                        (lambda_type, value)
                     }
-                    PhysicalPassedFunction::FunctionPointer(expr) => {
-                        let ftp = self
-                            .types
-                            .get(function_type_param.type_id)
-                            .as_function_type_parameter()
-                            .unwrap();
-                        let original_param_function_type = ftp.function_type;
-                        let substituted_function_type =
-                            self.substitute_in_type(original_param_function_type, &subst_pairs);
-                        let fp_type =
-                            self.types.add_function_pointer_type(substituted_function_type);
-                        (fp_type, expr)
-                    }
-                    PhysicalPassedFunction::LambdaObject(expr, lambda_object_type) => {
-                        // Replace the function type
-                        let substituted_lambda_object_type =
-                            self.substitute_in_type(lambda_object_type, &subst_pairs);
-                        (substituted_lambda_object_type, expr)
-                    }
-                };
-                fnlike_type_arg_values.push(final_value);
-                fnlike_type_args
-                    .push(NameAndType { name: function_type_param.name, type_id: final_type });
-            }
+                },
+            };
+            let (final_type, final_value) = match physical_passed_function {
+                PhysicalPassedFunction::Lambda(value, lambda_type) => {
+                    // Can use as-is since we rebuilt this lambda already
+                    (lambda_type, value)
+                }
+                PhysicalPassedFunction::FunctionPointer(expr) => {
+                    let ftp = self
+                        .types
+                        .get(function_type_param.type_id)
+                        .as_function_type_parameter()
+                        .unwrap();
+                    let original_param_function_type = ftp.function_type;
+                    let substituted_function_type =
+                        self.substitute_in_type(original_param_function_type, &subst_pairs);
+                    let fp_type = self.types.add_function_pointer_type(substituted_function_type);
+                    (fp_type, expr)
+                }
+                PhysicalPassedFunction::LambdaObject(expr, lambda_object_type) => {
+                    // Replace the function type
+                    let substituted_lambda_object_type =
+                        self.substitute_in_type(lambda_object_type, &subst_pairs);
+                    (substituted_lambda_object_type, expr)
+                }
+            };
+            fnlike_type_arg_values.push(final_value);
+            fnlike_type_args
+                .push(NameAndType { name: function_type_param.name, type_id: final_type });
         }
         if !fnlike_type_args.is_empty() {
             debug!(
@@ -688,7 +688,7 @@ impl TypedProgram {
                 self.pretty_print_named_types(&fnlike_type_args, ", ")
             );
         }
-        let fnlike_type_args_handle = self.named_types.add_slice_copy(&fnlike_type_args);
+        let fnlike_type_args_handle = self.mem.list_to_handle(fnlike_type_args);
         Ok((fnlike_type_args_handle, fnlike_type_arg_values))
     }
 
@@ -1126,16 +1126,14 @@ impl TypedProgram {
 
     pub(super) fn zip_named_types_to_subst_pairs<const N: usize>(
         &self,
-        from: SliceHandle<NameAndTypeId>,
-        to: SliceHandle<NameAndTypeId>,
+        from: MSlice<NameAndType, TypedProgram>,
+        to: MSlice<NameAndType, TypedProgram>,
     ) -> SmallVec<[TypeSubstitutionPair; N]>
     where
         [TypeSubstitutionPair; N]: smallvec::Array<Item = TypeSubstitutionPair>,
     {
         let mut pairs = smallvec![];
-        for (from, to) in
-            self.named_types.get_slice(from).iter().zip(self.named_types.get_slice(to))
-        {
+        for (from, to) in self.mem.getn(from).iter().zip(self.mem.getn(to)) {
             pairs.push(spair! { from.type_id => to.type_id });
         }
         pairs

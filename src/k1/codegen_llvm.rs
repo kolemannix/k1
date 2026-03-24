@@ -1,6 +1,7 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use std::num::NonZeroU32;
 use std::path::Path;
 
 use ahash::HashMapExt;
@@ -41,11 +42,12 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, ScalarType, Type, TypeDefnInfo, TypeId, STRING_TYPE_ID
+    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, STRING_TYPE_ID,
+    ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
-    FunctionId, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, K1Result,
+    FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
+    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{SV8, bc, failf, kmem};
 
@@ -923,7 +925,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 expected_layout.align, expected_layout.size
             );
         }
-        let aligner_type = self.ctx.custom_width_int_type(expected_layout.align_bits());
+        let aligner_type = self
+            .ctx
+            .custom_width_int_type(NonZeroU32::new(expected_layout.align_bits()).unwrap())
+            .unwrap();
         let padding_bytes = expected_layout.size.saturating_sub(aligner_type.get_bit_width() / 8);
 
         let padding = self.padding_type(padding_bytes);
@@ -1058,7 +1063,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::ScalarInRegister => self.pt_canon_type(pt),
             AbiParamMapping::StructInInteger { width } => {
-                let int_type = self.ctx.custom_width_int_type(width).as_basic_type_enum();
+                let int_type = self
+                    .ctx
+                    .custom_width_int_type(NonZeroU32::new(width).unwrap())
+                    .unwrap()
+                    .as_basic_type_enum();
                 int_type
             }
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
@@ -1126,7 +1135,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .builder
                     .build_int_truncate(
                         abi_value.into_int_value(),
-                        self.ctx.custom_width_int_type(width),
+                        self.ctx.custom_width_int_type(NonZeroU32::new(width).unwrap()).unwrap(),
                         "",
                     )
                     .unwrap();
@@ -2452,10 +2461,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok((di_subprogram, *function_file))
     }
 
-    fn declare_llvm_function(
-        &mut self,
-        function_id: FunctionId,
-    ) -> K1Result<FunctionValue<'ctx>> {
+    fn declare_llvm_function(&mut self, function_id: FunctionId) -> K1Result<FunctionValue<'ctx>> {
         if let Some(function) = self.llvm_functions.get(&function_id) {
             return Ok(function.function_value);
         }
@@ -3062,7 +3068,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let sum_agg_id = self.k1.get_physical_type(sum.sum_type_id).unwrap().expect_agg();
                 let sum_agg_record = self.k1.types.agg_types.get(sum_agg_id);
                 let sum_pt = sum_agg_record.agg_type.expect_sum();
-                let variant = self.k1.types.mem.get_nth(sum_pt.variants, sum.variant_index as usize);
+                let variant =
+                    self.k1.types.mem.get_nth(sum_pt.variants, sum.variant_index as usize);
                 let variant_tag = variant.tag;
                 let envelope_layout = sum_agg_record.layout;
                 let variant_payload_pt = variant.payload;

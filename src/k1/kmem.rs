@@ -616,6 +616,10 @@ impl<Tag> Mem<Tag> {
         slice1 == slice2
     }
 
+    pub fn slice_contains<T: PartialEq + Eq>(&self, handle: MSlice<T, Tag>, elem: &T) -> bool {
+        self.getn_lt(handle).contains(elem)
+    }
+
     pub fn bytes_used(&self) -> usize {
         self.cursor.addr() - self.base_ptr().addr()
     }

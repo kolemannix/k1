@@ -1568,7 +1568,7 @@ fn compile_expr(
                         BuiltinHandler::BcBakeStaticValue => {
                             return {
                                 // intern fn bakeStaticValue[T](value: T): u64
-                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let _physical_type = b.get_physical_type(type_id);
 
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
@@ -1589,7 +1589,7 @@ fn compile_expr(
                         }
                         BuiltinHandler::BcZeroed => {
                             return {
-                                let type_id = b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let pt = b.get_physical_type(type_id);
                                 match pt.as_enum() {
                                     PhysicalTypeEnum::Empty => Ok(Value::Empty),
@@ -1655,9 +1655,9 @@ fn compile_expr(
                         BuiltinHandler::BcBitCast => {
                             return {
                                 let from_type_id =
-                                    b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                    b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let to_type_id =
-                                    b.k1.named_types.get_nth(call.type_args, 1).type_id;
+                                    b.k1.mem.get_nth(call.type_args, 1).type_id;
 
                                 let from_pt = b.get_physical_type(from_type_id);
                                 let to_pt = b.get_physical_type(to_type_id);
@@ -1769,7 +1769,7 @@ fn compile_expr(
                             return {
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                                 let elem_type_id =
-                                    b.k1.named_types.get_nth(call.type_args, 0).type_id;
+                                    b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let elem_pt = b.get_physical_type(elem_type_id);
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let base = compile_expr(b, None, arg0)?;
