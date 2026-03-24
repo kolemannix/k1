@@ -1527,7 +1527,15 @@ fn compile_expr(
             let variable_id = address_of.target_variable;
             let (var_addr_value, _is_indirect, _var_storage_pt) =
                 compile_variable_to_address(b, variable_id);
-            Ok(var_addr_value)
+
+            #[cfg(debug)]
+            if !b.get_value_kind(var_addr_value).is_ptr() {
+                b.k1.ice_with_span("Address-of yielded non-ptr", b.cur_span)
+            }
+
+            let stored =
+                store_rich_if_dst(b, dst, PhysicalType::PTR, var_addr_value, "fulfill address of");
+            Ok(stored)
         }
         TypedExpr::Deref(deref) => {
             let src = compile_expr(b, None, deref.target)?;
@@ -1654,10 +1662,8 @@ fn compile_expr(
                         }
                         BuiltinHandler::BcBitCast => {
                             return {
-                                let from_type_id =
-                                    b.k1.mem.get_nth(call.type_args, 0).type_id;
-                                let to_type_id =
-                                    b.k1.mem.get_nth(call.type_args, 1).type_id;
+                                let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
+                                let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
 
                                 let from_pt = b.get_physical_type(from_type_id);
                                 let to_pt = b.get_physical_type(to_type_id);
@@ -1768,8 +1774,7 @@ fn compile_expr(
                         BuiltinHandler::BcPointerIndex => {
                             return {
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
-                                let elem_type_id =
-                                    b.k1.mem.get_nth(call.type_args, 0).type_id;
+                                let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let elem_pt = b.get_physical_type(elem_type_id);
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let base = compile_expr(b, None, arg0)?;

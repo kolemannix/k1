@@ -26,10 +26,9 @@ Non-major Ideas
 On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
 
 Syntax/elegance
-- [ ] The dereference operator does the opposite of what it looks like: it unpointers things, where the star in the rest of the language makes pointers or keeps them
-  - [ ] Going to go with & for pointers, and .* for deref
 - [ ] Destructuring, (in)fallible patterns
 - [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [x] Struct updates using .with(<substruct>)
 - [x] replace `\` with 'fn' for lambda notation, one more character and we
       can be similarly elegant, `\x.x` becomes `fn x.x`
 - [x] Rename `view` to `span`

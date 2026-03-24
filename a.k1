@@ -4,4 +4,23 @@ let MODULE_INFO: k1/module-manifest = zeroed().with({
   multithreading: true, kind: .executable
 })
 
-let x: {i:int} = with({ i: 10 }, { i: 20, b: false })
+let x: {i:int} = with({ i: 10 }, { i: 20 })
+
+// nocommit commit this to suite1
+fn main(): i32 {
+
+  let breaker = false; let breaker = &breaker;
+
+  let makeStruct = fn. { if breaker.* crash(""); breaker <- true; { a: 1, b: true, c: "hello", d: { inside: 0 } } };
+  // nocommit `let result`!
+  // let result = 40;
+  // result;
+  let s: { a: int, b: bool, c: string, d: { inside: int } } = makeStruct().with({ a: 4, b: false, d: { inside: 1 }});
+
+  assertEquals(s.a, 4);
+  assertEquals(s.b, false);
+  assertEquals(s.c, "hello");
+  assertEquals(s.d.inside, 1);
+
+  0
+}

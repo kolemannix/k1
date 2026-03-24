@@ -5559,8 +5559,6 @@ impl TypedProgram {
         id
     }
 
-    // TODO(perf) registers in profile, EcoVecs
-    // We could put ability impl functions in a pool, done, since we make so many in generic code
     fn add_constrained_ability_impl(
         &mut self,
         type_variable_id: TypeId,
@@ -10675,6 +10673,7 @@ impl TypedProgram {
         };
 
         // nocommit: tmp HashSet per method call resolution of abilities in scope
+        // Just iterate them and search instead, dur
         let mut abilities_in_scope = FxHashSet::new();
         self.scopes.find_abilities_in_scope(&mut abilities_in_scope, ctx.scope_id);
         debug!(
@@ -10868,6 +10867,8 @@ impl TypedProgram {
             ParsedFields(ParsedSlice<StructValueField>),
             TypedExpr(TypedExprId),
         }
+        let mut patch_hits = 0;
+        let mut patched_count = 0;
         let patch_struct = match self.ast.exprs.get(patch_arg.value) {
             ParsedExpr::Struct(parsed_struct) => {
                 ProvidedPatchStruct::ParsedFields(parsed_struct.fields)
@@ -10884,6 +10885,7 @@ impl TypedProgram {
             let name = base_field.name;
             let expr_value_for_field: TypedExprId = match patch_struct {
                 ProvidedPatchStruct::ParsedFields(parsed) => {
+                    patched_count = parsed.len();
                     let patch_parsed_field =
                         self.ast.mem.getn(parsed).iter().find(|f| f.name == name);
                     match patch_parsed_field {
@@ -10923,12 +10925,17 @@ impl TypedProgram {
                                     );
                                     e
                                 })?;
+                            patch_hits += 1;
                             typed_expr
                         }
                     }
                 }
                 ProvidedPatchStruct::TypedExpr(patch_struct_expr) => {
                     let patch_struct_type_id = self.exprs.get_type(patch_struct_expr);
+                    let Type::Struct(patch_struct) = self.types.get(patch_struct_type_id) else {
+                        return failf!(span, "'with' argument struct must be a struct");
+                    };
+                    patched_count = patch_struct.fields.len();
                     if let Some((matching_patch_field_index, matching_patch_field)) =
                         self.types.get_struct_field_by_name(patch_struct_type_id, base_field.name)
                     {
@@ -10945,6 +10952,7 @@ impl TypedProgram {
                             FieldAccessKind::ValueToValue,
                             span,
                         )?;
+                        patch_hits += 1;
                         patch_field_access_expr_id
                     } else {
                         let base_field_access_expr_id = self.synth_struct_field_access(
@@ -10961,6 +10969,12 @@ impl TypedProgram {
                 name: base_field.name,
                 expr: Some(expr_value_for_field),
             })
+        }
+        if patch_hits < patched_count {
+            return failf!(
+                span,
+                "Some fields in the patch struct did not match any fields in the base struct (todo: name them)",
+            );
         }
         let final_fields_handle = self.mem.list_to_handle(final_fields);
         let new_struct = self.exprs.add(
@@ -11301,7 +11315,12 @@ impl TypedProgram {
                 Ok(Some(sum_constructor))
             } else {
                 if base_expr.is_none() {
-                    failf!(span, "No such variant: {}", self.ident_str(variant_name))
+                    failf!(
+                        span,
+                        "No variant {} on type {}",
+                        self.ident_str(variant_name),
+                        self.type_id_to_string(base_type_id)
+                    )
                 } else {
                     Ok(None)
                 }
@@ -11311,7 +11330,16 @@ impl TypedProgram {
             let Some(generic_variant) =
                 self.types.sum_variant_by_name(inner_sum.variants, variant_name)
             else {
-                return failf!(span, "No such variant: {}", self.ident_str(variant_name));
+                if base_expr.is_none() {
+                    return failf!(
+                        span,
+                        "No variant {} on type {}",
+                        self.ident_str(variant_name),
+                        self.type_id_to_string(g.inner)
+                    );
+                } else {
+                    return Ok(None);
+                }
             };
             let g_params = g.params;
 
@@ -13706,7 +13734,8 @@ impl TypedProgram {
         );
 
         // Instantiate type arguments.
-        let mut type_params: MList<NameAndType, _> = self_.mem.new_list(ast_fn.type_params.len() + 1);
+        let mut type_params: MList<NameAndType, _> =
+            self_.mem.new_list(ast_fn.type_params.len() + 1);
         let mut fnlike_type_params: MList<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
