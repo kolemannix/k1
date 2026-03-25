@@ -3,7 +3,6 @@
 
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::str::Chars;
 
 use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
@@ -626,14 +625,6 @@ macro_rules! errf {
     };
 }
 
-pub struct Lexer<'a, 'spans> {
-    pub file_id: FileId,
-    content: Chars<'a>,
-    pub spans: &'spans mut Spans,
-    pub line_index: u32,
-    pub pos: u32,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LexMode {
     /// The standard mode; we're lexing code
@@ -669,6 +660,14 @@ impl LexMode {
 struct LexState {
     mode_stack: Vec<LexMode>,
 }
+pub struct Lexer<'a, 'spans> {
+    pub file_id: FileId,
+    // Known valid utf8; see `make`
+    content: &'a [u8],
+    pub spans: &'spans mut Spans,
+    pub line_index: u32,
+    pub pos: u32,
+}
 
 impl<'content, 'spans> Lexer<'content, 'spans> {
     pub fn make(
@@ -676,7 +675,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer { file_id, content: input.chars(), spans, line_index: 0, pos: 0 }
+        Lexer { file_id, content: input.as_bytes(), spans, line_index: 0, pos: 0 }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -750,7 +749,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 LexMode::DoubleQuoteString { exprs: interp_exprs }
                 | LexMode::BacktickString { exprs: interp_exprs } => {
                     let interp_exprs = *interp_exprs;
-                    let (_, next) = self.peek_two();
                     match c {
                         EOF_CHAR => {
                             return Err(self.make_error(
@@ -759,8 +757,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 tok_buf.len() as u32 + 1,
                             ));
                         }
-                        '\\' =>
-                        {
+                        '\\' => {
+                            let next = self.peek_n(1);
                             #[allow(clippy::if_same_then_else)]
                             if SHARED_STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
                                 tok_buf.push(c);
@@ -784,6 +782,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         }
                         // { is only special when interp_exprs is true
                         '{' if interp_exprs => {
+                            let next = self.peek_n(1);
                             if next == '{' {
                                 self.advance();
                                 self.advance();
@@ -797,7 +796,10 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                 state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                                 tokens.push(make_buffered_token(
                                     self,
-                                    K::StringUnterminated { delim: string_delim_kind, interp_exprs },
+                                    K::StringUnterminated {
+                                        delim: string_delim_kind,
+                                        interp_exprs,
+                                    },
                                     tok_buf,
                                     n,
                                 ));
@@ -875,7 +877,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     return Ok(None);
                 }
             }
-            let (_, next) = self.peek_two();
+            let next = self.peek_n(1);
             if c == 'p' && next == '"' {
                 state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
                 tok_buf.push_str("f\"");
@@ -900,7 +902,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 continue;
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
-                let (_, next) = self.peek_two();
                 if !tok_buf.is_empty() {
                     // Return without advancing; basically just 'save the buffered token'.
                     // We'll have a clear buffer next time and will advance.
@@ -1040,24 +1041,26 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     fn next(&mut self) -> char {
+        let c = self.peek();
         self.pos += 1;
-        let c = self.content.next().unwrap_or(EOF_CHAR);
         if c == '\n' {
             self.line_index += 1;
-        }
-        if c == '\r' && self.peek() == '\n' {
-            self.content.next();
+        } else if c == '\r' && self.peek() == '\n' {
             self.pos += 1;
         }
         c
     }
+
+    #[inline]
     fn peek(&self) -> char {
-        self.content.clone().next().unwrap_or(EOF_CHAR)
+        self.peek_n(0)
     }
-    fn peek_two(&self) -> (char, char) {
-        let mut peek_iter = self.content.clone();
-        (peek_iter.next().unwrap_or(EOF_CHAR), peek_iter.next().unwrap_or(EOF_CHAR))
+
+    #[inline]
+    fn peek_n(&self, n: usize) -> char {
+        self.content.get(self.pos as usize + n).copied().unwrap_or(0) as char
     }
+
     fn peek_with_pos(&self) -> (char, u32) {
         (self.peek(), self.pos)
     }
@@ -1230,7 +1233,13 @@ mod test {
         let input = r#"f"Hello, {world}""#;
         expect_token_kinds(
             input,
-            vec![K::STRING_UNTERM_DQ_INTERP, K::OpenBrace, K::Ident, K::CloseBrace, K::STRING_DQ_INTERP],
+            vec![
+                K::STRING_UNTERM_DQ_INTERP,
+                K::OpenBrace,
+                K::Ident,
+                K::CloseBrace,
+                K::STRING_DQ_INTERP,
+            ],
         )
     }
 
@@ -1260,7 +1269,13 @@ mod test {
         let input = r#""{p"hello"}""#;
         expect_token_kinds(
             input,
-            vec![K::STRING_UNTERM_DQ_INTERP, K::OpenBrace, K::STRING_DQ_PLAIN, K::CloseBrace, K::STRING_DQ_INTERP],
+            vec![
+                K::STRING_UNTERM_DQ_INTERP,
+                K::OpenBrace,
+                K::STRING_DQ_PLAIN,
+                K::CloseBrace,
+                K::STRING_DQ_INTERP,
+            ],
         )
     }
 

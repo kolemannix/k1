@@ -56,13 +56,23 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 
     #[inline]
-    fn data(&self) -> &[T] {
+    fn data_inbounds(&self) -> &[T] {
+        unsafe { core::slice::from_raw_parts(self.mmap.as_ptr() as *const T, self.len) }
+    }
+
+    #[inline]
+    fn data_buffer(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.mmap.as_ptr() as *const T, self.max_len) }
     }
 
     #[inline]
     fn data_mut(&mut self) -> &mut [T] {
         unsafe { core::slice::from_raw_parts_mut(self.mmap.as_mut_ptr() as *mut T, self.max_len) }
+    }
+
+    #[inline]
+    fn data_mut_inbounds(&mut self) -> &mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.mmap.as_mut_ptr() as *mut T, self.len) }
     }
 
     pub fn next_id(&self) -> Index {
@@ -142,8 +152,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 
     fn get_index(&self, index: usize) -> &T {
-        self.bounds_check(index);
-        let v = &self.data()[index];
+        let v = &self.data_inbounds()[index];
         v
     }
 
@@ -178,8 +187,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
 
     pub fn get_mut(&mut self, id: Index) -> &mut T {
         let index = Self::id_to_actual_index(id);
-        self.bounds_check(index);
-        &mut self.data_mut()[index]
+        &mut self.data_mut_inbounds()[index]
     }
 
     pub fn get_slice(&self, handle: SliceHandle<Index>) -> &[T] {
@@ -203,7 +211,6 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
             panic!("get_nth called on empty handle");
         };
         let slice_start_index = Self::id_to_actual_index(id);
-        self.bounds_check(slice_start_index + handle.len as usize - 1);
         let elem_index = slice_start_index + index;
         self.get_index(elem_index)
     }
@@ -219,19 +226,19 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn get_n(&self, index: Index, count: u32) -> &[T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
-        self.bounds_check(end - 1);
-        &self.data()[index..end]
+        // self.bounds_check(end - 1);
+        &self.data_inbounds()[index..end]
     }
 
     pub fn get_n_mut(&mut self, index: Index, count: u32) -> &mut [T] {
         let index = Self::id_to_actual_index(index);
         let end = index + count as usize;
-        self.bounds_check(end - 1);
-        &mut self.data_mut()[index..end]
+        // self.bounds_check(end - 1);
+        &mut self.data_mut_inbounds()[index..end]
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
-        self.data()[0..self.len].iter()
+        self.data_inbounds().iter()
     }
 
     pub fn iter_ids(&self) -> impl Iterator<Item = Index> {
@@ -391,7 +398,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Pool Index out of bounds")]
+    #[should_panic(expected = "index out of bounds: the len is 0 but the index is 0")]
     fn out_of_bounds_single() {
         let pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         let invalid_id = MyIndex::from(NonZeroU32::new(1).unwrap());
@@ -400,7 +407,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Pool Index out of bounds")]
+    #[should_panic(expected = "range end index 4 out of range for slice of length 3")]
     fn out_of_bounds_slice_start() {
         let mut pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         pool.add(1);
@@ -414,7 +421,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Pool Index out of bounds")]
+    #[should_panic(expected = "range end index 4 out of range for slice of length 3")]
     fn out_of_bounds_slice_end() {
         let mut pool: VPool<i32, MyIndex> = VPool::make("bounds_test");
         pool.add(1);
