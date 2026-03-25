@@ -1528,7 +1528,7 @@ fn compile_expr(
             let (var_addr_value, _is_indirect, _var_storage_pt) =
                 compile_variable_to_address(b, variable_id);
 
-            #[cfg(debug)]
+            #[cfg(debug_assertions)]
             if !b.get_value_kind(var_addr_value).is_ptr() {
                 b.k1.ice_with_span("Address-of yielded non-ptr", b.cur_span)
             }
