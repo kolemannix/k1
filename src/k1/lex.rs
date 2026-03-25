@@ -183,10 +183,8 @@ pub enum TokenKind {
     KeywordIntern,
     KeywordFor,
     KeywordIn,
-    KeywordDo,
     KeywordAbility,
     KeywordImpl,
-    KeywordAuto,
     KeywordIs,
     KeywordSwitch,
     KeywordNot,
@@ -294,10 +292,8 @@ impl TokenKind {
             K::KeywordIntern => "intern",
             K::KeywordFor => "for",
             K::KeywordIn => "in",
-            K::KeywordDo => "do",
             K::KeywordAbility => "ability",
             K::KeywordImpl => "impl",
-            K::KeywordAuto => "auto",
             K::KeywordIs => "is",
             K::KeywordSwitch => "switch",
             K::KeywordNot => "not",
@@ -444,40 +440,38 @@ impl TokenKind {
             _ => None,
         }
     }
-    pub fn token_from_str(str: &str) -> Option<TokenKind> {
-        match str {
-            "fn" => Some(K::KeywordFn),
-            "let" => Some(K::KeywordLet),
-            "mut" => Some(K::KeywordMut),
-            "and" => Some(K::KeywordAnd),
-            "or" => Some(K::KeywordOr),
-            "if" => Some(K::KeywordIf),
-            "else" => Some(K::KeywordElse),
-            "deftype" => Some(K::KeywordDefType),
-            "while" => Some(K::KeywordWhile),
-            "loop" => Some(K::KeywordLoop),
-            "ns" => Some(K::KeywordNamespace),
-            "intern" => Some(K::KeywordIntern),
-            "for" => Some(K::KeywordFor),
-            "in" => Some(K::KeywordIn),
-            "do" => Some(K::KeywordDo),
-            "ability" => Some(K::KeywordAbility),
-            "impl" => Some(K::KeywordImpl),
-            "auto" => Some(K::KeywordAuto),
-            "switch" => Some(K::KeywordSwitch),
-            "not" => Some(K::KeywordNot),
-            "is" => Some(K::KeywordIs),
-            "builtin" => Some(K::KeywordBuiltin),
-            "where" => Some(K::KeywordWhere),
-            "context" => Some(K::KeywordContext),
-            "use" => Some(K::KeywordUse),
-            "require" => Some(K::KeywordRequire),
-            "defer" => Some(K::KeywordDefer),
-            "==" => Some(K::EqualsEquals),
-            "!=" => Some(K::BangEquals),
-            "<=" => Some(K::LessThanEqual),
-            ">=" => Some(K::GreaterThanEqual),
-            ":=" => Some(K::ColonEquals),
+    pub fn token_from_bytes(bytes: &[u8]) -> Option<TokenKind> {
+        match bytes {
+            b"fn" => Some(K::KeywordFn),
+            b"let" => Some(K::KeywordLet),
+            b"mut" => Some(K::KeywordMut),
+            b"and" => Some(K::KeywordAnd),
+            b"or" => Some(K::KeywordOr),
+            b"if" => Some(K::KeywordIf),
+            b"else" => Some(K::KeywordElse),
+            b"deftype" => Some(K::KeywordDefType),
+            b"while" => Some(K::KeywordWhile),
+            b"loop" => Some(K::KeywordLoop),
+            b"ns" => Some(K::KeywordNamespace),
+            b"intern" => Some(K::KeywordIntern),
+            b"for" => Some(K::KeywordFor),
+            b"in" => Some(K::KeywordIn),
+            b"ability" => Some(K::KeywordAbility),
+            b"impl" => Some(K::KeywordImpl),
+            b"switch" => Some(K::KeywordSwitch),
+            b"not" => Some(K::KeywordNot),
+            b"is" => Some(K::KeywordIs),
+            b"builtin" => Some(K::KeywordBuiltin),
+            b"where" => Some(K::KeywordWhere),
+            b"context" => Some(K::KeywordContext),
+            b"use" => Some(K::KeywordUse),
+            b"require" => Some(K::KeywordRequire),
+            b"defer" => Some(K::KeywordDefer),
+            b"==" => Some(K::EqualsEquals),
+            b"!=" => Some(K::BangEquals),
+            b"<=" => Some(K::LessThanEqual),
+            b">=" => Some(K::GreaterThanEqual),
+            b":=" => Some(K::ColonEquals),
             _ => None,
         }
     }
@@ -495,10 +489,8 @@ impl TokenKind {
             K::KeywordIntern => true,
             K::KeywordFor => true,
             K::KeywordIn => true,
-            K::KeywordDo => true,
             K::KeywordAbility => true,
             K::KeywordImpl => true,
-            K::KeywordAuto => true,
             K::KeywordIs => true,
             K::KeywordSwitch => true,
             K::KeywordNot => true,
@@ -688,24 +680,19 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     }
 
     pub fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
-        let mut tok_buf = String::with_capacity(1024);
-
         let mut state = LexState { mode_stack: vec![LexMode::Tokens] };
-        while self.eat_token(&mut tok_buf, tokens, &mut state)?.is_some() {
-            tok_buf.clear();
+        while self.eat_token(tokens, &mut state)?.is_some() {
+            {}
         }
         Ok(())
     }
 
     fn eat_token(
         &mut self,
-        tok_buf: &mut String,
         tokens: &mut Vec<Token>,
         state: &mut LexState,
     ) -> LexResult<Option<()>> {
-        // Note: tok_buf is only used for its length; we don't use the chars in it.
-        //       Its a nice debugging tool though.
-        tok_buf.clear();
+        let mut tok_len = 0;
         let mut is_line_comment = false;
         let mut line_comment_start = 0;
         let mut is_number = false;
@@ -714,14 +701,17 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let span = lex.add_span(start, len);
             Token::new(kind, span, peeked_whitespace)
         };
-        let make_buffered_token = |lex: &mut Lexer, kind: TokenKind, tok_buf: &str, n: u32| {
-            let span = lex.add_span(n - tok_buf.len() as u32, tok_buf.len() as u32);
+        #[inline]
+        fn make_buffered_token(lex: &mut Lexer, kind: TokenKind, n: u32, tok_len: u32, peeked_whitespace: bool) -> Token {
+            let span = lex.add_span(n - tok_len, tok_len);
             Token::new(kind, span, peeked_whitespace)
-        };
-        let make_keyword_or_ident = |lex: &mut Lexer, tok_buf: &str, n: u32| {
-            let start = n - tok_buf.len() as u32;
-            let len = tok_buf.len() as u32;
-            if let Some(kind) = TokenKind::token_from_str(tok_buf) {
+        }
+        let make_keyword_or_ident = |lex: &mut Lexer, n: u32, tok_len: u32| {
+            let start = n - tok_len;
+            let len = tok_len;
+            // Safety: We construct Lexer from &str
+            let tok_bytes: &[u8] = &self.content[start as usize..(start + len) as usize];
+            if let Some(kind) = TokenKind::token_from_bytes(tok_bytes) {
                 make_token(lex, kind, start, len)
             } else {
                 make_token(lex, TokenKind::Ident, start, len)
@@ -730,8 +720,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         loop {
             let (c, n) = self.peek_with_pos();
             debug!(
-                "LEX line={} char='{}' n={} buf={} state={:?}",
-                self.line_index, c, n, tok_buf, state
+                "LEX line={} char='{}' n={} tok_len={} state={:?}",
+                self.line_index, c, n, tok_len, state
             );
             if is_line_comment {
                 if c == '\n' || c == EOF_CHAR {
@@ -753,30 +743,27 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         EOF_CHAR => {
                             return Err(self.make_error(
                                 "Encountered EOF inside string".to_string(),
-                                n - tok_buf.len() as u32,
-                                tok_buf.len() as u32 + 1,
+                                n - tok_len as u32,
+                                tok_len as u32 + 1,
                             ));
                         }
                         '\\' => {
                             let next = self.peek_n(1);
                             #[allow(clippy::if_same_then_else)]
                             if SHARED_STRING_ESCAPED_CHARS.iter().any(|c| c.sentinel == next) {
-                                tok_buf.push(c);
-                                tok_buf.push(next);
+                                tok_len += 2;
                                 self.advance();
                                 self.advance();
                             } else if lex_mode.is_dq_string() && next == '"' {
-                                tok_buf.push(c);
-                                tok_buf.push(next);
+                                tok_len += 2;
                                 self.advance();
                                 self.advance();
                             } else if lex_mode.is_bt_string() && next == '`' {
-                                tok_buf.push(c);
-                                tok_buf.push(next);
+                                tok_len += 2;
                                 self.advance();
                                 self.advance();
                             } else {
-                                tok_buf.push(c);
+                                tok_len += 1;
                                 self.advance();
                             }
                         }
@@ -786,12 +773,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             if next == '{' {
                                 self.advance();
                                 self.advance();
-                                tok_buf.push('{');
-                                tok_buf.push('{');
+                                tok_len += 2;
                             } else {
                                 self.advance();
                                 // Track brace depth and done when == 0
-                                debug!("[lex] starting code at {n} with tok_buf = `{tok_buf}`");
+                                debug!("[lex] starting code at {n} with tok_len = {tok_len}");
                                 let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                                 state.mode_stack.push(LexMode::Interp { brace_depth: 1 });
                                 tokens.push(make_buffered_token(
@@ -800,8 +786,9 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                         delim: string_delim_kind,
                                         interp_exprs,
                                     },
-                                    tok_buf,
                                     n,
+                                    tok_len,
+                                    peeked_whitespace
                                 ));
                                 tokens.push(make_token(self, K::OpenBrace, n, 1));
                                 return Ok(Some(()));
@@ -810,56 +797,58 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         '"' => {
                             // Terminates a double-quoted string
                             if lex_mode.is_dq_string() {
-                                tok_buf.push('"');
+                                tok_len += 1;
                                 self.advance();
                                 let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                                 state.mode_stack.pop();
                                 tokens.push(make_buffered_token(
                                     self,
                                     K::String { delim: string_delim_kind, interp_exprs },
-                                    tok_buf,
                                     n + 1,
+                                    tok_len,
+                                    peeked_whitespace
                                 ));
                                 return Ok(Some(()));
                             } else {
-                                tok_buf.push('"');
+                                tok_len += 1;
                                 self.advance();
                             }
                         }
                         '`' => {
                             // Terminates a backtick string
                             if lex_mode.is_bt_string() {
-                                tok_buf.push('`');
+                                tok_len += 1;
                                 self.advance();
                                 let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                                 state.mode_stack.pop();
                                 tokens.push(make_buffered_token(
                                     self,
                                     K::String { delim: string_delim_kind, interp_exprs },
-                                    tok_buf,
                                     n + 1,
+                                    tok_len,
+                                    peeked_whitespace
                                 ));
                                 return Ok(Some(()));
                             } else {
-                                tok_buf.push('`');
+                                tok_len += 1;
                                 self.advance();
                             }
                         }
                         '\n' => {
                             if lex_mode.is_bt_string() {
-                                tok_buf.push('\n');
+                                tok_len += 1;
                                 self.advance();
                             } else {
-                                let string_start_quote = n - tok_buf.len() as u32 - 1;
+                                let string_start_quote = n - tok_len as u32 - 1;
                                 return Err(self.make_error(
                                     "Encountered newline inside string; Try a backtick string (`) instead".to_string(),
                                     string_start_quote,
-                                    tok_buf.len() as u32 + 1,
+                                    tok_len as u32 + 1,
                                 ));
                             }
                         }
                         _ => {
-                            tok_buf.push(c);
+                            tok_len += 1;
                             self.advance();
                         }
                     };
@@ -870,8 +859,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
 
             debug_assert!(lex_mode.string_delim_kind().is_none());
             if c == EOF_CHAR {
-                if !tok_buf.is_empty() {
-                    tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                if tok_len != 0 {
+                    tokens.push(make_keyword_or_ident(self, n, tok_len));
                     return Ok(Some(()));
                 } else {
                     return Ok(None);
@@ -880,29 +869,29 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             let next = self.peek_n(1);
             if c == 'p' && next == '"' {
                 state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
-                tok_buf.push_str("f\"");
+                tok_len += 2;
                 self.advance();
                 self.advance();
                 continue;
             } else if c == '"' {
                 state.mode_stack.push(LexMode::DoubleQuoteString { exprs: true });
-                tok_buf.push('"');
+                tok_len += 1;
                 self.advance();
                 continue;
             } else if c == 'p' && next == '`' {
                 state.mode_stack.push(LexMode::BacktickString { exprs: false });
-                tok_buf.push_str("f`");
+                tok_len += 2;
                 self.advance();
                 self.advance();
                 continue;
             } else if c == '`' {
                 state.mode_stack.push(LexMode::BacktickString { exprs: true });
-                tok_buf.push('`');
+                tok_len += 1;
                 self.advance();
                 continue;
             }
             if let Some(single_char_tok) = TokenKind::from_char(c) {
-                if !tok_buf.is_empty() {
+                if tok_len != 0 {
                     // Return without advancing; basically just 'save the buffered token'.
                     // We'll have a clear buffer next time and will advance.
 
@@ -921,11 +910,11 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             // continue the floating point number including a dot
                         } else {
                             // End the ident; we'll eat the dot next token w/ an empty buffer
-                            tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                            tokens.push(make_keyword_or_ident(self, n, tok_len));
                             return Ok(Some(()));
                         }
                     } else {
-                        tokens.push(make_keyword_or_ident(self, tok_buf, n));
+                        tokens.push(make_keyword_or_ident(self, n, tok_len));
                         return Ok(Some(()));
                     }
                 } else if single_char_tok == K::SingleQuote {
@@ -1008,34 +997,36 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     return Ok(Some(()));
                 }
             }
-            if c.is_whitespace() && !tok_buf.is_empty() {
-                tokens.push(make_keyword_or_ident(self, tok_buf, n));
+            if c.is_whitespace() && tok_len != 0 {
+                tokens.push(make_keyword_or_ident(self, n, tok_len));
                 return Ok(Some(()));
             }
-            if tok_buf.is_empty() && is_ident_or_num_start(c) {
+            if tok_len == 0 && is_ident_or_num_start(c) {
                 // case: Start an ident
 
                 // Signal that its a number
                 if c == '-' || c.is_numeric() {
                     is_number = true;
+                } else if c == '_' && next == '_' {
+                    return Err(errf!(self, n, "the __ prefix is reserved for internals"));
                 }
-                tok_buf.push(c);
-            } else if !tok_buf.is_empty() && (is_ident_char(c) || c == '.') {
+                tok_len += 1;
+            } else if tok_len != 0 && (is_ident_char(c) || c == '.') {
                 if c == '.' && !is_number {
                     panic!("lexer got dot outside of is_number state")
                 }
 
-                // case: Continue an ident
-                if tok_buf.len() == 1 && tok_buf.starts_with('_') && c == '_' {
-                    return Err(errf!(self, n, "the __ prefix is reserved for internals"));
-                }
-                tok_buf.push(c);
+                tok_len += 1;
             // We can possibly remove this check; it would be handled next loop
-            } else if let Some(tok) = TokenKind::token_from_str(tok_buf) {
-                // Do not eat c so the next eat_token call can see it.
-                tokens.push(make_buffered_token(self, tok, tok_buf, n));
-                return Ok(Some(()));
-            }
+            // nocommit
+            };
+            //     if let Some(tok) =
+            //     TokenKind::token_from_bytes(&self.content[n as usize - tok_len as usize..n as usize])
+            // {
+            //     // Do not eat c so the next eat_token call can see it.
+            //     tokens.push(make_buffered_token(self, tok, n, tok_len, peeked_whitespace));
+            //     return Ok(Some(()));
+            // }
             self.advance();
         }
     }
@@ -1335,6 +1326,15 @@ mod test {
     fn backtick_string_1() -> anyhow::Result<()> {
         let input = "`Method 'sum' does not exist on type: '{{ x: iword, y: iword }'`";
         expect_token_kinds(input, vec![K::STRING_BT_INTERP])
+    }
+
+    #[test]
+    fn keyword_substring_is_correct() -> anyhow::Result<()> {
+        let input = "mutt";
+        expect_token_kinds(input, vec![K::Ident]);
+        let input2 = "mut";
+        expect_token_kinds(input2, vec![K::KeywordMut]);
+        Ok(())
     }
 
     #[test]
