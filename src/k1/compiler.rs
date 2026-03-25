@@ -444,7 +444,11 @@ pub fn write_executable(
         if optimize {
             build_cmd.arg("-O3");
         } else {
-            build_cmd.arg("-gline-tables-only");
+            if target.target_os() == TargetOs::Linux {
+                build_cmd.arg("-g");
+            } else {
+                build_cmd.arg("-gline-tables-only");
+            }
             build_cmd.arg("-fno-omit-frame-pointer");
         }
     };
