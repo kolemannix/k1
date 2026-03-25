@@ -3439,7 +3439,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 &cpu,
                 &features,
                 opt_level,
-                inkwell::targets::RelocMode::Default,
+                inkwell::targets::RelocMode::PIC,
                 inkwell::targets::CodeModel::Default,
             )
             .unwrap();
