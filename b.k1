@@ -1,11 +1,3 @@
-#debug
 fn main(): i32 {
-  let breaker = false; let breakerRef = &breaker;
-
-  breakerRef.*;
-  breakerRef <- true;
-  breaker;
-
-  println("");
   0
 }

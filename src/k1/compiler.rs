@@ -25,10 +25,11 @@ pub const MAC_SDK_VERSION: &str = "15.0.0";
 pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum TargetOs {
-    Linux,
-    MacOs,
-    Wasm,
+    Linux = 0,
+    MacOs = 1,
+    Wasm = 2,
 }
 
 impl TargetOs {

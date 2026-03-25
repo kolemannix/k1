@@ -7157,15 +7157,17 @@ impl TypedProgram {
                     false,
                     None,
                 );
-                let partial_match = true;
+                let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
-                self.eval_match_expr(match_expr_id, ctx, partial_match, allow_bindings)
+                // Alternatively we could set the fallback _value_ to false... idk, match needs
+                // rework
+                self.eval_match_expr(match_expr_id, ctx, check_exhaustive, allow_bindings, false)
             }
             ParsedExpr::Match(_match_expr) => {
-                let partial_match = false;
+                let check_exhaustive = true;
                 let allow_bindings = true;
-                self.eval_match_expr(expr_id, ctx, partial_match, allow_bindings)
+                self.eval_match_expr(expr_id, ctx, check_exhaustive, allow_bindings, true)
             }
             ParsedExpr::Cast(cast) => {
                 let cast = *cast;
@@ -7191,10 +7193,16 @@ impl TypedProgram {
                         Ok(self.synth_bool(is_test_build, *span))
                     }
                     "os" => {
-                        // TODO: Ideally this is an enum!
-                        let os_str = self.ast.config.target.target_os().to_str();
-                        let string_id = self.ast.strings.intern(os_str);
-                        Ok(self.synth_string_literal(string_id, *span))
+                        let os_tag_value = self.ast.config.target.target_os() as u8;
+                        let k1_os_global_type_id = ctx.expected_type_id.unwrap();
+                        let static_sum = StaticValue::Sum(StaticSum {
+                            sum_type_id: k1_os_global_type_id,
+                            variant_index: os_tag_value as u32,
+                            payload: None,
+                        });
+                        let os_id = self.static_values.add(static_sum);
+                        let expr_id = self.add_static_constant_expr(os_id, *span);
+                        Ok(expr_id)
                     }
                     "no-std" => {
                         let no_std = self.ast.config.no_std;
@@ -8404,8 +8412,9 @@ impl TypedProgram {
         &mut self,
         match_expr_id: ParsedExprId,
         ctx: EvalExprContext,
-        partial: bool,
+        check_exhaustive: bool,
         allow_bindings: bool,
+        add_fallback: bool,
     ) -> K1Result<TypedExprId> {
         let match_parsed_expr = self.ast.exprs.get(match_expr_id).as_match().unwrap().clone();
         if match_parsed_expr.cases.is_empty() {
@@ -8563,7 +8572,7 @@ impl TypedProgram {
         }
 
         // Exhaustiveness Checking
-        if !partial {
+        if check_exhaustive {
             let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
             let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
             let mut visited_ancestors =
@@ -8626,19 +8635,21 @@ impl TypedProgram {
             }
         }
 
-        let fallback_arm = TypedMatchArm {
-            condition: MatchingCondition { instrs: MSlice::empty() },
-            consequent_expr: self.synth_crash_call(
-                if partial {
-                    "No cases matched"
-                } else {
-                    "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
-                },
-                match_expr_span,
-                arms_ctx.with_no_expected_type(),
-            )?,
-        };
-        typed_arms.push(fallback_arm);
+        if add_fallback {
+            let fallback_arm = TypedMatchArm {
+                condition: MatchingCondition { instrs: MSlice::empty() },
+                consequent_expr: self.synth_crash_call(
+                    if check_exhaustive {
+                        "Internal Compiler Error: no cases matched but match was meant to be exhaustive"
+                    } else {
+                        "No cases matched"
+                    },
+                    match_expr_span,
+                    arms_ctx.with_no_expected_type(),
+                )?,
+            };
+            typed_arms.push(fallback_arm);
+        }
 
         // The result type of the match is the type of the first non-never arm, or never
         // They've already been typechecked against each other.
@@ -10646,7 +10657,12 @@ impl TypedProgram {
         {
             let companion_scope = self.get_namespace_scope(companion_ns);
             debug!(
-                "functions in companion scope: {:?}",
+                "companion scope {}",
+                self.scope_id_to_string(self.namespaces.get_scope(companion_ns))
+            );
+            debug!(
+                "functions in companion scope for type {}: {:?}",
+                self.type_id_to_string(base_for_method),
                 companion_scope
                     .functions
                     .values()
@@ -11718,9 +11734,9 @@ impl TypedProgram {
                             .map_err(|err| {
                                 errf!(
                                     err.span,
-                                    "Invalid call to {}\nInvalid type for parameter '{}'\n{}",
-                                    self.qident_to_string(&fn_call.name),
+                                    "Error in parameter '{}' in call to '{}'\n{}",
                                     self.ident_str(param.name),
+                                    self.qident_to_string(&fn_call.name),
                                     err.message
                                 )
                             })?,
@@ -11843,9 +11859,13 @@ impl TypedProgram {
                             }
                             None => match *maybe_typed_expr {
                                 MaybeTypedExpr::Typed(typed) => {
-                                    let checked_coerced = self.check_and_coerce_expr(param.type_id, typed, ctx.scope_id)?;
+                                    let checked_coerced = self.check_and_coerce_expr(
+                                        param.type_id,
+                                        typed,
+                                        ctx.scope_id,
+                                    )?;
                                     checked_coerced
-                                },
+                                }
                                 MaybeTypedExpr::Parsed(parsed) => self
                                     .eval_expr_with_coercion(
                                         parsed,
@@ -11855,9 +11875,9 @@ impl TypedProgram {
                                     .map_err(|err| {
                                         errf!(
                                             err.span,
-                                            "Invalid call to {}\nInvalid type for parameter '{}': {}",
-                                            self.qident_to_string(&fn_call.name),
+                                            "Error in parameter '{}' in call to '{}''\n{}",
                                             self.ident_str(param.name),
+                                            self.qident_to_string(&fn_call.name),
                                             err.message
                                         )
                                     })?,
@@ -16564,6 +16584,14 @@ impl TypedProgram {
             message: message.as_ref().to_string(),
             span,
             level: MessageLevel::Hint,
+        });
+    }
+
+    pub fn report_warning(&mut self, span: SpanId, message: impl AsRef<str>) {
+        self.report(K1Message {
+            message: message.as_ref().to_string(),
+            span,
+            level: MessageLevel::Warn,
         });
     }
 

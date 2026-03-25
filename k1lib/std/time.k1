@@ -18,12 +18,20 @@
 
 ns time {
   fn read-cpu-counter(): u64 {
-    #if k1/os-macos macos-time/mach_absolute_time()
-    else #static crash("Unimplemented: cpu-counter for platform")
+    // TODO: static switch
+    #if k1/os is .macos
+      macos-time/mach_absolute_time()
+    else #if k1/os is .linux {
+      let ts: core/posix/timespec = uninit;
+      core/posix/clock_gettime(core/posix/CLOCK_MONOTONIC, &ts);
+      (ts.tv_sec * 1_000_000_000) + ts.tv_nsec
+    } else #static crash("Unimplemented: read-cpu-counter for wasm")
   }
   fn counter-to-nanos(counter: u64): u64 {
-    #if k1/os-macos macos-time/counter-to-nanos(counter)
-    else #static crash("Unimplemented: counter-to-nanos for platform")
+    // TODO: static switch
+    #if k1/os is .macos macos-time/counter-to-nanos(counter)
+    else #if k1/os is .linux counter
+    else #static crash("Unimplemented: counter-to-nanos for wasm")
   }
 }
 

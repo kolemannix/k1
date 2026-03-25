@@ -16,7 +16,7 @@ LLVM_ENABLE_PROJECTS="clang;lld;compiler-rt"
 LLVM_TARGETS="X86;AArch64"
 
 # CMake generator
-GENERATOR="Ninja"
+GENERATOR="Unix Makefiles"
 
 # CMake build type (Release, RelWithDebInfo, etc.)
 BUILD_TYPE="Release"

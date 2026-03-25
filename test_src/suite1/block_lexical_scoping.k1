@@ -7,6 +7,6 @@ fn test() {
   });
   assert(
     result is .some(msg) 
-    and msg.startsWith("Invalid call to assert\nInvalid type for parameter 'value'\nVariable '_foo' is not defined")
+    and msg.startsWith("Error in parameter 'value' in call to 'assert'\nVariable '_foo' is not defined")
   )
 }

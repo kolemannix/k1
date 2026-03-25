@@ -503,9 +503,15 @@ ns k1 {
   let no-std: bool = builtin
   let debug: bool = builtin
 
-  let os: string = builtin // Possible values: 'linux', 'macos', 'wasm'
-  let os-macos: bool = os == "macos"
-  let os-posix: bool = os == "macos" or os == "linux"
+  let os: (either linux, macos, wasm) = builtin
+  // nocommit: implement equals automatically for scalar enums
+  impl equals for typeOf(os) {
+    fn equals(self: typeOf(os), other: typeOf(os)): bool {
+      self.tag == other.tag
+    }
+  }
+  let os-macos: bool = os is .macos
+  let os-posix: bool = os is .macos or os is .linux
 
   let multithreading: bool = builtin
 
@@ -691,6 +697,11 @@ ns array {
   extern("posix_madvise") fn madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
 
   extern("backtrace") fn backtrace(buffer: ptr, size: c-int)
+
+  deftype timespec = { tv_sec: u64, tv_nsec: u64 }
+  deftype alias clockid_t = c-int
+  let CLOCK_MONOTONIC: clockid_t = 1
+  extern("clock_gettime") fn clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
 
 }
 

@@ -368,14 +368,14 @@ impl TypedProgram {
                     let ability_arg_iterator = self
                         .mem
                         .getn(self.abilities.get(sig.specialized_ability_id).kind.arguments())
-                        .into_iter()
+                        .iter()
                         .zip(
                             self.mem.getn(self.abilities.get(the_impl.ability_id).kind.arguments()),
                         );
                     let impl_arg_iterator = self
                         .mem
                         .getn(sig.impl_arguments)
-                        .into_iter()
+                        .iter()
                         .zip(self.mem.getn(the_impl.impl_arguments));
                     for (constrained_type, found_impl_type) in
                         ability_arg_iterator.chain(impl_arg_iterator)
@@ -429,7 +429,6 @@ impl TypedProgram {
         let type_params = generic_function_sig.type_params;
         // Fuse these two paths; where for a given type param,
         // - X *if ALL PASSED, special case to skip inference altogether of course
-        let passed_type_args = passed_type_args;
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
             return failf!(
                 fn_call.span,
