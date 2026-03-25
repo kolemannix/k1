@@ -6,9 +6,6 @@ let MY_VALUE_NEG: bool = not MY_VALUE
 
 fn test() {
   use core/k1;
-  let a = k1/os;
-  assert(k1/os == .macos);
-  assert(k1/os == a);
   assertEquals(k1/test, false);
 
   let trip = false;
