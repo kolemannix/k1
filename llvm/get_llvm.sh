@@ -10,7 +10,7 @@ INSTALL_DIR="$(pwd)/install-llvm"
 SRC_DIR="$(pwd)/llvm-project"
 
 # Choose which subprojects to build
-LLVM_ENABLE_PROJECTS="clang;lld;compiler-rt"
+LLVM_ENABLE_PROJECTS="clang;lld"
 
 # Targets: only build x86_64 and AArch64 backends
 LLVM_TARGETS="X86;AArch64"
@@ -44,7 +44,8 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS}" \
   -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
   -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_STATIC_LINK_CXX_STDLIB=ON
+  -DLLVM_STATIC_LINK_CXX_STDLIB=ON \
+  -DLLVM_ENABLE_RUNTIMES=compiler-rt
 
 # === Build and Install ===
 cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
