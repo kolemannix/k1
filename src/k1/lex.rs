@@ -866,9 +866,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     }
                     if let Some(single_char_tok) = TokenKind::from_char(c) {
                         if tok_len != 0 {
-                            // Return without advancing; basically just 'save the buffered token'.
-                            // We'll have a clear buffer next time and will advance.
-
                             // Dot is a token, but not inside a 'number', where:
                             // If followed by a digit, its just part of the Ident stream
                             // Otherwise, its a 'Dot' token.
@@ -989,9 +986,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             return Ok(Some(()));
                         }
                     }
-                    if c.is_whitespace() && tok_len != 0 {
-                        tokens.push(make_keyword_or_ident(self, n, tok_len));
-                        return Ok(Some(()));
+                    if c.is_whitespace() {
+                        if tok_len != 0 {
+                            tokens.push(make_keyword_or_ident(self, n, tok_len));
+                            return Ok(Some(()));
+                        } else {
+                            self.advance();
+                            continue;
+                        }
                     }
                     if tok_len == 0 && is_ident_or_num_start(c) {
                         // case: Start an ident
@@ -1003,15 +1005,17 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             return Err(errf!(self, n, "the __ prefix is reserved for internals"));
                         }
                         tok_len += 1;
+                        self.advance();
                     } else if tok_len != 0 && (is_ident_char(c) || c == '.') {
                         if c == '.' && !is_number {
                             panic!("lexer got dot outside of is_number state")
                         }
-
                         tok_len += 1;
-                    };
-                    eprintln!("basic advance c=={} line {}", c, self.line_index + 1);
-                    self.advance();
+                        self.advance();
+                    } else {
+                        eprintln!("fallthrough advance: {c}, tok_len={tok_len}");
+                        self.advance();
+                    }
                 }
             };
         }
