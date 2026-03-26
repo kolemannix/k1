@@ -693,8 +693,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         state: &mut LexState,
     ) -> LexResult<Option<()>> {
         let mut tok_len = 0;
-        let mut is_line_comment = false;
-        let mut line_comment_start = 0;
         let mut is_number = false;
         let peeked_whitespace = self.peek().is_whitespace();
         let make_token = |lex: &mut Lexer, kind: TokenKind, start: u32, len: u32| {
@@ -702,14 +700,19 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             Token::new(kind, span, peeked_whitespace)
         };
         #[inline]
-        fn make_buffered_token(lex: &mut Lexer, kind: TokenKind, n: u32, tok_len: u32, peeked_whitespace: bool) -> Token {
+        fn make_buffered_token(
+            lex: &mut Lexer,
+            kind: TokenKind,
+            n: u32,
+            tok_len: u32,
+            peeked_whitespace: bool,
+        ) -> Token {
             let span = lex.add_span(n - tok_len, tok_len);
             Token::new(kind, span, peeked_whitespace)
         }
         let make_keyword_or_ident = |lex: &mut Lexer, n: u32, tok_len: u32| {
             let start = n - tok_len;
             let len = tok_len;
-            // Safety: We construct Lexer from &str
             let tok_bytes: &[u8] = &self.content[start as usize..(start + len) as usize];
             if let Some(kind) = TokenKind::token_from_bytes(tok_bytes) {
                 make_token(lex, kind, start, len)
@@ -723,17 +726,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                 "LEX line={} char='{}' n={} tok_len={} state={:?}",
                 self.line_index, c, n, tok_len, state
             );
-            if is_line_comment {
-                if c == '\n' || c == EOF_CHAR {
-                    let len = n - line_comment_start - 1;
-                    let comment_tok = make_token(self, K::LineComment, line_comment_start, len);
-                    tokens.push(comment_tok);
-                    return Ok(Some(()));
-                } else {
-                    self.advance();
-                    continue;
-                }
-            }
             let lex_mode = state.mode_stack.last_mut().unwrap();
             match lex_mode {
                 LexMode::DoubleQuoteString { exprs: interp_exprs }
@@ -743,8 +735,8 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         EOF_CHAR => {
                             return Err(self.make_error(
                                 "Encountered EOF inside string".to_string(),
-                                n - tok_len as u32,
-                                tok_len as u32 + 1,
+                                n - tok_len,
+                                tok_len + 1,
                             ));
                         }
                         '\\' => {
@@ -788,64 +780,49 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     },
                                     n,
                                     tok_len,
-                                    peeked_whitespace
+                                    peeked_whitespace,
                                 ));
                                 tokens.push(make_token(self, K::OpenBrace, n, 1));
                                 return Ok(Some(()));
                             }
                         }
-                        '"' => {
+                        '"' if lex_mode.is_dq_string() => {
                             // Terminates a double-quoted string
-                            if lex_mode.is_dq_string() {
-                                tok_len += 1;
-                                self.advance();
-                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                                state.mode_stack.pop();
-                                tokens.push(make_buffered_token(
-                                    self,
-                                    K::String { delim: string_delim_kind, interp_exprs },
-                                    n + 1,
-                                    tok_len,
-                                    peeked_whitespace
-                                ));
-                                return Ok(Some(()));
-                            } else {
-                                tok_len += 1;
-                                self.advance();
-                            }
+                            tok_len += 1;
+                            self.advance();
+                            let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                            state.mode_stack.pop();
+                            tokens.push(make_buffered_token(
+                                self,
+                                K::String { delim: string_delim_kind, interp_exprs },
+                                n + 1,
+                                tok_len,
+                                peeked_whitespace,
+                            ));
+                            return Ok(Some(()));
                         }
-                        '`' => {
+                        '`' if lex_mode.is_bt_string() => {
                             // Terminates a backtick string
-                            if lex_mode.is_bt_string() {
-                                tok_len += 1;
-                                self.advance();
-                                let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                                state.mode_stack.pop();
-                                tokens.push(make_buffered_token(
-                                    self,
-                                    K::String { delim: string_delim_kind, interp_exprs },
-                                    n + 1,
-                                    tok_len,
-                                    peeked_whitespace
-                                ));
-                                return Ok(Some(()));
-                            } else {
-                                tok_len += 1;
-                                self.advance();
-                            }
+                            tok_len += 1;
+                            self.advance();
+                            let string_delim_kind = lex_mode.string_delim_kind().unwrap();
+                            state.mode_stack.pop();
+                            tokens.push(make_buffered_token(
+                                self,
+                                K::String { delim: string_delim_kind, interp_exprs },
+                                n + 1,
+                                tok_len,
+                                peeked_whitespace,
+                            ));
+                            return Ok(Some(()));
                         }
-                        '\n' => {
-                            if lex_mode.is_bt_string() {
-                                tok_len += 1;
-                                self.advance();
-                            } else {
-                                let string_start_quote = n - tok_len as u32 - 1;
-                                return Err(self.make_error(
+                        '\n' if !lex_mode.is_bt_string() => {
+                            let string_start_quote = n - tok_len - 1;
+                            return Err(self.make_error(
                                     "Encountered newline inside string; Try a backtick string (`) instead".to_string(),
                                     string_start_quote,
-                                    tok_len as u32 + 1,
+                                    tok_len + 1,
                                 ));
-                            }
                         }
                         _ => {
                             tok_len += 1;
@@ -854,180 +831,189 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                     };
                     continue;
                 }
-                _ => {}
-            };
-
-            debug_assert!(lex_mode.string_delim_kind().is_none());
-            if c == EOF_CHAR {
-                if tok_len != 0 {
-                    tokens.push(make_keyword_or_ident(self, n, tok_len));
-                    return Ok(Some(()));
-                } else {
-                    return Ok(None);
-                }
-            }
-            let next = self.peek_n(1);
-            if c == 'p' && next == '"' {
-                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
-                tok_len += 2;
-                self.advance();
-                self.advance();
-                continue;
-            } else if c == '"' {
-                state.mode_stack.push(LexMode::DoubleQuoteString { exprs: true });
-                tok_len += 1;
-                self.advance();
-                continue;
-            } else if c == 'p' && next == '`' {
-                state.mode_stack.push(LexMode::BacktickString { exprs: false });
-                tok_len += 2;
-                self.advance();
-                self.advance();
-                continue;
-            } else if c == '`' {
-                state.mode_stack.push(LexMode::BacktickString { exprs: true });
-                tok_len += 1;
-                self.advance();
-                continue;
-            }
-            if let Some(single_char_tok) = TokenKind::from_char(c) {
-                if tok_len != 0 {
-                    // Return without advancing; basically just 'save the buffered token'.
-                    // We'll have a clear buffer next time and will advance.
-
-                    // Dot is a token, but not inside a 'number', where:
-                    // If followed by a digit, its just part of the Ident stream
-                    // Otherwise, its a 'Dot' token.
-                    // Example:
-                    // 100.42 -> Ident(100.42)
-                    // 100.toInt() -> Ident(100), Dot, Ident(toInt)
-                    // knows to accept dot for numbers
-                    if single_char_tok == K::Minus {
-                        // Fall through; let the ident code handle this
-                    } else if is_number && single_char_tok == K::Dot {
-                        if next.is_numeric() {
-                            // Fall through, let the ident code handle this, which will
-                            // continue the floating point number including a dot
-                        } else {
-                            // End the ident; we'll eat the dot next token w/ an empty buffer
+                LexMode::Tokens | LexMode::Interp { .. } => {
+                    debug_assert!(lex_mode.string_delim_kind().is_none());
+                    let next = self.peek_n(1);
+                    if c == EOF_CHAR {
+                        if tok_len != 0 {
                             tokens.push(make_keyword_or_ident(self, n, tok_len));
                             return Ok(Some(()));
+                        } else {
+                            return Ok(None);
                         }
-                    } else {
+                    } else if c == 'p' && next == '"' {
+                        state.mode_stack.push(LexMode::DoubleQuoteString { exprs: false });
+                        tok_len += 2;
+                        self.advance();
+                        self.advance();
+                        continue;
+                    } else if c == '"' {
+                        state.mode_stack.push(LexMode::DoubleQuoteString { exprs: true });
+                        tok_len += 1;
+                        self.advance();
+                        continue;
+                    } else if c == 'p' && next == '`' {
+                        state.mode_stack.push(LexMode::BacktickString { exprs: false });
+                        tok_len += 2;
+                        self.advance();
+                        self.advance();
+                        continue;
+                    } else if c == '`' {
+                        state.mode_stack.push(LexMode::BacktickString { exprs: true });
+                        tok_len += 1;
+                        self.advance();
+                        continue;
+                    }
+                    if let Some(single_char_tok) = TokenKind::from_char(c) {
+                        if tok_len != 0 {
+                            // Return without advancing; basically just 'save the buffered token'.
+                            // We'll have a clear buffer next time and will advance.
+
+                            // Dot is a token, but not inside a 'number', where:
+                            // If followed by a digit, its just part of the Ident stream
+                            // Otherwise, its a 'Dot' token.
+                            // Example:
+                            // 100.42 -> Ident(100.42)
+                            // 100.toInt() -> Ident(100), Dot, Ident(toInt)
+                            // knows to accept dot for numbers
+                            if single_char_tok == K::Minus {
+                                // Fall through; let the ident code handle this
+                            } else if is_number && single_char_tok == K::Dot {
+                                if next.is_numeric() {
+                                    // Fall through, let the ident code handle this, which will
+                                    // continue the floating point number including a dot
+                                } else {
+                                    // End the ident; we'll eat the dot next token w/ an empty buffer
+                                    tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                    return Ok(Some(()));
+                                }
+                            } else {
+                                tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                return Ok(Some(()));
+                            }
+                        } else if single_char_tok == K::SingleQuote {
+                            // Eat opening '
+                            self.advance();
+                            let c = self.next();
+                            if c == '\\' {
+                                // Eat Escaped char
+                                self.advance();
+
+                                // Eat Closing '
+                                let q = self.next();
+                                if q != '\'' {
+                                    return Err(errf!(
+                                        self,
+                                        n + 3,
+                                        "Expected closing ' for char literal at {q}"
+                                    ));
+                                }
+                                tokens.push(make_token(self, TokenKind::Char, n, 4));
+                                return Ok(Some(()));
+                            } else {
+                                // Eat Closing ''
+                                let q = self.next();
+                                if q != '\'' {
+                                    return Err(errf!(
+                                        self,
+                                        n + 2,
+                                        "Expected closing ' for char literal at {q}"
+                                    ));
+                                }
+                                // `n` is the index of the opening quote
+                                tokens.push(make_token(self, TokenKind::Char, n, 3));
+                                return Ok(Some(()));
+                            }
+                        // Handle all of our 2-char but-also-1-char-prefixed tokens!
+                        } else if let Some(double_tok) =
+                            TokenKind::compound_from_start_and_char(single_char_tok, next)
+                        {
+                            match double_tok {
+                                K::LineComment => {
+                                    // Immediately handle this to either the next line or the EOF,
+                                    // so that the main loop doesn't have to check for this state
+                                    self.advance();
+                                    self.advance();
+                                    let mut comment_c;
+                                    loop {
+                                        comment_c = self.next();
+                                        if comment_c == '\n'
+                                            || comment_c == EOF_CHAR
+                                            || comment_c == '\r' && self.peek() == '\n'
+                                        {
+                                            let comment_tok =
+                                                make_token(self, K::LineComment, n, self.pos - n);
+                                            tokens.push(comment_tok);
+                                            return Ok(Some(()));
+                                        }
+                                    }
+                                }
+                                other => {
+                                    self.advance();
+                                    self.advance();
+                                    tokens.push(make_token(self, other, n, 2));
+                                    return Ok(Some(()));
+                                }
+                            }
+                        } else {
+                            let interp_brace_depth = match lex_mode {
+                                LexMode::Interp { brace_depth } => Some(brace_depth),
+                                _ => None,
+                            };
+                            #[allow(clippy::unnecessary_unwrap)]
+                            if (c == '{' || c == '}') && interp_brace_depth.is_some() {
+                                let interp_brace_depth = interp_brace_depth.unwrap();
+                                if c == '{' {
+                                    *interp_brace_depth += 1;
+                                } else {
+                                    *interp_brace_depth -= 1;
+                                    if *interp_brace_depth == 0 {
+                                        debug!("[lex] *pop* code end");
+                                        state.mode_stack.pop();
+
+                                        // Should always be in a string state after finishing an
+                                        // expression interpolation
+                                        debug_assert!(
+                                            state
+                                                .mode_stack
+                                                .last()
+                                                .unwrap()
+                                                .string_delim_kind()
+                                                .is_some()
+                                        );
+                                    }
+                                }
+                            }
+                            self.advance();
+                            tokens.push(make_token(self, single_char_tok, n, 1));
+                            return Ok(Some(()));
+                        }
+                    }
+                    if c.is_whitespace() && tok_len != 0 {
                         tokens.push(make_keyword_or_ident(self, n, tok_len));
                         return Ok(Some(()));
                     }
-                } else if single_char_tok == K::SingleQuote {
-                    // Eat opening '
-                    self.advance();
-                    let c = self.next();
-                    if c == '\\' {
-                        // Eat Escaped char
-                        self.advance();
+                    if tok_len == 0 && is_ident_or_num_start(c) {
+                        // case: Start an ident
 
-                        // Eat Closing '
-                        let q = self.next();
-                        if q != '\'' {
-                            return Err(errf!(
-                                self,
-                                n + 3,
-                                "Expected closing ' for char literal at {q}"
-                            ));
+                        // Signal that its a number
+                        if c == '-' || c.is_numeric() {
+                            is_number = true;
+                        } else if c == '_' && next == '_' {
+                            return Err(errf!(self, n, "the __ prefix is reserved for internals"));
                         }
-                        tokens.push(make_token(self, TokenKind::Char, n, 4));
-                        return Ok(Some(()));
-                    } else {
-                        // Eat Closing ''
-                        let q = self.next();
-                        if q != '\'' {
-                            return Err(errf!(
-                                self,
-                                n + 2,
-                                "Expected closing ' for char literal at {q}"
-                            ));
+                        tok_len += 1;
+                    } else if tok_len != 0 && (is_ident_char(c) || c == '.') {
+                        if c == '.' && !is_number {
+                            panic!("lexer got dot outside of is_number state")
                         }
-                        // `n` is the index of the opening quote
-                        tokens.push(make_token(self, TokenKind::Char, n, 3));
-                        return Ok(Some(()));
-                    }
-                // Handle all of our 2-char but-also-1-char-prefixed tokens!
-                } else if let Some(double_tok) =
-                    TokenKind::compound_from_start_and_char(single_char_tok, next)
-                {
-                    match double_tok {
-                        K::LineComment => {
-                            is_line_comment = true;
-                            line_comment_start = n;
-                            self.advance();
-                            self.advance();
-                        }
-                        other => {
-                            self.advance();
-                            self.advance();
-                            tokens.push(make_token(self, other, n, 2));
-                            return Ok(Some(()));
-                        }
-                    }
-                } else {
-                    let interp_brace_depth = match lex_mode {
-                        LexMode::Interp { brace_depth } => Some(brace_depth),
-                        _ => None,
+
+                        tok_len += 1;
                     };
-                    #[allow(clippy::unnecessary_unwrap)]
-                    if (c == '{' || c == '}') && interp_brace_depth.is_some() {
-                        let interp_brace_depth = interp_brace_depth.unwrap();
-                        if c == '{' {
-                            *interp_brace_depth += 1;
-                        } else {
-                            *interp_brace_depth -= 1;
-                            if *interp_brace_depth == 0 {
-                                debug!("[lex] *pop* code end");
-                                state.mode_stack.pop();
-
-                                // Should always be in a string state after finishing an
-                                // expression interpolation
-                                debug_assert!(
-                                    state.mode_stack.last().unwrap().string_delim_kind().is_some()
-                                );
-                            }
-                        }
-                    }
+                    eprintln!("basic advance c=={} line {}", c, self.line_index + 1);
                     self.advance();
-                    tokens.push(make_token(self, single_char_tok, n, 1));
-                    return Ok(Some(()));
                 }
-            }
-            if c.is_whitespace() && tok_len != 0 {
-                tokens.push(make_keyword_or_ident(self, n, tok_len));
-                return Ok(Some(()));
-            }
-            if tok_len == 0 && is_ident_or_num_start(c) {
-                // case: Start an ident
-
-                // Signal that its a number
-                if c == '-' || c.is_numeric() {
-                    is_number = true;
-                } else if c == '_' && next == '_' {
-                    return Err(errf!(self, n, "the __ prefix is reserved for internals"));
-                }
-                tok_len += 1;
-            } else if tok_len != 0 && (is_ident_char(c) || c == '.') {
-                if c == '.' && !is_number {
-                    panic!("lexer got dot outside of is_number state")
-                }
-
-                tok_len += 1;
-            // We can possibly remove this check; it would be handled next loop
-            // nocommit
             };
-            //     if let Some(tok) =
-            //     TokenKind::token_from_bytes(&self.content[n as usize - tok_len as usize..n as usize])
-            // {
-            //     // Do not eat c so the next eat_token call can see it.
-            //     tokens.push(make_buffered_token(self, tok, n, tok_len, peeked_whitespace));
-            //     return Ok(Some(()));
-            // }
-            self.advance();
         }
     }
 
@@ -1055,8 +1041,15 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     fn peek_with_pos(&self) -> (char, u32) {
         (self.peek(), self.pos)
     }
+
+    #[inline]
     fn advance(&mut self) {
-        self.next();
+        self.advance_n(1);
+    }
+
+    #[inline]
+    fn advance_n(&mut self, n: u32) {
+        self.pos += n;
     }
 }
 
@@ -1173,7 +1166,7 @@ mod test {
         "#;
         let (spans, tokens) = set_up(input)?;
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(spans.get(tokens[0].span), Span { start: 0, len: 14, file_id: 0 });
+        assert_eq!(spans.get(tokens[0].span), Span { start: 0, len: 16, file_id: 0 });
         assert_eq!(&input[0..5], "// He");
         assert_eq!(
             vec![
@@ -1331,9 +1324,9 @@ mod test {
     #[test]
     fn keyword_substring_is_correct() -> anyhow::Result<()> {
         let input = "mutt";
-        expect_token_kinds(input, vec![K::Ident]);
+        expect_token_kinds(input, vec![K::Ident])?;
         let input2 = "mut";
-        expect_token_kinds(input2, vec![K::KeywordMut]);
+        expect_token_kinds(input2, vec![K::KeywordMut])?;
         Ok(())
     }
 
