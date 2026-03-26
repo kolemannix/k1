@@ -303,6 +303,7 @@ pub fn compile_program(
     args: &Args,
     out_dir: &Path,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
+    #[cfg(feature = "profile")]
     let profiler_guard = if args.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
@@ -384,6 +385,7 @@ pub fn compile_program(
     )
     .unwrap();
 
+    #[cfg(feature = "profile")]
     if let Some(profiler_guard) = profiler_guard {
         if let Ok(report) = profiler_guard.report().build() {
             let mut options = pprof::flamegraph::Options::default();

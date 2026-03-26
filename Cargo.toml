@@ -11,7 +11,7 @@ path = "src/k1/lib.rs"
 [features]
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
 gui = ["raylib"]
-profile = []
+profile = ["pprof"]
 # Our project-specific debug mode, not the same thing as the compiler's!
 dbg = []
 
@@ -31,7 +31,7 @@ ahash = "0.8.11"
 fxhash = "0.2.1"
 scopeguard = "1.2.0"
 mimalloc = "0.1.43"
-pprof = { version = "0.15.0", features = ["flamegraph"] }
+pprof = { version = "0.15.0", features = ["flamegraph"], optional = true }
 ecow = "0.2.3"
 memmap2 = "0.9.7"
 quanta = "0.12.6"
