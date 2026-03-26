@@ -566,8 +566,8 @@ impl BinaryOpKind {
             TokenKind::RAngle => Some(BinaryOpKind::Greater),
             TokenKind::LAngleLAngle => Some(BinaryOpKind::BitShiftLeft),
             TokenKind::RAngleRAngle => Some(BinaryOpKind::BitShiftRight),
-            TokenKind::LessThanEqual => Some(BinaryOpKind::LessEqual),
-            TokenKind::GreaterThanEqual => Some(BinaryOpKind::GreaterEqual),
+            TokenKind::LessEqual => Some(BinaryOpKind::LessEqual),
+            TokenKind::GreaterEqual => Some(BinaryOpKind::GreaterEqual),
             TokenKind::KeywordAnd => Some(BinaryOpKind::And),
             TokenKind::KeywordOr => Some(BinaryOpKind::Or),
             TokenKind::EqualsEquals => Some(BinaryOpKind::Equals),
@@ -2250,7 +2250,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
         match maybe_directive.kind {
-            K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+            K::Ident if !maybe_directive.is_whitespace_preceded() => {
                 let chars = self.token_chars(maybe_directive);
                 match chars {
                     "meta" | "meat" | "static" => {
@@ -2516,7 +2516,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn maybe_consume_next_no_whitespace(&mut self, target_token: TokenKind) -> Option<Token> {
         let tok = self.peek();
-        if tok.kind == target_token && !tok.is_whitespace_preceeded() {
+        if tok.kind == target_token && !tok.is_whitespace_preceded() {
             self.advance();
             trace!("eat_token SUCCESS '{}'", target_token);
             Some(tok)
@@ -2603,7 +2603,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             (K::String { .. } | K::StringUnterminated { .. }, _) => Ok(Some(self.expect_string()?)),
-            (K::Minus, K::Ident) if !second.is_whitespace_preceeded() => {
+            (K::Minus, K::Ident) if !second.is_whitespace_preceded() => {
                 let text = self.token_chars(second);
                 if text.chars().next().unwrap().is_numeric() {
                     self.advance();
@@ -3123,9 +3123,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     span,
                 }));
                 Some(is_expression_id)
-            } else if (next.kind == K::Dot && !next.is_whitespace_preceeded())
+            } else if (next.kind == K::Dot && !next.is_whitespace_preceded())
                 || (next.kind == K::QuestionMark
-                    && (second.kind == K::Dot && !second.is_whitespace_preceeded()))
+                    && (second.kind == K::Dot && !second.is_whitespace_preceded()))
             {
                 let is_coalescing = next.kind == K::QuestionMark;
                 // Field access syntax; a.b with optional bracketed type args []
@@ -3324,7 +3324,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let (first, second) = self.tokens.peek_two();
         let mut namespaces: SV8<Ident> = smallvec![];
-        if second.kind == K::Slash && !second.is_whitespace_preceeded() {
+        if second.kind == K::Slash && !second.is_whitespace_preceded() {
             // Namespaced expression; foo/
             // Loop until we don't see a /
             namespaces.push(self.intern_ident_token(first));
@@ -3352,7 +3352,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let (first, second) = self.peek_two();
         let is_debug = first.kind == K::Hash
             && second.kind == K::Ident
-            && !second.is_whitespace_preceeded()
+            && !second.is_whitespace_preceded()
             && self.get_token_chars(second) == "debug";
         if is_debug {
             self.advance_n(2);
@@ -3555,7 +3555,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             if_expr.is_static = true;
                             Ok(Some(self.add_expression(ParsedExpr::If(if_expr))))
                         }
-                        K::Ident if !maybe_directive.is_whitespace_preceeded() => {
+                        K::Ident if !maybe_directive.is_whitespace_preceded() => {
                             let chars = self.token_chars(maybe_directive);
                             match chars {
                                 "code" => {
