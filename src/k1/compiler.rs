@@ -331,11 +331,13 @@ pub fn compile_program(
         .or(detect_host_target())
         .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
 
-    let lib_dir_pathbuf =
-        std::env::var("K1_LIB_DIR").map(PathBuf::from).unwrap_or(PathBuf::from("k1lib"));
+    let k1_home_pathbuf = std::env::var("K1_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_exe().unwrap().parent().unwrap().to_path_buf());
+    let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");
 
-    let corelib_dir = lib_dir_pathbuf.join("core");
-    let stdlib_dir = lib_dir_pathbuf.join("std");
+    let corelib_dir = k1lib_dir_pathbuf.join("core");
+    let stdlib_dir = k1lib_dir_pathbuf.join("std");
 
     let module_name = if src_path.is_dir() {
         src_path.file_name().unwrap().to_str().unwrap().to_string()

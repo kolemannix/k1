@@ -30,6 +30,10 @@ mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
 # === Configure ===
+# Note on -DLLVM_STATIC_LINK_CXX_STDLIB=OFF: we wish we could statically link libc++
+# But Rust's llvm-sys is hardcoded to demand libc++ anyway (https://docs.rs/crate/llvm-sys/221.0.0/source/build.rs#383)
+# So I'll request libc++ (clang) over libstdc++ (gnu), but will not statically link it yet
+# Until we move to pure rustc perhaps, or selfhost or something
 cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
   -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
@@ -45,7 +49,7 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS}" \
   -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
   -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_STATIC_LINK_CXX_STDLIB=ON \
+  -DLLVM_STATIC_LINK_CXX_STDLIB=OFF \
   -DLLVM_ENABLE_LIBCXX=ON \
   -DLLVM_ENABLE_RUNTIMES=compiler-rt
 

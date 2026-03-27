@@ -1,25 +1,26 @@
 ARG CROSS_BASE_IMAGE=missing-base-image
+FROM $CROSS_BASE_IMAGE AS llvm-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    git cmake build-essential clang libc++-dev libc++abi-dev python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /llvm-build
+COPY llvm/get_llvm.sh .
+RUN chmod +x get_llvm.sh
+RUN ./get_llvm.sh
+
+# Stage 2
 FROM $CROSS_BASE_IMAGE
 
-# print out the base image
-RUN echo $CROSS_BASE_IMAGE
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    libc++-dev libc++abi-dev \   
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update
-RUN apt-get install -y libllvm-18-ocaml-dev \
-libllvm18                                   \
-llvm-18                                     \
-llvm-18-dev                                 \
-llvm-18-doc                                 \
-llvm-18-examples                            \
-llvm-18-runtime                             \
-libpolly-18-dev \
-libzstd-dev \ 
-libz-dev
+# Just copy the compiled output, not the source or build dirs
+COPY --from=llvm-builder /llvm-build/install-llvm /opt/llvm
 
-# ARG CACHE_BUST=1
-RUN echo $CROSS_BASE_IMAGE
-
-RUN ls /usr/bin/llvm*
-RUN ls /usr/bin/llvm-config*
-RUN ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
-RUN which llvm-config
+ENV PATH="/opt/llvm/bin:${PATH}"
+ENV LLVM_SYS_221_PREFIX="/opt/llvm"
