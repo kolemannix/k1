@@ -1,11 +1,9 @@
 use core/Arena
 
-let MODULE_INFO: core/k1/module-manifest = {
-  let* m = core/mem/zeroed[core/k1/module-manifest]();
-  m.multithreading* <- true;
-  m.kind* <- .executable;
-  m.*
-}
+let MODULE_INFO: k1/module-manifest = zeroed().with({
+  multithreading: true,
+  kind: .executable,
+})
 
 let mutable tls myvar: i32 = 0
 

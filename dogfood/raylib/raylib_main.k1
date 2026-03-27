@@ -1,4 +1,4 @@
-let MODULE_INFO: core/k1/ModuleManifest = {
+let MODULE_INFO: k1/module-manifest = {
   kind: .Executable,
   deps: [],
   multithreading: false,

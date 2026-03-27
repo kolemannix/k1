@@ -119,7 +119,6 @@ ns sys {
   #if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
 
   fn random(upperBound: u32): u32 {
-    //nocommit
     #if k1/os is .macos arc4random_uniform(upperBound)
     else if k1/os is .linux crash("linux 'random' unimpl")
     else if k1/os is .wasm crash("wasm 'random' unimpl")

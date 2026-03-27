@@ -331,9 +331,15 @@ pub fn compile_program(
         .or(detect_host_target())
         .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
 
-    let k1_home_pathbuf = std::env::var("K1_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_exe().unwrap().parent().unwrap().to_path_buf());
+    // Find the installation. env var overrides, otherwise release mode says co-located with the
+    // binary. dev mode says cwd
+    let k1_home_pathbuf = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            std::env::current_dir().unwrap()
+        } else {
+            std::env::current_exe().unwrap().parent().unwrap().to_path_buf()
+        }
+    });
     let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");
 
     let corelib_dir = k1lib_dir_pathbuf.join("core");

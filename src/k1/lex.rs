@@ -657,7 +657,6 @@ pub struct Lexer<'a, 'spans> {
     // Known valid utf8; see `make`
     content: &'a [u8],
     pub spans: &'spans mut Spans,
-    pub line_index: u32,
     pub pos: u32,
 }
 
@@ -667,7 +666,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         spans: &'spans mut Spans,
         file_id: FileId,
     ) -> Lexer<'content, 'spans> {
-        Lexer { file_id, content: input.as_bytes(), spans, line_index: 0, pos: 0 }
+        Lexer { file_id, content: input.as_bytes(), spans, pos: 0 }
     }
 
     fn make_error(&mut self, message: String, start: u32, len: u32) -> LexError {
@@ -723,10 +722,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         };
         loop {
             let (c, n) = self.peek_with_pos();
-            debug!(
-                "LEX line={} char='{}' n={} tok_len={} state={:?}",
-                self.line_index, c, n, tok_len, state
-            );
+            debug!("LEX char='{}' n={} tok_len={} state={:?}", c, n, tok_len, state);
             let lex_mode = state.mode_stack.last_mut().unwrap();
             match lex_mode {
                 LexMode::DoubleQuoteString { exprs: interp_exprs }
@@ -1065,6 +1061,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             }
                         };
                     } else {
+                        // tok_len != 0
                         match c {
                             EOF_CHAR => {
                                 tokens.push(make_keyword_or_ident(self, n, tok_len));
@@ -1121,12 +1118,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
     fn next(&mut self) -> char {
         let c = self.peek();
         self.pos += 1;
-        // nocommit: move this to lexer now, its all becoming clear
-        if c == '\n' {
-            self.line_index += 1;
-        } else if c == '\r' && self.peek() == '\n' {
-            self.pos += 1;
-        }
         c
     }
 

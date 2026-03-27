@@ -427,7 +427,6 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    // nocommit
     pub(super) fn synth_struct_field_access(
         &mut self,
         struct_expr: TypedExprId,
