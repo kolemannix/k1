@@ -48,7 +48,7 @@ ns type_schema {
       type-id[*bool]
     );
 
-    assert(get-type-schema[either Yes] is .either(_));
+    assert(get-type-schema[either Yes] is .enum(_));
 
     require get-type-schema[either Yes, No, MaybeSo(string)]
       is .either({ variants })

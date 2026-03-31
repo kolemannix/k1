@@ -3007,6 +3007,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
             }
             StaticValue::Int(int_value) => self.codegen_int_value(*int_value),
+            StaticValue::Enum(_, int_value) => self.codegen_int_value(*int_value),
             StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
             StaticValue::String(string_id) => {
                 let string_global = self
@@ -3270,6 +3271,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | StaticValue::Bool(_)
             | StaticValue::Char(_)
             | StaticValue::Int(_)
+            | StaticValue::Enum(_, _)
             | StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
             StaticValue::String(string_id) => {
                 let string_global = self

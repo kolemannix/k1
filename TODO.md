@@ -1,22 +1,21 @@
 "C with typeclasses and tagged unions"
 
-GOOD IDEAS 11/13
-- When converting a lambda to a dyn lambda, put its environments in the current allocator instead of on the stack
-- language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
+- When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [X] Specialization solution (when types are known by the function)
 -     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
+- [ ] Opaque type solution. Try using 1-member structs and make struct's "first field special"
+- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
+- [ ] Destructuring, (in)fallible patterns
+  - [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 
 More optimal final programs
 - [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
-- [x] Unit syntax of '()', as well as the name `unit` by the way, makes no sense when we don't have tuples.
-      What about `{}`
 
 Non-major Ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
 - [ ] userland: CCompatString which is a valid c string with length in front of the allocation (ill call it antirez strings)
-- [ ] User-defined implicit conversions: based on a special ability that integrates with 
-      type inference? (like Mojo's ImplicitlyIntable, etc): ImplicitAs?
 - [ ] [design/flags_in_tags.k1]
 - [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
       `impl Unwrap<Inner = u32> for { hidden: i64 }`
@@ -24,28 +23,6 @@ Non-major Ideas
 - [ ] Inspired by fast_float, char to digit lookup table
 
 On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
-
-Syntax/elegance
-- [ ] Destructuring, (in)fallible patterns
-- [ ] Default type args for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
-- [x] Struct updates using .with(<substruct>)
-- [x] replace `\` with 'fn' for lambda notation, one more character and we
-      can be similarly elegant, `\x.x` becomes `fn x.x`
-- [x] Rename `view` to `span`
-- [x] Rename 'static' types to 'static value' types
-- [x] Need a way to write an interpolated string to a Writer that you already have
-      Let's just call it 'fmt' and make it a special construct
-- [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
-  - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
-- [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
-  - Allow users to capitalize domain types, but types like List/Opt/Buffer/Result should sink into the background
-- [x] Replace the builtin for ... yield with a userspace function taking a lambda
-- [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
-      to produce a very strong name for this concept
-- [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
-  - [x] Ok now I'm really thinking about `size` and it being signed.
-  - [x] Also: do safe integer coercions automatically
-- [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
 
 Simple but missing
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
@@ -61,7 +38,7 @@ Simple but missing
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
 - [ ] Defect: Generic (co)recursive types do not work
-- [ ] Require that a blanket impls params appear in the Self type
+- [ ] Require that a blanket impl's params appear in the Self type
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
@@ -79,7 +56,9 @@ Simple but missing
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 
 ## [ ] Distribute builds that work
-- [ ] Test on linux
+- [x] Test on linux
+- [x] Linux bundler, cross build, static llvm linking
+- [x] solve stdlib location
 - [ ] Link in lld? ugh. For now maybe just ship with it
 - [ ] 
 
@@ -106,7 +85,7 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
       not `union { tag, payload }, { tag, payload }`, ...
 - [x] Classify like structs for ABI handling; test with mirrored C types
 - [x] Rename `Enum` -> `Sum` in the code
-- [ ] Optimize no-payload enums into non-aggregates, at the typer level.
+- [x] Optimize no-payload enums into non-aggregates, at the typer level.
 
 ## Project: Instruction-level IR ('bytecode')
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
@@ -142,7 +121,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Treat Unit and empty Struct as ZSTs
 - [x] Compile ZSTs to missing arguments, and LLVM void returns, and no-ops inside other types
 - [x] Treat statics as ZSTs
-- [ ] Think about `never` in either variants: Is it a ZST? Does it make the variant unreachable? Result[T, never]
 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 
@@ -166,6 +144,30 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker
+
+Syntax/elegance punchlist
+- [x] Replace unit with empty struct `{}`, proper ZST support
+      Unit syntax of '()', as well as the name `unit` by the way, makes no sense when we don't have tuples.
+      What about `{}`
+- [x] Struct updates using .with(<substruct>)
+- [x] replace `\` with 'fn' for lambda notation, one more character and we
+      can be similarly elegant, `\x.x` becomes `fn x.x`
+- [x] Rename `view` to `span`
+- [x] Rename 'static' types to 'static value' types
+- [x] Need a way to write an interpolated string to a Writer that you already have
+      Let's just call it 'fmt' and make it a special construct
+- [x] syntax sugar for the continuous collection types: array, view, buffer. something like `[N] T`, `[] T`, `[rw] T`
+  - Actually, I think this is bad. Came up with [] T, [mut] T, [+] T, and [N] T, but the names are better
+- [x] Lowercase most types, they look overly important, and move to kebab-case to avoid uppercase awkwardness
+  - Allow users to capitalize domain types, but types like List/Opt/Buffer/Result should sink into the background
+- [x] Replace the builtin for ... yield with a userspace function taking a lambda
+- [x] Eschew the name 'Unwrap'; twitter is right about that one. Good opportunity
+      to produce a very strong name for this concept
+- [x] Consider a rename of 'uword/iword'; they do not feel good to use. What about `u` and `i`.
+  - [x] Ok now I'm really thinking about `size` and it being signed.
+  - [x] Also: do safe integer coercions automatically
+- [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
+
 
 ## Project: Make llvm codegen run off our bytecode
 It currently runs directly off the typed tree

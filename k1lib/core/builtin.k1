@@ -66,8 +66,10 @@ deftype alias byte = u8
 
 ns types {
 
-  // nocommit build this
-  // intern fn substruct[t, u](): bool
+  // Magically implemented for all enums
+  // ability enum[impl v] {
+  //   intern fn value(self: self): v
+  // }
 
   intern fn size-of[t](): int
   intern fn size-of-stride[t](): int
@@ -109,11 +111,17 @@ ns types {
 
   deftype type-schema = (either
     char,
-    int(int-kind),
-    float(either f32, f64),
     bool,
     ptr,
-    string,
+    int(int-kind),
+    float(either f32, f64),
+    enum({
+      int-kind: int-kind,
+      values: span[{
+        name: string,
+        value: int-value,
+      }]
+    }),
     reference({ inner-type-id: u64, mutable: bool }),
     array({
       element-type-id: u64,
@@ -134,12 +142,13 @@ ns types {
         payload: ?{ type-id: u64, offset: size }
       }],
     }),
+    string,
+    never,
     function({
       params: span[{ name: string, type-id: u64 }],
       return-type-id: u64,
     }),
     function-pointer({ function-type-id: u64 }),
-    never,
     // static-scalar(),
     // TODO: lambda schema, lambda object schema
     // lambda({ type-id: u64, function-type-id: u64 }),
@@ -467,6 +476,10 @@ impl equals for {} {
   fn equals(_self: {}, _other: {}): bool { true }
 }
 
+//impl[t, e: types/enum[impl i]] equals for e {
+//  fn equals(self: e, other: e): bool { self.value == other.value }
+//}
+
 ns mem {
 
   // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
@@ -504,10 +517,9 @@ ns k1 {
   let debug: bool = builtin
 
   let os: (either linux, macos, wasm) = builtin
-  // nocommit: implement equals automatically for scalar enums
   impl equals for typeOf(os) {
     fn equals(self: typeOf(os), other: typeOf(os)): bool {
-      self.tag == other.tag
+      self.as[u8] == other.as[u8]
     }
   }
   let os-macos: bool = os is .macos

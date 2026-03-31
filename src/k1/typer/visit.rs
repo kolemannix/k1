@@ -161,6 +161,10 @@ impl TypedProgram {
             TypedExpr::SumGetPayload(enum_get_payload) => {
                 recurse!(enum_get_payload.sum_expr);
             }
+            TypedExpr::Enum(_) => {}
+            TypedExpr::EnumGetValue(egv) => {
+                recurse!(egv.enum_expr)
+            }
             TypedExpr::Cast(cast) => recurse!(cast.base_expr),
             TypedExpr::Return(ret) => recurse!(ret.value),
             TypedExpr::Break(brk) => recurse!(brk.value),

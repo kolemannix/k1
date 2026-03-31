@@ -98,6 +98,7 @@ pub(crate) struct BuiltinIdents {
     pub line: Ident,
     pub equals: Ident,
     pub tag: Ident,
+    pub value: Ident,
     pub variantName: Ident,
     pub MODULE_INFO: Ident,
     pub root_module_name: Ident,
@@ -157,6 +158,7 @@ pub(crate) struct BuiltinIdents {
     pub testCompile: Ident,
     pub writef: Ident,
     pub stringf: Ident,
+    pub v: Ident,
 }
 
 #[allow(non_snake_case)]
@@ -272,6 +274,7 @@ impl IdentPool {
             line: intern!("line"),
             equals: intern!("equals"),
             tag: intern!("tag"),
+            value: intern!("value"),
             variantName: intern!("variantName"),
             MODULE_INFO: intern!("MODULE_INFO"),
             root_module_name: intern!("_root"),
@@ -331,6 +334,7 @@ impl IdentPool {
             testCompile: intern!("testCompile"),
             writef: intern!("writef"),
             stringf: intern!("stringf"),
+            v: intern!("v"),
         };
 
         macro_rules! make_fn {

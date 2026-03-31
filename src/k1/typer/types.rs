@@ -237,18 +237,18 @@ pub struct TypedSumVariant {
 #[derive(Clone)]
 pub struct SumType {
     pub variants: MSlice<TypedSumVariant, TypePool>,
-    pub tag_type: TypeId,
+    pub tag_type: IntegerType,
 }
 
 #[derive(Copy, Clone)]
 pub struct ScalarEnumValue {
     pub name: Ident,
-    pub value_bits: u64,
+    pub int_value: TypedIntValue,
 }
 
 #[derive(Copy, Clone)]
 pub struct ScalarEnumType {
-    pub values: MSlice<ScalarEnumValue, TypePool>,
+    pub member_values: MSlice<ScalarEnumValue, TypePool>,
     pub int_type: IntegerType,
 }
 
@@ -263,6 +263,7 @@ pub struct GenericType {
 impl GenericType {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum IntegerType {
     U8,
     U16,
@@ -451,11 +452,11 @@ pub enum Type {
     Pointer,
     Integer(IntegerType),
     Float(FloatType),
+    Enum(ScalarEnumType),
     Reference(ReferenceType),
     Array(ArrayType),
     Struct(StructType),
     Sum(SumType),
-    ScalarEnum(ScalarEnumType),
 
     /// An uninhabited type; used to indicate divergent control flow
     Never,
@@ -489,15 +490,17 @@ impl TypePool {
         match (t1, t2) {
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
-            (Type::ScalarEnum(se1), Type::ScalarEnum(se2)) => {
+            (Type::Enum(se1), Type::Enum(se2)) => {
                 if defn1 != defn2 {
                     return false;
                 }
-                if se1.values.len() != se2.values.len() {
+                if se1.member_values.len() != se2.member_values.len() {
                     return false;
                 }
-                for (v1, v2) in self.mem.getn(se1.values).iter().zip(self.mem.getn(se2.values)) {
-                    let mismatch = v1.name != v2.name || v1.value_bits != v2.value_bits;
+                for (v1, v2) in
+                    self.mem.getn(se1.member_values).iter().zip(self.mem.getn(se2.member_values))
+                {
+                    let mismatch = v1.name != v2.name || v1.int_value != v2.int_value;
                     if mismatch {
                         return false;
                     }
@@ -610,7 +613,7 @@ impl TypePool {
         match typ {
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
-            Type::ScalarEnum(_se) => {
+            Type::Enum(_se) => {
                 defn.hash(state);
             }
             Type::Bool => {}
@@ -708,7 +711,7 @@ impl Type {
             Type::FunctionTypeParameter(_) => "ftp",
             Type::InferenceHole(_) => "hole",
             Type::Sum(_) => "sum",
-            Type::ScalarEnum(_) => "enum",
+            Type::Enum(_) => "enum",
             Type::Never => "never",
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
@@ -777,6 +780,22 @@ impl Type {
         match self {
             Type::Struct(struc) => Some(struc),
             _ => None,
+        }
+    }
+
+    #[track_caller]
+    pub fn as_enum(&self) -> Option<&ScalarEnumType> {
+        match self {
+            Type::Enum(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_enum(&self) -> &ScalarEnumType {
+        match self {
+            Type::Enum(e) => e,
+            _ => panic!("expected enum on {}", self.kind_name()),
         }
     }
 
@@ -1700,7 +1719,7 @@ impl TypePool {
                 }
                 result
             }
-            Type::ScalarEnum(_) => EMPTY,
+            Type::Enum(_) => EMPTY,
             Type::Never => EMPTY,
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
@@ -1792,7 +1811,7 @@ impl TypePool {
                 let st = i.get_scalar_type();
                 Some(PhysicalType::scalar(st))
             }
-            Type::ScalarEnum(se) => {
+            Type::Enum(se) => {
                 let st = se.int_type.get_scalar_type();
                 Some(PhysicalType::scalar(st))
             }
@@ -1864,8 +1883,7 @@ impl TypePool {
             Type::Sum(e) => {
                 let variant_count = e.variants.len();
 
-                let tag_scalar =
-                    self.get_physical_type(static_values, e.tag_type).unwrap().expect_scalar();
+                let tag_scalar = e.tag_type.get_scalar_type();
                 let tag_layout = tag_scalar.get_layout();
 
                 let mut physical_variants = self.mem.new_list(variant_count);
@@ -2022,6 +2040,13 @@ impl TypePool {
         (tag, payload)
     }
 
+    pub fn enum_value_by_name(
+        &self,
+        values: MSlice<ScalarEnumValue, TypePool>,
+        name: Ident,
+    ) -> Option<(usize, &'static ScalarEnumValue)> {
+        self.mem.getn(values).iter().find_position(|v| v.name == name)
+    }
     pub fn sum_variant_by_name(
         &self,
         variants: MSlice<TypedSumVariant, TypePool>,

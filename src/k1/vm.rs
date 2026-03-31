@@ -22,9 +22,9 @@ use crate::typer::types::{
     STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, MessageLevel, StaticContainer, StaticContainerKind, StaticStruct, StaticSum,
-    StaticValue, StaticValueId, StaticValuePool, TypedExprId, TypedFloatValue, TypedGlobalId,
-    TypedIntValue, TypedProgram, K1Message, K1Result, VariableId,
+    FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
+    StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedExprId,
+    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, VariableId,
 };
 use crate::{
     errf, failf, ice_span,
@@ -134,11 +134,23 @@ pub mod k1_types {
         pub data: *mut u8,
     }
 
+    #[derive(Clone, Copy)]
     #[repr(u8)]
     pub enum CompilerMessageLevel {
         Info = 0,
         Warn = 1,
         Error = 2,
+    }
+
+    impl CompilerMessageLevel {
+        pub fn from_u8(v: u8) -> Option<Self> {
+            match v {
+                x if x == Self::Info as u8 => Some(Self::Info),
+                x if x == Self::Warn as u8 => Some(Self::Warn),
+                x if x == Self::Error as u8 => Some(Self::Error),
+                _ => None,
+            }
+        }
     }
 
     impl K1BufferLike {
@@ -1005,11 +1017,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                     (location_arg.as_ptr() as *const k1_types::K1SourceLocation)
                                         .read()
                                 };
-                                let level = unsafe {
-                                    (level_arg.as_ptr() as *const k1_types::CompilerMessageLevel)
-                                        .read()
-                                };
-                                let level = match level {
+                                let level = match k1_types::CompilerMessageLevel::from_u8(
+                                    level_arg.as_u8(),
+                                )
+                                .unwrap_or(k1_types::CompilerMessageLevel::Info)
+                                {
                                     k1_types::CompilerMessageLevel::Info => MessageLevel::Info,
                                     k1_types::CompilerMessageLevel::Warn => MessageLevel::Warn,
                                     k1_types::CompilerMessageLevel::Error => MessageLevel::Error,
@@ -1784,6 +1796,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
         StaticValue::Int(iv) => Value(iv.to_u64_bits()),
+        StaticValue::Enum(_, iv) => Value(iv.to_u64_bits()),
         StaticValue::Float(fv) => Value::float_value(*fv),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
@@ -1840,7 +1853,8 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
         StaticValue::Empty => {}
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
-        StaticValue::Int(iv) => store_typed_int(dst, *iv),
+        StaticValue::Int(int_value) => store_typed_int(dst, *int_value),
+        StaticValue::Enum(_, int_value) => store_typed_int(dst, *int_value),
         StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
@@ -2333,9 +2347,9 @@ pub fn vm_value_to_static_value(
             let int_value = vm_value.as_typed_int(*integer_type);
             k1.static_values.add(StaticValue::Int(int_value))
         }
-        Type::ScalarEnum(se) => {
+        Type::Enum(se) => {
             let int_value = vm_value.as_typed_int(se.int_type);
-            k1.static_values.add(StaticValue::Int(int_value))
+            k1.static_values.add(StaticValue::Enum(type_id, int_value))
         }
         Type::Float(float_type) => {
             let float_value = vm_value.as_typed_float(*float_type);
@@ -2427,13 +2441,12 @@ pub fn vm_value_to_static_value(
         Type::Sum(typed_sum) => {
             let sum_ptr = vm_value.as_ptr();
 
-            let tag_type = typed_sum.tag_type;
+            let tag_int_type = typed_sum.tag_type;
             let variants = typed_sum.variants;
             let sum_agg_id = k1.get_physical_type(type_id).unwrap().expect_agg();
             let sum_pt = k1.types.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let payload_offset = sum_pt.payload_offset;
 
-            let tag_int_type = k1.types.get(tag_type).expect_integer();
             let tag_scalar_type = sum_pt.tag_type;
             let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
             let Some(variant) = k1.types.mem.getn(variants).iter().find(|v| v.tag_value == tag)
@@ -2673,7 +2686,7 @@ fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit
 fn vm_crash(m: &TypedProgram, vm: &Vm, msg: impl AsRef<str>) -> ! {
     vm.dump_current_frame(m);
     eprintln!("{}", make_stack_trace(m, &vm.stack));
-    m.ice_with_span(msg, vm.eval_span)
+    m.ice_span(vm.eval_span, msg)
 }
 
 const MIN_VALID_PTR_HEUR: usize = 0x10000; // 64 KiB

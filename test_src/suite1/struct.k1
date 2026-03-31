@@ -60,9 +60,22 @@ fn structNested() {
   assert(area2 == 2500);
 }
 
+fn withFields() {
+  let breaker = false; let breaker = &breaker;
+
+  let makeStruct = fn. { if breaker.* crash(""); breaker <- true; { a: 1, b: true, c: "hello", d: { inside: 0 } } };
+  let s: { a: int, b: bool, c: string, d: { inside: int } } = makeStruct().with({ a: 4, b: false, d: { inside: 1 }});
+
+  assertEquals(s.a, 4);
+  assertEquals(s.b, false);
+  assertEquals(s.c, "hello");
+  assertEquals(s.d.inside, 1);
+}
+
 fn test() {
   basicStruct();
   structArgMut();
   eqAnon();
   structNested();
+  withFields();
 }

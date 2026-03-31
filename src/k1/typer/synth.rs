@@ -19,20 +19,36 @@ impl TypedProgram {
         self.add_static_constant_expr(value_id, span)
     }
 
-    pub(super) fn synth_equals_call(
+    pub(super) fn synth_simple_equals_call(
         &mut self,
         lhs: TypedExprId,
         rhs: TypedExprId,
-        ctx: EvalExprContext,
         span: SpanId,
-    ) -> K1Result<TypedExprId> {
-        self.synth_typed_call_typed_args(
-            self.ast.idents.f.equals__equals.with_span(span),
-            &[],
-            &[lhs, rhs],
-            ctx.with_no_expected_type(),
-            false,
-        )
+    ) -> TypedExprId {
+        let ty = self.exprs.get_type(lhs);
+        let rhs_type = self.exprs.get_type(rhs);
+        debug_assert_eq!(ty, rhs_type);
+        let Some(impl_id) = self
+            .ability_impl_table
+            .get(&ty)
+            .and_then(|impls| impls.iter().find(|i| i.base_ability_id == EQUALS_ABILITY_ID))
+        else {
+            self.ice_span(span, "expected equals impl")
+        };
+        let AbilityImplFunction::FunctionId(equals_function_id) =
+            self.ability_impls.get(impl_id.full_impl_id).function_at_index(&self.mem, 0)
+        else {
+            self.ice_span(span, "got abstract equals impl")
+        };
+        let call_id = self.calls.add(Call {
+            callee: Callee::StaticFunction(*equals_function_id),
+            args: self.mem.pushn(&[lhs, rhs]),
+            type_args: MSlice::empty(),
+            return_type: BOOL_TYPE_ID,
+            span,
+        });
+        let expr_id = self.exprs.add(TypedExpr::Call { call_id }, BOOL_TYPE_ID, span);
+        expr_id
     }
 
     pub(super) fn synth_add_call(
@@ -125,6 +141,23 @@ impl TypedProgram {
         let span = self.exprs.get_span(base);
         let type_id = self.get_expr_type(base).expect_reference().inner_type;
         self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, span)
+    }
+
+    pub(super) fn synth_enum_get_value(
+        &mut self,
+        enum_expr: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let Type::Enum(e) = self.types.get(self.exprs.get_type(enum_expr)) else {
+            self.ice_span(span, "need enum")
+        };
+        let int_type = e.int_type;
+        debug_assert!(self.types.get(self.exprs.get_type(enum_expr)).as_enum().is_some());
+        self.exprs.add(
+            TypedExpr::EnumGetValue(EnumGetValue { enum_expr }),
+            int_type.type_id(),
+            span,
+        )
     }
 
     pub(super) fn synth_block(
@@ -409,13 +442,11 @@ impl TypedProgram {
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
     pub(super) fn synth_phony(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
-        let type_args =
-            self.mem.pushn(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
+        let type_args = self.mem.pushn(&[NameAndType { name: self.ast.idents.b.t, type_id }]);
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
-        let specialized_phony_fn_id = self
-            .specialize_function_signature(type_args, MSlice::empty(), phony_fn_id)
-            .unwrap();
+        let specialized_phony_fn_id =
+            self.specialize_function_signature(type_args, MSlice::empty(), phony_fn_id).unwrap();
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
@@ -437,7 +468,7 @@ impl TypedProgram {
         if access_kind == FieldAccessKind::ValueToValue {
             let struct_type_id = self.exprs.get_type(struct_expr);
             let Type::Struct(_s) = self.types.get(struct_type_id) else {
-                self.ice_with_span("bad struct field access: base is not a struct", span);
+                self.ice_span(span, "bad struct field access: base is not a struct");
             };
             let field = self.types.get_struct_field(struct_type_id, field_index);
             let expr_id = self.exprs.add(
@@ -452,7 +483,7 @@ impl TypedProgram {
             );
             Ok(expr_id)
         } else {
-            self.ice_with_span("unsupported access kind for synth", span);
+            self.ice_span(span, "unsupported access kind for synth");
         }
     }
 
@@ -469,7 +500,6 @@ impl TypedProgram {
         enum_expr_or_reference: TypedExprId,
         variant_index: u32,
         is_reference: bool,
-        ctx: EvalExprContext,
         span: Option<SpanId>,
     ) -> K1Result<TypedExprId> {
         let enum_type = self
@@ -485,11 +515,11 @@ impl TypedProgram {
                 sum_expr_or_reference: enum_expr_or_reference,
                 is_reference,
             }),
-            tag_type,
+            tag_type.type_id(),
             span,
         );
         let variant_tag_expr = self.synth_int(variant_tag, span);
-        let tag_equals = self.synth_equals_call(get_tag, variant_tag_expr, ctx, span)?;
+        let tag_equals = self.synth_simple_equals_call(get_tag, variant_tag_expr, span);
         Ok(tag_equals)
     }
 

@@ -29,7 +29,7 @@ macro_rules! b_ice {
     ($b:expr, $($format_args:expr),*) => {
         {
             let s: String = format!($($format_args),*);
-            $b.k1.ice_with_span(s, $b.cur_span)
+            $b.k1.ice_span($b.cur_span, s)
         }
 
     }
@@ -695,7 +695,7 @@ impl InstKind {
     pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
             InstKind::Value(t) => Ok(*t),
-            _ => Err(format!("Expected value, got {}", self.kind_str())),
+            _ => Err(format!("Expected value, got {}", self.kind_name())),
         }
     }
     fn as_value(&self) -> Option<PhysicalType> {
@@ -711,7 +711,7 @@ impl InstKind {
         matches!(self, InstKind::Void)
     }
 
-    pub fn kind_str(&self) -> &'static str {
+    pub fn kind_name(&self) -> &'static str {
         match self {
             InstKind::Value(_) => "value",
             InstKind::Void => "void",
@@ -1337,7 +1337,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
             match ass.kind {
                 AssignmentKind::Set => {
                     let TypedExpr::Variable(v) = b.k1.exprs.get(ass.destination) else {
-                        b.k1.ice_with_span("Invalid value assignment lhs", ass.span)
+                        b.k1.ice_span(ass.span, "Invalid value assignment lhs")
                     };
                     let builder_variable = b.get_variable(v.variable_id).expect("Missing variable");
                     //if !builder_variable.indirect {
@@ -1514,7 +1514,7 @@ fn compile_expr(
             if is_indirect {
                 // indirect; var_value is storage that holds the variable's type
                 let loaded_or_copied =
-                    load_or_copy(b, var_pt, dst, var_value, false, "fulfill global usage");
+                    load_or_copy(b, var_pt, dst, var_value, false, "fulfill variable usage");
                 Ok(loaded_or_copied)
             } else {
                 // direct; var_value is already a canonical representation of the value; just have to
@@ -1530,7 +1530,7 @@ fn compile_expr(
 
             #[cfg(debug_assertions)]
             if !b.get_value_kind(var_addr_value).is_ptr() {
-                b.k1.ice_with_span("Address-of yielded non-ptr", b.cur_span)
+                b.k1.ice_span(b.cur_span, "Address-of yielded non-ptr")
             }
 
             let stored =
@@ -2127,8 +2127,7 @@ fn compile_expr(
                 b.k1.types
                     .get_type_dereferenced(b.k1.exprs.get_type(sum_get_tag.sum_expr_or_reference))
                     .expect_sum();
-            let tag_type = sum_type.tag_type;
-            let tag_scalar = b.get_physical_type(tag_type);
+            let tag_scalar = PhysicalType::scalar(sum_type.tag_type.get_scalar_type());
 
             // Load straight from the sum base, dont bother with a struct gep
             Ok(load_or_copy(
@@ -2186,6 +2185,18 @@ fn compile_expr(
                 Ok(copied)
             }
         }
+        TypedExpr::Enum(e) => {
+            // Just compile to the integer
+            let Type::Enum(enum_type) = b.k1.types.get(expr_type) else { unreachable!() };
+            let value = b.k1.types.mem.get_nth(enum_type.member_values, e.value_index as usize);
+            let value = b.make_int_value(&value.int_value, "enum int");
+            let stored = store_scalar_if_dst(b, dst, value);
+            Ok(stored)
+        }
+        TypedExpr::EnumGetValue(get_value) => {
+            let value = compile_expr(b, dst, get_value.enum_expr)?;
+            Ok(value)
+        }
         TypedExpr::Cast(c) => compile_cast(b, dst, &c, expr),
         TypedExpr::Return(typed_return) => {
             debug_assert!(dst.is_none());
@@ -2221,9 +2232,7 @@ fn compile_expr(
             b.k1.bytecode.b_units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
-        TypedExpr::PendingCapture(_) => {
-            b.k1.ice_with_span("bytecode on PendingCapture", b.cur_span)
-        }
+        TypedExpr::PendingCapture(_) => b_ice!(b, "bytecode on PendingCapture"),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             // We lower the simple scalar static values
@@ -2243,6 +2252,12 @@ fn compile_expr(
                 StaticValue::Int(int) => {
                     let int = *int;
                     let imm = b.make_int_value(&int, "static int");
+                    let store = store_scalar_if_dst(b, dst, imm);
+                    Ok(store)
+                }
+                StaticValue::Enum(_, int) => {
+                    let int = *int;
+                    let imm = b.make_int_value(&int, "static enum");
                     let store = store_scalar_if_dst(b, dst, imm);
                     Ok(store)
                 }
@@ -2296,7 +2311,7 @@ fn compile_variable_to_address(
                         .map(|bv| format!("{} {}", bv.id, bv.value))
                         .join("\n")
                 );
-                b.k1.ice_with_span("Missing variable", b.cur_span)
+                b.k1.ice_span(b.cur_span, "Missing variable")
             };
             let var_value = var.value;
             let var_indirect = var.indirect;
@@ -2354,7 +2369,7 @@ fn compile_cast(
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id);
-            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast signchange");
+            let casted = b.push_inst(Inst::BitCast { v: base_noop, to: to_pt }, "cast noop");
             let stored =
                 store_rich_if_dst(b, dst, to_pt, casted.as_value(), "fulfill cast destination");
             Ok(stored)

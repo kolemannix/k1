@@ -1,5 +1,6 @@
 ns enum_basic;
 
+#debug
 fn enumNoPayload() {
   let v: either Yes, No = .No;
   if v is .No {} else { crash("") };
@@ -8,10 +9,10 @@ fn enumNoPayload() {
 }
 
 deftype Maybe = either A, B(char), C(string)
-fn enumPayload() {
+fn sumPayload() {
   let a: Maybe = .A;
   let b: Maybe = .B('x');
-  let c: Maybe = .C("hello, enums");
+  let c: Maybe = .C("hello, sums");
   if a is .A {} else crash("");
   assert(a is .A);
 
@@ -22,9 +23,9 @@ fn enumPayload() {
   assert(b is .B('x'));
   assert(b.asB().! == 'x');
 
-  if c is .C("hello, enums") {} else crash("");
+  if c is .C("hello, sums") {} else crash("");
   assert(c is .C(_));
-  assert(c.asC().! == "hello, enums");
+  assert(c.asC().! == "hello, sums");
 
 }
 
@@ -41,13 +42,13 @@ ns MyResult {
   }
 }
 
-fn genericEnum() {
+fn genericSum() {
     let x1: MyResult[int, string] = .ok(-3);
     let x2: MyResult[int, string] = .err("Some error message");
 
     let x1Ok = x1.asOk();
 
-    // This tests type inference for enums
+    // This tests type inference for sums
     assert(MyResult/myGet(x1) == -3);
     assert(x1.myGet() == -3);
     assert(x1Ok == .some(-3));
@@ -63,21 +64,32 @@ fn genericEnum() {
     assert(core/types/align-of[MyResult[int, string]]() == 8);
 }
 
-// Bug: change this type to name 'E' for a nice surprise
-deftype EByte = either(u8) A, B, C
+deftype E = either(u8) A, B, C(int)
 fn tags() {
-  let a: EByte = .A;
-  let b: EByte = .B;
-  let c: EByte = .C;
-  assert(a.tag == 0);
-  assert(b.tag == 1);
-  assert(c.tag == 2);
+  let a: E = .A;
+  let b: E = .B;
+  let c: E = .C(0);
+  assertEquals(a.tag, 0);
+  assertEquals(b.tag, 1);
+  assertEquals(c.tag, 2);
   {}
+}
+
+deftype enum-abc = either(u8) A, B, C
+fn enumValue() {
+  let a: enum-abc = .A;
+  let b: enum-abc = .B;
+  let c: enum-abc = .C;
+  assertEquals(a.value, 0);
+  assertEquals(b.value, 1);
+  assertEquals(c.value, 2);
 }
 
 fn test() {
   tags();
+  sumPayload();
+  genericSum();
+
   enumNoPayload();
-  enumPayload();
-  genericEnum();
+  enumValue();
 }

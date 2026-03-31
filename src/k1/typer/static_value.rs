@@ -59,6 +59,7 @@ pub enum StaticValue {
     Int(TypedIntValue),
     Float(TypedFloatValue),
     String(StringId),
+    Enum(TypeId, TypedIntValue),
     Zero(TypeId),
     Struct(StaticStruct),
     Sum(StaticSum),
@@ -74,6 +75,7 @@ impl StaticValue {
             StaticValue::Int(i) => i.kind_name(),
             StaticValue::Float(_) => "float",
             StaticValue::String(_) => "string",
+            StaticValue::Enum(_, _) => "enum",
             StaticValue::Zero(_) => "zero",
             StaticValue::Struct(_) => "struct",
             StaticValue::Sum(_) => "sum",
@@ -90,6 +92,7 @@ impl StaticValue {
             StaticValue::Bool(_) => BOOL_TYPE_ID,
             StaticValue::Char(_) => CHAR_TYPE_ID,
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
+            StaticValue::Enum(type_id, _) => *type_id,
             StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
             StaticValue::String(_) => STRING_TYPE_ID,
             StaticValue::Zero(type_id) => *type_id,
@@ -109,6 +112,13 @@ impl StaticValue {
     pub fn as_sum(&self) -> Option<&StaticSum> {
         match self {
             StaticValue::Sum(sum) => Some(sum),
+            _ => None,
+        }
+    }
+
+    pub fn as_enum(&self) -> Option<(TypeId, TypedIntValue)> {
+        match self {
+            StaticValue::Enum(type_id, int_value) => Some((*type_id, *int_value)),
             _ => None,
         }
     }
@@ -145,6 +155,10 @@ impl DepHash<StaticValuePool> for StaticValue {
             StaticValue::Bool(b) => b.hash(state),
             StaticValue::Char(c) => c.hash(state),
             StaticValue::Int(i) => i.hash(state),
+            StaticValue::Enum(type_id, int_value) => {
+                type_id.hash(state);
+                int_value.hash(state)
+            }
             StaticValue::Float(f) => {
                 // Use bit representation since f32/f64 don't implement Hash (NaN issues)
                 match f {
@@ -186,6 +200,7 @@ impl DepEq<StaticValuePool> for StaticValue {
             (StaticValue::Bool(a), StaticValue::Bool(b)) => a == b,
             (StaticValue::Char(a), StaticValue::Char(b)) => a == b,
             (StaticValue::Int(a), StaticValue::Int(b)) => a == b,
+            (StaticValue::Enum(ta, va), StaticValue::Enum(tb, vb)) => *ta == *tb && *va == *vb,
             (StaticValue::Float(a), StaticValue::Float(b)) => a == b,
             (StaticValue::String(a), StaticValue::String(b)) => a == b,
             (StaticValue::Zero(t1), StaticValue::Zero(t2)) => *t1 == *t2,

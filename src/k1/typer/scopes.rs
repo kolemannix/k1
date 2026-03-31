@@ -2,7 +2,7 @@
 // All rights reserved.
 
 use ahash::HashMapExt;
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 
 use std::{collections::hash_map::Entry, fmt::Display, num::NonZeroU32};
@@ -15,8 +15,8 @@ use crate::{
     pool::VPool,
     static_assert_niched, static_assert_size,
     typer::{
-        AbilityId, FunctionId, Ident, LoopType, NamespaceId, Namespaces, TypeId, TypedExprId,
-        K1Result, VariableId,
+        AbilityId, FunctionId, Ident, K1Result, LoopType, NamespaceId, Namespaces, TypeId,
+        TypedExprId, VariableId,
     },
 };
 
@@ -563,14 +563,19 @@ impl Scopes {
         }
     }
 
-    pub fn find_abilities_in_scope(&self, dst: &mut FxHashSet<AbilityId>, scope_id: ScopeId) {
+    pub fn is_ability_id_in_scope(&self, scope_id: ScopeId, target_ability_id: AbilityId) -> bool {
         let scope = self.get_scope(scope_id);
-        dst.extend(scope.abilities.values());
+        for ability_id in scope.abilities.values() {
+            if *ability_id == target_ability_id {
+                return true;
+            }
+        }
+
         match scope.parent {
             Some(parent_scope_id) => {
-                self.find_abilities_in_scope(dst, parent_scope_id);
+                self.is_ability_id_in_scope(parent_scope_id, target_ability_id)
             }
-            None => {}
+            None => false,
         }
     }
 

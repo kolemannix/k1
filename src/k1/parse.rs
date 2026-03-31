@@ -818,7 +818,7 @@ pub enum ParsedExpr {
     /// .<ident>
     /// .<ident>(<expr>)
     /// ```
-    AnonSumConstructor(AnonSumConstructor),
+    AnonConstructor(AnonSumConstructor),
     /// ```md
     /// <expr> is <pat>
     /// ```
@@ -868,7 +868,7 @@ impl ParsedExpr {
             Self::Struct(struc) => struc.span,
             Self::ListLiteral(list_expr) => list_expr.span,
             Self::For(for_expr) => for_expr.span,
-            Self::AnonSumConstructor(tag_expr) => tag_expr.span,
+            Self::AnonConstructor(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::Cast(as_cast) => as_cast.span,
@@ -1097,7 +1097,7 @@ impl_copy_if_small!(12, ParsedArrayType);
 #[derive(Debug, Clone)]
 pub struct ParsedSumVariant {
     pub tag_name: Ident,
-    pub payload_expression: Option<ParsedTypeExprId>,
+    pub payload: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
@@ -3028,7 +3028,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 None => tag.span,
                 Some(expr) => self.ast.type_exprs.get(expr).get_span(),
             };
-            variants.push(ParsedSumVariant { tag_name, payload_expression, span });
+            variants.push(ParsedSumVariant { tag_name, payload: payload_expression, span });
             first = false;
         }
         let last_variant_span =
@@ -3484,13 +3484,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let payload = self.expect_expression()?;
                     let close_paren = self.expect_kind(K::CloseParen)?;
                     let span = self.extend_token_span(first, close_paren);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonSumConstructor(
+                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(
                         AnonSumConstructor { variant_name, payload: Some(payload), span },
                     ))))
                 } else {
                     // Tag Literal
                     let span = self.extend_token_span(first, second);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonSumConstructor(
+                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(
                         AnonSumConstructor { variant_name, payload: None, span },
                     ))))
                 }
@@ -4745,7 +4745,7 @@ impl ParsedProgram {
             }
             ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
             ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpr::AnonSumConstructor(anon_sum) => {
+            ParsedExpr::AnonConstructor(anon_sum) => {
                 w.write_char('.')?;
                 w.write_str(self.idents.get_name(anon_sum.variant_name))?;
                 if let Some(payload) = anon_sum.payload.as_ref() {
@@ -4955,7 +4955,7 @@ impl ParsedProgram {
                 w.write_str("either ")?;
                 for variant in &e.variants {
                     w.write_str(self.idents.get_name(variant.tag_name))?;
-                    if let Some(payload) = &variant.payload_expression {
+                    if let Some(payload) = &variant.payload {
                         w.write_str("(")?;
                         self.display_type_expr_id(*payload, w)?;
                         w.write_str(")")?;

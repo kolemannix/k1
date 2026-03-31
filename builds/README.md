@@ -4,11 +4,8 @@ cargo cross uses docker buildx, great
 
 # Build for linux x86-64
 ```sh
-cross build --release --target=x86_64-unknown-linux-gnu --features=llvm-sys/force-static
+cross build --bin k1 --release --target=x86_64-unknown-linux-gnu --features=llvm-sys/force-static
 ```
-
-# Build my test image for seeing if the linux build works
-docker buildx build --platform linux/amd64 -f builds/Dockerfile-test-linux-amd64 --load -t k1-linux-amd64:latest .
 
 # Run test image
 ```sh

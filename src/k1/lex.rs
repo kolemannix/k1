@@ -697,7 +697,6 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
         #[inline]
         fn make_token(lex: &mut Lexer, kind: TokenKind, start: u32, len: u32) -> Token {
             let span = lex.add_span(start, len);
-            // nocommit
             let whitespace_preceded = lex
                 .content
                 .get((start as usize).saturating_sub(1))

@@ -61,7 +61,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     }
 
     #[inline]
-    fn data_buffer(&self) -> &[T] {
+    fn _data_buffer(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.mmap.as_ptr() as *const T, self.max_len) }
     }
 
@@ -166,14 +166,6 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
             return None;
         }
         Some(self.get_index(index))
-    }
-
-    #[inline]
-    #[track_caller]
-    fn bounds_check(&self, index: usize) {
-        if index >= self.len {
-            panic!("Pool Index out of bounds: {} >= {}", index, self.len);
-        }
     }
 
     #[inline]
