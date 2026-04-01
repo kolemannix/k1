@@ -67,9 +67,15 @@ deftype alias byte = u8
 ns types {
 
   // Magically implemented for all enums
-  // ability enum[impl v] {
-  //   intern fn value(self: self): v
-  // }
+  ability enum[impl v] {
+    fn enum-value(self: self): v
+  }
+
+  // Implement equals for all enums in userspace B-)
+  impl[i: equals, e: types/enum[v = i]] equals for e {
+    fn equals(self: e, other: e): bool { self.enum-value() == other.enum-value() }
+  }
+
 
   intern fn size-of[t](): int
   intern fn size-of-stride[t](): int
@@ -476,10 +482,6 @@ impl equals for {} {
   fn equals(_self: {}, _other: {}): bool { true }
 }
 
-//impl[t, e: types/enum[impl i]] equals for e {
-//  fn equals(self: e, other: e): bool { self.value == other.value }
-//}
-
 ns mem {
 
   // TODO: Possibly reduce to a single alloc with a 'zero' option to reduce the number of builtins
@@ -516,12 +518,8 @@ ns k1 {
   let no-std: bool = builtin
   let debug: bool = builtin
 
-  let os: (either linux, macos, wasm) = builtin
-  impl equals for typeOf(os) {
-    fn equals(self: typeOf(os), other: typeOf(os)): bool {
-      self.as[u8] == other.as[u8]
-    }
-  }
+  deftype os = either linux, macos, wasm
+  let os: os = builtin
   let os-macos: bool = os is .macos
   let os-posix: bool = os is .macos or os is .linux
 

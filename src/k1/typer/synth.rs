@@ -31,7 +31,7 @@ impl TypedProgram {
         let Some(impl_id) = self
             .ability_impl_table
             .get(&ty)
-            .and_then(|impls| impls.iter().find(|i| i.base_ability_id == EQUALS_ABILITY_ID))
+            .and_then(|impls| impls.iter().find(|i| i.base_ability_id == ABILITY_ID_EQUALS))
         else {
             self.ice_span(span, "expected equals impl")
         };

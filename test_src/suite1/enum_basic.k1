@@ -1,6 +1,5 @@
 ns enum_basic;
 
-#debug
 fn enumNoPayload() {
   let v: either Yes, No = .No;
   if v is .No {} else { crash("") };
@@ -8,88 +7,39 @@ fn enumNoPayload() {
   if v is .Yes {} else { crash("") };
 }
 
-deftype Maybe = either A, B(char), C(string)
-fn sumPayload() {
-  let a: Maybe = .A;
-  let b: Maybe = .B('x');
-  let c: Maybe = .C("hello, sums");
-  if a is .A {} else crash("");
-  assert(a is .A);
-
-  if b is .B(x) {
-    assert(x == 'x');
-  } else crash("");
-  assert(b is .B(_));
-  assert(b is .B('x'));
-  assert(b.asB().! == 'x');
-
-  if c is .C("hello, sums") {} else crash("");
-  assert(c is .C(_));
-  assert(c.asC().! == "hello, sums");
-
+deftype enum-abc = either(u8) a, b, c
+impl print for enum-abc {
+  fn printTo[w: writer](self: self, w: w) { switch self { 
+    .a -> w.write-char('a'),
+    .b -> w.write-char('b'),
+    .c -> w.write-char('c'),
+  } }
 }
-
-deftype MyResult[T, E] = either ok(T), err(E)
-ns MyResult {
-  fn myGet[T, E](self: MyResult[T, E]): T {
-    self.asOk().!
-  }
-  fn show[T: print, E: print](self: MyResult[T, E]): string {
-    switch self {
-      .ok(v) -> { "Ok: {v}\n" },
-      .err(e) -> { "Error: {e}\n" }
-    }
-  }
-}
-
-fn genericSum() {
-    let x1: MyResult[int, string] = .ok(-3);
-    let x2: MyResult[int, string] = .err("Some error message");
-
-    let x1Ok = x1.asOk();
-
-    // This tests type inference for sums
-    assert(MyResult/myGet(x1) == -3);
-    assert(x1.myGet() == -3);
-    assert(x1Ok == .some(-3));
-
-    // shows that we can talk about the payload type
-    let _: MyResult[int, string].ok = 42;
-
-    assertEquals(x1.show(), "Ok: -3\n");
-    assertEquals(x2.show(), "Error: Some error message\n");
-
-    assert(core/types/size-of[MyResult[int, string]]() == 24);
-    assert(core/types/size-of-stride[MyResult[int, string]]() == 24);
-    assert(core/types/align-of[MyResult[int, string]]() == 8);
-}
-
-deftype E = either(u8) A, B, C(int)
-fn tags() {
-  let a: E = .A;
-  let b: E = .B;
-  let c: E = .C(0);
-  assertEquals(a.tag, 0);
-  assertEquals(b.tag, 1);
-  assertEquals(c.tag, 2);
-  {}
-}
-
-deftype enum-abc = either(u8) A, B, C
-fn enumValue() {
-  let a: enum-abc = .A;
-  let b: enum-abc = .B;
-  let c: enum-abc = .C;
+fn enumTest() {
+  let a: enum-abc = .a;
+  let b: enum-abc = .b;
+  let c: enum-abc = .c;
   assertEquals(a.value, 0);
   assertEquals(b.value, 1);
   assertEquals(c.value, 2);
+  assertEquals(a, enum-abc.a);
+  assertEquals(b, enum-abc.b);
+  assertEquals(c, enum-abc.c);
+
+  assertEquals(getEnumValue(c), 2);
+  assertEquals(getEnumValue(b), 1);
+  assertEquals(c, c);
+  assertEquals(b, b);
+  core/assertNotEquals(c, b);
+}
+
+fn getEnumValue[i, e: types/enum[v = i]](e: e): i {
+  e.enum-value()
 }
 
 fn test() {
-  tags();
-  sumPayload();
-  genericSum();
 
   enumNoPayload();
-  enumValue();
+  enumTest();
 }
+

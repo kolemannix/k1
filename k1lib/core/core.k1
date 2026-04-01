@@ -7,6 +7,12 @@ fn assertEquals[T: print and equals](context locn: compiler/source-location)(a: 
   }
 }
 
+fn assertNotEquals[T: print and equals](context locn: compiler/source-location)(a: T, b: T) {
+  if a == b {
+    crash("ASSERT FAILED: {a} == {b}")
+  }
+}
+
 ns iter {
 
   fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): ?T {

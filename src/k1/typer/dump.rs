@@ -615,8 +615,15 @@ impl TypedProgram {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(w, name)?;
                     }
-                    Callee::Abstract { .. } => {
-                        w.write_str("<abstract>")?;
+                    Callee::Abstract { function_sig } => {
+                        w.write_str("abstract ")?;
+                        self.display_function_signature(w, *function_sig)?;
+                    }
+                    Callee::Builtin { function_sig, builtin } => {
+                        w.write_str("builtin ")?;
+                        self.display_function_signature(w, *function_sig)?;
+                        w.write_str(" ")?;
+                        w.write_str(builtin.kind_name())?;
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         self.display_expr_id(*function_pointer_expr, w, indentation)?;
@@ -1108,6 +1115,7 @@ impl TypedProgram {
             AbilityImplKind::Blanket { .. } => "blanket",
             AbilityImplKind::DerivedFromBlanket { .. } => "derived",
             AbilityImplKind::TypeParamConstraint => "constraint",
+            AbilityImplKind::Builtin(_) => "builtin",
         };
         write!(w, "{kind_str:10} ")?;
         self.display_ability_signature(w, i.ability_id, self.mem.getn(i.impl_arguments))?;
@@ -1123,13 +1131,25 @@ impl TypedProgram {
                     }
                     AbilityImplFunction::Abstract(sig) => {
                         w.write_str("abstract ")?;
-                        self.display_type_id(w, sig.function_type, false)?;
+                        self.display_function_signature(w, sig)?;
+                    }
+                    AbilityImplFunction::Builtin(sig, builtin) => {
+                        w.write_str("builtin ")?;
+                        w.write_str(builtin.kind_name())?;
+                        w.write_str(" ")?;
+                        self.display_function_signature(w, sig)?;
                     }
                 };
                 writeln!(w)?;
             }
         }
         Ok(())
+    }
+
+    pub fn ability_impl_to_string(&self, id: AbilityImplId, display_functions: bool) -> String {
+        let mut s = String::new();
+        self.display_ability_impl(&mut s, id, display_functions).unwrap();
+        s
     }
 
     pub fn pattern_to_string(&self, pattern_id: TypedPatternId) -> String {

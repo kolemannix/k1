@@ -740,7 +740,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             level: err.level,
         });
     }
-    let intrinsic_type = f.intrinsic_type;
+    let intrinsic_type = f.builtin_type;
     let is_debug = f.compiler_debug;
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
     b.cur_span = fn_span;
@@ -1405,6 +1405,7 @@ pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
         Builtin::GetStaticValue => H::Typer,
         Builtin::StaticTypeToValue => H::Typer,
         Builtin::TypeId => H::Typer,
+        Builtin::EnumGetValue => H::Typer,
 
         Builtin::BakeStaticValue => H::BcBakeStaticValue,
         Builtin::CompilerMessage => H::Backend(BackendBuiltin::CompilerMessage),
@@ -1567,7 +1568,7 @@ fn compile_expr(
                 None => (None, None),
                 Some(f_id) => {
                     let f = b.k1.get_function(f_id);
-                    (f.intrinsic_type, Some(f.linkage))
+                    (f.builtin_type, Some(f.linkage))
                 }
             };
             let (callee, environment_arg) = match (intrinsic_op, linkage) {
@@ -1818,7 +1819,8 @@ fn compile_expr(
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
                         (BcCallee::Direct(*function_id), Some(env_ptr))
                     }
-                    Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract call"),
+                    Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract callee"),
+                    Callee::Builtin { .. } => return failf!(b.cur_span, "bc builtin callee"),
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();

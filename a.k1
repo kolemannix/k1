@@ -1,24 +1,24 @@
-deftype enum-abc = either(u8) A, B, C
-#debug
-fn enumNoPayload() {
-  println("{enum-abc.B.value}");
-  println("{enum-abc.B is .B}");
-  {}
-  // let a: enum-abc = .A;
-  // let b: enum-abc = .B;
-  // let c: enum-abc = .C;
-  // assertEquals(a.value, 0);
-  // assertEquals(b.value, 1);
-  // assertEquals(c.value, 2);
-
-  // let v: either Yes, No = .No;
-  // if v is .No {} else { crash("") };
-  // v := .Yes;
-  // if v is .Yes {} else { crash("") };
+fn enumValue[i, e: types/enum[v = i]](e: e): i {
+  e.enum-value()
+}
+deftype my-enum = either a,b,c
+impl print for my-enum {
+  fn printTo[w: writer](self: self, w: w) { switch self { 
+    .a -> w.write-char('a'),
+    .b -> w.write-char('b'),
+    .c -> w.write-char('c'),
+  } }
 }
 
-#static enumNoPayload()
 fn main(): i32 {
-  enumNoPayload();
+  let c = my-enum.c;
+  let b = my-enum.b;
+  c == b;
+  assertEquals(enumValue(c), 2);
+  assertEquals(enumValue(b), 1);
+  assertEquals(c, c);
+  assertEquals(b, b);
+  core/assertNotEquals(c, b);
+
   0
 }

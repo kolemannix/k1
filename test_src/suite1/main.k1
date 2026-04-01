@@ -20,6 +20,7 @@ fn low() {
   test_uninit/test();
   control_flow/test();
   enum_basic/test();
+  sum_basic/test();
   function_pointer/test();
   ns_collision/test();
   enum_construction/test();
