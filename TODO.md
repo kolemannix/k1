@@ -10,7 +10,7 @@
   - [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 
 More optimal final programs
-- [ ] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
+- [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
 
 Non-major Ideas
@@ -33,7 +33,7 @@ Simple but missing
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
-- [ ] implement iterator for array
+- [x] implement iterator for array
 
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)

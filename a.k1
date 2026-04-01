@@ -1,24 +1,9 @@
-fn enumValue[i, e: types/enum[v = i]](e: e): i {
-  e.enum-value()
-}
-deftype my-enum = either a,b,c
-impl print for my-enum {
-  fn printTo[w: writer](self: self, w: w) { switch self { 
-    .a -> w.write-char('a'),
-    .b -> w.write-char('b'),
-    .c -> w.write-char('c'),
-  } }
-}
 
 fn main(): i32 {
-  let c = my-enum.c;
-  let b = my-enum.b;
-  c == b;
-  assertEquals(enumValue(c), 2);
-  assertEquals(enumValue(b), 1);
-  assertEquals(c, c);
-  assertEquals(b, b);
-  core/assertNotEquals(c, b);
+  let xs = [1,2,3,4,5,6]: array[int, 6];
+  for &xs {
+    println("{it}")
+  };
 
   0
 }

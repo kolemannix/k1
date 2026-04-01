@@ -6302,11 +6302,18 @@ impl TypedProgram {
             let tp = self.types.get_type_parameter(typed_param.type_id);
             if let Some(static_constraint) = tp.static_constraint {
                 let static_type = self.types.get(static_constraint).as_value_type().unwrap();
-                if static_type.family_type_id != solution.type_id {
-                    eprintln!(
-                        "Blanket impl almost matched but a static constraint failed: {} != {}",
-                        self.type_id_to_string(static_type.family_type_id),
-                        self.type_id_to_string(solution.type_id)
+                let matched = match self.types.get(solution.type_id) {
+                    Type::StaticValue(s) => static_type.family_type_id == s.family_type_id,
+                    _non_static => static_type.family_type_id == solution.type_id,
+                };
+                if !matched {
+                    self.report_hint(
+                        span,
+                        format!(
+                            "Blanket impl almost matched but a static constraint failed: {} != {}",
+                            self.type_id_to_string(static_type.family_type_id),
+                            self.type_id_to_string(solution.type_id)
+                        ),
                     );
                     return None;
                 }

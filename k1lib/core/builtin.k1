@@ -623,36 +623,36 @@ fn discard[t](_t: t): empty { {} }
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn get-base-read[t, n](array: *array[t, n]): *t where n: static int {
+  fn get-base-read[t, n](array: *array[t, n]): *t where n: static size {
     array.get-ref(0)
   }
-  fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static int {
+  fn get-base[t, n](array: *mut array[t, n]): *mut t where n: static size {
     array.get-ref(0)
   }
-  fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static int {
+  fn base-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
-  fn size-bytes[t, n](_array: array[t, n]): int where n: static int {
+  fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
     types/size-of[array[t, n]]
   }
 
-  fn zeroed[t, n: static int](): array[t, n] {
+  fn zeroed[t, n: static size](): array[t, n] {
     mem/zeroed[array[t, n]]
   }
 
-  fn allocate[t, n: static int](context alloc: mem/alloc-mode)(): *mut array[t, n] {
+  fn allocate[t, n: static size](context alloc: mem/alloc-mode)(): *mut array[t, n] {
     alloc.allocT[array[t, n]]()
   }
 
-  fn memset[t, n](array: *mut array[t, n], value: u8) where n: static int {
+  fn memset[t, n](array: *mut array[t, n], value: u8) where n: static size {
     mem/set(dst = array.base-ptr(), value = value, count = array.size-bytes())
   }
 
-  fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static int {
+  fn set[t, n](array: *mut array[t, n], index: int, value: t) where n: static size {
     array.get-ref(index) <- value
   }
 
-  fn filled-in[t, n: static int](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
+  fn filled-in[t, n: static size](context alloc: mem/alloc-mode)(t: t, n: n): *mut array[t, n] {
     let array-uninit = allocate[t, n]();
     let i = 0;
     while i < n.from-static() {
@@ -662,11 +662,11 @@ ns array {
     array-uninit
   }
 
-  fn as-buffer[t, n](array: *mut array[t, n]): buffer[t] where n: static int {
+  fn as-buffer[t, n](array: *mut array[t, n]): buffer[t] where n: static size {
     { len: array.len(), data: array.get-base() }
   }
 
-  fn as-span[t, n](array: *array[t, n]): span[t] where n: static int {
+  fn as-span[t, n](array: *array[t, n]): span[t] where n: static size {
     let temp = array.to-mut.as-buffer();
     span/wrapBuffer(temp)
   }
