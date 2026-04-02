@@ -36,7 +36,7 @@ cd "${BUILD_DIR}"
 # Until we move to pure rustc perhaps, or selfhost or something
 cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_C_COMPILER=clang++ \
+  -DCMAKE_CXX_COMPILER=clang++ \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
   -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
   -DLLVM_BUILD_LLVM_DYLIB=OFF \
