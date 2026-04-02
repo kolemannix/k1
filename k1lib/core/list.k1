@@ -138,7 +138,7 @@ ns list {
   }
 
   fn push[T](self: *mut list[T], elem: T) {
-    self.pushIn[T](context .Current)(elem)
+    self.pushIn[T](context .current)(elem)
   }
 
   fn slice[T](self: list[T], start: size, end: size): buffer[T] {
@@ -202,7 +202,7 @@ ns list {
   }
 
   fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
-    self.reserve(.Current, self.len + other.len);
+    self.reserve(.current, self.len + other.len);
     let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
     buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;

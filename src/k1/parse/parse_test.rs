@@ -405,3 +405,19 @@ fn integer_suffix() -> ParseResult<()> {
     assert_eq!(text, "-42i64");
     Ok(())
 }
+
+#[test]
+fn consecutive_strings() -> ParseResult<()> {
+    let input = r#""Hello, " "World!""#;
+    let (module, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let ParsedExpr::InterpolatedString(is) = expr else { panic!() };
+    let span = module.spans.get(is.span);
+    assert_eq!(is.parts.len(), 2);
+    let InterpolatedStringPart::String(s1) = module.mem.get_nth(is.parts, 0) else { panic!() };
+    let InterpolatedStringPart::String(s2) = module.mem.get_nth(is.parts, 1) else { panic!() };
+    assert_eq!(module.get_string(*s1), "Hello, ");
+    assert_eq!(module.get_string(*s2), "World!");
+    assert_eq!(span.start, 0);
+    assert_eq!(span.len, 18);
+    Ok(())
+}

@@ -4,76 +4,75 @@
 use core/types/size-of
 use core/types/align-of
 
-// TODO: Move to <header> . <mem block> model vs separate struct
-deftype Arena = {
-  basePtr: ptr,
-  curAddr: ptr,
-  maxAddr: ptr
+deftype arena = {
+  base-ptr: ptr,
+  cur-addr: ptr,
+  max-addr: ptr
 }
-ns Arena {
+ns arena {
   let kb: size = 1024
   let mb: size = 1048576
   let gb: size = 1073741824
 
-  fn regionSizeBytes(self: Arena): size {
-    self.maxAddr.diff(self.basePtr)
+  fn regionSizeBytes(self: arena): size {
+    self.max-addr.diff(self.base-ptr)
   }
 
-  fn usedBytes(self: Arena): size {
-    self.curAddr.diff(self.basePtr)
+  fn usedBytes(self: arena): size {
+    self.cur-addr.diff(self.base-ptr)
   }
 
-  fn _virtual(usageHintMb: size): Arena {
+  fn _virtual(usageHintMb: size): arena {
     let sizeBytes = 1 * gb;
-    let basePtr: ptr = mem/virtualAlloc(sizeBytes);
-    #if k1/debug mem/set(dst = basePtr, value = 0xCD, count = usageHintMb * mb);
-    posix/madvise(basePtr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
+    let base-ptr: ptr = mem/virtualAlloc(sizeBytes);
+    #if k1/debug mem/set(dst = base-ptr, value = 0xCD, count = usageHintMb * mb);
+    posix/madvise(base-ptr, (usageHintMb * mb).as[c-sizet], advice = posix/MADV_SEQUENTIAL);
     {
-      basePtr: basePtr,
-      curAddr: basePtr,
-      maxAddr: basePtr.add-bytes(sizeBytes)
+      base-ptr: base-ptr,
+      cur-addr: base-ptr,
+      max-addr: base-ptr.add-bytes(sizeBytes)
     }
   }
 
-  fn default(): Arena {
+  fn default(): arena {
     _virtual(usageHintMb = 10)
-    //let header: *mut Arena = basePtr.as[*mut Arena];
-    //header.basePtr* <- basePtr.addBytes(types/size-of[Arena]());
+    //let header: *mut arena = base-ptr.as[*mut arena];
+    //header.base-ptr* <- base-ptr.addBytes(types/size-of[arena]());
   }
 
-  fn release(self: *mut Arena) {
-    mem/virtualRelease(self.basePtr, self.regionSizeBytes())
+  fn release(self: *mut arena) {
+    mem/virtualRelease(self.base-ptr, self.regionSizeBytes())
   }
 
-  fn reset(self: *mut Arena, clear: bool) {
+  fn reset(self: *mut arena, clear: bool) {
     let usedBytes = self.usedBytes();
     println("[arena] Resetting {usedBytes / kb}KiB");
-    self.curAddr* <- self.basePtr;
+    self.cur-addr* <- self.base-ptr;
 
     if clear {
-      println("mem/set clear {self.basePtr} 0 {usedBytes}");
-      mem/set(dst = self.basePtr, value = 0, count = usedBytes);
+      println("mem/set clear {self.base-ptr} 0 {usedBytes}");
+      mem/set(dst = self.base-ptr, value = 0, count = usedBytes);
     }
   }
 
-  fn pushLayout(self: *mut Arena, size: size, align: size): ptr {
-    let dataStart = self.curAddr.aligned(align);
+  fn pushLayout(self: *mut arena, size: size, align: size): ptr {
+    let dataStart = self.cur-addr.aligned(align);
     let newEnd = dataStart.add-bytes(size);
-    if newEnd.as[usize] > self.maxAddr.as[usize] {
-      mem/pushMode(.SystemHeap);
-      crash("Arena is out of space to allocate {size} bytes. newEnd: {newEnd}. maxAddr: {self.maxAddr}")
+    if newEnd.as[usize] > self.max-addr.as[usize] {
+      mem/pushMode(.system-heap);
+      crash("arena is out of space to allocate {size} bytes. newEnd: {newEnd} > {self.max-addr}")
     };
 
-    self.curAddr* <- newEnd;
+    self.cur-addr* <- newEnd;
     dataStart
   }
 
-  fn pushUninit[T](self: *mut Arena): *mut T {
+  fn push-uninit[T](self: *mut arena): *mut T {
     let dataStart = self.pushLayout(size-of[T](), align-of[T]());
     dataStart.as[*mut T]
   }
 
-  fn push[T](self: *mut Arena, t: T): *mut T {
+  fn push[T](self: *mut arena, t: T): *mut T {
     let dataStart = self.pushLayout(size-of[T](), align-of[T]());
 
     let ref: *mut T = dataStart.rw();
@@ -81,7 +80,7 @@ ns Arena {
     ref
   }
 
-  fn pushN[T](self: *mut Arena, ts: span[T]): buffer[T] {
+  fn pushN[T](self: *mut arena, ts: span[T]): buffer[T] {
     let size = ts.buffer.sizeBytes();
     let align = types/align-of[T]();
     let base = self.pushLayout(size, align);
@@ -90,13 +89,13 @@ ns Arena {
     buffer
   }
 
-  fn pushString(self: *mut Arena, s: string): string {
+  fn pushString(self: *mut arena, s: string): string {
     let data: buffer[char] = self.pushN(s.span());
     string/wrapBuffer(data)
   }
 
-  fn pushList[T](self: *mut Arena, cap: size): list[T] {
-    list/withCapacityIn(context .CustomArena(self))(cap)
+  fn pushList[T](self: *mut arena, cap: size): list[T] {
+    list/withCapacityIn(context .custom-arena(self))(cap)
   }
 
 }

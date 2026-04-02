@@ -28,7 +28,7 @@ ns spill-list {
   }
 
   fn _spill[T, N: static size](fixlist: *mut fixlist[T, N]): list[T] {
-    let* list = list/withCapacityIn[T](context .Current)(fixlist.cap() * 2);
+    let* list = list/withCapacityIn[T](context .current)(fixlist.cap() * 2);
 
     let srcbuffer = fixlist.asBuffer();
     list.appendBuffer(srcbuffer);

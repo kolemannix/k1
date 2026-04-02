@@ -12,7 +12,7 @@ let sample: string =
 11
 17
 32`;
-let inputFile: string = core/files/readToString(context .Arena)("day5_input.txt");
+let inputFile: string = core/files/readToString(context .arena)("day5_input.txt");
 
 // The fresh ID ranges are inclusive: the range 3-5 means that ingredient IDs 3, 4, and 5 are all fresh. The ranges can also overlap; an ingredient ID is fresh if it is in any range.
 // 

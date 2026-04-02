@@ -8,6 +8,7 @@
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [ ] Destructuring, (in)fallible patterns
   - [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
+- [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 
 More optimal final programs
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -34,6 +35,7 @@ Simple but missing
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!
 - [ ] Bindings generator; `rust-bindgen` equivalent
 - [x] implement iterator for array
+- [ ] Implement at least one format specifier (precision, pretty)
 
 # Bugs
 - [ ] Defect: Allow pattern matching *into* recursive types (currently we just terminate)
@@ -42,11 +44,9 @@ Simple but missing
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
-## [ ] Writergate
+## [x] Writergate
 - [x] Allow using expr-interpolated strings directly into a writer
 - [x] Allow for named non-interpolated args into holes with a struct
-- [ ] Implement at least one format specifier (precision, pretty)
-
 - [x] Return value binding, or named return values, for guaranteed RVO
 - [x] Uninit in struct fields - just don't store there
 
@@ -55,12 +55,13 @@ Simple but missing
   - let context(impl Alloc) temp = mem/AllocMode.Arena;
   - let context(impl Iterator[string]) temp = mem/AllocMode.Arena;
 
-## [ ] Distribute builds that work
+## [x] Distribute builds that work
 - [x] Test on linux
 - [x] Linux bundler, cross build, static llvm linking
 - [x] solve stdlib location
-- [ ] Link in lld? ugh. For now maybe just ship with it
-- [ ] 
+- [x] Link in lld? ugh. For now, we link with system 'cc'
+- [ ] Publish a linux build
+- [ ] Publish a macos build
 
 ## Project: Optimize the bytecode a bit
 - [ ] Function inlining
@@ -337,8 +338,9 @@ It currently runs directly off the typed tree
 - Ability derivation (prefer a metaprogram solution)
 
 ## Won't do
-- [ ] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
+- [x] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
       This simplification comes at the cost of making empty struct quite special, so I think it's a sidegrade. Won't do
+      Edit: Did this much later, since 'special' just means true ZSTs
 - [ ] 'call' method syntax (Scala's 'apply' feature)
 
 ## Ideas
@@ -358,7 +360,7 @@ It currently runs directly off the typed tree
 - [x] Intern ParsedBlock and ParsedStatement
 
 ## Error story
-- [x] As values, of course.
+- [x] As values
 - [x] A simple stdlib enum?
 - [x] A '?' operator for early return? We could do an ability for it!
 

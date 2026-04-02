@@ -609,12 +609,30 @@ impl TypedProgram {
             }
         }
 
-        for part in self.ast.mem.getn(parts) {
-            match part {
+        let mut i = 0usize;
+        while i < parts.len() as usize {
+            match self.ast.mem.get_nth(parts, i) {
                 parse::InterpolatedStringPart::String(string_id) => {
-                    let rust_str = self.ast.strings.get_string(*string_id);
-                    if !rust_str.is_empty() {
-                        let string_expr = self.synth_string_literal(*string_id, span);
+                    // Combine consecutive strings into a single constant
+                    let mut string_to_print = *string_id;
+                    let mut combined: Option<String> = None;
+                    while i + 1 < parts.len() as usize {
+                        let next = self.ast.mem.get_nth(parts, i + 1);
+                        if let InterpolatedStringPart::String(next_string) = next {
+                            let buf = combined.get_or_insert_with(|| {
+                                String::from(self.ast.strings.get_string(string_to_print))
+                            });
+                            buf.push_str(self.ast.strings.get_string(*next_string));
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(combined) = combined {
+                        string_to_print = self.ast.strings.intern(combined);
+                    }
+                    if !self.ast.strings.get_string(string_to_print).is_empty() {
+                        let string_expr = self.synth_string_literal(string_to_print, span);
                         let print_call =
                             self.synth_printto_call(string_expr, writer_expr, block_ctx)?;
                         self.push_block_expr_id(&mut block, print_call);
@@ -654,7 +672,8 @@ impl TypedProgram {
                     let print_expr_call = self.synth_printto_call(arg, writer_expr, ctx)?;
                     self.push_block_expr_id(&mut block, print_expr_call);
                 }
-            };
+            }
+            i += 1
         }
         Ok(self.exprs.add_block(&mut self.mem, block, EMPTY_TYPE_ID))
     }

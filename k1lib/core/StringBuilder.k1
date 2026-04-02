@@ -12,7 +12,7 @@ ns StringBuilder {
 
   fn buildTmp(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context .Current)()),
+      .Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context .current)()),
       .Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }

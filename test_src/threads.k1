@@ -1,4 +1,4 @@
-use core/Arena
+use core/arena
 
 let MODULE_INFO: k1/module-manifest = zeroed().with({
   multithreading: true,
@@ -17,9 +17,9 @@ fn run(input: *mut int): ptr {
 
 fn main(): i32 {
   &myvar <- 1000;
-  let* arena = Arena/default();
+  let* arena = arena/default();
   let input = arena.push(42);
-  let output = arena.pushUninit[*int]();
+  let output = arena.push-uninit[*int]();
 
   let thread = std/thread/start(arena, run.toRef(), input);
   std/thread/join(thread.*, output);

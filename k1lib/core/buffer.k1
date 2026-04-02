@@ -79,7 +79,7 @@ ns buffer {
   }
 
   fn filled[T](size: size, value: T): buffer[T] {
-    buffer/filledIn[T](context .Current)(size, value)
+    buffer/filledIn[T](context .current)(size, value)
   }
 
   fn _allocateIn[T](context alloc: mem/alloc-mode)(count: size): buffer[T] {
@@ -94,7 +94,7 @@ ns buffer {
   }
 
   fn _allocate[T](count: size): buffer[T] {
-    _allocateIn[T](context .Current)(count)
+    _allocateIn[T](context .current)(count)
   }
 
   ////////////////////////
@@ -124,7 +124,7 @@ ns buffer {
   }
 
   fn _enlargedClone[T](self: buffer[T], newCount: size): buffer[T] {
-    _enlargedCloneIn[T](context .Current)(self, newCount)
+    _enlargedCloneIn[T](context .current)(self, newCount)
   }
 
   fn copyFrom[T](src: buffer[T], dst: buffer[T]) {

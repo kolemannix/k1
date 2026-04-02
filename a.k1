@@ -1,9 +1,9 @@
 
 fn main(): i32 {
-  let xs = [1,2,3,4,5,6]: array[int, 6];
-  for &xs {
-    println("{it}")
-  };
+  let s = "Hello, ""World!"      
+  " (still here)";
+
+  println(s);
 
   0
 }

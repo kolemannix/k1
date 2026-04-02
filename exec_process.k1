@@ -52,7 +52,7 @@ fn run-command(context alloc: mem/alloc-mode)(program: string, args: span[string
 
 fn testPosix() {
     println("Testing process execution...");
-    //let context(impl Alloc) temp = mem/AllocMode.Arena;
+    //let context(impl Alloc) temp = mem/AllocMode.arena;
     let context temp = mem/alloc-mode.Arena;
     
     // Test 1: Simple echo command

@@ -14,7 +14,7 @@ fn testLiterals() {
 }
 
 fn testFilled() {
-  let context alloc: mem/alloc-mode = .Arena;
+  let context alloc: mem/alloc-mode = .arena;
   let buffer: buffer[u8] = buffer/filledIn(size = 64, value = 3);
   let array: *array[u8, 64] = array/filled-in(3, 64);
   let list: list[u8] = list/filledIn(size = 64, value = 3);
@@ -29,7 +29,7 @@ fn testFilled() {
 }
 
 fn testArray() {
-  let context alloc: mem/alloc-mode = .Arena;
+  let context alloc: mem/alloc-mode = .arena;
   let ls: list[u8] = list/filledIn(size = 10, value = 3);
 
   let a: *mut array[u8, 10] = list/copyToArray(ls, 10);
@@ -43,6 +43,13 @@ fn testArray() {
       assertEquals(a.get(it), 3);
     }
   };
+  for a {
+    if itIndex % 2 == 0 {
+      assertEquals(it, 1);
+    } else {
+      assertEquals(it, 3);
+    }
+  }
 
 }
 

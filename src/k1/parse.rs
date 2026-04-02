@@ -1493,6 +1493,10 @@ impl ParsedExpressionPool {
         self.get(id).get_span()
     }
 
+    pub fn iter_exprs(&self) -> impl Iterator<Item = &ParsedExpr> {
+        self.expressions.iter()
+    }
+
     pub fn count(&self) -> usize {
         self.expressions.len()
     }
@@ -2749,10 +2753,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let string_id = self.ast.strings.intern(&buf);
 
                     parts.push(InterpolatedStringPart::String(string_id));
-                    // StringUnterminated means there are more segments
-                    // String means we're done;
+
                     if is_terminated {
-                        break;
+                        if matches!(
+                            self.peek().kind,
+                            K::String { .. } | K::StringUnterminated { .. }
+                        ) {
+                            first_segment = true;
+                            continue;
+                        } else {
+                            break;
+                        }
                     }
                 }
                 _k => {
@@ -3484,15 +3495,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let payload = self.expect_expression()?;
                     let close_paren = self.expect_kind(K::CloseParen)?;
                     let span = self.extend_token_span(first, close_paren);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(
-                        AnonSumConstructor { variant_name, payload: Some(payload), span },
-                    ))))
+                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(AnonSumConstructor {
+                        variant_name,
+                        payload: Some(payload),
+                        span,
+                    }))))
                 } else {
                     // Tag Literal
                     let span = self.extend_token_span(first, second);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(
-                        AnonSumConstructor { variant_name, payload: None, span },
-                    ))))
+                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(AnonSumConstructor {
+                        variant_name,
+                        payload: None,
+                        span,
+                    }))))
                 }
             }
             K::KeywordBuiltin => {

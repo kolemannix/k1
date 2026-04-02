@@ -1,7 +1,7 @@
 ns day3;
 
 let sample: string = "987654321111111\n811111111111119\n234234234234278\n818181911112111";
-let input: string = core/files/readToString(context .Arena)("day3_input.txt");
+let input: string = core/files/readToString(context .arena)("day3_input.txt");
 
 fn part1(input: string) {
   let hi: char = '0';

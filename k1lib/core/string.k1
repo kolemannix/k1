@@ -91,7 +91,7 @@ ns string {
   }
 
   fn appendChar(self: string, c: char): string {
-    appendCharIn(context .Current)(self, c)
+    appendCharIn(context .current)(self, c)
   }
 
   fn splitByChar(self: string, delim: char): list[string] {

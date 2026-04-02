@@ -14,7 +14,7 @@ use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::info;
+use tracing::{error, info};
 
 //trait LspError {
 //    fn span() -> SpanId;
@@ -22,6 +22,19 @@ use tracing::info;
 //}
 //
 //impl LspError for TyperError {}
+//
+
+fn span_to_range(ast: &ParsedProgram, span_id: SpanId) -> Range {
+    let span = ast.spans.get(span_id);
+    let (start_line, end_line) = ast.get_lines_for_span_id(span_id).unwrap();
+    Range {
+        start: Position {
+            line: start_line.line_index,
+            character: span.start - start_line.start_char,
+        },
+        end: Position { line: end_line.line_index, character: span.end() - end_line.start_char },
+    }
+}
 
 fn error_to_diagnostic(
     ast: &ParsedProgram,
@@ -30,7 +43,6 @@ fn error_to_diagnostic(
     span_id: SpanId,
 ) -> (Url, Diagnostic) {
     let span = ast.spans.get(span_id);
-    let (start_line, end_line) = ast.get_lines_for_span_id(span_id).unwrap();
     let source = ast.sources.get_source(span.file_id);
     let url = source_to_uri(&source.directory, &source.filename);
     let severity = match level {
@@ -44,16 +56,7 @@ fn error_to_diagnostic(
     escaped_message.push_str(&message);
     escaped_message.push_str("\n```");
     let diagnostic = Diagnostic {
-        range: Range {
-            start: Position {
-                line: start_line.line_index,
-                character: span.start - start_line.start_char,
-            },
-            end: Position {
-                line: end_line.line_index,
-                character: span.end() - end_line.start_char,
-            },
-        },
+        range: span_to_range(ast, span_id),
         severity: Some(severity),
         code: None,
         code_description: None,
@@ -309,6 +312,55 @@ impl LanguageServer for Backend {
             )],
         }))
     }
+
+    // This is the wrong endpoint; this is for coloring the background like a toddler
+    // async fn document_highlight(
+    //     &self,
+    //     params: DocumentHighlightParams,
+    // ) -> Result<Option<Vec<DocumentHighlight>>> {
+    //     let mut highlights = vec![];
+    //     let position = params.text_document_position_params;
+    //     let file_url = position.text_document.uri;
+    //     let Some(source) = uri_to_source(&k1.ast, &file_url) else {
+    //         info!("Could not get source for {}", file_url.path());
+    //         return Ok(None);
+    //     };
+    //     self.with_ast(|ast| {
+    //         for (id, expr) in ast.exprs.iter_exprs() {
+    //             let span = ast.spans.get(expr.get_span());
+    //             if span.file_id == source.file_id {
+    //                 let range = span_to_range(ast, span_id);
+    //                 let kind = match expr {
+    //                     k1::parse::ParsedExpr::BinaryOp(binary_op) => todo!(),
+    //                     k1::parse::ParsedExpr::UnaryOp(unary_op) => todo!(),
+    //                     k1::parse::ParsedExpr::Literal(parsed_literal) => DocumentHighlightKind::WRITE,
+    //                     k1::parse::ParsedExpr::InterpolatedString(parsed_interpolated_string) => todo!(),
+    //                     k1::parse::ParsedExpr::Call(parsed_call) => todo!(),
+    //                     k1::parse::ParsedExpr::Variable(parsed_variable) => todo!(),
+    //                     k1::parse::ParsedExpr::FieldAccess(field_access) => todo!(),
+    //                     k1::parse::ParsedExpr::Block(parsed_block) => todo!(),
+    //                     k1::parse::ParsedExpr::If(parsed_if_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::While(parsed_while_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::Loop(parsed_loop_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::Struct(parsed_struct) => todo!(),
+    //                     k1::parse::ParsedExpr::ListLiteral(parsed_list) => todo!(),
+    //                     k1::parse::ParsedExpr::For(for_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::AnonConstructor(anon_sum_constructor) => todo!(),
+    //                     k1::parse::ParsedExpr::Is(parsed_is_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::Match(parsed_match_expression) => todo!(),
+    //                     k1::parse::ParsedExpr::Cast(parsed_cast) => todo!(),
+    //                     k1::parse::ParsedExpr::Lambda(parsed_lambda) => todo!(),
+    //                     k1::parse::ParsedExpr::Builtin(span_id) => todo!(),
+    //                     k1::parse::ParsedExpr::Static(parsed_static_expr) => todo!(),
+    //                     k1::parse::ParsedExpr::Code(parsed_code) => todo!(),
+    //                     k1::parse::ParsedExpr::QualifiedAbilityCall(parsed_qability_call) => todo!(),
+    //                 }
+    //             }
+    //         }
+    //     });
+    //     error!("Got a textDocument/documentHighlight request, but it is not implemented");
+    //     Ok(Some(vec![]))
+    // }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());

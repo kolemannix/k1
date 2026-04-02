@@ -160,7 +160,7 @@ ns sys {
 ns files {
 
   fn readToString(context alloc: mem/alloc-mode)(path: string): string {
-    let filenameCString = path.toCString(context .Arena)();
+    let filenameCString = path.toCString(context .arena)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     if file.is-null() {
