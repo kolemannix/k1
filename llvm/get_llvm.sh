@@ -35,6 +35,8 @@ cd "${BUILD_DIR}"
 # So I'll request libc++ (clang) over libstdc++ (gnu), but will not statically link it yet
 # Until we move to pure rustc perhaps, or selfhost or something
 cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_C_COMPILER=clang++ \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
   -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
   -DLLVM_BUILD_LLVM_DYLIB=OFF \
