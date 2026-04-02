@@ -337,7 +337,7 @@ pub fn compile_program(
         if cfg!(debug_assertions) {
             std::env::current_dir().unwrap()
         } else {
-            std::env::current_exe().unwrap().parent().unwrap().to_path_buf()
+            std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf()
         }
     });
     let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");

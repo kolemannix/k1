@@ -6038,9 +6038,11 @@ impl TypedProgram {
                     .unwrap_or("_".to_string()))
                 .join(", ")
         );
+
         // let mut s = String::new();
         // self.dump_blanket_impls(&mut s).unwrap();
         // eprintln!("{s}");
+
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
             for blanket_impl_id in blanket_impls_for_base.clone() {
                 match self.try_apply_blanket_implementation(

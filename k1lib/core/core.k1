@@ -136,7 +136,7 @@ ns sys {
       count = argCount.as[size],
       ptr = args
     );
-    let strings = list/fromMap(buf, fn cstr. string/wrap-c(cstr));
+    let strings = list/fromMapping(buf, fn cstr. string/wrap-c(cstr));
     strings.as-span()
   }
 

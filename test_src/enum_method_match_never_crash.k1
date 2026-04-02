@@ -14,7 +14,7 @@ ns enum_method_match_never {
   fn isVariant() {
     let x: either a(int), b(int), c = .a(42);
     assert(x.asB().isNone());
-    assert(not x is .C);
+    assert(not x is .c);
     assert(x.asA().isSome());
   }
 
@@ -28,6 +28,6 @@ fn main(): i32 {
     let y = e.a(42);
     assert(x.valueIfA() == y.valueIfA());
     assert((.b: e).valueIfA() == 0);
-    0
+    1
   }
 //exitcode: 1 This is a B!

@@ -192,9 +192,9 @@ ns list {
   }
 
   fn reversed[T](self: list[T]): list[T] {
-    let* clone = self.cloned();
+    let clone = self.cloned();
     clone.reverse[T]();
-    clone.*
+    clone
   }
 
   fn appendList[T](self: *mut list[T], other: list[T]) {
@@ -230,14 +230,14 @@ ns list {
     let halfIndex = input.len / 2;
     let pivot = input.get(halfIndex);
   
-    let* left = list/withCapacity[T](halfIndex);
-    let* right = list/withCapacity[T](halfIndex);
-    let* equal = list/withCapacity[T](4);
+    let left = list/withCapacity[T](halfIndex);
+    let right = list/withCapacity[T](halfIndex);
+    let equal = list/withCapacity[T](4);
   
     for item in input.* {
       switch item.compare(pivot) {
-        .less -> left.push(item),
-        .equal -> equal.push(item),
+        .less    -> left.push(item),
+        .equal   -> equal.push(item),
         .greater -> right.push(item)
       }
     };
@@ -246,67 +246,66 @@ ns list {
     right.sort();
   
     let i = 0;
-    for item in left.* {
+    for item in left {
       input.set(i, item);
       i := i + 1;
     };
   
-    for item in equal.* {
+    for item in equal {
       input.set(i, item);
       i := i + 1;
     };
   
-    for item in right.* {
+    for item in right {
       input.set(i, item);
       i := i + 1;
     };
   }
 
   fn sorted[T](self: list[T]): list[T] where T: comparable {
-    let* copy = self.cloned();
+    let copy = self.cloned();
     copy.sort();
-    copy.*
+    copy
   }
 
-  // TODO(stdlib) remove or tweak this; assumes global allocation
   fn join[T: show](self: list[T], sep: string): string {
-    let* b = StringBuilder/new();
+    let b = StringBuilder/new();
     for s in self {
-      b.write-string(s.show());
+      &b.write-string(s.show());
       let isLast = itIndex != self.len - 1;
       if not isLast {
-        b.write-string(sep);
+        &b.write-string(sep);
       }
     };
     b.build()
   }
 
-  fn fromMap[T, Iter, Iterable, U](input: Iterable, f: some fn T -> U): list[U]
+  fn fromMapping[T, Iter, Iterable, U](input: Iterable, f: some fn T -> U): list[U]
   where Iter: iterator[item = T], Iterable: iterable[item = T, i = Iter]
   {
-    let* iter = input.iterator();
-    let* us = list/withCapacity[U](iter.size-hint().at-least);
-    for iter.* {
+    let iter = input.iterator();
+    let us = list/withCapacity[U](iter.size-hint().at-least);
+    for iter {
       let u = f(it);
       us.push(u)
     };
-    us.*
+    us
   }
 
   fn map[T, U](self: list[T], f: some fn T -> U): list[U] {
-    let* us = list/withCapacity[U](self.len);
+    let us = list/withCapacity[U](self.len);
     for i in self { us.push[U](f(i)) };
-    us.*
+    us
   }
   
   fn flatMap[T, U](self: list[T], f: some fn T -> list[U]): list[U] {
-    let* us = list/empty[U]();
+    let us = list/empty[U]();
     for i in self { us.appendList[U](f(i)) };
-    us.*
+    us
   }
   
   fn filter[T](self: list[T], f: some fn T -> bool): list[T] {
-    let* keep = list/empty[T]();
+    let keep = list/empty[T]();
     for i in self { if f(i) keep.push(i) };
     keep
   }

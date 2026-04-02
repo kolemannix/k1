@@ -21,7 +21,6 @@ fn test() {
 
   // Or you can just make strings directly, mixing interpolated expressions
   // with struct specifiers
-  // nocommit implement a specifier
   let s = stringf("hello {getWorld()} {yyyy}-{mm}-{dd}", {yyyy:2021,mm:10,dd:3});
   // TODO left pad, get it from npm!
   assertEquals(s, "hello Budapest 2021-10-3");
