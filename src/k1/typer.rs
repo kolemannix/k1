@@ -1595,15 +1595,30 @@ impl Display for MessageLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorKind {
+    None,
+    TypeError,
+    Malformed,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct K1Message {
     pub message: String,
     pub span: SpanId,
+    pub error_kind: ErrorKind,
     pub level: MessageLevel,
 }
 
 impl K1Message {
     fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> K1Message {
-        K1Message { message: message.as_ref().to_owned(), span, level }
+        let error_kind = match level {
+            MessageLevel::Hint => ErrorKind::None,
+            MessageLevel::Info => ErrorKind::None,
+            MessageLevel::Warn => ErrorKind::None,
+            MessageLevel::Error => ErrorKind::Malformed,
+        };
+        K1Message { message: message.as_ref().to_owned(), span, level, error_kind }
     }
 }
 
@@ -5117,7 +5132,12 @@ impl TypedProgram {
         match self.check_expr_type(expected, expr, scope_id) {
             CheckExprTypeResult::Err(msg) => {
                 let span = self.exprs.get_span(expr);
-                Err(K1Message { message: msg, span, level: MessageLevel::Error })
+                Err(K1Message {
+                    message: msg,
+                    span,
+                    level: MessageLevel::Error,
+                    error_kind: ErrorKind::TypeError,
+                })
             }
             CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
                 debug!(
@@ -5253,15 +5273,13 @@ impl TypedProgram {
                 match self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id) {
                     e @ Err(_) => e,
                     Ok(()) => {
-                        if exp_ref.mutable == act_ref.mutable {
-                            Ok(())
-                        } else {
+                        if exp_ref.mutable && !act_ref.mutable {
                             Err(k1_format_user!(
                                 self,
-                                "References differ in mutability. expected {} but got {}",
-                                if exp_ref.mutable { "write" } else { "read" },
-                                if act_ref.mutable { "write" } else { "read" }
+                                "Required a mutable reference; got an immutable one",
                             ))
+                        } else {
+                            Ok(())
                         }
                     }
                 }
@@ -5950,7 +5968,7 @@ impl TypedProgram {
         let impl_handles_for_self = self.ability_impl_table.get(&self_type_id);
         if let Some(impl_handles) = impl_handles_for_self {
             debug!(
-                "NEW Ability dump for {} {:02} in search of {} {:02}\n{}",
+                "Ability dump for {} {:02} in search of {} {:02}\n{}",
                 self.type_id_to_string(self_type_id),
                 self_type_id,
                 self.ident_str(self.abilities.get(target_base_ability_id).name),
@@ -6026,6 +6044,88 @@ impl TypedProgram {
                 }
             }
         };
+        // This works! But lets clean it up
+        let ref_self = self.types.add_reference_type(self_type_id, true);
+        let impl_handles_for_ref_self = self.ability_impl_table.get(&ref_self);
+        if let Some(impl_handles) = impl_handles_for_ref_self {
+            debug!(
+                "Ability dump for {} {:02} in search of {} {:02}\n{}",
+                self.type_id_to_string(self_type_id),
+                self_type_id,
+                self.ident_str(self.abilities.get(target_base_ability_id).name),
+                target_base_ability_id.0,
+                impl_handles
+                    .iter()
+                    .map(|h| {
+                        format!(
+                            "IMPL {:02} {} with args {}",
+                            h.specialized_ability_id.0,
+                            self.ident_str(self.abilities.get(h.specialized_ability_id).name),
+                            self.pretty_print_named_type_slice(
+                                self.ability_impls.get(h.full_impl_id).impl_arguments,
+                                ", "
+                            )
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            let mut valid_impls: SV4<AbilityImplHandle> = smallvec![];
+            for impl_handle in impl_handles {
+                if let Ok(()) = self.check_ability_impl(
+                    target_base_ability_id,
+                    *impl_handle,
+                    parameter_constraints,
+                    scope_id,
+                ) {
+                    valid_impls.push(*impl_handle);
+                }
+            }
+            match valid_impls.len() {
+                0 => {
+                    // Fall through to trying blanket implementations
+                }
+                1 => return Ok(valid_impls[0]),
+                _ => {
+                    // If any of the parameter constraints have holes, then we don't require that we
+                    // have a unique implementation because the holes will make it such
+                    // that multiple implementations can match
+                    let has_holes = parameter_constraints.iter().any(|c| c.is_none());
+                    if has_holes {
+                        return Ok(valid_impls[0]);
+                    } else {
+                        let impls_formatted = valid_impls
+                            .iter()
+                            .map(|i| {
+                                let imp = self.ability_impls.get(i.full_impl_id);
+                                format!(
+                                    "- IMPL {:02} {:?} {}",
+                                    i.full_impl_id.0,
+                                    imp.kind,
+                                    self.ability_signature_to_string(imp.signature(),)
+                                )
+                            })
+                            .join("\n");
+                        eprintln!(
+                            "Multiple matching implementations found for constraints {}:\n{}",
+                            parameter_constraints
+                                .iter()
+                                .map(|maybe_type| maybe_type
+                                    .map(|t| self.type_id_to_string(t))
+                                    .unwrap_or("_".to_string()))
+                                .join(", "),
+                            impls_formatted
+                        );
+                        return Err(format!(
+                            "Multiple matching implementations found:\n{}",
+                            impls_formatted
+                        )
+                        .into());
+                    }
+                }
+            }
+        };
+
         // Blanket
         debug!(
             "Blanket search for impl {} for {} with constraints {}",
@@ -12148,6 +12248,7 @@ impl TypedProgram {
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
         let signature = self.get_callee_function_signature(&callee);
+        debug!("Callee is: {}", self.function_signature_to_string(signature));
         let is_generic = signature.has_type_params();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
@@ -12166,7 +12267,19 @@ impl TypedProgram {
                 let mut typechecked_args = self.mem.new_list(args_and_params.len() as u32);
                 for (maybe_typed_expr, param) in args_and_params.iter() {
                     let checked_expr = match *maybe_typed_expr {
-                        MaybeTypedExpr::Typed(typed) => typed,
+                        MaybeTypedExpr::Typed(typed) => {
+                            if let Err(e) =
+                                self.check_and_coerce_expr(param.type_id, typed, ctx.scope_id)
+                            {
+                                return failf!(
+                                    self.exprs.get_span(typed),
+                                    "Invalid type for '{}': {}",
+                                    self.ident_str(param.name),
+                                    e.message
+                                );
+                            };
+                            typed
+                        }
                         MaybeTypedExpr::Parsed(parsed) => self
                             .eval_expr_with_coercion(
                                 parsed,
@@ -16316,6 +16429,8 @@ impl TypedProgram {
             (TypedPattern::LiteralBool(b, _), PatternCtor::BoolFalse) => *b == false,
             // Char is innumerable
             (TypedPattern::LiteralChar(_char_pattern, _), PatternCtor::Char) => false,
+            (TypedPattern::LiteralInteger(_int_pattern, _), PatternCtor::Int) => false,
+            (TypedPattern::LiteralFloat(_float_pattern, _), PatternCtor::Float) => false,
             (TypedPattern::Sum(sum_pat), PatternCtor::Sum { variant_name, inner }) => {
                 if *variant_name == sum_pat.variant_tag_name {
                     match (sum_pat.payload, inner) {
@@ -17075,6 +17190,7 @@ impl TypedProgram {
             message: message.as_ref().to_string(),
             span,
             level: MessageLevel::Hint,
+            error_kind: ErrorKind::None,
         });
     }
 
@@ -17083,13 +17199,18 @@ impl TypedProgram {
             message: message.as_ref().to_string(),
             span,
             level: MessageLevel::Warn,
+            error_kind: ErrorKind::None,
         });
     }
 
     pub fn log_hint(&self, span: SpanId, message: impl AsRef<str>) {
         let use_color = std::io::stderr().is_terminal();
-        let hint =
-            K1Message { message: message.as_ref().to_string(), span, level: MessageLevel::Hint };
+        let hint = K1Message {
+            message: message.as_ref().to_string(),
+            span,
+            level: MessageLevel::Hint,
+            error_kind: ErrorKind::None,
+        };
         self.write_error(&mut std::io::stderr(), &hint, use_color).unwrap();
     }
 

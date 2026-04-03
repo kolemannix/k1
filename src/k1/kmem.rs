@@ -646,7 +646,8 @@ macro_rules! kerr {
         K1Message {
             span: $span,
             message: msg,
-            level: MessageLevel::Error
+            level: MessageLevel::Error,
+            error_kind: ErrorKind::Malformed,
         }
     }}
 }

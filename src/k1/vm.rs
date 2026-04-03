@@ -22,7 +22,7 @@ use crate::typer::types::{
     STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
-    FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
+    ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
     StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedExprId,
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, VariableId,
 };
@@ -2679,7 +2679,10 @@ fn report_execution_messages(k1: &mut TypedProgram, vm: &Vm, span: SpanId, _exit
         };
     }
     let level = MessageLevel::Info;
-    k1.report_ext(K1Message { message: formatted_messages, span, level }, true);
+    k1.report_ext(
+        K1Message { message: formatted_messages, span, level, error_kind: ErrorKind::None },
+        true,
+    );
 }
 
 #[track_caller]

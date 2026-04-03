@@ -738,6 +738,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             ),
             span: err.span,
             level: err.level,
+            error_kind: ErrorKind::Malformed,
         });
     }
     let intrinsic_type = f.builtin_type;
@@ -2933,6 +2934,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                 error_string
             ),
             level: MessageLevel::Error,
+            error_kind: ErrorKind::Internal,
         })
     } else {
         Ok(())
