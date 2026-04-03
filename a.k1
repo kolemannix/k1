@@ -1,8 +1,0 @@
-#debug
-fn join[T: show](): string {
-  let b = StringBuilder/new();
-  b.write-string("asdf");
-}
-fn main(): i32 {
-  0
-}

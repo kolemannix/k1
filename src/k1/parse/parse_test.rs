@@ -28,7 +28,7 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("unit_test");
     let mut token_vec = vec![];
-    lex_text(ast, source, &mut token_vec).unwrap();
+    lex_file_into_program(ast, source, &mut token_vec).unwrap();
     let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
     let ns_id = parse::init_module(module_name, ast);

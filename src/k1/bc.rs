@@ -1917,7 +1917,7 @@ fn compile_expr(
                     let unreachable = b.push_inst_anon(Inst::Unreachable);
                     unreachable.as_value()
                 } else {
-                    call_inst_id.as_value()
+                    dst.unwrap_or(call_inst_id.as_value())
                 }
             };
             Ok(value_for_call)
@@ -3130,6 +3130,11 @@ pub fn display_inst(
         Inst::Call { id } => {
             let call = bc.calls.get(id);
             write!(w, "call ")?;
+            if let Some(dst) = call.dst {
+                w.write_str("into ")?;
+                display_value(w, &dst)?;
+                w.write_str(" ")?;
+            }
             k1.types.display_pt(w, call.ret_type)?;
             match &call.callee {
                 BcCallee::Builtin(_, intrinsic_operation) => {

@@ -34,7 +34,11 @@ pub struct Spans {
 
 impl Spans {
     pub fn new() -> Spans {
-        let mut pool = VPool::make_with_hint("spans", 131072);
+        Self::new_with_hint(131072)
+    }
+
+    pub fn new_with_hint(expected_spans: usize) -> Spans {
+        let mut pool = VPool::make_with_hint("spans", expected_spans);
         pool.add(Span::NONE);
         Spans { span_pool: pool }
     }
@@ -155,6 +159,7 @@ impl StringDelimKind {
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum TokenKind {
     Ident,
+    Numeric,
     /// A completed string
     String {
         delim: StringDelimKind,
@@ -349,6 +354,7 @@ impl TokenKind {
             K::SingleQuote => "singleq",
 
             K::Ident => "<ident>",
+            K::Numeric => "<numeric>",
             K::String { delim: StringDelimKind::Backtick, interp_exprs } => {
                 if *interp_exprs {
                     "<f`string`>"
@@ -709,14 +715,16 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
             make_token(lex, kind, n - tok_len, tok_len)
         }
 
-        let make_keyword_or_ident = |lex: &mut Lexer, n: u32, tok_len: u32| {
+        let make_keyword_or_ident = |lex: &mut Lexer, n: u32, tok_len: u32, is_number: bool| {
             let start = n - tok_len;
             let len = tok_len;
             let tok_bytes: &[u8] = &self.content[start as usize..(start + len) as usize];
-            if let Some(kind) = TokenKind::token_from_bytes(tok_bytes) {
+            if is_number {
+                make_token(lex, K::Numeric, start, len)
+            } else if let Some(kind) = TokenKind::token_from_bytes(tok_bytes) {
                 make_token(lex, kind, start, len)
             } else {
-                make_token(lex, TokenKind::Ident, start, len)
+                make_token(lex, K::Ident, start, len)
             }
         };
         loop {
@@ -1063,7 +1071,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                         // tok_len != 0
                         match c {
                             EOF_CHAR => {
-                                tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                tokens.push(make_keyword_or_ident(self, n, tok_len, is_number));
                                 return Ok(Some(()));
                             }
                             '.' => {
@@ -1079,12 +1087,14 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                         self.advance();
                                     } else {
                                         // Conclude the number ident; we'll eat the dot next token w/ an empty buffer
-                                        tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                        tokens.push(make_keyword_or_ident(
+                                            self, n, tok_len, is_number,
+                                        ));
                                         return Ok(Some(()));
                                     }
                                 } else {
                                     // Flush the ident buffer
-                                    tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                    tokens.push(make_keyword_or_ident(self, n, tok_len, is_number));
                                     // Lex the dot
                                     tokens.push(make_token(self, K::Dot, n, 1));
                                     self.advance();
@@ -1093,7 +1103,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             }
                             ' ' | '\x09'..='\x0d' => {
                                 // Flush the ident
-                                tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                tokens.push(make_keyword_or_ident(self, n, tok_len, is_number));
                                 // Eat the whitespace too
                                 self.advance();
                                 return Ok(Some(()));
@@ -1103,7 +1113,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                                     tok_len += 1;
                                     self.advance();
                                 } else {
-                                    tokens.push(make_keyword_or_ident(self, n, tok_len));
+                                    tokens.push(make_keyword_or_ident(self, n, tok_len, is_number));
                                     return Ok(Some(()));
                                 }
                             }
@@ -1153,6 +1163,15 @@ fn is_ident_or_num_start(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '-'
 }
 
+pub fn lex_standalone(content: &str) -> (Spans, Vec<Token>, Option<LexError>) {
+    let mut spans = Spans::new_with_hint(1024);
+    let mut token_vec = vec![];
+    match Lexer::make(content, &mut spans, 1).run(&mut token_vec) {
+        Err(e) => (spans, token_vec, Some(e)),
+        Ok(()) => (spans, token_vec, None),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::lex::{Lexer, Span, SpanId, Spans, Token, TokenKind as K};
@@ -1200,7 +1219,7 @@ mod test {
                 K::Equals,
                 K::Ident,
                 K::OpenParen,
-                K::Ident,
+                K::Numeric,
                 K::CloseParen,
             ],
         )
@@ -1211,7 +1230,7 @@ mod test {
         let input = "-43";
         let (spans, tokens) = set_up(input)?;
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Minus, K::Ident]);
+        assert_eq!(kinds, vec![K::Minus, K::Numeric]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
         assert_eq!(span0.len, 1);
@@ -1229,7 +1248,7 @@ mod test {
         let input = "- 43";
         let (spans, tokens) = set_up(input)?;
         let kinds: Vec<K> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![K::Minus, K::Ident]);
+        assert_eq!(kinds, vec![K::Minus, K::Numeric]);
         let span0 = spans.get(tokens[0].span);
         assert_eq!(span0.start, 0);
         assert_eq!(span0.len, 1);
@@ -1277,7 +1296,7 @@ mod test {
                 K::Colon,
                 K::Ident,
                 K::Equals,
-                K::Ident,
+                K::Numeric,
                 K::Semicolon,
                 K::LineComment,
                 K::LineComment
@@ -1417,7 +1436,7 @@ mod test {
                 K::OpenBrace,
                 K::Ident,
                 K::Colon,
-                K::Ident,
+                K::Numeric,
                 K::CloseBrace,
                 K::CloseParen,
                 K::Dot,

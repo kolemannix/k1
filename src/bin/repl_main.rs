@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<ExitCode> {
     loop {
         let _len = std::io::stdin().read_line(&mut line).unwrap();
         let mut tokens = vec![];
-        let lex_result = k1::parse::lex_text(
+        let lex_result = k1::parse::lex_file_into_program(
             &mut ast,
             Source::make(
                 file_id,

@@ -837,6 +837,7 @@ pub enum ParsedExpr {
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
+    // nocommit remove
     Code(ParsedCode),
     QualifiedAbilityCall(ParsedQAbilityCall),
 }
@@ -1567,8 +1568,12 @@ impl Sources {
         &self.sources[0]
     }
 
-    pub fn get_source(&self, file_id: FileId) -> &Source {
+    pub fn get(&self, file_id: FileId) -> &Source {
         &self.sources[file_id as usize]
+    }
+
+    pub fn get_mut(&mut self, file_id: FileId) -> &mut Source {
+        &mut self.sources[file_id as usize]
     }
 
     pub fn get_line_for_span_start(&self, span: Span) -> Option<&Line> {
@@ -1576,8 +1581,7 @@ impl Sources {
     }
 
     pub fn get_lines_for_span(&self, span: Span) -> Option<(&Line, &Line)> {
-        let start = self.sources[span.file_id as usize].get_line_for_offset(span.start)?;
-        let end = self.sources[span.file_id as usize].get_line_for_offset(span.end())?;
+        let (start, end) = self.sources[span.file_id as usize].get_lines_for_span(span)?;
         Some((start, end))
     }
 
@@ -1586,7 +1590,7 @@ impl Sources {
     }
 
     pub fn source_by_span(&self, span: Span) -> &Source {
-        self.get_source(span.file_id)
+        self.get(span.file_id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (FileId, &Source)> {
@@ -1595,6 +1599,10 @@ impl Sources {
 
     pub fn next_file_id(&self) -> FileId {
         self.sources.len() as u32
+    }
+
+    pub fn len(&self) -> usize {
+        self.sources.len()
     }
 }
 
@@ -2009,6 +2017,7 @@ pub struct Source {
     pub filename: String,
     pub content: String,
     pub lines: Vec<Line>,
+    pub tokens: Vec<Token>,
 }
 
 impl Source {
@@ -2045,7 +2054,7 @@ impl Source {
                 line_index: lines.len() as u32,
             });
         }
-        Source { file_id, directory, filename, content, lines }
+        Source { file_id, directory, filename, content, lines, tokens: vec![] }
     }
 
     pub fn get_content(&self, start: u32, len: u32) -> &str {
@@ -2062,6 +2071,12 @@ impl Source {
 
     pub fn get_line_content(&self, line: &Line) -> &str {
         self.get_content(line.start_char, line.len)
+    }
+
+    pub fn get_lines_for_span(&self, span: Span) -> Option<(&Line, &Line)> {
+        let start = self.get_line_for_offset(span.start)?;
+        let end = self.get_line_for_offset(span.end())?;
+        Some((start, end))
     }
 
     pub fn get_line_for_offset(&self, offset: u32) -> Option<&Line> {
@@ -2301,7 +2316,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
     }
 
     fn source(&self) -> &Source {
-        self.ast.sources.get_source(self.file_id)
+        self.ast.sources.get(self.file_id)
     }
 
     fn expect<A>(what: &str, current: Token, value: ParseResult<Option<A>>) -> ParseResult<A> {
@@ -2542,7 +2557,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn intern_ident_token(&mut self, token: Token) -> Ident {
         let tok_chars =
-            Parser::tok_chars(&self.ast.spans, self.ast.sources.get_source(self.file_id), token);
+            Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), token);
         self.ast.idents.intern(tok_chars)
     }
 
@@ -2607,17 +2622,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             (K::String { .. } | K::StringUnterminated { .. }, _) => Ok(Some(self.expect_string()?)),
-            (K::Minus, K::Ident) if !second.is_whitespace_preceded() => {
-                let text = self.token_chars(second);
-                if text.chars().next().unwrap().is_numeric() {
-                    self.advance();
-                    self.advance();
-                    let span = self.extend_token_span(first, second);
-                    let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { span });
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
-                } else {
-                    Err(error_expected("number following '-'", second))
-                }
+            (K::Minus, K::Numeric) if !second.is_whitespace_preceded() => {
+                self.advance_n(2);
+                let span = self.extend_token_span(first, second);
+                let numeric = ParsedLiteral::Numeric(ParsedNumericLiteral { span });
+                Ok(Some(self.add_expression(ParsedExpr::Literal(numeric))))
+            }
+            (K::Numeric, _) => {
+                self.advance();
+                Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Numeric(
+                    ParsedNumericLiteral { span: first.span },
+                )))))
             }
             (K::Ident, _) => {
                 let text = self.token_chars(first);
@@ -2632,15 +2647,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         false, first.span,
                     )))))
                 } else {
-                    match text.chars().next() {
-                        Some(c) if c.is_numeric() => {
-                            self.advance();
-                            Ok(Some(self.add_expression(ParsedExpr::Literal(
-                                ParsedLiteral::Numeric(ParsedNumericLiteral { span: first.span }),
-                            ))))
-                        }
-                        _ => Ok(None),
-                    }
+                    Ok(None)
                 }
             }
             _ => Ok(None),
@@ -2683,7 +2690,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     // Accessing the tok_chars this way achieves a partial borrow of self
                     let text = Parser::tok_chars(
                         &self.ast.spans,
-                        self.ast.sources.get_source(self.file_id),
+                        self.ast.sources.get(self.file_id),
                         current_token,
                     );
 
@@ -4320,7 +4327,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         // allowing us to intern the identifier
         let string_text = Parser::tok_chars(
             &self.ast.spans,
-            self.ast.sources.get_source(self.file_id),
+            self.ast.sources.get(self.file_id),
             external_name_token,
         );
         let Some(string_text_trimmed) =
@@ -4358,7 +4365,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_ident_ext(&mut self, upper: bool, lower: bool) -> ParseResult<(Token, Ident)> {
         let token = self.expect_kind(K::Ident)?;
         let tok_chars =
-            Parser::tok_chars(&self.ast.spans, self.ast.sources.get_source(self.file_id), token);
+            Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), token);
         if upper {
             let c = tok_chars.chars().next().unwrap();
             if c != '_' && !c.is_uppercase() {
@@ -4391,7 +4398,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let next = self.peek();
         if next.kind == K::Ident {
             let tok_chars =
-                Parser::tok_chars(&self.ast.spans, self.ast.sources.get_source(self.file_id), next);
+                Parser::tok_chars(&self.ast.spans, self.ast.sources.get(self.file_id), next);
             if tok_chars == chars {
                 self.advance();
                 let ident = self.intern_ident_token(next);
@@ -5092,14 +5099,14 @@ impl ParsedProgram {
     }
 }
 
-pub fn lex_text(
+pub fn lex_file_into_program(
     module: &mut ParsedProgram,
     source: Source,
     tokens: &mut Vec<Token>,
 ) -> ParseResult<()> {
     let file_id = source.file_id;
     module.sources.add_source(source);
-    let text = &module.sources.get_source(file_id).content;
+    let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
     tokens.retain(|token| token.kind != K::LineComment);
@@ -5126,7 +5133,7 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
 
     let file_id = source.file_id;
     let mut token_vec = vec![];
-    lex_text(&mut ast, source, &mut token_vec)?;
+    lex_file_into_program(&mut ast, source, &mut token_vec)?;
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("test_module");
     let module_ns_id = init_module(module_name, &mut ast);

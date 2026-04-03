@@ -1,5 +1,4 @@
-
-#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List2")
+//#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List2")
 #meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List3")
 #meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List4")
 #meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List5")

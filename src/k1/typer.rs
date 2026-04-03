@@ -2821,7 +2821,7 @@ impl TypedProgram {
                 name.to_str().unwrap().to_string(),
                 content,
             );
-            match parse::lex_text(&mut self.ast, source, &mut token_buffer) {
+            match parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer) {
                 Err(e) => {
                     self.ast.push_error(e);
                     // Keep going man! to the next file
@@ -2829,6 +2829,11 @@ impl TypedProgram {
                 }
                 Ok(_) => {}
             };
+
+            if cfg!(feature = "lsp") {
+                self.ast.sources.get_mut(file_id).tokens = token_buffer.clone();
+            };
+
             let mut parser = parse::Parser::make_for_file(
                 module_id,
                 module_name,
@@ -2840,6 +2845,7 @@ impl TypedProgram {
             parser.parse_file();
             token_buffer.clear();
         }
+
         self.buffers.lexer_tokens = token_buffer;
 
         let parse_elapsed_us = self.timing.elapsed_nanos(parse_start) / 1_000;
@@ -5950,181 +5956,43 @@ impl TypedProgram {
     }
 
     /// resolution works on the base ability
-    pub fn find_ability_impl_for_type_or_generate(
+    pub fn find_or_generate_ability_impl_for_type(
         &mut self,
         self_type_id: TypeId,
         target_base_ability_id: AbilityId,
 
         // If this is happening as part of inference, then it may be the
         // case that not just any implementation will do; but only one
-        // that meets certain constraints.
+        // that meets certain constraints. For example, we may need into[string], not just into[<whatever>]
         // For each ability parameter, the type it must conform to,
         // or None for if we didn't solve for it, meaning anything is fine
         parameter_constraints: &[Option<TypeId>],
 
+        allow_ref_self: bool,
+
         scope_id: ScopeId,
         span: SpanId,
     ) -> Result<AbilityImplHandle, Cow<'static, str>> {
-        let impl_handles_for_self = self.ability_impl_table.get(&self_type_id);
-        if let Some(impl_handles) = impl_handles_for_self {
-            debug!(
-                "Ability dump for {} {:02} in search of {} {:02}\n{}",
-                self.type_id_to_string(self_type_id),
-                self_type_id,
-                self.ident_str(self.abilities.get(target_base_ability_id).name),
-                target_base_ability_id.0,
-                impl_handles
-                    .iter()
-                    .map(|h| {
-                        format!(
-                            "IMPL {:02} {} with args {}",
-                            h.specialized_ability_id.0,
-                            self.ident_str(self.abilities.get(h.specialized_ability_id).name),
-                            self.pretty_print_named_type_slice(
-                                self.ability_impls.get(h.full_impl_id).impl_arguments,
-                                ", "
-                            )
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            let mut valid_impls: SV4<AbilityImplHandle> = smallvec![];
-            for impl_handle in impl_handles {
-                if let Ok(()) = self.check_ability_impl(
-                    target_base_ability_id,
-                    *impl_handle,
-                    parameter_constraints,
-                    scope_id,
-                ) {
-                    valid_impls.push(*impl_handle);
-                }
+        if let Some(impl_handle) = self.find_unique_valid_ability_impl(
+            self_type_id,
+            target_base_ability_id,
+            parameter_constraints,
+            scope_id,
+        )? {
+            return Ok(impl_handle);
+        }
+
+        if allow_ref_self {
+            let ref_self = self.types.add_reference_type(self_type_id, true);
+            if let Some(impl_handle) = self.find_unique_valid_ability_impl(
+                ref_self,
+                target_base_ability_id,
+                parameter_constraints,
+                scope_id,
+            )? {
+                return Ok(impl_handle);
             }
-            match valid_impls.len() {
-                0 => {
-                    // Fall through to trying blanket implementations
-                }
-                1 => return Ok(valid_impls[0]),
-                _ => {
-                    // If any of the parameter constraints have holes, then we don't require that we
-                    // have a unique implementation because the holes will make it such
-                    // that multiple implementations can match
-                    let has_holes = parameter_constraints.iter().any(|c| c.is_none());
-                    if has_holes {
-                        return Ok(valid_impls[0]);
-                    } else {
-                        let impls_formatted = valid_impls
-                            .iter()
-                            .map(|i| {
-                                let imp = self.ability_impls.get(i.full_impl_id);
-                                format!(
-                                    "- IMPL {:02} {:?} {}",
-                                    i.full_impl_id.0,
-                                    imp.kind,
-                                    self.ability_signature_to_string(imp.signature(),)
-                                )
-                            })
-                            .join("\n");
-                        eprintln!(
-                            "Multiple matching implementations found for constraints {}:\n{}",
-                            parameter_constraints
-                                .iter()
-                                .map(|maybe_type| maybe_type
-                                    .map(|t| self.type_id_to_string(t))
-                                    .unwrap_or("_".to_string()))
-                                .join(", "),
-                            impls_formatted
-                        );
-                        return Err(format!(
-                            "Multiple matching implementations found:\n{}",
-                            impls_formatted
-                        )
-                        .into());
-                    }
-                }
-            }
-        };
-        // This works! But lets clean it up
-        let ref_self = self.types.add_reference_type(self_type_id, true);
-        let impl_handles_for_ref_self = self.ability_impl_table.get(&ref_self);
-        if let Some(impl_handles) = impl_handles_for_ref_self {
-            debug!(
-                "Ability dump for {} {:02} in search of {} {:02}\n{}",
-                self.type_id_to_string(self_type_id),
-                self_type_id,
-                self.ident_str(self.abilities.get(target_base_ability_id).name),
-                target_base_ability_id.0,
-                impl_handles
-                    .iter()
-                    .map(|h| {
-                        format!(
-                            "IMPL {:02} {} with args {}",
-                            h.specialized_ability_id.0,
-                            self.ident_str(self.abilities.get(h.specialized_ability_id).name),
-                            self.pretty_print_named_type_slice(
-                                self.ability_impls.get(h.full_impl_id).impl_arguments,
-                                ", "
-                            )
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            let mut valid_impls: SV4<AbilityImplHandle> = smallvec![];
-            for impl_handle in impl_handles {
-                if let Ok(()) = self.check_ability_impl(
-                    target_base_ability_id,
-                    *impl_handle,
-                    parameter_constraints,
-                    scope_id,
-                ) {
-                    valid_impls.push(*impl_handle);
-                }
-            }
-            match valid_impls.len() {
-                0 => {
-                    // Fall through to trying blanket implementations
-                }
-                1 => return Ok(valid_impls[0]),
-                _ => {
-                    // If any of the parameter constraints have holes, then we don't require that we
-                    // have a unique implementation because the holes will make it such
-                    // that multiple implementations can match
-                    let has_holes = parameter_constraints.iter().any(|c| c.is_none());
-                    if has_holes {
-                        return Ok(valid_impls[0]);
-                    } else {
-                        let impls_formatted = valid_impls
-                            .iter()
-                            .map(|i| {
-                                let imp = self.ability_impls.get(i.full_impl_id);
-                                format!(
-                                    "- IMPL {:02} {:?} {}",
-                                    i.full_impl_id.0,
-                                    imp.kind,
-                                    self.ability_signature_to_string(imp.signature(),)
-                                )
-                            })
-                            .join("\n");
-                        eprintln!(
-                            "Multiple matching implementations found for constraints {}:\n{}",
-                            parameter_constraints
-                                .iter()
-                                .map(|maybe_type| maybe_type
-                                    .map(|t| self.type_id_to_string(t))
-                                    .unwrap_or("_".to_string()))
-                                .join(", "),
-                            impls_formatted
-                        );
-                        return Err(format!(
-                            "Multiple matching implementations found:\n{}",
-                            impls_formatted
-                        )
-                        .into());
-                    }
-                }
-            }
-        };
+        }
 
         // Blanket
         debug!(
@@ -6200,6 +6068,89 @@ impl TypedProgram {
         Err("No matching implementations found".into())
     }
 
+    fn find_unique_valid_ability_impl(
+        &self,
+        self_type_id: TypeId,
+        target_base_ability_id: AbilityId,
+        parameter_constraints: &[Option<TypeId>],
+        scope_id: ScopeId,
+    ) -> Result<Option<AbilityImplHandle>, Cow<'static, str>> {
+        let Some(impl_handles) = self.ability_impl_table.get(&self_type_id) else {
+            return Ok(None);
+        };
+        debug!(
+            "Ability dump for {} {:02} in search of {} {:02}\n{}",
+            self.type_id_to_string(self_type_id),
+            self_type_id,
+            self.ident_str(self.abilities.get(target_base_ability_id).name),
+            target_base_ability_id.0,
+            impl_handles
+                .iter()
+                .map(|h| {
+                    format!(
+                        "IMPL {:02} {} with args {}",
+                        h.specialized_ability_id.0,
+                        self.ident_str(self.abilities.get(h.specialized_ability_id).name),
+                        self.pretty_print_named_type_slice(
+                            self.ability_impls.get(h.full_impl_id).impl_arguments,
+                            ", "
+                        )
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        let mut valid_impls: SV4<AbilityImplHandle> = smallvec![];
+        for impl_handle in impl_handles {
+            if let Ok(()) = self.check_ability_impl(
+                target_base_ability_id,
+                *impl_handle,
+                parameter_constraints,
+                scope_id,
+            ) {
+                valid_impls.push(*impl_handle);
+            }
+        }
+        match valid_impls.len() {
+            0 => Ok(None),
+            1 => Ok(Some(valid_impls[0])),
+            _ => {
+                // If any of the parameter constraints have holes, then we don't require that we
+                // have a unique implementation because the holes will make it such
+                // that multiple implementations can match
+                let has_holes = parameter_constraints.iter().any(|c| c.is_none());
+                if has_holes {
+                    Ok(Some(valid_impls[0]))
+                } else {
+                    let impls_formatted = valid_impls
+                        .iter()
+                        .map(|i| {
+                            let imp = self.ability_impls.get(i.full_impl_id);
+                            format!(
+                                "- IMPL {:02} {:?} {}",
+                                i.full_impl_id.0,
+                                imp.kind,
+                                self.ability_signature_to_string(imp.signature(),)
+                            )
+                        })
+                        .join("\n");
+                    eprintln!(
+                        "Multiple matching implementations found for constraints {}:\n{}",
+                        parameter_constraints
+                            .iter()
+                            .map(|maybe_type| maybe_type
+                                .map(|t| self.type_id_to_string(t))
+                                .unwrap_or("_".to_string()))
+                            .join(", "),
+                        impls_formatted
+                    );
+                    Err(format!("Multiple matching implementations found:\n{}", impls_formatted)
+                        .into())
+                }
+            }
+        }
+    }
+
     fn check_ability_impl(
         &self,
         target_base_ability_id: AbilityId,
@@ -6244,10 +6195,11 @@ impl TypedProgram {
         let parameter_constraints: SV4<Option<TypeId>> =
             self.mem.getn(args).iter().map(|nt| Some(nt.type_id)).collect();
 
-        self.find_ability_impl_for_type_or_generate(
+        self.find_or_generate_ability_impl_for_type(
             self_type_id,
             base_ability,
             &parameter_constraints,
+            true,
             scope_id,
             span,
         )
@@ -9851,10 +9803,11 @@ impl TypedProgram {
         scope_id: ScopeId,
         span_for_error: SpanId,
     ) -> K1Result<AbilityImplHandle> {
-        self.find_ability_impl_for_type_or_generate(
+        self.find_or_generate_ability_impl_for_type(
             type_id,
             base_ability_id,
             &[],
+            true,
             scope_id,
             span_for_error,
         )
@@ -11605,10 +11558,11 @@ impl TypedProgram {
 
         let solved_self = self.types.get_static_family_id_if_static(solved_self);
         let impl_handle = self
-            .find_ability_impl_for_type_or_generate(
+            .find_or_generate_ability_impl_for_type(
                 solved_self,
                 base_ability_id,
                 &parameter_constraints,
+                true,
                 ctx.scope_id,
                 call_span,
             )
@@ -15773,7 +15727,9 @@ impl TypedProgram {
             {
                 return failf!(
                     ast_namespace.span,
-                    "Cannot extend definition of namespace from another module"
+                    "Cannot extend definition of namespace {} from another module {}",
+                    self.ident_str(ast_namespace.name),
+                    self.ident_str(self.modules.get(self.module_in_progress.unwrap()).name)
                 );
             }
             // Namespace extension
@@ -16427,10 +16383,13 @@ impl TypedProgram {
             (TypedPattern::LiteralBool(b, _), PatternCtor::BoolTrue) => *b == true,
             #[allow(clippy::bool_comparison)]
             (TypedPattern::LiteralBool(b, _), PatternCtor::BoolFalse) => *b == false,
-            // Char is innumerable
+
+            // 'Innumerable' types and their patterns
             (TypedPattern::LiteralChar(_char_pattern, _), PatternCtor::Char) => false,
             (TypedPattern::LiteralInteger(_int_pattern, _), PatternCtor::Int) => false,
             (TypedPattern::LiteralFloat(_float_pattern, _), PatternCtor::Float) => false,
+            (TypedPattern::LiteralString(_string_pattern, _), PatternCtor::String) => false,
+
             (TypedPattern::Sum(sum_pat), PatternCtor::Sum { variant_name, inner }) => {
                 if *variant_name == sum_pat.variant_tag_name {
                     match (sum_pat.payload, inner) {
@@ -17118,7 +17077,7 @@ impl TypedProgram {
 
     pub fn get_span_location(&self, span: SpanId) -> (&parse::Source, &parse::Line) {
         let the_span = self.ast.spans.get(span);
-        let source = self.ast.sources.get_source(the_span.file_id);
+        let source = self.ast.sources.get(the_span.file_id);
         let line = source.get_line_for_span_start(the_span).unwrap();
         (source, line)
     }
