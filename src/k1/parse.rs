@@ -4,7 +4,6 @@
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
-use crate::compiler::CompilerConfig;
 use crate::kmem::{self, MHandle, MSL2, MSS2, MSlice, MSpillList};
 use crate::pool::{SliceHandle, VPool};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
@@ -837,7 +836,6 @@ pub enum ParsedExpr {
     Lambda(ParsedLambda),
     Builtin(SpanId),
     Static(ParsedStaticExpr),
-    // nocommit remove
     Code(ParsedCode),
     QualifiedAbilityCall(ParsedQAbilityCall),
 }
@@ -1243,7 +1241,7 @@ impl ParsedTypeParam {}
 pub enum ParsedTypeConstraintExpr {
     Ability(ParsedHandle<ParsedAbilityExpr>),
     Static(ParsedTypeExprId),
-    // Predicate(NamespaceIdentifier)
+    Predicate(QIdent),
 }
 
 impl ParsedTypeConstraintExpr {
@@ -1612,7 +1610,6 @@ pub(crate) type ParsedHandle<T> = MHandle<T, ParsedProgram>;
 pub struct ParsedProgram {
     pub name: String,
     pub name_id: Ident,
-    pub config: CompilerConfig,
     pub spans: Spans,
     pub functions: VPool<ParsedFunction, ParsedFunctionId>,
     pub globals: VPool<ParsedGlobal, ParsedGlobalId>,
@@ -1633,28 +1630,39 @@ pub struct ParsedProgram {
     pub mem: kmem::Mem<ParsedProgram>,
 }
 
+#[cfg(feature = "lsp")]
+unsafe impl Sync for ParsedProgram {}
+#[cfg(feature = "lsp")]
+unsafe impl Send for ParsedProgram {}
+
 impl ParsedProgram {
-    pub fn make(name: String, config: CompilerConfig) -> ParsedProgram {
+    pub fn make(name: String, preallocate_hints: bool) -> ParsedProgram {
         let mut idents = IdentPool::make();
         let name_id = idents.intern(&name);
+
+        macro_rules! if_hint {
+            ($value: expr) => {
+                if preallocate_hints { $value } else { 0 }
+            };
+        }
+
         ParsedProgram {
             name,
             name_id,
-            config,
-            spans: Spans::new(),
-            functions: VPool::make_with_hint("functions", 16384),
-            globals: VPool::make_with_hint("parsed_globals", 8192),
-            type_defns: VPool::make_with_hint("parsed_type_defn", 2048),
-            namespaces: VPool::make_with_hint("parsed_namespaces", 8192),
-            abilities: VPool::make_with_hint("parsed_abilities", 2048),
+            spans: Spans::new_with_hint(if_hint!(131072)),
+            functions: VPool::make_with_hint("functions", if_hint!(16384)),
+            globals: VPool::make_with_hint("parsed_globals", if_hint!(8192)),
+            type_defns: VPool::make_with_hint("parsed_type_defn", if_hint!(2048)),
+            namespaces: VPool::make_with_hint("parsed_namespaces", if_hint!(8192)),
+            abilities: VPool::make_with_hint("parsed_abilities", if_hint!(2048)),
             ability_impls: Vec::new(),
             sources: Sources::default(),
             idents,
             strings: StringPool::make(),
-            exprs: ParsedExpressionPool::make_with_hint(131072),
+            exprs: ParsedExpressionPool::make_with_hint(if_hint!(131072)),
             type_exprs: ParsedTypeExpressionPool::new(),
             patterns: ParsedPatternPool::default(),
-            stmts: VPool::make_with_hint("parsed_stmts", 65536),
+            stmts: VPool::make_with_hint("parsed_stmts", if_hint!(65536)),
             uses: ParsedUsePool::make(),
             errors: Vec::new(),
 
@@ -4347,6 +4355,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if next.kind == K::Ident && self.token_chars(next) == "static" {
             let static_type_expr = self.expect_type_expression()?;
             Ok(ParsedTypeConstraintExpr::Static(static_type_expr))
+        } else if next.kind == K::Ident && self.token_chars(next) == "pred" {
+            self.advance();
+            let predicate_qident = self.expect_namespaced_ident()?;
+            Ok(ParsedTypeConstraintExpr::Predicate(predicate_qident))
         } else {
             let ability_expr = self.expect_ability_expr()?;
             let id = self.ast.mem.push_h(ability_expr);
@@ -5103,37 +5115,31 @@ pub fn lex_file_into_program(
     module: &mut ParsedProgram,
     source: Source,
     tokens: &mut Vec<Token>,
-) -> ParseResult<()> {
-    let file_id = source.file_id;
-    module.sources.add_source(source);
+) -> ParseResult<FileId> {
+    let file_id = module.sources.add_source(source);
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
     tokens.retain(|token| token.kind != K::LineComment);
 
-    Ok(())
+    Ok(file_id)
 }
 
-#[cfg(test)]
-pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
-    use std::path::PathBuf;
+/// To be used by the lsp or other tools that are
+/// only interested in parsing a single file independently
+pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram {
+    let mut ast = ParsedProgram::make(program_name.clone(), false);
 
-    let program_name = source.filename.split('.').next().unwrap().to_string();
-    let mut ast = ParsedProgram::make(
-        program_name,
-        CompilerConfig {
-            src_path: PathBuf::from("test.k1"),
-            is_test_build: false,
-            no_std: true,
-            target: crate::compiler::detect_host_target().unwrap(),
-            debug: true,
-            out_dir: ".k1-out-unit-test".into(),
-        },
-    );
-
-    let file_id = source.file_id;
+    let source = Source::make(0, ".".to_string(), program_name.clone(), content);
     let mut token_vec = vec![];
-    lex_file_into_program(&mut ast, source, &mut token_vec)?;
+    let file_id = match lex_file_into_program(&mut ast, source, &mut token_vec) {
+        Err(e) => {
+            ast.errors.push(e);
+            return ast;
+        }
+        Ok(file_id) => file_id,
+    };
+
     let module_id = ModuleId::from_u32(1).unwrap();
     let module_name = ast.idents.intern("test_module");
     let module_ns_id = init_module(module_name, &mut ast);
@@ -5141,6 +5147,19 @@ pub fn test_parse_module(source: Source) -> ParseResult<ParsedProgram> {
     let mut parser =
         Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &token_vec, file_id);
     parser.parse_file();
+
+    // Store tokens for the lsp
+    #[cfg(feature = "lsp")]
+    {
+        ast.sources.get_mut(file_id).tokens = token_vec;
+    }
+
+    ast
+}
+
+#[cfg(test)]
+pub fn test_parse_module(name: String, source: String) -> ParseResult<ParsedProgram> {
+    let ast = parse_standalone(name, source);
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);
         Err(e.clone())

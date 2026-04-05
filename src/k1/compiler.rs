@@ -431,9 +431,9 @@ pub fn write_executable(
     extra_options: &[String],
     optimize: bool,
 ) -> Result<()> {
-    let target = k1.ast.config.target;
-    let debug = k1.ast.config.debug;
-    let out_dir = &k1.ast.config.out_dir;
+    let target = k1.config.target;
+    let debug = k1.config.debug;
+    let out_dir = &k1.config.out_dir;
     let clang_time = std::time::Instant::now();
 
     let mut build_cmd = std::process::Command::new("cc");

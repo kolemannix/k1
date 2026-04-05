@@ -404,12 +404,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
-        let sysroot = match module.ast.config.target.target_os() {
+        let sysroot = match module.config.target.target_os() {
             compiler::TargetOs::Linux => "",
             compiler::TargetOs::MacOs => compiler::MAC_SDK_SYSROOT,
             compiler::TargetOs::Wasm => "",
         };
-        let sdk = match module.ast.config.target.target_os() {
+        let sdk = match module.config.target.target_os() {
             compiler::TargetOs::Linux => "",
             compiler::TargetOs::MacOs => "MacOSX.sdk",
             compiler::TargetOs::Wasm => "",
@@ -2614,7 +2614,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let callconv = match abi_mode {
             AbiMode::Internal => CallConv::InternalK1,
-            AbiMode::Native => match self.k1.ast.config.target {
+            AbiMode::Native => match self.k1.config.target {
                 compiler::Target::LinuxIntel64 => CallConv::AMD64,
                 compiler::Target::MacOsArm64 => CallConv::ARM64,
                 compiler::Target::Wasm64 => CallConv::ARM64,

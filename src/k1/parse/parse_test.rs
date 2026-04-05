@@ -1,24 +1,11 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use crate::{
-    compiler::detect_host_target,
-    parse::{self, *},
-};
+use crate::parse::*;
 use std::fs;
 
 fn make_test_module() -> ParsedProgram {
-    ParsedProgram::make(
-        "unit_test".to_string(),
-        CompilerConfig {
-            src_path: std::path::PathBuf::from("test_module.k1"),
-            is_test_build: false,
-            no_std: true,
-            target: detect_host_target().unwrap(),
-            debug: true,
-            out_dir: ".k1-out-parse-test".into(),
-        },
-    )
+    ParsedProgram::make("unit_test".to_string(), false)
 }
 
 fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'ast> {
@@ -31,7 +18,7 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     lex_file_into_program(ast, source, &mut token_vec).unwrap();
     let token_vec = token_vec.leak();
     println!("{:#?}", token_vec);
-    let ns_id = parse::init_module(module_name, ast);
+    let ns_id = init_module(module_name, ast);
     let parser = Parser::make_for_file(module_id, module_name, ns_id, ast, token_vec, file_id);
     parser
 }
@@ -69,9 +56,7 @@ fn basic_fn() -> Result<(), ParseError> {
       y := add(42, 42);
       add(x, y)
     }"#;
-    let source =
-        Source::make(0, "test_src".to_string(), "test_case.k1".to_string(), src.to_string());
-    let mut module = test_parse_module(source)?;
+    let mut module = test_parse_module("basic_fn".to_string(), src.to_string())?;
     let fndef = module.functions.get_opt(ParsedFunctionId::from_u32(1).unwrap()).unwrap();
     assert_eq!(fndef.name, module.idents.intern("basic"));
     Ok(())
@@ -202,18 +187,17 @@ fn type_parameter_multi() -> ParseResult<()> {
 }
 
 #[test]
+fn builtin_only() -> Result<(), ParseError> {
+    let builtin_source = fs::read_to_string("k1lib/core/builtin.k1").unwrap();
+    let module = test_parse_module("builtin.k1".to_string(), builtin_source)?;
+    assert!(!module.get_root_namespace().definitions.is_empty());
+    Ok(())
+}
+
+#[test]
 fn core_only() -> Result<(), ParseError> {
-    env_logger::init();
-    let core_source = Source::make(
-        0,
-        "core".to_string(),
-        "core.k1".to_string(),
-        fs::read_to_string("k1lib/core/core.k1").unwrap(),
-    );
-    let module = test_parse_module(core_source)?;
-    assert_eq!(&module.name, "core");
-    assert_eq!(&module.sources.get_main().filename, "core.k1");
-    assert_eq!(&module.sources.get_main().directory, "core");
+    let core_source = fs::read_to_string("k1lib/core/core.k1").unwrap();
+    let module = test_parse_module("core.k1".to_string(), core_source)?;
     assert!(!module.get_root_namespace().definitions.is_empty());
     Ok(())
 }

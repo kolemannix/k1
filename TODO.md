@@ -129,6 +129,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Hover first pass
 - [x] Hover much better
 - [x] Hover no more markdown
+- [ ] Parse with recovery within same file
 - [ ] Go-to
 - [ ] Completion
 

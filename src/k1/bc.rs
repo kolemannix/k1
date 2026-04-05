@@ -783,6 +783,12 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     if let Some(body_block) = f.body_block {
         b.push_block("entry");
         compile_block_stmts(&mut b, None, body_block)?;
+    } else {
+        match f.linkage {
+            Linkage::Standard => panic!("bc: function should have a body I think"),
+            Linkage::External { .. } => {}
+            Linkage::Intrinsic => {}
+        }
     };
 
     let unit_id = CompilableUnitId::Function(function_id);

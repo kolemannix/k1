@@ -1224,7 +1224,7 @@ impl TypedProgram {
         w.write_str(self.ident_str(ident))
     }
 
-    pub fn display_qident(&self, w: &mut impl Write, ident: &QIdent) -> std::fmt::Result {
+    pub fn display_qident<W: Write + ?Sized>(&self, w: &mut W, ident: &QIdent) -> std::fmt::Result {
         for ns in self.ast.idents.slices.get_slice(ident.path) {
             self.write_ident(w, *ns)?;
             write!(w, "/")?;
@@ -1439,6 +1439,12 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for MStr<MemTmp> {
 impl DepDisplay<TypedProgram, K1DisplayArgs> for Ident {
     fn fmt(&self, w: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
         w.write_str(k1.ident_str(*self))
+    }
+}
+
+impl DepDisplay<TypedProgram, K1DisplayArgs> for QIdent {
+    fn fmt(&self, w: &mut dyn Write, k1: &TypedProgram, _args: &K1DisplayArgs) -> std::fmt::Result {
+        k1.display_qident(w, self)
     }
 }
 

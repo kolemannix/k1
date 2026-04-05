@@ -446,7 +446,7 @@ impl TypedProgram {
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
         let specialized_phony_fn_id =
-            self.specialize_function_signature(type_args, MSlice::empty(), phony_fn_id).unwrap();
+            self.specialize_function_signature(type_args, MSlice::empty(), phony_fn_id);
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
@@ -536,7 +536,7 @@ impl TypedProgram {
         let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, parts.len());
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        if self.ast.config.no_std {
+        if self.config.no_std {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
         }
         let mut hole_index = 0;
@@ -706,7 +706,7 @@ impl TypedProgram {
         let mut block = self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
         let block_scope = block.scope_id;
         let block_ctx = ctx.with_scope(block_scope).with_no_expected_type();
-        if self.ast.config.no_std {
+        if self.config.no_std {
             return failf!(span, "Interpolated strings are not supported in no_std mode");
         }
         let new_string_builder = self.synth_typed_call_typed_args(

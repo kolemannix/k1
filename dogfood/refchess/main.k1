@@ -66,8 +66,8 @@ fn indexToBit(index: u64): Bitboard {
 }
 
 fn printBitboard(b: Bitboard) {
-  let* l = list/empty[char]();
-  writeBitboard(l, b);
+  let l = list/empty[char]();
+  writeBitboard(&l, b);
   println(string/wrapList(l))
 }
 
@@ -108,7 +108,7 @@ ns GameState {
   }
 
   fn printGrid(self: GameState) {
-    let* writer = list/withCapacity[char](128);
+    let writer = list/withCapacity[char](128);
     let rank = 7;
     while rank >= 0 {
       let rankStart = rank * 8;
@@ -160,7 +160,7 @@ ns GameState {
   }
 
   fn genWhitePawnMoves(self: GameState): list[Move] {
-     let* _moves = list/empty[Move]();
+     let returned moves = list/empty[Move]();
      let notOccupied = self.notOccupied();
      // Single push: shift pawns up one rank if square is empty
      let singlePush = (self.wPawns << 8) & notOccupied;
@@ -179,7 +179,7 @@ ns GameState {
           enPassantTargetSquareOccupied & (enPassantTargetSquareBit << 1) & (enPassantTargetSquareBit >> 1);
         printBitboard(enPassantTargetSquareOccupied);
      };
-     list/empty()
+     moves
   }
 }
 

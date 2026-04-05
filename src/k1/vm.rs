@@ -550,12 +550,82 @@ fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
     inst_id.as_u32() - offset
 }
 
+pub fn execute_compiled_function(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    function_id: FunctionId,
+    _input_parameters: &[(VariableId, StaticValueId)],
+) -> K1Result<StaticValueId> {
+    // nocommit: DRY with execute expr once good
+    let start = k1.timing.clock.raw();
+    let span = k1.get_function_span(function_id);
+    vm.eval_span = span;
+    let unit = k1.bytecode.functions.get(function_id).unwrap();
+
+    eprintln!("[vm] Executing Function\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+
+    let top_frame_index = 0;
+
+    debug_assert!(vm.stack.frames.is_empty());
+    let top_ret_info = RetInfo {
+        pt: unit.fn_type.return_type,
+        frame_index: 0,
+        inst_index: 0,
+        has_dst: false,
+        ret_layout: unit.ret_layout,
+        ip: 0,
+        block: 0,
+    };
+
+    let logical_return_pt = unit.fn_type.return_type;
+    let pt_layout = k1.types.get_pt_layout(logical_return_pt);
+    let ret_addr = vm.stack.push_layout_uninit(pt_layout);
+    vm.overall_return_addr = ret_addr;
+
+    debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
+    vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
+    // nocommit: Convert input parameters to VM values and bind them to the frame's function
+    // parameter slots
+    debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
+
+    let exit_code = match exec_loop(k1, vm, unit) {
+        Ok(exit_code) => exit_code,
+        Err(err) => {
+            return Err(err);
+        }
+    };
+
+    let elapsed_nanos = k1.timing.elapsed_nanos(start);
+    k1.timing.total_vm_nanos += elapsed_nanos as i64;
+
+    report_execution_messages(k1, vm, span, exit_code);
+
+    if exit_code != 0 {
+        failf!(span, "Static execution exited with code: {}", exit_code)
+    } else {
+        let function_return_type =
+            k1.types.get(k1.functions.get(function_id).type_id).as_function().unwrap().return_type;
+        let result = if unit.fn_type.diverges {
+            Ok(k1.static_values.empty_id())
+        } else {
+            if logical_return_pt.is_empty() {
+                Ok(k1.static_values.empty_id())
+            } else {
+                let loaded = load_value(logical_return_pt, ret_addr);
+                let returned_value =
+                    vm_value_to_static_value(k1, function_return_type, loaded, span)?;
+                Ok(returned_value)
+            }
+        };
+        vm.overall_return_addr = core::ptr::null_mut();
+        result
+    }
+}
+
 pub fn execute_compiled_expr(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     expr_id: TypedExprId,
-    // These should have gotten compiled to StaticValue instructions
-    _input_parameters: &[(VariableId, StaticValueId)],
 ) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     let span = k1.exprs.get_span(expr_id);

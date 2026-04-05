@@ -10,20 +10,13 @@ use std::sync::{Mutex, RwLock};
 
 use k1::compiler::CompileProgramError;
 use k1::lex::{self, SpanId, Spans};
-use k1::parse::{FileId, ParsedProgram, Source};
+use k1::parse;
+use k1::parse::{ParsedProgram, Source};
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 use tracing::{error, info};
-
-//trait LspError {
-//    fn span() -> SpanId;
-//    fn message() -> String;
-//}
-//
-//impl LspError for TyperError {}
-//
 
 const TOKEN_TYPES: [SemanticTokenType; 22] = [
     SemanticTokenType::NAMESPACE,
@@ -172,16 +165,12 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
 }
 
 fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(Source, bool)> {
-    backend
-        .with_ast(|ast| {
-            let source = uri_to_source(ast, url)?;
-            let file_id = source.file_id;
-            match backend.edited_sources.lock().unwrap().get(&file_id) {
-                None => Some((source.clone(), false)),
-                Some(source) => Some((source.0.clone(), true)),
-            }
-        })
-        .unwrap_or(None)
+    match backend.edited_sources.lock().unwrap().get(url) {
+        None => backend
+            .with_ast(|ast| uri_to_source(ast, url).map(|source| (source.clone(), false)))
+            .unwrap_or(None),
+        Some(ast) => Some((ast.sources.get_main().clone(), true)),
+    }
 }
 
 enum CompiledProgram {
@@ -193,7 +182,7 @@ enum CompiledProgram {
 struct Backend {
     client: Client,
     module: Mutex<CompiledProgram>,
-    edited_sources: Mutex<HashMap<FileId, (Source, lex::Spans)>>,
+    edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
     workspace_uri: RwLock<Option<Url>>,
     compile_iteration: AtomicU32,
 }
@@ -218,7 +207,7 @@ impl Backend {
         }
     }
 
-    fn all_files(&self) -> Vec<Url> {
+    fn all_file_urls(&self) -> Vec<Url> {
         self.with_ast(|ast| {
             ast.sources.iter().map(|s| source_to_uri(&s.1.directory, &s.1.filename)).collect()
         })
@@ -303,11 +292,11 @@ impl Backend {
         let version = self.compile_iteration.load(Ordering::Relaxed);
         let mut errors_by_file = errors.into_iter().into_group_map();
         for e in &errors_by_file {
-            info!("Got {} errors for {}", e.1.len(), e.0);
+            info!("Got {} messages for {}", e.1.len(), e.0);
         }
 
         // Ensure we clear existing diagnostics by always publishing for every file
-        let all_files = self.all_files();
+        let all_files = self.all_file_urls();
         for url in all_files.into_iter() {
             errors_by_file.entry(url).or_insert(vec![]);
         }
@@ -317,6 +306,44 @@ impl Backend {
             }
             self.client.publish_diagnostics(file_url, errors, Some(version as i32)).await;
         }
+    }
+
+    fn get_typer_errors(&self, file_url: &Url) -> Vec<K1Message> {
+        let module_lock = self.module.lock().unwrap();
+        let CompiledProgram::Typed(k1) = &*module_lock else {
+            return vec![];
+        };
+        let Some(source) = uri_to_source(&k1.ast, file_url) else {
+            info!("Could not get source for {}", file_url.path());
+            return vec![];
+        };
+        let file_id = source.file_id;
+        k1.messages
+            .iter()
+            .filter(|m| {
+                let span = k1.ast.spans.get(m.span);
+                span.file_id == file_id
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn messages_to_diagnostics(&self, messages: &[K1Message]) -> Vec<Diagnostic> {
+        self.with_ast(|k1| {
+            messages
+                .iter()
+                .filter_map(|k1_message| {
+                    error_to_diagnostic(
+                        k1,
+                        k1_message.message.clone(),
+                        k1_message.level,
+                        k1_message.span,
+                    )
+                    .map(|p| p.1)
+                })
+                .collect()
+        })
+        .unwrap_or(vec![])
     }
 }
 
@@ -371,7 +398,7 @@ impl LanguageServer for Backend {
         let root_uri = params.root_uri.ok_or(Error::invalid_params("Need root_uri"))?;
         assert!(root_uri.scheme() == "file");
         self.workspace_uri.write().unwrap().replace(root_uri.clone());
-        info!("Set root uri: {root_uri:?}");
+        info!("Set root uri: {}", root_uri.path());
 
         self.compile();
         Ok(res)
@@ -393,7 +420,7 @@ impl LanguageServer for Backend {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let file_url = params.text_document.uri;
         info!("textDocument/did_change: {}", &file_url);
-        let Some(change) = params.content_changes.first() else {
+        let Some(change) = params.content_changes.into_iter().next() else {
             error!("expect a change");
             return;
         };
@@ -401,58 +428,40 @@ impl LanguageServer for Backend {
             error!("expect full content");
             return;
         }
-        let new_content = &change.text;
-        // Scoping hacks for async bullshit
-        let (mut new_source, program_name) = {
-            let module = self.module.lock().unwrap();
-            let CompiledProgram::Typed(k1) = &*module else {
-                info!("Parsed but not typed (when does this happen?)");
-                return;
-            };
-            let program_name = k1.program_name().to_string();
-            let Some(source) = uri_to_source(&k1.ast, &file_url) else {
-                info!("Could not get source for {}", file_url.path());
-                return;
-            };
-            let new_source = Source::make(
-                source.file_id,
-                source.directory.clone(),
-                source.filename.clone(),
-                new_content.clone(),
-            );
-            (new_source, program_name)
-        };
-        info!("textDocument/did_change: lexing file {}", &file_url);
-        let (spans, tokens, lex_error) = lex::lex_standalone(&new_source.content);
-        let diagnostics = match lex_error {
-            None => vec![],
-            Some(lex_error) => {
-                if let Some(range) = span_to_range(&new_source, &spans, lex_error.span) {
-                    let diagnostic = Diagnostic {
-                        range,
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        code: None,
-                        code_description: None,
-                        source: Some(program_name),
-                        message: lex_error.message,
-                        related_information: None,
-                        tags: None,
-                        data: None,
-                    };
-                    vec![diagnostic]
-                } else {
-                    vec![]
-                }
+        let new_content = change.text;
+        info!("textDocument/did_change: parsing file {}", &file_url);
+        let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
+        let new_source = ast.sources.get_main();
+        // let (spans, tokens, lex_error) = lex::lex_standalone(&new_source.content);
+        let mut parse_diagnostics = vec![];
+        for error in &ast.errors {
+            if let Some(range) = span_to_range(new_source, &ast.spans, error.span()) {
+                let diagnostic = Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: None,
+                    code_description: None,
+                    source: Some(ast.name.clone()),
+                    message: error.message().to_string(),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                };
+                parse_diagnostics.push(diagnostic)
             }
-        };
-        new_source.tokens = tokens;
-        // Scoping hacks for async bullshit
+        }
+
         {
+            // Scoping hacks for async bullshit
             let mut edited_sources = self.edited_sources.lock().unwrap();
-            edited_sources.insert(new_source.file_id, (new_source, spans));
+            edited_sources.insert(file_url.clone(), ast);
         }
         let version = self.compile_iteration.load(Ordering::Relaxed);
-        self.client.publish_diagnostics(file_url, diagnostics, Some(version as i32)).await;
+
+        let typer_errors = self.get_typer_errors(&file_url);
+        let mut all_file_diagnostics = self.messages_to_diagnostics(&typer_errors);
+        all_file_diagnostics.extend(parse_diagnostics);
+        self.client.publish_diagnostics(file_url, all_file_diagnostics, Some(version as i32)).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -514,19 +523,25 @@ impl LanguageServer for Backend {
             info!("Could not get source for {}", file_url.path());
             return Ok(None);
         };
+        info!(
+            "semantic_tokens {}. tokens={} is_edited={is_edited}",
+            file_url.path(),
+            source.tokens.len()
+        );
         self.with_ast(|ast| {
             let mut tokens: Vec<SemanticToken> = vec![];
             let mut prev_line = 1;
             let mut prev_start_col = 0;
+
+            let edited_sources = self.edited_sources.lock().unwrap();
+            let ast_for_file: &ParsedProgram = match is_edited {
+                false => ast,
+                true => edited_sources.get(&file_url).unwrap(),
+            };
             for token in &source.tokens {
-                let span = match is_edited {
-                    false => ast.spans.get(token.span),
-                    true => {
-                        let edited_sources = self.edited_sources.lock().unwrap();
-                        let spans = &edited_sources.get(&source.file_id).unwrap().1;
-                        spans.get(token.span)
-                    }
-                };
+                // FIXME: Hack to retrieve the span from the edited ParsedProgram rather than the primary
+                // one
+                let span = ast_for_file.spans.get(token.span);
                 let length = span.len;
                 let Some(line) = source.get_line_for_span_start(span) else {
                     continue;
@@ -569,44 +584,44 @@ impl LanguageServer for Backend {
                     | k1::lex::TokenKind::KeywordDefer => Some(TokenTypes::Keyword as u32),
                     k1::lex::TokenKind::Slash => Some(TokenTypes::Operator as u32),
                     k1::lex::TokenKind::LineComment => Some(TokenTypes::Comment as u32),
-                    k1::lex::TokenKind::OpenParen => None,
-                    k1::lex::TokenKind::CloseParen => None,
-                    k1::lex::TokenKind::OpenBracket => None,
-                    k1::lex::TokenKind::CloseBracket => None,
-                    k1::lex::TokenKind::OpenBrace => None,
-                    k1::lex::TokenKind::CloseBrace => None,
-                    k1::lex::TokenKind::LAngle => None,
-                    k1::lex::TokenKind::LAngleLAngle => None,
-                    k1::lex::TokenKind::RAngle => None,
-                    k1::lex::TokenKind::RAngleRAngle => None,
-                    k1::lex::TokenKind::Colon => None,
-                    k1::lex::TokenKind::ColonEquals => None,
-                    k1::lex::TokenKind::Semicolon => None,
-                    k1::lex::TokenKind::Equals => None,
-                    k1::lex::TokenKind::EqualsEquals => None,
-                    k1::lex::TokenKind::BangEquals => None,
-                    k1::lex::TokenKind::Dot => None,
-                    k1::lex::TokenKind::Comma => None,
-                    k1::lex::TokenKind::Bang => None,
-                    k1::lex::TokenKind::QuestionMark => None,
-                    k1::lex::TokenKind::Pipe => None,
-                    k1::lex::TokenKind::PipePipe => None,
-                    k1::lex::TokenKind::Amp => None,
-                    k1::lex::TokenKind::AmpAmp => None,
-                    k1::lex::TokenKind::Percent => None,
-                    k1::lex::TokenKind::BackSlash => None,
-                    k1::lex::TokenKind::Hash => None,
-                    k1::lex::TokenKind::At => None,
-                    k1::lex::TokenKind::Caret => None,
-                    k1::lex::TokenKind::DoubleQuote => None,
-                    k1::lex::TokenKind::SingleQuote => None,
-                    k1::lex::TokenKind::Plus => None,
-                    k1::lex::TokenKind::Minus => None,
-                    k1::lex::TokenKind::Asterisk => None,
-                    k1::lex::TokenKind::LessEqual => None,
-                    k1::lex::TokenKind::GreaterEqual => None,
-                    k1::lex::TokenKind::LThinArrow => None,
-                    k1::lex::TokenKind::RThinArrow => None,
+                    k1::lex::TokenKind::OpenParen
+                    | k1::lex::TokenKind::CloseParen
+                    | k1::lex::TokenKind::OpenBracket
+                    | k1::lex::TokenKind::CloseBracket
+                    | k1::lex::TokenKind::OpenBrace
+                    | k1::lex::TokenKind::CloseBrace
+                    | k1::lex::TokenKind::LAngle
+                    | k1::lex::TokenKind::LAngleLAngle
+                    | k1::lex::TokenKind::RAngle
+                    | k1::lex::TokenKind::RAngleRAngle
+                    | k1::lex::TokenKind::Colon
+                    | k1::lex::TokenKind::ColonEquals
+                    | k1::lex::TokenKind::Semicolon
+                    | k1::lex::TokenKind::Equals
+                    | k1::lex::TokenKind::EqualsEquals
+                    | k1::lex::TokenKind::BangEquals
+                    | k1::lex::TokenKind::Dot
+                    | k1::lex::TokenKind::Comma
+                    | k1::lex::TokenKind::Bang
+                    | k1::lex::TokenKind::QuestionMark
+                    | k1::lex::TokenKind::Pipe
+                    | k1::lex::TokenKind::PipePipe
+                    | k1::lex::TokenKind::Amp
+                    | k1::lex::TokenKind::AmpAmp
+                    | k1::lex::TokenKind::Percent
+                    | k1::lex::TokenKind::BackSlash
+                    | k1::lex::TokenKind::Hash
+                    | k1::lex::TokenKind::At
+                    | k1::lex::TokenKind::Caret
+                    | k1::lex::TokenKind::DoubleQuote
+                    | k1::lex::TokenKind::SingleQuote
+                    | k1::lex::TokenKind::Plus
+                    | k1::lex::TokenKind::Minus
+                    | k1::lex::TokenKind::Asterisk
+                    | k1::lex::TokenKind::LessEqual
+                    | k1::lex::TokenKind::GreaterEqual
+                    | k1::lex::TokenKind::LThinArrow
+                    | k1::lex::TokenKind::RThinArrow => Some(TokenTypes::Operator as u32),
                     k1::lex::TokenKind::Eof => None,
                 };
                 if let Some(token_type) = token_type {
@@ -651,9 +666,22 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
+        {
+            let mut es = self.edited_sources.lock().unwrap();
+            es.remove(&params.text_document.uri);
+        }
         //info!("did_save file {:?}", params.text);
+        let start = std::time::Instant::now();
         self.compile();
+        let elapsed_ms = start.elapsed().as_millis();
         self.send_diagnostics().await;
+        self.client.semantic_tokens_refresh().await.unwrap();
+        self.client
+            .show_message(
+                MessageType::INFO,
+                format!("recompiled {} in {}ms", params.text_document.uri.path(), elapsed_ms),
+            )
+            .await;
     }
 
     async fn completion(&self, _params: CompletionParams) -> Result<Option<CompletionResponse>> {

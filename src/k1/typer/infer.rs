@@ -283,14 +283,14 @@ impl TypedProgram {
     ///
     /// Each time we get a _concrete_ substitution for a param,
     /// if the param has constraints,
-    /// we need to 'learn' from the constraints, adding a pair to the mix
-    /// for each ability param and ability impl param in the constraint
+    /// we need to 'learn' from the constraints, adding an inference pair to the mix
+    /// for each ability param and ability impl param in that constraint.
     /// Consider:
     /// fn find[T, I: Iterator[Item = T]](i: I, fn: \T -> bool)
     /// find(myList, \i i.isEven())
     ///      ^
-    /// We need to learn T from the ability impl for Iterator for myList, so that we can infer the
-    /// type of the function param in \i i.isEven()
+    /// We need to learn T FROM THE ABILITY IMPL FOR ITERATOR FOR MYLIST, so that we can infer the
+    /// type of the function param in \i i.isEven(). We can't learn it from just the callsite.
     pub(crate) fn apply_constraints_to_inferred_type(
         &mut self,
         type_param_id: TypeId,
@@ -360,6 +360,7 @@ impl TypedProgram {
             match self.find_or_generate_specialized_ability_impl_for_type(
                 solution_type_id,
                 sig.specialized_ability_id,
+                false,
                 scope_id,
                 span,
             ) {

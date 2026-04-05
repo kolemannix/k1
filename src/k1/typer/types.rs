@@ -185,10 +185,11 @@ pub struct ListType {
 pub struct TypeParameter {
     pub name: Ident,
     pub static_constraint: Option<TypeId>,
+    pub predicate_functions: MSlice<QIdent, TypedProgram>,
     pub scope_id: ScopeId,
     pub span: SpanId,
 }
-impl_copy_if_small!(16, TypeParameter);
+impl_copy_if_small!(24, TypeParameter);
 
 #[derive(Clone)]
 pub struct FunctionTypeParameter {
@@ -441,7 +442,7 @@ pub struct FunctionPointerType {
     pub function_type_id: TypeId,
 }
 
-static_assert_size!(Type, 20);
+static_assert_size!(Type, 28);
 #[derive(Clone)]
 pub enum Type {
     Char,

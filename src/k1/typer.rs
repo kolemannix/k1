@@ -860,7 +860,7 @@ pub struct TypedFunction {
     pub scope: ScopeId,
     pub params: MSlice<TypedFunctionParam, TypedProgram>,
     pub type_params: NamedTypeSlice,
-    pub function_type_params: MSlice<FunctionTypeParam, TypedProgram>,
+    pub fnlike_type_params: MSlice<FunctionTypeParam, TypedProgram>,
     pub body_block: Option<TypedExprId>,
     pub builtin_type: Option<Builtin>,
     pub linkage: Linkage,
@@ -884,7 +884,7 @@ impl TypedFunction {
             name: Some(self.name),
             function_type: self.type_id,
             type_params: self.type_params,
-            function_type_params: self.function_type_params,
+            function_type_params: self.fnlike_type_params,
         }
     }
 
@@ -2500,6 +2500,7 @@ impl TypedExprPool {
 
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
+    pub config: CompilerConfig,
     pub program_settings: ProgramSettings,
     pub ast: ParsedProgram,
 
@@ -2634,7 +2635,7 @@ impl Timing {
 
 impl TypedProgram {
     pub fn new(program_name: String, config: CompilerConfig) -> TypedProgram {
-        let ast = ParsedProgram::make(program_name, config);
+        let ast = ParsedProgram::make(program_name, true);
 
         let mut types = TypePool::empty(ast.idents.b.tag, ast.idents.b.payload);
         let empty_struct_id = types.add_empty_struct();
@@ -2697,6 +2698,7 @@ impl TypedProgram {
 
         TypedProgram {
             modules: VPool::make_with_hint("modules", 32),
+            config,
             program_settings: ProgramSettings { multithreaded: false, executable: false },
             functions: VPool::make_with_hint("typed_functions", 8192),
             variables: VPool::make_with_hint("typed_variables", 8192),
@@ -2926,7 +2928,7 @@ impl TypedProgram {
         }
         let typing_elapsed_ms = self.timing.clock.elapsed_ms(type_start);
         self.modules.get_mut(module_id).typecheck_elapsed_ms = typing_elapsed_ms;
-        // if self.ast.config.profile {
+        // if self.config.profile {
         // }
         // self.named_types.print_size_info();
         // self.types.types.print_size_info();
@@ -3173,25 +3175,31 @@ impl TypedProgram {
                     Ok(None) => None,
                     Err(msg) => return failf!(type_param.span, "{}", msg),
                 };
-            let mut ability_constraints = smallvec![];
+            let mut ability_constraint_signatures = smallvec![];
+            let mut predicate_functions = self.mem.new_list(0);
             for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
                 match parsed_constraint {
                     ParsedTypeConstraintExpr::Ability(ability_expr) => {
                         let ability_sig =
                             self.eval_ability_expr(*ability_expr, false, defn_scope_id)?;
-                        ability_constraints.push(ability_sig);
+                        ability_constraint_signatures.push(ability_sig);
+                    }
+                    ParsedTypeConstraintExpr::Predicate(qident) => {
+                        predicate_functions.push_grow(&mut self.mem, *qident);
                     }
                     ParsedTypeConstraintExpr::Static(_) => {}
                 };
             }
+            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
                     static_constraint: maybe_static_constraint,
+                    predicate_functions: predicate_functions_handle,
                     scope_id: defn_scope_id,
                     span: type_param.span,
                 },
-                ability_constraints,
+                ability_constraint_signatures,
             );
             type_params.push(NameAndType { name: type_param.name, type_id: type_variable_id });
             let added = self
@@ -5544,12 +5552,11 @@ impl TypedProgram {
         bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_bytecode(expr_span)?;
 
-        let execution_result =
-            vm::execute_compiled_expr(self, vm, expr, input_parameters).map_err(|mut e| {
-                let stack_trace = vm::make_stack_trace(self, &vm.stack);
-                e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                e
-            });
+        let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
+            let stack_trace = vm::make_stack_trace(self, &vm.stack);
+            e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+            e
+        });
 
         vm.reset(self.global_id_k1_arena);
 
@@ -5593,6 +5600,65 @@ impl TypedProgram {
             Some(vm) => (vm, false),
         };
         let res = self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, input_parameters);
+        if !used_alt {
+            *self.vm = Some(vm);
+        } else {
+            debug!("Restoring alt VM to pool");
+            self.vm_alts.push(vm);
+        }
+
+        res
+    }
+
+    fn execute_static_function_with_vm(
+        &mut self,
+        vm: &mut vm::Vm,
+        function_id: FunctionId,
+        input_parameters: &[(VariableId, StaticValueId)],
+        span: SpanId,
+    ) -> K1Result<StaticValueId> {
+        bc::compile_function(self, function_id)?;
+        self.compile_all_pending_bytecode(span)?;
+
+        let execution_result =
+            vm::execute_compiled_function(self, vm, function_id, input_parameters).map_err(
+                |mut e| {
+                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
+                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                    e
+                },
+            );
+
+        vm.reset(self.global_id_k1_arena);
+
+        let static_value_id = execution_result?;
+        Ok(static_value_id)
+    }
+
+    // nocommit: DRY with execute_static_expr if good
+    fn execute_static_function(
+        &mut self,
+        function_id: FunctionId,
+        function_parameters: &[(VariableId, StaticValueId)],
+        span: SpanId,
+    ) -> K1Result<StaticValueId> {
+        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
+            None => {
+                let maybe_alt = self.vm_alts.pop();
+                let alt_vm = match maybe_alt {
+                    None => {
+                        self.report_warning(span, "Had to make a new alt VM");
+                        let new_vm = vm::Vm::make();
+                        new_vm
+                    }
+                    Some(alt_vm) => alt_vm,
+                };
+                (alt_vm, true)
+            }
+            Some(vm) => (vm, false),
+        };
+        let res =
+            self.execute_static_function_with_vm(&mut vm, function_id, function_parameters, span);
         if !used_alt {
             *self.vm = Some(vm);
         } else {
@@ -5911,24 +5977,27 @@ impl TypedProgram {
 
     fn add_type_parameter(
         &mut self,
-        value: TypeParameter,
-        ability_impls: SmallVec<[TypedAbilitySignature; 4]>,
+        type_parameter: TypeParameter,
+        ability_impl_signatures: SV4<TypedAbilitySignature>,
     ) -> TypeId {
-        let type_id = self.types.add_anon(Type::TypeParameter(value));
-        for ability_sig in ability_impls.into_iter() {
+        let type_id = self.types.add_anon(Type::TypeParameter(type_parameter));
+        for ability_sig in ability_impl_signatures.into_iter() {
             let constrained_impl_scope = self.scopes.add_child_scope(
-                value.scope_id,
+                type_parameter.scope_id,
                 ScopeType::AbilityImpl,
                 ScopeOwnerId::None,
                 None,
             );
-            let _ = self.scopes.get_scope_mut(constrained_impl_scope).add_type(value.name, type_id);
+            let _ = self
+                .scopes
+                .get_scope_mut(constrained_impl_scope)
+                .add_type(type_parameter.name, type_id);
             self.implement_ability_for_type(
                 type_id,
                 ability_sig,
                 constrained_impl_scope,
                 AbilityImplKind::TypeParamConstraint,
-                value.span,
+                type_parameter.span,
             );
         }
         type_id
@@ -5990,6 +6059,10 @@ impl TypedProgram {
                 parameter_constraints,
                 scope_id,
             )? {
+                // self.report_hint(
+                //     span,
+                //     format!("I used ref self with {}", self.type_id_to_string(ref_self)),
+                // );
                 return Ok(impl_handle);
             }
         }
@@ -6186,6 +6259,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         target_specialized_ability_id: AbilityId,
+        allow_ref_self: bool,
         scope_id: ScopeId,
         span: SpanId,
     ) -> Result<AbilityImplHandle, Cow<'static, str>> {
@@ -6199,7 +6273,7 @@ impl TypedProgram {
             self_type_id,
             base_ability,
             &parameter_constraints,
-            true,
+            allow_ref_self,
             scope_id,
             span,
         )
@@ -6378,7 +6452,7 @@ impl TypedProgram {
                 let constraint_signature = self
                     .eval_ability_expr(parsed_ability_expr, false, constraint_checking_scope)
                     .unwrap();
-                if let Err(e) = self.check_type_constraint(
+                if let Err(e) = self.check_ability_constraint(
                     solution.type_id,
                     constraint_signature,
                     parsed_param.name,
@@ -7584,11 +7658,11 @@ impl TypedProgram {
                 }
                 match self.ident_str(defn_name) {
                     "test" => {
-                        let is_test_build = self.ast.config.is_test_build;
+                        let is_test_build = self.config.is_test_build;
                         Ok(self.synth_bool(is_test_build, *span))
                     }
                     "os" => {
-                        let os_tag_value = self.ast.config.target.target_os() as u8;
+                        let os_tag_value = self.config.target.target_os() as u8;
                         let k1_os_global_type_id = ctx.expected_type_id.unwrap();
                         let static_enum = StaticValue::Enum(
                             k1_os_global_type_id,
@@ -7599,11 +7673,11 @@ impl TypedProgram {
                         Ok(expr_id)
                     }
                     "no-std" => {
-                        let no_std = self.ast.config.no_std;
+                        let no_std = self.config.no_std;
                         Ok(self.synth_bool(no_std, *span))
                     }
                     "debug" => {
-                        let debug = self.ast.config.debug;
+                        let debug = self.config.debug;
                         Ok(self.synth_bool(debug, *span))
                     }
                     "is-static" => Ok(self.synth_bool(false, *span)),
@@ -7641,6 +7715,7 @@ impl TypedProgram {
                     .find_or_generate_specialized_ability_impl_for_type(
                         self_type_id,
                         signature.specialized_ability_id,
+                        true,
                         ctx.scope_id,
                         qcall.span,
                     )
@@ -8036,12 +8111,11 @@ impl TypedProgram {
                         content.push('}');
                     }
                     debug!("Emitted raw content:\n---\n{content}\n---");
-                    let generated_path = self.ast.config.out_dir.join(&generated_filename);
+                    let generated_path = self.config.out_dir.join(&generated_filename);
                     let source_for_emission =
                         self.ast.sources.add_source(crate::parse::Source::make(
                             0,
-                            self.ast
-                                .config
+                            self.config
                                 .out_dir
                                 .canonicalize()
                                 .unwrap()
@@ -8052,6 +8126,7 @@ impl TypedProgram {
                             content.clone(),
                         ));
                     // TODO: Write #meta source files asynchronously
+                    self.report_hint(span, &content);
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
                             "Failed to write out generated metaprogram at {}. {e}",
@@ -8585,7 +8660,7 @@ impl TypedProgram {
                 scope: lambda_scope_id,
                 params: self.mem.list_to_handle(param_variables),
                 type_params: MSlice::empty(),
-                function_type_params: MSlice::empty(),
+                fnlike_type_params: MSlice::empty(),
                 body_block: Some(body_expr_id),
                 builtin_type: None,
                 linkage: Linkage::Standard,
@@ -8717,7 +8792,7 @@ impl TypedProgram {
             scope: lambda_scope_id,
             params: self.mem.list_to_handle(param_variables),
             type_params: MSlice::empty(),
-            function_type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
             body_block: Some(body_expr_id),
             builtin_type: None,
             linkage: Linkage::Standard,
@@ -12317,7 +12392,7 @@ impl TypedProgram {
                                 type_args,
                                 fnlike_type_args,
                                 function_id,
-                            )?;
+                            );
                             Callee::StaticFunction(function_id)
                         }
                         Callee::Abstract { function_sig } => Callee::Abstract {
@@ -12753,7 +12828,7 @@ impl TypedProgram {
         // Must 'zip' up with each function type param
         fnlike_type_arguments: NamedTypeSlice,
         generic_function_id: FunctionId,
-    ) -> K1Result<FunctionId> {
+    ) -> FunctionId {
         let generic_function = self.get_function(generic_function_id);
         let generic_function_param_variables = generic_function.params;
         let generic_function_scope = generic_function.scope;
@@ -12777,7 +12852,7 @@ impl TypedProgram {
                         ", "
                     ),
                 );
-                return Ok(existing_specialization.specialized_function_id);
+                return existing_specialization.specialized_function_id;
             }
         }
         let specialized_function_type_id = self.substitute_in_function_signature(
@@ -12868,7 +12943,7 @@ impl TypedProgram {
             // Must be empty for correctness; a specialized function has no type parameters!
             type_params: MSlice::empty(),
             // Must be empty for correctness; a specialized function has no function type parameters!
-            function_type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
             body_block: None,
             builtin_type: generic_function.builtin_type,
             linkage: generic_function.linkage,
@@ -12899,7 +12974,7 @@ impl TypedProgram {
             self.functions_pending_body_specialization.push(specialized_function_id);
         }
 
-        Ok(specialized_function_id)
+        specialized_function_id
     }
 
     fn specialize_function_body(&mut self, function_id: FunctionId) -> K1Result<()> {
@@ -13822,7 +13897,7 @@ impl TypedProgram {
         Ok(sum_constructor)
     }
 
-    fn check_type_constraint(
+    fn check_ability_constraint(
         &mut self,
         target_type: TypeId,
         signature: TypedAbilitySignature,
@@ -13841,6 +13916,7 @@ impl TypedProgram {
         if let Ok(impl_handle) = self.find_or_generate_specialized_ability_impl_for_type(
             target_type,
             signature.specialized_ability_id,
+            false,
             scope_id,
             span,
         ) {
@@ -13890,7 +13966,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: SpanId,
     ) -> K1Result<()> {
-        let tp = self.types.get_type_parameter(param_type);
+        let tp = *self.types.get_type_parameter(param_type);
         if let Some(static_constraint) = tp.static_constraint {
             let specialized_constraint =
                 self.substitute_in_type(static_constraint, substitution_pairs);
@@ -13901,6 +13977,36 @@ impl TypedProgram {
                     self.ident_str(param_name),
                 );
             }
+        }
+        for predicate_constraint_fn_qident in self.mem.getn(tp.predicate_functions) {
+            let Some(function_id) = self.scopes.find_function_namespaced(
+                tp.scope_id,
+                predicate_constraint_fn_qident,
+                &self.namespaces,
+                &self.ast.idents,
+            )?
+            else {
+                return failf!(predicate_constraint_fn_qident.span, "Function not found");
+            };
+            let predicate_result: bool =
+                self.execute_type_predicate_function(function_id, passed_type, span)?;
+            if !predicate_result {
+                kbail!(
+                    self,
+                    span,
+                    "Predicate '{}' failed on type {}",
+                    predicate_constraint_fn_qident,
+                    passed_type
+                )
+            }
+            self.report_warning(
+                span,
+                format!(
+                    "I am checking {} against {}! b = {predicate_result}",
+                    self.qident_to_string(predicate_constraint_fn_qident),
+                    self.type_id_to_string(passed_type)
+                ),
+            );
         }
         let ability_constraints = self.get_constrained_ability_impls_for_type(param_type);
         for constraint in &ability_constraints {
@@ -13923,9 +14029,56 @@ impl TypedProgram {
                 );
                 specialized_constraint_signature
             };
-            self.check_type_constraint(passed_type, signature, param_name, scope_id, span)?;
+            self.check_ability_constraint(passed_type, signature, param_name, scope_id, span)?;
         }
         Ok(())
+    }
+
+    fn execute_type_predicate_function(
+        &mut self,
+        function_id: FunctionId,
+        type_id: TypeId,
+        span: SpanId,
+    ) -> K1Result<bool> {
+        let generic_function = self.functions.get(function_id);
+        if generic_function.body_block.is_none() {
+            return failf!(
+                span,
+                "Predicate function '{}' has no body; likely a compiler bug. Try putting it in a pre-evaluated namespace",
+                self.ident_str(generic_function.name)
+            );
+        }
+        if generic_function.type_params.len() != 1 {
+            return failf!(
+                span,
+                "Must have 1 type parameter to be used as a type predicate function"
+            );
+        }
+        if !generic_function.fnlike_type_params.is_empty() {
+            return failf!(
+                span,
+                "Must have no fnlike type params to be used as a type predicate function"
+            );
+        }
+        let function_type = self.types.get(generic_function.type_id).as_function().unwrap();
+        if function_type.return_type != BOOL_TYPE_ID {
+            return failf!(span, "Must return bool to be used as a type predicate function");
+        }
+
+        let type_param = self.mem.get_nth(generic_function.type_params, 0);
+
+        let type_arguments = self.mem.pushn(&[NameAndType { name: type_param.name, type_id }]);
+        let specialized_function =
+            self.specialize_function_signature(type_arguments, MSlice::empty(), function_id);
+        self.specialize_function_body(specialized_function)?;
+        let predicate_result_static_value_id =
+            self.execute_static_function(specialized_function, &[], span)?;
+        let StaticValue::Bool(predicate_result) =
+            *self.static_values.get(predicate_result_static_value_id)
+        else {
+            ice_span!(self, span, "Expected a bool")
+        };
+        Ok(predicate_result)
     }
 
     /// Checks a list of arguments against an ability's signature.
@@ -14078,6 +14231,7 @@ impl TypedProgram {
             TypeParameter {
                 name: self_ident,
                 static_constraint: None,
+                predicate_functions: MSlice::empty(),
                 scope_id: specialized_ability_scope,
                 span,
             },
@@ -14269,7 +14423,8 @@ impl TypedProgram {
             type_params.push(NameAndType { name: self_.ast.idents.b.self_, type_id: self_type_id })
         }
         for type_parameter in self_.ast.mem.getn(ast_fn.type_params) {
-            let mut ability_constraints = SmallVec::new();
+            let mut ability_constraint_signatures = SmallVec::new();
+            let mut predicate_functions = self_.mem.new_list(0);
             let mut static_constraint: Option<TypeId> = None;
 
             for parsed_constraint in self_.ast.mem.getn(type_parameter.constraints).iter().chain(
@@ -14283,7 +14438,10 @@ impl TypedProgram {
                     ParsedTypeConstraintExpr::Ability(ability_expr) => {
                         let ability_sig =
                             self_.eval_ability_expr(*ability_expr, false, fn_scope_id)?;
-                        ability_constraints.push(ability_sig);
+                        ability_constraint_signatures.push(ability_sig);
+                    }
+                    ParsedTypeConstraintExpr::Predicate(qident) => {
+                        predicate_functions.push_grow(&mut self_.mem, *qident);
                     }
                     ParsedTypeConstraintExpr::Static(static_expr) => {
                         let static_type = self_.eval_type_expr(*static_expr, fn_scope_id)?;
@@ -14299,14 +14457,16 @@ impl TypedProgram {
                     }
                 };
             }
+            let predicate_functions_handle = self_.mem.list_to_handle(predicate_functions);
             let type_variable_id = self_.add_type_parameter(
                 TypeParameter {
                     name: type_parameter.name,
                     static_constraint,
+                    predicate_functions: predicate_functions_handle,
                     scope_id: fn_scope_id,
                     span: type_parameter.span,
                 },
-                ability_constraints,
+                ability_constraint_signatures,
             );
             let fn_scope = self_.scopes.get_scope_mut(fn_scope_id);
             let type_param = NameAndType { name: type_parameter.name, type_id: type_variable_id };
@@ -14553,7 +14713,7 @@ impl TypedProgram {
             scope: fn_scope_id,
             params: param_variables_handle,
             type_params: type_params_handle,
-            function_type_params: function_type_params_handle,
+            fnlike_type_params: function_type_params_handle,
             body_block: None,
             builtin_type: intrinsic_type,
             linkage: ast_fn.linkage,
@@ -14725,6 +14885,7 @@ impl TypedProgram {
             TypeParameter {
                 name: self_ident_id,
                 static_constraint: None,
+                predicate_functions: MSlice::empty(),
                 scope_id: ability_scope_id,
                 span: parsed_ability.span,
             },
@@ -14732,12 +14893,19 @@ impl TypedProgram {
         );
         let _ = self.scopes.get_scope_mut(ability_scope_id).add_type(self_ident_id, self_type_id);
         for ability_param in parsed_ability.params.clone().iter() {
-            let mut ability_constraints: SV4<TypedAbilitySignature> = smallvec![];
+            let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
+            let mut predicate_functions = self.mem.new_list(0);
             for constraint in self.ast.mem.getn(ability_param.constraints) {
-                if let parse::ParsedTypeConstraintExpr::Ability(ability_expr) = constraint {
-                    let signature =
-                        self.eval_ability_expr(*ability_expr, false, ability_scope_id)?;
-                    ability_constraints.push(signature);
+                match constraint {
+                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
+                        let signature =
+                            self.eval_ability_expr(*ability_expr, false, ability_scope_id)?;
+                        ability_constraint_signatures.push(signature);
+                    }
+                    ParsedTypeConstraintExpr::Static(_) => {}
+                    ParsedTypeConstraintExpr::Predicate(qident) => {
+                        predicate_functions.push_grow(&mut self.mem, *qident);
+                    }
                 }
             }
             let maybe_static_constraint =
@@ -14752,14 +14920,16 @@ impl TypedProgram {
                     Err(msg) => return failf!(ability_param.span, "{}", msg),
                 };
 
+            let predicate_functions_handle = self.mem.list_to_handle(predicate_functions);
             let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,
                     static_constraint: maybe_static_constraint,
+                    predicate_functions: predicate_functions_handle,
                     scope_id: ability_scope_id,
                     span: ability_param.span,
                 },
-                ability_constraints,
+                ability_constraint_signatures,
             );
 
             if !self
@@ -14935,9 +15105,12 @@ impl TypedProgram {
                 TypeParameter {
                     name: blanket_impl_param.name,
                     static_constraint: maybe_static_constraint,
+                    // Can't have any of these yet; we check this below for now
+                    predicate_functions: MSlice::empty(),
                     scope_id: impl_scope_id,
                     span: blanket_impl_param.span,
                 },
+                // nocommit clarify or fix this comment with a better example
                 // We create the variable with no ability constraints, then add them later, so that its
                 // constraints can reference itself
                 // Example: impl[T] Add[Rhs = T where T: Num]
@@ -14963,23 +15136,28 @@ impl TypedProgram {
                     ScopeOwnerId::None,
                     None,
                 );
-                for ability_expr in self
-                    .ast
-                    .mem
-                    .getn(blanket_impl_param.constraints)
-                    .iter()
-                    .filter_map(|c| c.as_ability())
-                {
-                    let constrained_ability_sig =
-                        self.eval_ability_expr(ability_expr, false, impl_scope_id)?;
-                    let constraint_span = self.ast.mem.get(ability_expr).span;
-                    self.implement_ability_for_type(
-                        type_variable_id,
-                        constrained_ability_sig,
-                        param_constraints_scope_id,
-                        AbilityImplKind::TypeParamConstraint,
-                        constraint_span,
-                    );
+                for constraint in self.ast.mem.getn(blanket_impl_param.constraints) {
+                    match constraint {
+                        ParsedTypeConstraintExpr::Ability(ability_expr) => {
+                            let constrained_ability_sig =
+                                self.eval_ability_expr(*ability_expr, false, impl_scope_id)?;
+                            let constraint_span = self.ast.mem.get(*ability_expr).span;
+                            self.implement_ability_for_type(
+                                type_variable_id,
+                                constrained_ability_sig,
+                                param_constraints_scope_id,
+                                AbilityImplKind::TypeParamConstraint,
+                                constraint_span,
+                            );
+                        }
+                        ParsedTypeConstraintExpr::Predicate(qident) => {
+                            return failf!(
+                                qident.span,
+                                "Blanket implementation parameters cannot have type predicate functions yet"
+                            );
+                        }
+                        ParsedTypeConstraintExpr::Static(_) => {}
+                    }
                 }
             }
             blanket_type_params
@@ -17030,7 +17208,7 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_name(lib_name_ident);
-        let lib_filename: PathBuf = match self.ast.config.target.target_os() {
+        let lib_filename: PathBuf = match self.config.target.target_os() {
             crate::compiler::TargetOs::Linux => {
                 Path::new(&format!("lib{}", lib_name_str)).with_extension("so")
             }
@@ -17042,7 +17220,7 @@ impl TypedProgram {
             }
         };
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
-        debug!("src_path is: {}", self.ast.config.src_path.display());
+        debug!("src_path is: {}", self.config.src_path.display());
 
         let module_home_dir = &self.modules.get(module_id).home_dir;
         let search_path = module_home_dir.join(compiler::LIBS_DIR_NAME).join(lib_filename);
