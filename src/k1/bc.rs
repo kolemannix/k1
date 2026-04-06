@@ -119,6 +119,7 @@ pub struct CompiledBlock {
 
 #[derive(Clone, Copy)]
 pub struct CompiledUnit {
+    pub result_type_id: TypeId,
     pub unit_id: CompilableUnitId,
     pub fn_type: PhysicalFunctionType,
     // The offset of the first instruction id
@@ -131,9 +132,6 @@ pub struct CompiledUnit {
     pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
-
-    // Save some vm time for now by having this here
-    pub ret_layout: Layout,
 }
 
 #[derive(Clone, Copy)]
@@ -730,6 +728,8 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
 
     //eprintln!("bc::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
+    let function_type = b.k1.types.get(f.type_id).expect_function();
+    let return_type_id = function_type.return_type;
     if let Some(err) = f.body_failure.clone() {
         return Err(K1Message {
             message: format!(
@@ -799,7 +799,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             _ => None,
         },
     };
-    let unit = finalize_unit(&mut b, unit_id, phys_fn_type, is_debug, builtin_kind);
+    let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
 
     *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
 
@@ -836,7 +836,8 @@ pub fn compile_top_level_expr(
         })
     }
 
-    let (return_type, diverges) = b.get_function_return_type(b.k1.exprs.get_type(expr));
+    let return_type_id = b.k1.exprs.get_type(expr);
+    let (return_type, diverges) = b.get_function_return_type(return_type_id);
     let params = MSlice::empty();
     let phys_fn_type =
         PhysicalFunctionType { return_type, diverges, params, abi_mode: AbiMode::Internal };
@@ -845,8 +846,14 @@ pub fn compile_top_level_expr(
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
     b.push_block("expr_");
     let _result = compile_expr(&mut b, None, expr)?;
-    let compiled_expr =
-        finalize_unit(&mut b, CompilableUnitId::Expr(expr), phys_fn_type, is_debug, None);
+    let compiled_expr = finalize_unit(
+        &mut b,
+        return_type_id,
+        CompilableUnitId::Expr(expr),
+        phys_fn_type,
+        is_debug,
+        None,
+    );
     b.k1.bytecode.exprs.insert(expr, compiled_expr);
 
     let unit_id = CompilableUnitId::Expr(expr);
@@ -864,6 +871,7 @@ pub fn compile_top_level_expr(
 
 fn finalize_unit(
     b: &mut Builder,
+    result_type_id: TypeId,
     unit_id: CompilableUnitId,
     fn_type: PhysicalFunctionType,
     is_debug: bool,
@@ -871,9 +879,9 @@ fn finalize_unit(
 ) -> CompiledUnit {
     let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
     let compiled_blocks = b.bake_blocks();
-    let ret_layout = b.k1.types.get_pt_layout(fn_type.return_type);
     //b.k1.bytecode.mem.print_usage("after bake");
     let unit = CompiledUnit {
+        result_type_id,
         unit_id,
         fn_type,
         inst_offset: b.inst_offset,
@@ -881,7 +889,6 @@ fn finalize_unit(
         blocks: compiled_blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
-        ret_layout,
     };
     b.reset_compilation_unit();
     unit

@@ -5571,77 +5571,17 @@ impl TypedProgram {
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
-        let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
-            None => {
-                let span = self.ast.get_expr_span(parsed_expr);
-                let maybe_alt = self.vm_alts.pop();
-                let (source, location) = self.get_span_location(span);
-                let alt_vm = match maybe_alt {
-                    None => {
-                        eprintln!(
-                            "Had to make a new alt VM at {}:{}",
-                            source.filename,
-                            location.line_number()
-                        );
-                        let new_vm = vm::Vm::make();
-                        new_vm
-                    }
-                    Some(alt_vm) => {
-                        debug!(
-                            "Serving up nested at {}:{}",
-                            source.filename,
-                            location.line_number()
-                        );
-                        alt_vm
-                    }
-                };
-                (alt_vm, true)
-            }
-            Some(vm) => (vm, false),
-        };
-        let res = self.execute_static_expr_with_vm(&mut vm, parsed_expr, ctx, input_parameters);
-        if !used_alt {
-            *self.vm = Some(vm);
-        } else {
-            debug!("Restoring alt VM to pool");
-            self.vm_alts.push(vm);
-        }
-
-        res
+        let span = self.ast.exprs.get(parsed_expr).get_span();
+        self.do_with_vm(span, |k1, vm| {
+            k1.execute_static_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
+        })
     }
 
-    fn execute_static_function_with_vm(
+    fn do_with_vm<T>(
         &mut self,
-        vm: &mut vm::Vm,
-        function_id: FunctionId,
-        input_parameters: &[(VariableId, StaticValueId)],
         span: SpanId,
-    ) -> K1Result<StaticValueId> {
-        bc::compile_function(self, function_id)?;
-        self.compile_all_pending_bytecode(span)?;
-
-        let execution_result =
-            vm::execute_compiled_function(self, vm, function_id, input_parameters).map_err(
-                |mut e| {
-                    let stack_trace = vm::make_stack_trace(self, &vm.stack);
-                    e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
-                    e
-                },
-            );
-
-        vm.reset(self.global_id_k1_arena);
-
-        let static_value_id = execution_result?;
-        Ok(static_value_id)
-    }
-
-    // nocommit: DRY with execute_static_expr if good
-    fn execute_static_function(
-        &mut self,
-        function_id: FunctionId,
-        function_parameters: &[(VariableId, StaticValueId)],
-        span: SpanId,
-    ) -> K1Result<StaticValueId> {
+        mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
+    ) -> T {
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let maybe_alt = self.vm_alts.pop();
@@ -5657,8 +5597,7 @@ impl TypedProgram {
             }
             Some(vm) => (vm, false),
         };
-        let res =
-            self.execute_static_function_with_vm(&mut vm, function_id, function_parameters, span);
+        let res = f(self, &mut vm);
         if !used_alt {
             *self.vm = Some(vm);
         } else {
@@ -5667,6 +5606,32 @@ impl TypedProgram {
         }
 
         res
+    }
+
+    fn execute_static_function(
+        &mut self,
+        function_id: FunctionId,
+        function_parameters: &[StaticValueId],
+        span: SpanId,
+    ) -> K1Result<StaticValueId> {
+        self.do_with_vm(span, |k1, vm| {
+            bc::compile_function(k1, function_id)?;
+            k1.compile_all_pending_bytecode(span)?;
+
+            let execution_result =
+                vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
+                    |mut e| {
+                        let stack_trace = vm::make_stack_trace(k1, &vm.stack);
+                        e.message = format!("{}\nExecution Trace\n{}", e.message, stack_trace);
+                        e
+                    },
+                );
+
+            vm.reset(k1.global_id_k1_arena);
+
+            let static_value_id = execution_result?;
+            Ok(static_value_id)
+        })
     }
 
     fn execute_static_condition(&mut self, cond: Option<ParsedExprId>, scope_id: ScopeId) -> bool {
@@ -14053,6 +14018,9 @@ impl TypedProgram {
                 span,
                 "Must have 1 type parameter to be used as a type predicate function"
             );
+        }
+        if !generic_function.params.is_empty() {
+            return failf!(span, "Must have 0 parameters to be used as a type predicate function");
         }
         if !generic_function.fnlike_type_params.is_empty() {
             return failf!(

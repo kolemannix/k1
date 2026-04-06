@@ -6,11 +6,13 @@ mod stack_tests {
 
     use crate::kmem::MSlice;
     use crate::typer::types::AbiMode;
+    use crate::typer::types::EMPTY_TYPE_ID;
     use crate::typer::*;
     use crate::vm::*;
 
     fn fake_unit() -> CompiledUnit {
         CompiledUnit {
+            result_type_id: EMPTY_TYPE_ID,
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
             fn_type: bc::PhysicalFunctionType {
                 return_type: PhysicalType::EMPTY,
@@ -23,7 +25,6 @@ mod stack_tests {
             blocks: MSlice::empty(),
             is_debug: false,
             function_builtin_kind: None,
-            ret_layout: Layout::ZERO_SIZED,
         }
     }
 
@@ -33,7 +34,6 @@ mod stack_tests {
             frame_index: 0,
             inst_index: 0,
             has_dst: false,
-            ret_layout: Layout::ZERO_SIZED,
             ip: 0,
             block: 0,
         }

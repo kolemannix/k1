@@ -911,7 +911,7 @@ const LEN_MASK: u32 = 0x7fff_ffff;
 ///
 /// - `len_flags`: low 31 bits = len, top bit = spilled
 /// - MSpillListStorage is a union of inline buffer vs spilled `MList`.
-/// - No Drop glue required; `T: Copy` and `MList` doesn't own heap memory.
+/// - No Drop glue; `T: Copy` and `MList` doesn't own heap memory.
 ///
 /// *Clanker helped with this one, hence the SAFETY annotations
 pub struct MSpillList<T: Copy, const N: usize, Tag> {

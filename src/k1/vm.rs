@@ -24,7 +24,7 @@ use crate::typer::types::{
 use crate::typer::{
     ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
     StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedExprId,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram, VariableId,
+    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{
     errf, failf, ice_span,
@@ -290,12 +290,6 @@ impl Vm {
         writeln!(w, "Frame [{frame_index}] ").unwrap();
         bc::display_unit_name(w, k1, frame.unit).unwrap();
         writeln!(w, "Base:  {:?}", frame.base_ptr).unwrap();
-        write!(w, "ret ").unwrap();
-        match frame.ret_info.ret_layout.size {
-            0 => w.write_str("{}").unwrap(),
-            1..=8 => write!(w, " [{frame_index}] reg {}", frame.ret_info.inst_index).unwrap(),
-            _ => write!(w, " [{frame_index}] store to {}", frame.ret_info.inst_index).unwrap(),
-        }
         writeln!(w).unwrap();
         let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
         for (i, param) in k1.bytecode.mem.getn(unit.fn_type.params).iter().enumerate() {
@@ -554,15 +548,33 @@ pub fn execute_compiled_function(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     function_id: FunctionId,
-    _input_parameters: &[(VariableId, StaticValueId)],
+    arguments: &[StaticValueId],
 ) -> K1Result<StaticValueId> {
-    // nocommit: DRY with execute expr once good
-    let start = k1.timing.clock.raw();
     let span = k1.get_function_span(function_id);
-    vm.eval_span = span;
     let unit = k1.bytecode.functions.get(function_id).unwrap();
+    execute_compiled_unit(k1, vm, unit, arguments, span)
+}
 
-    eprintln!("[vm] Executing Function\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+pub fn execute_compiled_expr(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    expr_id: TypedExprId,
+) -> K1Result<StaticValueId> {
+    let span = k1.exprs.get_span(expr_id);
+    let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
+    execute_compiled_unit(k1, vm, unit, &[], span)
+}
+
+pub fn execute_compiled_unit(
+    k1: &mut TypedProgram,
+    vm: &mut Vm,
+    unit: CompiledUnit,
+    arguments: &[StaticValueId],
+    span: SpanId,
+) -> K1Result<StaticValueId> {
+    let start = k1.timing.clock.raw();
+    vm.eval_span = span;
+    debug!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
 
     let top_frame_index = 0;
 
@@ -572,7 +584,6 @@ pub fn execute_compiled_function(
         frame_index: 0,
         inst_index: 0,
         has_dst: false,
-        ret_layout: unit.ret_layout,
         ip: 0,
         block: 0,
     };
@@ -584,8 +595,13 @@ pub fn execute_compiled_function(
 
     debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
     vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
-    // nocommit: Convert input parameters to VM values and bind them to the frame's function
-    // parameter slots
+
+    // Point the param registers at the function's arguments
+    for (index, arg) in arguments.iter().enumerate() {
+        let vm_value = static_value_to_vm_value(k1, *arg, span);
+        vm.stack.set_param_value(top_frame_index, index as u32, vm_value);
+    }
+
     debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
 
     let exit_code = match exec_loop(k1, vm, unit) {
@@ -603,8 +619,7 @@ pub fn execute_compiled_function(
     if exit_code != 0 {
         failf!(span, "Static execution exited with code: {}", exit_code)
     } else {
-        let function_return_type =
-            k1.types.get(k1.functions.get(function_id).type_id).as_function().unwrap().return_type;
+        let return_type_id = unit.result_type_id;
         let result = if unit.fn_type.diverges {
             Ok(k1.static_values.empty_id())
         } else {
@@ -613,85 +628,7 @@ pub fn execute_compiled_function(
             } else {
                 let loaded = load_value(logical_return_pt, ret_addr);
                 let returned_value =
-                    vm_value_to_static_value(k1, function_return_type, loaded, span)?;
-                Ok(returned_value)
-            }
-        };
-        vm.overall_return_addr = core::ptr::null_mut();
-        result
-    }
-}
-
-pub fn execute_compiled_expr(
-    k1: &mut TypedProgram,
-    vm: &mut Vm,
-    expr_id: TypedExprId,
-) -> K1Result<StaticValueId> {
-    let start = k1.timing.clock.raw();
-    let span = k1.exprs.get_span(expr_id);
-    vm.eval_span = span;
-    let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
-
-    //if unit.is_debug {
-    //eprintln!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
-    //}
-
-    match unit.unit_id {
-        CompilableUnitId::Function(_function_id) => {
-            return failf!(span, "Cannot execute function from top");
-        }
-        CompilableUnitId::Expr(_) => {
-            // Executing an expr. Execution will just end at some point, and
-            // we'll just decode the last value we got I suppose
-        }
-    };
-
-    let top_frame_index = 0;
-
-    debug_assert!(vm.stack.frames.is_empty());
-    let top_ret_info = RetInfo {
-        pt: unit.fn_type.return_type,
-        frame_index: 0,
-        inst_index: 0,
-        has_dst: false,
-        ret_layout: unit.ret_layout,
-        ip: 0,
-        block: 0,
-    };
-
-    let logical_return_pt = unit.fn_type.return_type;
-    let pt_layout = k1.types.get_pt_layout(logical_return_pt);
-    let ret_addr = vm.stack.push_layout_uninit(pt_layout);
-    vm.overall_return_addr = ret_addr;
-
-    debug_assert_eq!(ret_addr, unsafe { vm.stack.base_ptr().byte_add(8) }.cast_mut());
-    vm.stack.push_new_frame(Some(span), &unit, top_ret_info);
-    debug_assert_eq!(top_frame_index, vm.stack.current_frame_index());
-
-    let exit_code = match exec_loop(k1, vm, unit) {
-        Ok(exit_code) => exit_code,
-        Err(err) => {
-            return Err(err);
-        }
-    };
-
-    let elapsed_nanos = k1.timing.elapsed_nanos(start);
-    k1.timing.total_vm_nanos += elapsed_nanos as i64;
-
-    report_execution_messages(k1, vm, span, exit_code);
-
-    if exit_code != 0 {
-        failf!(span, "Static execution exited with code: {}", exit_code)
-    } else {
-        let expr_type = k1.exprs.get_type(expr_id);
-        let result = if unit.fn_type.diverges {
-            Ok(k1.static_values.empty_id())
-        } else {
-            if logical_return_pt.is_empty() {
-                Ok(k1.static_values.empty_id())
-            } else {
-                let loaded = load_value(logical_return_pt, ret_addr);
-                let returned_value = vm_value_to_static_value(k1, expr_type, loaded, span)?;
+                    vm_value_to_static_value(k1, return_type_id, loaded, span)?;
                 Ok(returned_value)
             }
         };
@@ -1151,7 +1088,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         frame_index: caller_frame_index,
                         inst_index,
                         has_dst,
-                        ret_layout,
                         ip: ip + 1,
                         block: b,
                     },
@@ -2150,7 +2086,6 @@ pub struct RetInfo {
     /// Otherwise, just write the value
     has_dst: bool,
 
-    ret_layout: Layout,
     ip: u32,
     block: u32,
 }
