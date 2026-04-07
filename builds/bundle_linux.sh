@@ -1,7 +1,7 @@
 set -e
 set -x
 
-TT=target/x86_64-unknown-linux-gnu/release
+TT=$1
 DST=builds/k1-linux-x86
 
 mkdir -p $DST
