@@ -54,7 +54,8 @@ fn inc(i: *mut size) { i <- i.* + 1 }
 fn identity[T](value: T): T { value }
 
 fn printIt[T: print](value: T) {
-  value.printTo(io/stdout)
+  value.printTo(io/stdout);
+  io/stdout.write-char('\n')
 }
 
 fn print(s: string) {

@@ -71,6 +71,7 @@ fn moderate() {
   ability_complex/test();
   any_test/test();
   format-test/test();
+  type-predicate-test/test();
 }
 
 fn coreLib() {

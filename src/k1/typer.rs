@@ -13964,14 +13964,6 @@ impl TypedProgram {
                     passed_type
                 )
             }
-            self.report_warning(
-                span,
-                format!(
-                    "I am checking {} against {}! b = {predicate_result}",
-                    self.qident_to_string(predicate_constraint_fn_qident),
-                    self.type_id_to_string(passed_type)
-                ),
-            );
         }
         let ability_constraints = self.get_constrained_ability_impls_for_type(param_type);
         for constraint in &ability_constraints {
@@ -14007,9 +13999,13 @@ impl TypedProgram {
     ) -> K1Result<bool> {
         let generic_function = self.functions.get(function_id);
         if generic_function.body_block.is_none() {
+            self.eval_function_body(function_id)?;
+        }
+        let generic_function = self.functions.get(function_id);
+        if generic_function.body_block.is_none() {
             return failf!(
                 span,
-                "Predicate function '{}' has no body; likely a compiler bug. Try putting it in a pre-evaluated namespace",
+                "Predicate function '{}' has no body",
                 self.ident_str(generic_function.name)
             );
         }
@@ -15078,10 +15074,11 @@ impl TypedProgram {
                     scope_id: impl_scope_id,
                     span: blanket_impl_param.span,
                 },
-                // nocommit clarify or fix this comment with a better example
-                // We create the variable with no ability constraints, then add them later, so that its
+                // We create the variable with no ability constraints then add them later, so that its
                 // constraints can reference itself
-                // Example: impl[T] Add[Rhs = T where T: Num]
+                // Example: impl[T] Add[Rhs = T] where T: Num
+                //                            ^ constraint uses T, so Add[Rhs=T] can't exist as
+                //                            a term until T exists as a type
                 // The constraints need T to exist
                 smallvec![],
             );

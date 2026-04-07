@@ -6,17 +6,17 @@ use types/type-id
 use types/make-any
 
 fn kindOfAny(any: any): string {
-  typeVariantName(any.type-id) ? "fail"
+  typeVariantName(any.type-id)
 }
 
-fn typeVariantName(type-id: u64): ?string {
+fn typeVariantName(type-id: u64): string {
   let schema = types/type-schema(type-id);
   let schemaSchema = types/type-schema(type-id[type-schema]);
-  require schemaSchema is .either(e) else { return(.none) };
+  require schemaSchema is .either(e) else { crash("type-schema of type-schema should be a sum") };
   let variant = core/iter/find(e.variants, fn v.
     if v.tag is .u8(t) and t == schema.tag true else false
-  );
-  variant.map(fn v. v.name)
+  ).!;
+  variant.name
 }
 
 fn test() {
