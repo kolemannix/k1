@@ -2093,7 +2093,7 @@ pub struct RetInfo {
 #[derive(Clone)]
 pub struct StackFrameRecord {
     index: u32,
-    base_ptr: *const u8,
+    base_ptr: *mut u8,
     inst_slice: *mut [Value],
     call_span: Option<SpanId>,
     param_count: u32,
@@ -2106,7 +2106,7 @@ pub struct StackFrameRecord {
 impl StackFrameRecord {
     fn make(
         index: u32,
-        base_ptr: *const u8,
+        base_ptr: *mut u8,
         call_span: Option<SpanId>,
         owner: &CompiledUnit,
         ret_info: RetInfo,
@@ -2148,7 +2148,7 @@ impl Stack {
         self.frames.clear();
     }
 
-    pub fn cursor(&self) -> *const u8 {
+    pub fn cursor(&self) -> *mut u8 {
         self.mem.cursor()
     }
 

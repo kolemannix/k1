@@ -15292,8 +15292,8 @@ impl TypedProgram {
                         None,
                         is_default,
                     )),
-                    // fixme: Root namespace?! A: namespace is only used for companion type stuff, so
-                    // this isn't doing any harm for now
+                    // Why root namespace?! Answer: the namespace is only used for companion type stuff, so
+                    // this isn't doing any harm
                     ROOT_NAMESPACE_ID,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
@@ -16322,7 +16322,7 @@ impl TypedProgram {
         }
 
         if ancestors.contains(&type_id) {
-            // FIXME: Here is where we would actually place a sentinel
+            // pattern matching: Here is where we would actually place a sentinel
             //        ctor that we could expand as needed by the pattern
             debug!("Stopping pattern ctor recursion at {}", self.type_id_to_string(type_id));
 

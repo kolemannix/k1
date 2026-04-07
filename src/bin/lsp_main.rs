@@ -539,8 +539,7 @@ impl LanguageServer for Backend {
                 true => edited_sources.get(&file_url).unwrap(),
             };
             for token in &source.tokens {
-                // FIXME: Hack to retrieve the span from the edited ParsedProgram rather than the primary
-                // one
+                // Hack to retrieve the span from the edited ParsedProgram rather than the primary one
                 let span = ast_for_file.spans.get(token.span);
                 let length = span.len;
                 let Some(line) = source.get_line_for_span_start(span) else {

@@ -130,6 +130,8 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Hover much better
 - [x] Hover no more markdown
 - [ ] Parse with recovery within same file
+- [ ] In lsp mode, parser should emit actual semantic tokens (currently we just use lexer tokens)
+- [ ] Proper handling of 'trivia' (whitespace and comments)
 - [ ] Go-to
 - [ ] Completion
 

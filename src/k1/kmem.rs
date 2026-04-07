@@ -46,7 +46,7 @@ use std::{
 /// prevent mixups
 pub struct Mem<Tag = ()> {
     mmap: memmap2::MmapMut,
-    cursor: *const u8,
+    cursor: *mut u8,
     _marker: PhantomData<Tag>,
 }
 
@@ -207,7 +207,7 @@ impl<Tag> std::fmt::Write for MemWriter<Tag> {
 
         #[cfg(debug_assertions)]
         {
-            let bytes_start = bytes.as_ptr();
+            let bytes_start = bytes.as_mut_ptr();
             if start != bytes_start {
                 // If we pushed any padding, fail. We
                 // shouldn't be pushing any padding for a u8 slice
@@ -222,13 +222,13 @@ impl<Tag> Mem<Tag> {
     pub fn make() -> Self {
         // Note(knix) If we never allow larger than a 4gb allocation, then we are safe to hand out 32-bit
         //            offsets instead of pointers, which could be big for some codebases
-        let mmap = memmap2::MmapMut::map_anon(crate::GIGABYTE).unwrap();
+        let mut mmap = memmap2::MmapMut::map_anon(crate::GIGABYTE).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
 
         // We waste the first 8 bytes every time, so that our handles can be niched
         // We could instead store offsets as (true offset) + 1, but I'd rather waste 8 bytes per
         // arena than convert on every single access
-        let cursor = unsafe { mmap.as_ptr().byte_add(8) };
+        let cursor = unsafe { mmap.as_mut_ptr().byte_add(8) };
 
         Self { cursor, mmap, _marker: PhantomData }
     }
@@ -240,7 +240,7 @@ impl<Tag> Mem<Tag> {
                 core::ptr::write_bytes(self.mmap.as_mut_ptr(), 0, used);
             }
         }
-        self.cursor = unsafe { self.mmap.as_ptr().byte_add(8) };
+        self.cursor = unsafe { self.mmap.as_mut_ptr().byte_add(8) };
     }
 
     /// Sends an advise_range call, effectively faulting in
@@ -249,15 +249,11 @@ impl<Tag> Mem<Tag> {
         self.mmap.advise_range(memmap2::Advice::WillNeed, 0, byte_count).unwrap();
     }
 
-    pub fn cursor(&self) -> *const u8 {
+    pub fn cursor(&self) -> *mut u8 {
         self.cursor
     }
 
-    pub fn cursor_mut(&self) -> *mut u8 {
-        self.cursor.cast_mut()
-    }
-
-    pub fn set_cursor(&mut self, new_cursor: *const u8) {
+    pub fn set_cursor(&mut self, new_cursor: *mut u8) {
         self.set_cursor_checked(new_cursor);
     }
 
@@ -324,14 +320,14 @@ impl<Tag> Mem<Tag> {
 
     #[track_caller]
     #[inline]
-    fn set_cursor_checked(&mut self, proposed_cursor: *const u8) {
+    fn set_cursor_checked(&mut self, proposed_cursor: *mut u8) {
         self.check_in_bounds(proposed_cursor.addr());
         self.cursor = proposed_cursor;
     }
 
     pub fn push<T>(&mut self, t: T) -> &mut T {
         unsafe {
-            let dst = self.cursor_mut();
+            let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
 
             let new_cursor = dst.byte_add(size_of::<T>());
@@ -357,7 +353,7 @@ impl<Tag> Mem<Tag> {
                 align == 1 || align.is_power_of_two(),
                 "Alignment must be a power of two"
             );
-            let dst = self.cursor_mut();
+            let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align));
             self.set_cursor_checked(dst);
         }
@@ -365,7 +361,7 @@ impl<Tag> Mem<Tag> {
 
     pub fn push_layout_uninit(&mut self, size: u32, align: u32) -> *mut u8 {
         if size == 0 {
-            return self.cursor_mut();
+            return self.cursor();
         }
         unsafe {
             debug_assert!(align != 0);
@@ -373,7 +369,7 @@ impl<Tag> Mem<Tag> {
                 align == 1 || align.is_power_of_two(),
                 "Alignment must be a power of two"
             );
-            let dst = self.cursor_mut();
+            let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align as usize));
 
             let new_cursor = dst.byte_add(size as usize);
@@ -385,8 +381,24 @@ impl<Tag> Mem<Tag> {
 
     pub fn push_slice_uninit<T>(&mut self, len: usize) -> *mut T {
         unsafe {
-            let dst = self.cursor_mut();
+            let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
+
+            let array_layout = core::alloc::Layout::array::<T>(len).unwrap();
+            let new_cursor = dst.byte_add(array_layout.size());
+            self.set_cursor_checked(new_cursor);
+
+            dst as *mut T
+        }
+    }
+
+    pub fn push_slice_uninit_prealigned<T>(&mut self, len: usize) -> *mut T {
+        unsafe {
+            let dst = self.cursor();
+            #[cfg(debug_assertions)]
+            if dst.align_offset(align_of::<T>()) != 0 {
+                panic!("Cursor is not properly aligned for push_slice_uninit_prealigned");
+            }
 
             let array_layout = core::alloc::Layout::array::<T>(len).unwrap();
             let new_cursor = dst.byte_add(array_layout.size());
@@ -696,6 +708,14 @@ impl<T, Tag> MList<T, Tag> {
         self.buf.len()
     }
 
+    pub fn base_ptr(&self) -> *mut T {
+        unsafe { (*self.buf).as_mut_ptr() }
+    }
+
+    fn end_ptr(&self) -> *mut u8 {
+        unsafe { (self.buf as *mut u8).add(self.buf.len() * size_of::<T>()) }
+    }
+
     fn push_unchecked(&mut self, val: T) {
         unsafe {
             (*self.buf)[self.len] = val;
@@ -721,7 +741,7 @@ impl<T, Tag> MList<T, Tag> {
 
     fn grow(&mut self, mem: &mut Mem<Tag>) -> Self
     where
-        T: Copy,
+        T: Copy + Sized,
     {
         let loc = std::panic::Location::caller();
         // Growth doesnt invalidate the old pointers
@@ -737,21 +757,32 @@ impl<T, Tag> MList<T, Tag> {
             }
             new_cap_usize as u32
         };
-        if cfg!(debug_assertions) {
-            // No need to log grows from 0
-            if self.len != 0 {
-                eprintln!(
-                    "{}:{} Growing from {} -> {}",
-                    loc.file(),
-                    loc.line(),
-                    self.cap(),
-                    new_cap
-                );
+
+        if self.end_ptr() == mem.cursor() {
+            // Fast path for growth when this list is the last thing in the arena; just move the cursor forward
+            let additional_ts = new_cap as usize - self.cap();
+            mem.push_slice_uninit_prealigned::<T>(additional_ts);
+            let new_buf = core::ptr::slice_from_raw_parts_mut(self.buf as *mut T, new_cap as usize);
+            let new_me = MList { buf: new_buf, len: self.len, _tag: PhantomData };
+            debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
+            new_me
+        } else {
+            if cfg!(debug_assertions) {
+                // No need to log grows from 0
+                if self.len != 0 {
+                    eprintln!(
+                        "{}:{} Slow Growing from {} -> {}",
+                        loc.file(),
+                        loc.line(),
+                        self.cap(),
+                        new_cap
+                    );
+                }
             }
+            let mut new_me = mem.new_list(new_cap);
+            new_me.extend(self.as_slice());
+            new_me
         }
-        let mut new_me = mem.new_list(new_cap);
-        new_me.extend(self.as_slice());
-        new_me
     }
 
     // This doesn't have to be the same arena, actually.
@@ -763,8 +794,6 @@ impl<T, Tag> MList<T, Tag> {
     where
         T: Copy,
     {
-        // FIXME: arena, special case for growth when this list is the last thing in the arena,
-        // which it quite often will be
         if self.len >= self.cap() {
             *self = self.grow(mem);
         }
@@ -950,6 +979,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -991,6 +1021,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn as_slice<'a>(&'a self, _mem: &'a Mem<Tag>) -> &'a [T] {
         let len = self.len() as usize;
 
@@ -1010,6 +1041,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn iter<'a>(&'a self, mem: &'a Mem<Tag>) -> slice::Iter<'a, T> {
         self.as_slice(mem).iter()
     }
@@ -1043,6 +1075,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
     /// - If spilled: reuses spilled buffer (no copy).
     /// - If inline: allocates exactly `len` elements in the arena and copies.
     #[inline]
+    #[allow(unused)]
     pub fn into_slice(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
         let len = self.len() as usize;
 
@@ -1103,9 +1136,12 @@ impl<T: Copy, Tag, const N: usize> Clone for MSpillSliceStorage<T, Tag, N> {
     }
 }
 
+#[allow(unused)]
 pub type MSS1<T, Tag = ()> = MSpillSlice<T, 1, Tag>;
 pub type MSS2<T, Tag = ()> = MSpillSlice<T, 2, Tag>;
+#[allow(unused)]
 pub type MSS4<T, Tag = ()> = MSpillSlice<T, 4, Tag>;
+#[allow(unused)]
 pub type MSS8<T, Tag = ()> = MSpillSlice<T, 8, Tag>;
 
 impl<T: Copy, Tag, const N: usize> Default for MSpillSlice<T, N, Tag> {
@@ -1305,9 +1341,13 @@ mod test {
     fn grow() {
         let mut arena: Mem<()> = Mem::make();
         let mut v = arena.new_list(2);
+        let initial_base = v.base_ptr();
         v.push_grow(&mut arena, 1);
         v.push_grow(&mut arena, 2);
         v.push_grow(&mut arena, 3);
+
+        // Check that the in-place growth optimization occurs
+        assert_eq!(v.base_ptr(), initial_base);
         assert_eq!(v.len(), 3);
         assert_eq!(v.as_slice(), &[1, 2, 3]);
     }
