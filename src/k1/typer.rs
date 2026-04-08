@@ -8091,7 +8091,7 @@ impl TypedProgram {
                             content.clone(),
                         ));
                     // TODO: Write #meta source files asynchronously
-                    self.report_hint(span, &content);
+                    self.report_hint_silent(span, &content);
                     if let Err(e) = std::fs::write(&generated_path, &content) {
                         eprintln!(
                             "Failed to write out generated metaprogram at {}. {e}",
@@ -8144,8 +8144,6 @@ impl TypedProgram {
             tokens.clear();
             return failf!(e.span(), "Failed to lex code emitted from here");
         };
-        // FIXME: we just filter out comment tokens before parsing to this day
-        tokens.retain(|token| token.kind != TokenKind::LineComment);
 
         let mut p = crate::parse::Parser::make_for_file(
             module.id,
@@ -17294,6 +17292,18 @@ impl TypedProgram {
             level: MessageLevel::Hint,
             error_kind: ErrorKind::None,
         });
+    }
+
+    pub fn report_hint_silent(&mut self, span: SpanId, message: impl AsRef<str>) {
+        self.report_ext(
+            K1Message {
+                message: message.as_ref().to_string(),
+                span,
+                level: MessageLevel::Hint,
+                error_kind: ErrorKind::None,
+            },
+            true,
+        );
     }
 
     pub fn report_warning(&mut self, span: SpanId, message: impl AsRef<str>) {

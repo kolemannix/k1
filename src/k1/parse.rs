@@ -5120,7 +5120,6 @@ pub fn lex_file_into_program(
     let text = &module.sources.get(file_id).content;
     let mut lexer = Lexer::make(text, &mut module.spans, file_id);
     lexer.run(tokens).map_err(ParseError::Lex)?;
-    tokens.retain(|token| token.kind != K::LineComment);
 
     Ok(file_id)
 }
