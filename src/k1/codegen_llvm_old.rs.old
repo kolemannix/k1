@@ -4065,8 +4065,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 let abi_mapping =
                     self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
                 if let AbiParamMapping::BigStructByPtrToCopy { byval_attr } = abi_mapping {
-                    // FIXME: We likely need to be setting param alignments explicitly sometimes
-                    //function_value.set_param_alignment(param_index, alignment);
                     if *byval_attr {
                         let k1_type =
                             self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);

@@ -4066,7 +4066,7 @@ impl TypedProgram {
                             );
                         }
                         let g_params = g.params;
-                        let mut type_arguments = self.tmp.new_list(ty_app.args.len());
+                        let mut type_arguments = self.types.mem.new_list(ty_app.args.len());
                         let mut subst_pairs: MList<TypeSubstitutionPair, MemTmp> =
                             self.tmp.new_list(ty_app.args.len());
                         for (param, parsed_arg) in
@@ -4100,7 +4100,7 @@ impl TypedProgram {
                             )?;
                         }
 
-                        let type_arguments_slice = self.types.mem.pushn(&type_arguments);
+                        let type_arguments_slice = self.types.mem.list_to_handle(type_arguments);
                         Ok(self.instantiate_generic_type(type_id, type_arguments_slice))
                     }
                     _other => Ok(self.get_type_id_resolved(type_id, scope_id)),
@@ -4170,10 +4170,6 @@ impl TypedProgram {
                     Some(generic_type),
                     Some(defn_info),
                 );
-                //For working on recursive generics
-                //if specialized_type == inner {
-                //    panic!("Instantiate should never no-op")
-                //}
                 if log::log_enabled!(log::Level::Debug) {
                     let inst_info =
                         self.types.get_instance_info(specialized_type).unwrap().type_args;
@@ -4207,30 +4203,16 @@ impl TypedProgram {
         // TODO: for full recursive types support, we need breadcrumbs
         // breadcrumbs: &mut Vec<TypeId>,
     ) -> TypeId {
-        // TODO: New strategy to support co-recursive types aka recursive families
-        // 1. Remember all visited type ids in this substitute (re-use a buf of TypeId)
-        // 2. When you encounter a RecursiveReference, check if its in the visited set
-        // 3. If it is, no-op
-        // 4. If it is not, visit it
-        // That should be all we need, don't even need to know the whole set in the family,
-        // we get that for 'free' by 'tagging' with RR everywhere vs just inferring from structure
-        //
-        // We have to work this way everywhere that we visit types. So
-        // - substitute_in_type
-        // - count_type_variables
-        // - Layout (?) although due to indirection requirements, less critical
-        // - Other places I am sure
-
-        let all_holes = substitution_pairs
+        let is_all_holes = substitution_pairs
             .iter()
             .all(|p| self.types.type_variable_counts.get(p.from).inference_variable_count > 0);
-        if all_holes {
+        if is_all_holes {
             let no_holes =
                 self.types.type_variable_counts.get(type_id).inference_variable_count == 0;
             // Optimization: if every 'from' type is an inference hole, and the type
             // contains no inference holes, which we compute on creation, its a no-op
             // This prevents useless deep type traversals
-            if all_holes && no_holes {
+            if is_all_holes && no_holes {
                 debug!(
                     "detected inference substitution noop for {} {}",
                     self.pretty_print_type_substitutions(substitution_pairs, ", "),
@@ -4239,15 +4221,15 @@ impl TypedProgram {
                 return type_id;
             }
         }
-        let all_params = substitution_pairs
+        let is_all_type_params = substitution_pairs
             .iter()
             .all(|p| self.types.type_variable_counts.get(p.from).type_parameter_count > 0);
-        if all_params {
+        if is_all_type_params {
             let no_params = self.types.type_variable_counts.get(type_id).type_parameter_count == 0;
             // Optimization: if every 'from' type is a type param, and the type
             // contains no type params, which we compute on creation, its a no-op
             // This prevents useless deep type traversals
-            if all_params && no_params {
+            if is_all_type_params && no_params {
                 debug!(
                     "detected type parameter substitution noop for {} {}",
                     self.pretty_print_type_substitutions(substitution_pairs, ", "),
@@ -7248,8 +7230,6 @@ impl TypedProgram {
             result_block_ctx,
             false,
         )?;
-        // FIXME: Consider alternatives for locating the block's makeError function
-        //        in a less brittle way
         let block_make_error_fn =
             self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.mem, 0);
         let call_id = self.calls.add(Call {

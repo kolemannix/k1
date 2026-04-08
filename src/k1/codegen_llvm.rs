@@ -714,7 +714,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     const DW_ATE_UNSIGNED: u32 = 0x07;
     const _DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
-    // FIXME(newcodegen): CgType is too big to return by value
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.types.pt_to_string(pt));
         match pt.as_enum() {
@@ -1151,7 +1150,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
                 dst_ptr.as_basic_value_enum()
             }
-            AbiParamMapping::BigStructByPtrToCopy { .. } => {
+            AbiParamMapping::BigStructByPtrToCopy => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
                 abi_value
@@ -1166,7 +1165,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         k1_value: BasicValueEnum<'ctx>,
     ) -> Option<BasicValueEnum<'ctx>> {
         match mapping {
-            AbiParamMapping::VoidReturnEmpty | AbiParamMapping::BigStructByPtrToCopy { .. } => None,
+            AbiParamMapping::VoidReturnEmpty | AbiParamMapping::BigStructByPtrToCopy => None,
             _ => {
                 let value = self.marshal_abi_param_value(mapping, cg_ty, k1_value, true);
                 Some(value)

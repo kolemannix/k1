@@ -4282,8 +4282,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None
         };
         let additional_type_constraints = if self.maybe_consume(K::KeywordWhere).is_some() {
-            // FIXME(brittle parsing): Has to backtrack to un-consume the next token in the fn call;
-            // the open brace
             let mut additional_type_constraints = eco_vec![];
             let _ = self.eat_delimited_ext(
                 "Type variable constraints",

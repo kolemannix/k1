@@ -3,7 +3,6 @@
 
 use std::process::ExitCode;
 
-use k1::compiler::CompilerConfig;
 use k1::lex::TokenKind;
 use k1::parse::{ParsedProgram, Source};
 use k1::typer::ModuleId;

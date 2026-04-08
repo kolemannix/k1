@@ -343,7 +343,7 @@ impl Backend {
                 })
                 .collect()
         })
-        .unwrap_or(vec![])
+        .unwrap_or_default()
     }
 }
 
