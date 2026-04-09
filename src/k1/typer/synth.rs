@@ -266,7 +266,7 @@ impl TypedProgram {
             name: new_ident,
             owner_scope,
             type_id,
-            kind: VariableKind::Stack(defn_stmt),
+            kind: VariableKind::StackSynthetic(defn_stmt),
             flags,
             usage_count: 0,
         };

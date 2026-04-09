@@ -2631,7 +2631,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 }
                             }
                             CallConv::ARM64 => {
-                                // nocommit: Check for HFA on ARM64
+                                // FIXME(abi) Check for HFA on ARM64
                                 if size_bytes <= 8 {
                                     // Returns use the exact width; otherwise just i64
                                     let width_bits = if is_return { size_bytes * 8 } else { 64 };

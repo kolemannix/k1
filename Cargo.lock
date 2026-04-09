@@ -847,7 +847,6 @@ dependencies = [
  "clap",
  "colored",
  "ecow",
- "either",
  "env_logger",
  "fxhash",
  "inkwell",

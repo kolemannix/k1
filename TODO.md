@@ -6,8 +6,8 @@
 - [ ] Opaque type solution. Try using 1-member structs and make struct's "first field special"
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
-- [ ] Destructuring, (in)fallible patterns
-  - [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
+- [x] Destructuring, (in)fallible patterns
+- [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 
 More optimal final programs

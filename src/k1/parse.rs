@@ -1008,7 +1008,7 @@ pub struct UseStmt {
 #[derive(Debug, Clone)]
 pub struct ParsedRequire {
     pub condition_expr: ParsedExprId,
-    pub else_body: ParsedExprId,
+    pub else_body: Option<ParsedExprId>,
     pub span: SpanId,
 }
 
@@ -3905,9 +3905,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let condition_expr = self.expect_expression()?;
-        self.expect_kind(K::KeywordElse)?;
 
-        let else_body = self.expect_expression()?;
+        let else_body = if let Some(_else) = self.maybe_consume(K::KeywordElse) {
+            Some(self.expect_expression()?)
+        } else {
+            None
+        };
 
         let span = self.extend_to_here(keyword_require_token.span);
         Ok(Some(ParsedRequire { condition_expr, else_body, span }))
@@ -5073,8 +5076,10 @@ impl ParsedProgram {
             ParsedStmt::Require(require_stmt) => {
                 write!(w, "require ")?;
                 self.display_expr_id(w, require_stmt.condition_expr)?;
-                write!(w, " else ")?;
-                self.display_expr_id(w, require_stmt.else_body)?;
+                if let Some(else_body) = require_stmt.else_body {
+                    write!(w, " else ")?;
+                    self.display_expr_id(w, else_body)?;
+                }
                 Ok(())
             }
             ParsedStmt::Assign(assgn) => {

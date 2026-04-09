@@ -54,8 +54,12 @@ fn inc(i: *mut size) { i <- i.* + 1 }
 fn identity[T](value: T): T { value }
 
 fn printIt[T: print](value: T) {
-  value.printTo(io/stdout);
-  io/stdout.write-char('\n')
+  if k1/is-static and compiler/capture-prints {
+    k1/emit-compiler-message(compiler/location(), .info, value.show())
+  } else {
+    value.printTo(io/stdout);
+    io/stdout.write-char('\n')
+  }
 }
 
 fn print(s: string) {
@@ -91,7 +95,7 @@ fn eprintln(s: string) {
 
 #if k1/OS_POSIX
 ns io {
-  // TODO: Add buffering
+  // TODO: Add buffering to stdout and stderr!
   deftype OutStream = { fileNo: i32 }
   let stdout: OutStream = { fileNo: posix/stdout }
   let stderr: OutStream = { fileNo: posix/stderr }

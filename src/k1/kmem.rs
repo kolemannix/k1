@@ -881,6 +881,12 @@ impl<T, Tag> MList<T, Tag> {
     pub fn into_handle(self, mem: &mut Mem<Tag>) -> MSlice<T, Tag> {
         mem.list_to_handle(self)
     }
+
+    pub fn fill_to_cap(&mut self, value: T) where T: Copy {
+        while self.len < self.cap() {
+            self.push_unchecked(value);
+        }
+    }
 }
 
 impl<T, Tag> std::ops::Index<usize> for MList<T, Tag> {

@@ -41,7 +41,6 @@ use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
 use colored::Colorize;
-use either::Either;
 use fxhash::{FxHashMap, FxHashSet};
 use log::{debug, error};
 use smallvec::{SmallVec, smallvec};
@@ -762,6 +761,11 @@ impl TypedPattern {
             TypedPattern::Type(t) => t.span,
         }
     }
+}
+
+enum MatchingConditionResult {
+    NeverBlock(TypedExprId),
+    MatchingCondition(MatchingCondition),
 }
 
 #[derive(Debug, Clone)]
@@ -1532,7 +1536,7 @@ impl_copy_if_small!(16, AssignmentStmt);
 #[derive(Clone)]
 pub struct TypedRequireStmt {
     pub condition: MatchingCondition,
-    pub else_body: TypedExprId,
+    pub else_body: Option<TypedExprId>,
     pub span: SpanId,
 }
 
@@ -1611,14 +1615,14 @@ pub struct K1Message {
 }
 
 impl K1Message {
-    fn make(message: impl AsRef<str>, span: SpanId, level: MessageLevel) -> K1Message {
+    fn make(message: impl Into<String>, span: SpanId, level: MessageLevel) -> K1Message {
         let error_kind = match level {
             MessageLevel::Hint => ErrorKind::None,
             MessageLevel::Info => ErrorKind::None,
             MessageLevel::Warn => ErrorKind::None,
             MessageLevel::Error => ErrorKind::Malformed,
         };
-        K1Message { message: message.as_ref().to_owned(), span, level, error_kind }
+        K1Message { message: message.into(), span, level, error_kind }
     }
 }
 
@@ -1657,6 +1661,7 @@ bitflags! {
 pub enum VariableKind {
     FnParam(FunctionId),
     Stack(TypedStmtId),
+    StackSynthetic(TypedStmtId),
     Global(TypedGlobalId),
 }
 
@@ -1969,15 +1974,15 @@ impl Builtin {
     }
 }
 
-pub fn make_error<T: AsRef<str>>(message: T, span: SpanId) -> K1Message {
-    K1Message::make(message.as_ref(), span, MessageLevel::Error)
+pub fn make_error<T: Into<String>>(message: T, span: SpanId) -> K1Message {
+    K1Message::make(message, span, MessageLevel::Error)
 }
 
 pub fn make_warning<T: AsRef<str>>(message: T, span: SpanId) -> K1Message {
     K1Message::make(message.as_ref(), span, MessageLevel::Warn)
 }
 
-pub fn make_fail_span<A, T: AsRef<str>>(message: T, span: SpanId) -> K1Result<A> {
+pub fn make_fail_span<A, T: Into<String>>(message: T, span: SpanId) -> K1Result<A> {
     Err(make_error(message, span))
 }
 
@@ -2057,7 +2062,7 @@ macro_rules! get_ident {
     };
 }
 
-fn make_fail_ast_id<A, T: AsRef<str>>(
+fn make_fail_ast_id<A, T: Into<String>>(
     ast: &ParsedProgram,
     message: T,
     parsed_id: ParsedId,
@@ -2483,6 +2488,13 @@ impl TypedExprPool {
         *self.exprs.get_mut(id) = expr;
         *self.type_ids.get_mut(id) = type_id;
         *self.spans.get_mut(id) = span;
+    }
+
+    pub fn get_full(&self, id: TypedExprId) -> (&TypedExpr, TypeId, SpanId) {
+        let expr = self.exprs.get(id);
+        let type_id = *self.type_ids.get(id);
+        let span = *self.spans.get(id);
+        (expr, type_id, span)
     }
 
     pub fn get_mut(&mut self, id: TypedExprId) -> &mut TypedExpr {
@@ -7139,6 +7151,12 @@ impl TypedProgram {
                             "Cannot take address of a function parameter; re-declare it or use a & type"
                         );
                     }
+                    VariableKind::StackSynthetic(_) => {
+                        return failf!(
+                            span,
+                            "Cannot take address of a binding or synthetic variable"
+                        );
+                    }
                     VariableKind::Stack(_) => (v.variable_id, AddressOfKind::StackVariable),
                     VariableKind::Global(_) => (v.variable_id, AddressOfKind::GlobalVariable),
                 }
@@ -7574,8 +7592,8 @@ impl TypedProgram {
                 let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
-                // Alternatively we could set the fallback _value_ to false... idk, match needs
-                // rework
+                // add_fallback: false since we have an explicit false case.
+                // Alternatively we could accept a fallback _value_ in eval_match_expr
                 self.eval_match_expr(match_expr_id, ctx, check_exhaustive, allow_bindings, false)
             }
             ParsedExpr::Match(_match_expr) => {
@@ -8380,11 +8398,14 @@ impl TypedProgram {
             None,
         );
 
-        let condition_or_block = self
-            .eval_matching_condition(while_expr.cond, ctx.with_scope(condition_block_scope_id))?;
+        let condition_or_block = self.eval_matching_condition(
+            while_expr.cond,
+            None,
+            ctx.with_scope(condition_block_scope_id),
+        )?;
         let condition = match condition_or_block {
-            Either::Right(mc) => mc,
-            Either::Left(crash_block) => return Ok(crash_block),
+            MatchingConditionResult::MatchingCondition(mc) => mc,
+            MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
         let body_block_scope_id = self.scopes.add_child_scope(
@@ -8862,10 +8883,10 @@ impl TypedProgram {
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
-        let mut all_unguarded_patterns: MList<(TypedPatternId, usize), MemTmp> =
+        let mut all_unguarded_patterns: MList<TypedPatternId, MemTmp> =
             self.tmp.new_list(parsed_pattern_count);
-        let target_expr_type = self.exprs.get_type(match_subject_variable.variable_expr);
-        let target_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
+        let subject_type = self.exprs.get_type(match_subject_variable.variable_expr);
+        let subject_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
         // Core loop to build up the typed, compiled match arms
         for parsed_case in self.ast.mem.getn(parsed_cases) {
@@ -8874,7 +8895,7 @@ impl TypedProgram {
             for parsed_pattern_id in parsed_case.patterns.as_slice(&self.ast.mem).iter() {
                 let pattern = self.compile_pattern_to_type(
                     *parsed_pattern_id,
-                    target_expr_type,
+                    subject_type,
                     match_scope_id,
                     allow_bindings,
                 )?;
@@ -8918,7 +8939,7 @@ impl TypedProgram {
                 }
 
                 if parsed_case.guard_condition_expr.is_none() {
-                    all_unguarded_patterns.push((pattern, 0));
+                    all_unguarded_patterns.push(pattern);
                 }
 
                 // Note: We compile the arm's consequent expression and the guard condition as many times as there are patterns, since each
@@ -8985,68 +9006,13 @@ impl TypedProgram {
 
         // Exhaustiveness Checking
         if check_exhaustive {
-            let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
-            let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
-            let mut visited_ancestors =
-                std::mem::take(&mut self.buffers.pattern_ctor_ancestor_stack);
-            trial_constructors.clear();
-            self.generate_constructors_for_type(
-                target_expr_type,
-                &mut trial_constructors,
-                &mut field_ctors_buf,
-                &mut visited_ancestors,
-                target_expr_span,
-            );
-            debug_assert!(visited_ancestors.is_empty());
-
-            'trial: for trial_entry in trial_constructors.iter_mut() {
-                '_pattern: for (pattern, kill_count) in all_unguarded_patterns.iter_mut() {
-                    if TypedProgram::pattern_eliminates_ctor(
-                        &self.pattern_ctors,
-                        &self.patterns,
-                        *pattern,
-                        trial_entry.ctor,
-                    ) {
-                        *kill_count += 1;
-                        trial_entry.alive = false;
-                        continue 'trial;
-                    }
-                }
-            }
-
-            let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
-            self.buffers.trial_ctors = trial_constructors;
-            self.buffers.field_ctors = field_ctors_buf;
-            self.buffers.pattern_ctor_ancestor_stack = visited_ancestors;
-            if alive_count != 0 {
-                let patterns = self
-                    .buffers
-                    .trial_ctors
-                    .iter()
-                    .filter(|entry| entry.alive)
-                    .map(|entry| self.pattern_ctor_to_string(entry.ctor))
-                    .join("\n- ");
-                return failf!(
-                    target_expr_span,
-                    "{} Unhandled patterns:\n- {}",
-                    alive_count,
-                    patterns
-                );
-            }
-
-            if let Some((useless_pattern, _useless_index)) =
-                all_unguarded_patterns.iter().find(|(_, kill_count)| *kill_count == 0)
-            {
-                if !self.patterns.pattern_never_useless(*useless_pattern) {
-                    return failf!(
-                        self.patterns.get(*useless_pattern).span_id(),
-                        "This pattern handled no cases: {}",
-                        self.pattern_to_string(*useless_pattern)
-                    );
-                }
-            }
+            self.check_pattern_exhaustiveness(
+                subject_type,
+                all_unguarded_patterns.as_slice_mut(),
+                subject_expr_span,
+                false,
+            )?
         }
-
         if add_fallback {
             let fallback_arm = TypedMatchArm {
                 condition: MatchingCondition { instrs: MSlice::empty() },
@@ -9080,6 +9046,80 @@ impl TypedProgram {
             match_result_type,
             match_expr_span,
         ))
+    }
+
+    fn check_pattern_exhaustiveness(
+        &mut self,
+        subject_type: TypeId,
+        all_unguarded_patterns: &mut [TypedPatternId],
+        subject_span: SpanId,
+        skip_build_message: bool,
+    ) -> K1Result<()> {
+        let mut trial_constructors = std::mem::take(&mut self.buffers.trial_ctors);
+        let mut field_ctors_buf = std::mem::take(&mut self.buffers.field_ctors);
+        let mut visited_ancestors = std::mem::take(&mut self.buffers.pattern_ctor_ancestor_stack);
+        trial_constructors.clear();
+        self.generate_constructors_for_type(
+            subject_type,
+            &mut trial_constructors,
+            &mut field_ctors_buf,
+            &mut visited_ancestors,
+            subject_span,
+        );
+        debug_assert!(visited_ancestors.is_empty());
+
+        let mut kill_counts = self.tmp.new_list::<usize>(all_unguarded_patterns.len() as u32);
+        kill_counts.fill_to_cap(0);
+        'trial: for trial_entry in trial_constructors.iter_mut() {
+            '_pattern: for (pattern_index, pattern) in all_unguarded_patterns.iter().enumerate() {
+                if TypedProgram::pattern_eliminates_ctor(
+                    &self.pattern_ctors,
+                    &self.patterns,
+                    *pattern,
+                    trial_entry.ctor,
+                ) {
+                    kill_counts[pattern_index] += 1;
+                    // *kill_count += 1;
+                    trial_entry.alive = false;
+                    continue 'trial;
+                }
+            }
+        }
+
+        let alive_count = trial_constructors.iter().filter(|entry| entry.alive).count();
+        self.buffers.trial_ctors = trial_constructors;
+        self.buffers.field_ctors = field_ctors_buf;
+        self.buffers.pattern_ctor_ancestor_stack = visited_ancestors;
+        if alive_count != 0 {
+            let msg = if skip_build_message {
+                "Unhandled patterns".to_string()
+            } else {
+                let patterns = self
+                    .buffers
+                    .trial_ctors
+                    .iter()
+                    .filter(|entry| entry.alive)
+                    .map(|entry| self.pattern_ctor_to_string(entry.ctor))
+                    .join("\n- ");
+                format!("{} Unhandled patterns:\n- {}", alive_count, patterns)
+            };
+            return make_fail_span(msg, subject_span);
+        }
+
+        if let Some((useless_pattern_id, _)) = all_unguarded_patterns
+            .iter()
+            .zip(kill_counts.as_slice())
+            .find(|(_, kill_count)| **kill_count == 0)
+        {
+            if !self.patterns.pattern_never_useless(*useless_pattern_id) {
+                return failf!(
+                    self.patterns.get(*useless_pattern_id).span_id(),
+                    "This pattern handled no cases: {}",
+                    self.pattern_to_string(*useless_pattern_id)
+                );
+            }
+        }
+        Ok(())
     }
 
     fn _eval_static_match_expr(&mut self, _match_expr_id: ParsedExprId, _ctx: EvalExprContext) {
@@ -9897,11 +9937,12 @@ impl TypedProgram {
 
         let condition_or_block = self.eval_matching_condition(
             if_expr.cond,
+            None,
             ctx.with_scope(match_scope_id).with_no_expected_type(),
         )?;
         let condition = match condition_or_block {
-            Either::Left(block) => return Ok(block),
-            Either::Right(mc) => mc,
+            MatchingConditionResult::MatchingCondition(mc) => mc,
+            MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
         let consequent = self.eval_expr(if_expr.cons, ctx.with_scope(match_scope_id))?;
@@ -9983,22 +10024,27 @@ impl TypedProgram {
     fn eval_matching_condition(
         &mut self,
         condition: ParsedExprId,
+        check_exhaustive: Option<(bool, &mut Option<K1Message>)>,
         ctx: EvalExprContext,
-    ) -> K1Result<Either<TypedExprId, MatchingCondition>> {
+    ) -> K1Result<MatchingConditionResult> {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
-        let mut all_patterns: SmallVec<[TypedPatternId; 1]> = smallvec![];
+        let mut all_patterns: SV4<(TypedPatternId, TypedExprId)> = smallvec![];
         let mut allow_bindings: bool = true;
         let mut instrs: MList<MatchingConditionInstr, _> = self.mem.new_list(16);
+        let condition_span = self.ast.get_expr_span(condition);
+        // If there are no boolean conditions, we can check for infallibility
+        let mut is_single_pattern_only = true;
         self.handle_matching_condition_rec(
             condition,
             &mut allow_bindings,
             &mut all_patterns,
             &mut instrs,
+            &mut is_single_pattern_only,
             ctx,
         )?;
 
         let mut all_bindings: SmallVec<[VariablePattern; 8]> = smallvec![];
-        for pattern in all_patterns.iter() {
+        for (pattern, _) in all_patterns.iter() {
             self.patterns.get_pattern_bindings_rec(*pattern, &mut all_bindings);
         }
         if allow_bindings {
@@ -10024,17 +10070,42 @@ impl TypedProgram {
             }
         }
 
+        if let Some((skip_message, exhaustive_out)) = check_exhaustive {
+            if is_single_pattern_only {
+                let (pattern_id, subject_expr) = all_patterns[0];
+                let subject_span = self.exprs.get_span(subject_expr);
+                let subject_type = self.exprs.get_type(subject_expr);
+                let nonexhaustive_message = self
+                    .check_pattern_exhaustiveness(
+                        subject_type,
+                        &mut [pattern_id],
+                        subject_span,
+                        skip_message,
+                    )
+                    .err();
+                *exhaustive_out = nonexhaustive_message;
+            } else {
+                *exhaustive_out = Some(K1Message {
+                    message: "".to_string(),
+                    span: condition_span,
+                    error_kind: ErrorKind::TypeError,
+                    level: MessageLevel::Error,
+                })
+            }
+        }
+
         let diverges_at = self.matching_condition_diverges(&instrs);
         if let Some(diverge_index) = diverges_at {
-            let condition_span = self.ast.get_expr_span(condition);
             let never_block = self.make_never_condition_block(
                 &instrs[0..=diverge_index],
                 ctx.scope_id,
                 condition_span,
             );
-            Ok(Either::Left(never_block))
+            Ok(MatchingConditionResult::NeverBlock(never_block))
         } else {
-            Ok(Either::Right(MatchingCondition { instrs: self.mem.pushn(&instrs) }))
+            Ok(MatchingConditionResult::MatchingCondition(MatchingCondition {
+                instrs: self.mem.pushn(&instrs),
+            }))
         }
     }
 
@@ -10072,8 +10143,9 @@ impl TypedProgram {
         &mut self,
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
-        all_patterns: &mut SmallVec<[TypedPatternId; 1]>,
+        all_patterns: &mut SV4<(TypedPatternId, TypedExprId)>,
         instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
+        is_single_pattern_only: &mut bool,
         ctx: EvalExprContext,
     ) -> K1Result<()> {
         debug!("hmirec: {}", self.ast.expr_id_to_string(parsed_expr_id));
@@ -10081,35 +10153,36 @@ impl TypedProgram {
             ParsedExpr::Is(is_expr) => {
                 let target_expr = is_expr.target_expression;
                 let pattern = is_expr.pattern;
-                let target = self.eval_expr(target_expr, ctx)?;
-                let target_type = self.exprs.get_type(target);
-                let target_var = self.synth_variable_defn_simple(
+                let subject = self.eval_expr(target_expr, ctx)?;
+                let subject_type = self.exprs.get_type(subject);
+                let subject_var = self.synth_variable_defn_simple(
                     self.ast.idents.b.if_target,
-                    target,
+                    subject,
                     ctx.scope_id,
                 );
                 let pattern = self.compile_pattern_to_type(
                     pattern,
-                    target_type,
+                    subject_type,
                     ctx.scope_id,
                     *allow_bindings,
                 )?;
                 instrs.push_grow(
                     &mut self.mem,
-                    MatchingConditionInstr::Binding { let_stmt: target_var.defn_stmt },
+                    MatchingConditionInstr::Binding { let_stmt: subject_var.defn_stmt },
                 );
                 self.compile_pattern_into_values(
                     pattern,
-                    target_var.variable_expr,
+                    subject_var.variable_expr,
                     instrs,
                     false,
                     ctx,
                 )?;
-                all_patterns.push(pattern);
+                all_patterns.push((pattern, subject));
 
                 Ok(())
             }
             ParsedExpr::BinaryOp(binary_op) if binary_op.op_kind == BinaryOpKind::And => {
+                *is_single_pattern_only = false;
                 let rhs = binary_op.rhs;
                 // It's important that the lhs comes first
                 // because expressions to the right can see bindings from
@@ -10120,12 +10193,21 @@ impl TypedProgram {
                     allow_bindings,
                     all_patterns,
                     instrs,
+                    is_single_pattern_only,
                     ctx,
                 )?;
-                self.handle_matching_condition_rec(rhs, allow_bindings, all_patterns, instrs, ctx)?;
+                self.handle_matching_condition_rec(
+                    rhs,
+                    allow_bindings,
+                    all_patterns,
+                    instrs,
+                    is_single_pattern_only,
+                    ctx,
+                )?;
                 Ok(())
             }
             other => {
+                *is_single_pattern_only = false;
                 let is_or_binop =
                     matches!(other, ParsedExpr::BinaryOp(b) if b.op_kind == BinaryOpKind::Or);
                 // At the top-level of the 'if', if there are any 'or's, we cannot allow patterns
@@ -10157,9 +10239,9 @@ impl TypedProgram {
             None,
         );
         let condition_ctx = ctx.with_scope(condition_scope).with_no_expected_type();
-        let matching_condition = match self.eval_matching_condition(expr_id, condition_ctx)? {
-            Either::Left(block) => return Ok(block),
-            Either::Right(mc) => mc,
+        let matching_condition = match self.eval_matching_condition(expr_id, None, condition_ctx)? {
+            MatchingConditionResult::MatchingCondition(mc) => mc,
+            MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
         let span = self.ast.exprs.get_span(expr_id);
         let true_arm = TypedMatchArm {
@@ -11807,6 +11889,7 @@ impl TypedProgram {
                     //
                     // I wonder if the dot isn't quite right for sum/enum construction.
                     // Maybe a slash is better
+                    // Something wholly different, colon for tagging!
                     if base_expr.is_none() {
                         return failf!(
                             span,
@@ -13226,52 +13309,79 @@ impl TypedProgram {
             ParsedStmt::Require(require) => {
                 static_assert_size!(parse::ParsedRequire, 12);
                 let require = require.clone();
-                match self
-                    .eval_matching_condition(require.condition_expr, ctx.with_no_expected_type())?
-                {
-                    Either::Left(block) => {
-                        let stmt = self.add_expr_stmt(block);
-                        Ok(Some(stmt))
+                let has_else = require.else_body.is_some();
+                let skip_message = has_else;
+                let mut nonexhaustive_msg = None;
+
+                // No need to build an expensive error message that we won't show
+                let condition = match self.eval_matching_condition(
+                    require.condition_expr,
+                    Some((skip_message, &mut nonexhaustive_msg)),
+                    ctx.with_no_expected_type(),
+                )? {
+                    MatchingConditionResult::NeverBlock(never_block) => {
+                        let stmt = self.add_expr_stmt(never_block);
+                        return Ok(Some(stmt));
                     }
-                    Either::Right(condition) => {
-                        let else_scope = self.scopes.add_child_scope(
-                            ctx.scope_id,
-                            ScopeType::LexicalBlock,
-                            ScopeOwnerId::None,
-                            None,
-                        );
+                    MatchingConditionResult::MatchingCondition(condition) => condition,
+                };
 
-                        // Make the binding variables unavailable in the else scope
-                        for instr in self.mem.getn(condition.instrs) {
-                            if let MatchingConditionInstr::Binding { let_stmt } = instr {
-                                let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
-                                let variable = self.variables.get(stmt.variable_id);
+                let match_was_exhaustive = nonexhaustive_msg.is_none();
+                if match_was_exhaustive && has_else {
+                    self.report_warning(
+                        require.span,
+                        "This pattern always matches; remove the 'else' clause",
+                    );
+                }
+                if !match_was_exhaustive && !has_else {
+                    return failf!(
+                        require.span,
+                        "This pattern can fail to match; make it infallible or add an 'else' clause: {}",
+                        nonexhaustive_msg.unwrap().message
+                    );
+                }
 
-                                if !variable.is_user_hidden() {
-                                    let else_scope = self.scopes.get_scope_mut(else_scope);
-                                    else_scope.mask_variable(variable.name);
-                                }
-                            }
+                let else_scope = self.scopes.add_child_scope(
+                    ctx.scope_id,
+                    ScopeType::LexicalBlock,
+                    ScopeOwnerId::None,
+                    None,
+                );
+
+                // Make the binding variables unavailable in the else scope
+                for instr in self.mem.getn(condition.instrs) {
+                    if let MatchingConditionInstr::Binding { let_stmt } = instr {
+                        let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
+                        let variable = self.variables.get(stmt.variable_id);
+
+                        if !variable.is_user_hidden() {
+                            let else_scope = self.scopes.get_scope_mut(else_scope);
+                            else_scope.mask_variable(variable.name);
                         }
-
-                        let else_body =
-                            self.eval_expr(require.else_body, ctx.with_scope(else_scope))?;
-                        if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
-                            let else_span = self.exprs.get_span(else_body);
-                            return failf!(
-                                else_span,
-                                "else branch must diverge; try returning or exiting"
-                            );
-                        }
-
-                        let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
-                            condition,
-                            else_body,
-                            span: require.span,
-                        }));
-                        Ok(Some(id))
                     }
                 }
+
+                let else_body = if let Some(require_else_body) = require.else_body {
+                    let else_body =
+                        self.eval_expr(require_else_body, ctx.with_scope(else_scope))?;
+                    if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
+                        let else_span = self.exprs.get_span(else_body);
+                        return failf!(
+                            else_span,
+                            "else branch must diverge; try returning or exiting"
+                        );
+                    }
+                    Some(else_body)
+                } else {
+                    None
+                };
+
+                let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
+                    condition,
+                    else_body,
+                    span: require.span,
+                }));
+                Ok(Some(id))
             }
             ParsedStmt::Assign(assign) => {
                 static_assert_size!(parse::AssignStmt, 12);
@@ -13287,6 +13397,12 @@ impl TypedProgram {
                 match self.variables.get(typed_variable_id).kind {
                     VariableKind::FnParam(_) => {
                         return failf!(assignment.span, "Cannot re-assign a function parameter");
+                    }
+                    VariableKind::StackSynthetic(_) => {
+                        return failf!(
+                            assignment.span,
+                            "Cannot re-assign a synthetic variable or binding"
+                        );
                     }
                     VariableKind::Stack(_) => {}
                     VariableKind::Global(_) => {

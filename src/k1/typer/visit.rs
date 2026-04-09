@@ -32,7 +32,12 @@ impl TypedProgram {
                 {
                     return Some(r);
                 };
-                self.visit_expr_tree(typed_require_stmt.else_body, state, action)
+                if let Some(else_body) = typed_require_stmt.else_body {
+                    if let Some(r) = self.visit_expr_tree(else_body, state, action) {
+                        return Some(r);
+                    }
+                }
+                None
             }
             TypedStmt::Defer(defer) => None,
         }

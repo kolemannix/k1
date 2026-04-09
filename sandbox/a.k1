@@ -1,41 +1,13 @@
-ns test-type-predicate;
+#debug fn main(): i32 {
+  let foo = { x: 42 };
 
-fn is-int[T](): bool {
-  false
-}
-ns pre {
-  fn is-scalar[t](): bool {
-    switch types/get-type-schema[t] {
-      .int(_) or .char or .bool or .ptr or.float(_) -> true,
-      _ -> false
-    } 
-  }
-}
-use pre/is-scalar
+  printIt(foo.x);
+  require foo is { x };
+  &x <- 100;
 
-fn no-password[T](): bool {
-  require types/get-type-schema[T] is .struct(s) else { return(true) };
-  not core/iter/exists(s.fields, fn f. f.name == "password")
-}
+  printIt(foo.x);
 
-deftype int-wrapper[T: pred is-int] = { value: T }
-
-
-ability to-scalar[out: pred is-scalar] {
-  fn to-scalar(self: self): out
-}
-
-impl to-scalar[out = int] for string {
-  fn to-scalar(self: string): int { self.len() }
-}
-
-fn foo[t: pred no-password](t: t) {
-  println("Hello from foo");
-}
-
-fn main(): i32 {
-  foo({ password: "Passw0rd!" });
-
-  let _i: int-wrapper[u64] = { value: 42 };
   0
 }
+
+#static main()

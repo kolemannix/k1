@@ -6,6 +6,15 @@ fn test() {
     crash("")
   };
 
+  { // Infallible
+    require foo is { x, y };
+    assertEquals(x, 1);
+    assertEquals(y, .some(2));
+
+    require foo is { y };
+    assertEquals(y, .some(2));
+  };
+
   require not false else {
     crash("")
   };
@@ -19,6 +28,9 @@ fn test() {
   require myEntity is { health, opacity, alive: true }* and health.* > 50 and opacity.* > 0.0 else {
     crash("")
   };
+
+
+  // Infallible
 
   {}
 }

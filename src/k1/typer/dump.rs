@@ -522,10 +522,12 @@ impl TypedProgram {
                 self.display_expr_id(assignment.value, writ, indentation)
             }
             TypedStmt::Require(require_stmt) => {
-                writ.write_str("require: ")?;
+                writ.write_str("require ")?;
                 self.display_matching_condition(writ, &require_stmt.condition, indentation)?;
-                writ.write_str(" else ")?;
-                self.display_expr_id(require_stmt.else_body, writ, indentation)?;
+                if let Some(else_body) = require_stmt.else_body {
+                    writ.write_str(" else ")?;
+                    self.display_expr_id(else_body, writ, indentation)?;
+                }
                 Ok(())
             }
             TypedStmt::Defer(defer) => {

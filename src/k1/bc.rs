@@ -1374,7 +1374,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
         TypedStmt::Require(req) => {
             let req = req.clone();
             let require_continue_block = b.push_block("require_continue");
-            let require_else_block = b.push_block("require_else");
+            let require_else_block = match req.else_body {
+                None => None,
+                Some(_) => Some(b.push_block("require_else")),
+            };
 
             compile_matching_condition(
                 b,
@@ -1383,8 +1386,10 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 require_else_block,
             )?;
 
-            b.goto_block(require_else_block);
-            compile_expr(b, None, req.else_body)?;
+            if let Some(else_body) = req.else_body {
+                b.goto_block(require_else_block.unwrap());
+                compile_expr(b, None, else_body)?;
+            }
 
             b.goto_block(require_continue_block);
 
@@ -1991,7 +1996,12 @@ fn compile_expr(
                 // A jump target if the conditions succeed, and a jump target if the conditions
                 // fail
                 b.goto_block(*arm_block);
-                compile_matching_condition(b, &arm.condition, *arm_cons_block, next_arm_or_fail)?;
+                compile_matching_condition(
+                    b,
+                    &arm.condition,
+                    *arm_cons_block,
+                    Some(next_arm_or_fail),
+                )?;
 
                 b.goto_block(*arm_cons_block);
                 let result = compile_expr(b, None, arm.consequent_expr)?;
@@ -2046,7 +2056,7 @@ fn compile_expr(
             b.push_jump(cond_block, "enter while cond");
 
             b.goto_block(cond_block);
-            compile_matching_condition(b, &w.condition, loop_body_block, end_block)?;
+            compile_matching_condition(b, &w.condition, loop_body_block, Some(end_block))?;
 
             b.goto_block(loop_body_block);
             let last = compile_block_stmts(b, None, w.body)?;
@@ -2682,7 +2692,7 @@ fn compile_matching_condition(
     b: &mut Builder,
     mc: &MatchingCondition,
     cons_block: BlockId,
-    condition_fail_block: BlockId,
+    condition_fail_block: Option<BlockId>,
 ) -> K1Result<()> {
     if mc.instrs.is_empty() {
         // Always true
@@ -2697,12 +2707,16 @@ fn compile_matching_condition(
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
                 let continue_block = b.push_block("matching_cond_continue");
-                b.push_jump_if(
-                    cond_value,
-                    continue_block,
-                    condition_fail_block,
-                    "matching cond cond",
-                );
+
+                // If the matching condition was typechecked as 'infallible', we don't have a fail
+                // block, and we just jump to continue.
+                match condition_fail_block {
+                    None => b.push_jump(continue_block, "infallible matching cond continue"),
+                    Some(fail_block) => {
+                        b.push_jump_if(cond_value, continue_block, fail_block, "matching cond cond")
+                    }
+                };
+
                 b.goto_block(continue_block);
             }
         }
