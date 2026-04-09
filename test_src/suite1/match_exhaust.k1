@@ -68,5 +68,15 @@ fn main(): i32 {
     _ -> assert(false),
   };
 
+  // matching understands 'never'
+  let foo: result[int, { asdf: never }] = .ok(42);
+
+  require foo is .ok(i);
+
+  assertEquals(i, 42);
+  switch foo {
+    .ok(i) -> assertEquals(i, 42),
+  };
+
   0
 }

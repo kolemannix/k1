@@ -102,7 +102,7 @@ impl Target {
 
 pub const LIBS_DIR_NAME: &str = "libs";
 
-pub fn logical_name_to_dylib_filename(
+pub fn logical_name_to_lib_filename(
     module_libs_dir: &Path,
     target_os: TargetOs,
     link_type: LibRefLinkType,
@@ -486,9 +486,12 @@ pub fn write_executable(
         if !module.manifest.libs.is_empty() {
             build_cmd.arg(format!("-L{}", module_libs_dir.display()));
         }
+        for link_arg_string_id in &module.manifest.link_args {
+            build_cmd.arg(k1.get_string(*link_arg_string_id));
+        }
         for lib in &module.manifest.libs {
             let logical_name_str = k1.get_string(lib.name);
-            let filename = logical_name_to_dylib_filename(
+            let filename = logical_name_to_lib_filename(
                 &module_libs_dir,
                 target.target_os(),
                 lib.link_type,

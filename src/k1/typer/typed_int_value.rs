@@ -165,7 +165,14 @@ impl TypedIntValue {
     pub fn expect_u64(&self) -> u64 {
         match self {
             TypedIntValue::U64(v) => *v,
-            _ => unreachable!(),
+            _ => panic!("expect_u64 on int"),
+        }
+    }
+
+    pub fn as_u8(&self) -> Option<u8> {
+        match self {
+            TypedIntValue::U8(v) => Some(*v),
+            _ => None,
         }
     }
 }

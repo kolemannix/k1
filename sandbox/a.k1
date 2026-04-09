@@ -1,12 +1,12 @@
-#debug fn main(): i32 {
-  let foo = { x: 42 };
+fn main(): i32 {
+  let foo: result[int, { asdf: never }] = .ok(42);
 
-  printIt(foo.x);
-  require foo is { x };
-  &x <- 100;
+  require foo is .ok(i);
 
-  printIt(foo.x);
-
+  assertEquals(i, 42);
+  switch foo {
+    .ok(i) -> assertEquals(i, 42),
+  };
   0
 }
 

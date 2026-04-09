@@ -7,19 +7,17 @@
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [x] Destructuring, (in)fallible patterns
-- [ ] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
+- [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 
 More optimal final programs
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
 - [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
 
-Non-major Ideas
+minor ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
 - [ ] userland: CCompatString which is a valid c string with length in front of the allocation (ill call it antirez strings)
 - [ ] [design/flags_in_tags.k1]
-- [ ] Dogfood idea: 'niched' integer abstraction (-1 as 'not found' but safely, vs using option and wasting space + adding more code)
-      `impl Unwrap<Inner = u32> for { hidden: i64 }`
 - [x] Incorporate ffc.h for int and float parsing
 - [ ] Inspired by fast_float, char to digit lookup table
 
@@ -76,6 +74,12 @@ Simple but missing
 - [x] add test with co-recursion and infinite recursion
 
 ## VM Profiler: Instrument the vm itself
+
+## Vendor'd Libraries
+- [ ] postgres client
+- [ ] linker args / "use system lib"
+- [ ] http server
+- [ ] datastar
 
 ## K1 Profiler
 Add `core` and/or compiler support to allow block profiling of k1 programs
@@ -136,15 +140,14 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [ ] Completion
 
 ## Project: Actual modules, library vs binary compile, allow linker options
-- [ ] Separate modules
-  - [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
-  - [x] Add entire modules from TypedProgram
-  - [x] Module manifests somewhere
-  - [x] Library vs Binary
-  - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-  - [x] Dependencies: local module
-  - [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
-  - [ ] serialize typedprogram at each module completion (for incremental compilation)
+- [x] Introduce 'module' w/ kind (lib/bin/core), deps, and namespace+scope
+- [x] Add entire modules from TypedProgram
+- [x] Module manifests somewhere
+- [x] Library vs Binary
+- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
+- [x] Dependencies: local module
+- [x] Specify linked libraries in manifest (Eventually this will need to be more customizable)
+- [ ] serialize typedprogram at each module completion (for incremental compilation)
 - [x] clang passthrough options, when do we 'link', in IR or as object files, ...
   - [x] we 'link' with k1 in the typer's modules system
   - [x] we link with other deps w/ the linker

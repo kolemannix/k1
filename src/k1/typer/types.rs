@@ -381,7 +381,9 @@ impl FloatType {
 #[derive(Clone, Copy)]
 pub struct FnParamType {
     // FIXME: Determine if param names are truly 'part' of the function type.
-    // For now, keeping them to fix some bugs
+    // For now, keeping them to fix some bugs. When we excluded them, we had
+    // different functions appearing identical and downstream 'name' lookups failed.
+    // The solution is to move the name entirely out of the type
     pub name: Ident,
     pub type_id: TypeId,
     pub is_context: bool,
@@ -1014,6 +1016,23 @@ impl ScalarType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalTypeResult {
+    No,
+    Never,
+    Yes(PhysicalType),
+}
+
+impl PhysicalTypeResult {
+    pub fn unwrap(self) -> PhysicalType {
+        match self {
+            PhysicalTypeResult::Yes(pt) => pt,
+            PhysicalTypeResult::No => panic!("Called unwrap on PhysicalTypeResult::No"),
+            PhysicalTypeResult::Never => panic!("Called unwrap on PhysicalTypeResult::Never"),
+        }
+    }
+}
+
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PhysicalType(u32);
@@ -1238,7 +1257,7 @@ pub struct TypePool {
 
     pub defn_info: FxHashMap<TypeId, TypeDefnInfo>,
     pub specializations: FxHashMap<TypeId, Vec<(TypeIdSlice, TypeId)>>,
-    pub phys_types: FxHashMap<TypeId, Option<PhysicalType>>,
+    pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
 
     /// Lookup mappings for parsed -> typed ids
     pub ast_type_defn_mapping: FxHashMap<ParsedTypeDefnId, TypeId>,
@@ -1800,43 +1819,49 @@ impl TypePool {
         }
     }
 
+    // nocommit: Log everywhere we actually return 'No', see if we can just make that an error
     pub fn compile_physical_type(
         &mut self,
         static_values: &StaticValuePool,
         type_id: TypeId,
-    ) -> Option<PhysicalType> {
+    ) -> PhysicalTypeResult {
         match self.get(type_id) {
-            Type::Char | Type::Bool => Some(PhysicalType::U8),
+            Type::Char | Type::Bool => PhysicalTypeResult::Yes(PhysicalType::U8),
 
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
-                Some(PhysicalType::scalar(st))
+                PhysicalTypeResult::Yes(PhysicalType::scalar(st))
             }
             Type::Enum(se) => {
                 let st = se.int_type.get_scalar_type();
-                Some(PhysicalType::scalar(st))
+                PhysicalTypeResult::Yes(PhysicalType::scalar(st))
             }
-            Type::Float(FloatType::F32) => Some(PhysicalType::scalar(ScalarType::F32)),
-            Type::Float(FloatType::F64) => Some(PhysicalType::scalar(ScalarType::F64)),
+            Type::Float(FloatType::F32) => {
+                PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F32))
+            }
+            Type::Float(FloatType::F64) => {
+                PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F64))
+            }
             Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
-                Some(PhysicalType::scalar(ScalarType::Pointer))
+                PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Pointer))
             }
             Type::Array(array) => {
                 let count = self.get_type_as_i64(static_values, array.size_type);
                 match count {
-                    None => None,
-                    Some(0) => Some(PhysicalType::EMPTY),
+                    None => PhysicalTypeResult::No,
+                    Some(0) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
                     Some(len) => match self.get_physical_type(static_values, array.element_type) {
-                        None => None,
-                        Some(element_t) => {
-                            let elem_layout = self.get_pt_layout(element_t);
+                        PhysicalTypeResult::No => PhysicalTypeResult::No,
+                        PhysicalTypeResult::Never => PhysicalTypeResult::Never,
+                        PhysicalTypeResult::Yes(element_pt) => {
+                            let elem_layout = self.get_pt_layout(element_pt);
                             let record = AggregateTypeRecord {
-                                agg_type: AggType::Array { element_pt: element_t, len: len as u32 },
+                                agg_type: AggType::Array { element_pt, len: len as u32 },
                                 origin_type_id: type_id,
                                 layout: elem_layout.array_me(len as usize),
                             };
                             let id = self.agg_types.add(record);
-                            Some(PhysicalType::agg(id))
+                            PhysicalTypeResult::Yes(PhysicalType::agg(id))
                         }
                     },
                 }
@@ -1845,16 +1870,11 @@ impl TypePool {
                 let s_fields = s.fields;
                 let mut fields = self.mem.new_list(s.fields.len());
                 let mut layout = Layout::ZERO_SIZED;
-                let mut not_physical = false;
                 for field in self.mem.getn(s_fields) {
-                    if not_physical {
-                        continue;
-                    }
                     match self.get_physical_type(static_values, field.type_id) {
-                        None => {
-                            not_physical = true;
-                        }
-                        Some(field_pt) => {
+                        PhysicalTypeResult::No => return PhysicalTypeResult::No,
+                        PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
+                        PhysicalTypeResult::Yes(field_pt) => {
                             let field_layout = self.get_pt_layout(field_pt);
                             let offset = layout.append_to_aggregate(field_layout);
                             fields.push(StructField {
@@ -1865,20 +1885,16 @@ impl TypePool {
                         }
                     }
                 }
-                if not_physical {
-                    None
+                if layout.size == 0 {
+                    PhysicalTypeResult::Yes(PhysicalType::EMPTY)
                 } else {
-                    if layout.size == 0 {
-                        Some(PhysicalType::EMPTY)
-                    } else {
-                        let fields_handle = self.mem.list_to_handle(fields);
-                        let agg_id = self.agg_types.add(AggregateTypeRecord {
-                            agg_type: AggType::Struct { fields: fields_handle },
-                            origin_type_id: type_id,
-                            layout,
-                        });
-                        Some(PhysicalType::agg(agg_id))
-                    }
+                    let fields_handle = self.mem.list_to_handle(fields);
+                    let agg_id = self.agg_types.add(AggregateTypeRecord {
+                        agg_type: AggType::Struct { fields: fields_handle },
+                        origin_type_id: type_id,
+                        layout,
+                    });
+                    PhysicalTypeResult::Yes(PhysicalType::agg(agg_id))
                 }
             }
             Type::Sum(e) => {
@@ -1889,17 +1905,18 @@ impl TypePool {
 
                 let mut physical_variants = self.mem.new_list(variant_count);
                 let mut union_members = self.mem.new_list(variant_count);
-                let mut is_physical = true;
 
                 let e = self.get(type_id).expect_sum();
 
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = &v.payload {
                         match self.get_physical_type(static_values, *payload) {
-                            None => {
-                                is_physical = false;
+                            PhysicalTypeResult::No => return PhysicalTypeResult::No,
+                            PhysicalTypeResult::Never => {
+                                // We simply skip this variant!
+                                eprintln!("I am skipping this sum variant")
                             }
-                            Some(payload_pt) => {
+                            PhysicalTypeResult::Yes(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });
 
                                 physical_variants.push(SumVariantPt {
@@ -1913,49 +1930,45 @@ impl TypePool {
                     }
                 }
 
-                if is_physical {
-                    let members_handle = self.mem.list_to_handle(union_members);
-                    let union_id = self.make_union_type(type_id, members_handle);
-                    let union_layout = self.get_pt_layout(PhysicalType::agg(union_id));
+                let members_handle = self.mem.list_to_handle(union_members);
+                let union_id = self.make_union_type(type_id, members_handle);
+                let union_layout = self.get_pt_layout(PhysicalType::agg(union_id));
 
-                    let mut struct_layout = tag_layout;
-                    let tag_field = StructField {
-                        offset: 0,
-                        field_t: PhysicalType::scalar(tag_scalar),
-                        name: self.idents.tag,
-                    };
-                    let (struct_fields, union_offset) = if members_handle.is_empty() {
-                        (self.mem.pushn(&[tag_field]), None)
-                    } else {
-                        let union_offset = struct_layout.append_to_aggregate(union_layout);
-                        let payload_field = StructField {
-                            offset: union_offset,
-                            field_t: PhysicalType::agg(union_id),
-                            name: self.idents.payload,
-                        };
-                        let fields = self.mem.pushn(&[tag_field, payload_field]);
-                        (fields, Some(union_offset))
-                    };
-                    let struct_repr = self.agg_types.add(AggregateTypeRecord {
-                        agg_type: AggType::Struct { fields: struct_fields },
-                        origin_type_id: type_id,
-                        layout: struct_layout,
-                    });
-                    let agg_sum = AggType::Sum(SumPt {
-                        tag_type: tag_scalar,
-                        struct_repr,
-                        variants: self.mem.list_to_handle(physical_variants),
-                        payload_offset: union_offset,
-                    });
-                    let sum_agg_id = self.agg_types.add(AggregateTypeRecord {
-                        agg_type: agg_sum,
-                        origin_type_id: type_id,
-                        layout: struct_layout,
-                    });
-                    Some(PhysicalType::agg(sum_agg_id))
+                let mut struct_layout = tag_layout;
+                let tag_field = StructField {
+                    offset: 0,
+                    field_t: PhysicalType::scalar(tag_scalar),
+                    name: self.idents.tag,
+                };
+                let (struct_fields, union_offset) = if members_handle.is_empty() {
+                    (self.mem.pushn(&[tag_field]), None)
                 } else {
-                    None
-                }
+                    let union_offset = struct_layout.append_to_aggregate(union_layout);
+                    let payload_field = StructField {
+                        offset: union_offset,
+                        field_t: PhysicalType::agg(union_id),
+                        name: self.idents.payload,
+                    };
+                    let fields = self.mem.pushn(&[tag_field, payload_field]);
+                    (fields, Some(union_offset))
+                };
+                let struct_repr = self.agg_types.add(AggregateTypeRecord {
+                    agg_type: AggType::Struct { fields: struct_fields },
+                    origin_type_id: type_id,
+                    layout: struct_layout,
+                });
+                let agg_sum = AggType::Sum(SumPt {
+                    tag_type: tag_scalar,
+                    struct_repr,
+                    variants: self.mem.list_to_handle(physical_variants),
+                    payload_offset: union_offset,
+                });
+                let sum_agg_id = self.agg_types.add(AggregateTypeRecord {
+                    agg_type: agg_sum,
+                    origin_type_id: type_id,
+                    layout: struct_layout,
+                });
+                PhysicalTypeResult::Yes(PhysicalType::agg(sum_agg_id))
             }
             Type::Lambda(lam_id) => {
                 let lam = self.lambda_types.get(*lam_id);
@@ -1964,14 +1977,14 @@ impl TypePool {
             Type::LambdaObject(lam_obj) => {
                 self.add_physical_duplicate(static_values, type_id, lam_obj.struct_representation)
             }
-            Type::StaticValue(_vt) => Some(PhysicalType::EMPTY),
-            Type::Never => None,
+            Type::StaticValue(_vt) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
+            Type::Never => PhysicalTypeResult::Never,
             Type::Function(_)
             | Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
-            | Type::Unresolved(_) => None,
+            | Type::Unresolved(_) => PhysicalTypeResult::No,
         }
     }
 
@@ -1980,12 +1993,13 @@ impl TypePool {
         static_values: &StaticValuePool,
         origin_type_id: TypeId,
         other: TypeId,
-    ) -> Option<PhysicalType> {
+    ) -> PhysicalTypeResult {
         match self.get_physical_type(static_values, other) {
-            None => None,
-            Some(other_pt) => match other_pt.as_enum() {
-                PhysicalTypeEnum::Empty => Some(other_pt),
-                PhysicalTypeEnum::Scalar(_) => Some(other_pt),
+            PhysicalTypeResult::No => PhysicalTypeResult::No,
+            PhysicalTypeResult::Never => PhysicalTypeResult::Never,
+            orig @ PhysicalTypeResult::Yes(other_pt) => match other_pt.as_enum() {
+                PhysicalTypeEnum::Empty => orig,
+                PhysicalTypeEnum::Scalar(_) => orig,
                 PhysicalTypeEnum::Agg(agg_id) => {
                     let r = self.agg_types.get(agg_id);
                     let r_new = AggregateTypeRecord {
@@ -1994,7 +2008,7 @@ impl TypePool {
                         layout: r.layout,
                     };
                     let new_id = self.agg_types.add(r_new);
-                    Some(PhysicalType::agg(new_id))
+                    PhysicalTypeResult::Yes(PhysicalType::agg(new_id))
                 }
             },
         }
@@ -2067,13 +2081,13 @@ impl TypePool {
         &mut self,
         static_values: &StaticValuePool,
         type_id: TypeId,
-    ) -> Option<PhysicalType> {
+    ) -> PhysicalTypeResult {
         match self.phys_types.get(&type_id) {
-            Some(res) => *res,
+            Some(result) => *result,
             None => {
-                let maybe_pt = self.compile_physical_type(static_values, type_id);
-                self.phys_types.insert(type_id, maybe_pt);
-                maybe_pt
+                let pt_result = self.compile_physical_type(static_values, type_id);
+                self.phys_types.insert(type_id, pt_result);
+                pt_result
             }
         }
     }
@@ -2081,8 +2095,9 @@ impl TypePool {
     pub fn get_layout_nonmut(&self, type_id: TypeId) -> Option<Layout> {
         match self.phys_types.get(&type_id) {
             Some(maybe_pt) => match maybe_pt {
-                None => Some(Layout::ZERO_SIZED),
-                Some(pt) => Some(self.get_pt_layout(*pt)),
+                PhysicalTypeResult::No => None,
+                PhysicalTypeResult::Never => None,
+                PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(*pt)),
             },
             None => None,
         }
@@ -2090,8 +2105,9 @@ impl TypePool {
 
     pub fn get_layout(&mut self, static_values: &StaticValuePool, type_id: TypeId) -> Layout {
         match self.get_physical_type(static_values, type_id) {
-            None => Layout::ZERO_SIZED,
-            Some(pt) => self.get_pt_layout(pt),
+            PhysicalTypeResult::No => Layout::ZERO_SIZED,
+            PhysicalTypeResult::Never => Layout::ZERO_SIZED,
+            PhysicalTypeResult::Yes(pt) => self.get_pt_layout(pt),
         }
     }
 

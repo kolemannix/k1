@@ -1,0 +1,190 @@
+let MODULE_INFO: k1/module-manifest = {
+  kind: .executable,
+  deps: [],
+  multithreading: false,
+  libs: [{ name: "pq", link-type: .default }],
+  link-args: ["-L/opt/homebrew/opt/libpq/include"]
+}
+
+ns pg {
+  let CONNECTION_OK: core/c-int = 0
+  let PGRES_COMMAND_OK: core/c-int = 1
+  let PGRES_TUPLES_OK: core/c-int = 2
+
+  extern("pq", "PQconnectdb") fn connectdb(conninfo: ptr): ptr
+  extern("pq", "PQstatus") fn status(conn: ptr): core/c-int
+  extern("pq", "PQerrorMessage") fn error-message(conn: ptr): ptr
+  extern("pq", "PQfinish") fn finish(conn: ptr)
+
+  extern("pq", "PQexec") fn exec(conn: ptr, query: ptr): ptr
+  extern("pq", "PQresultStatus") fn result-status(result: ptr): core/c-int
+  extern("pq", "PQresultErrorMessage") fn result-error-message(result: ptr): ptr
+  extern("pq", "PQclear") fn clear(result: ptr)
+
+  extern("pq", "PQntuples") fn n-tuples(result: ptr): core/c-int
+  extern("pq", "PQnfields") fn n-fields(result: ptr): core/c-int
+  extern("pq", "PQfname") fn field-name(result: ptr, column: core/c-int): ptr
+  extern("pq", "PQgetisnull") fn is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
+  extern("pq", "PQgetvalue") fn get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
+}
+
+deftype Connection = { raw: ptr }
+deftype QueryResult = { raw: ptr }
+
+fn c-string-or-default(c-str: ptr, fallback: string): string {
+  if c-str.is-null() fallback
+  else string/from-c(c-str)
+}
+
+fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[Connection, string] {
+  let conninfo-c = conninfo.toCString();
+  let conn = pg/connectdb(conninfo-c.ptr);
+  if conn.is-null() {
+    return(.err("PQconnectdb returned null"))
+  };
+
+  if pg/status(conn) == pg/CONNECTION_OK {
+    .ok({ raw: conn })
+  } else {
+    let err = c-string-or-default(pg/error-message(conn), "failed to connect");
+    pg/finish(conn);
+    .err(err)
+  }
+}
+
+ns Connection {
+  fn close(self: Connection) {
+    if not self.raw.is-null() {
+      pg/finish(self.raw)
+    };
+    {}
+  }
+
+  fn exec(context alloc: mem/alloc-mode)(self: Connection, query: string): result[QueryResult, string] {
+    let query-c = query.toCString();
+    let raw-result = pg/exec(self.raw, query-c.ptr);
+    if raw-result.is-null() {
+      return(.err("PQexec returned null"))
+    };
+
+    let status = pg/result-status(raw-result);
+    if status == pg/PGRES_COMMAND_OK or status == pg/PGRES_TUPLES_OK {
+      .ok({ raw: raw-result })
+    } else {
+      let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
+      pg/clear(raw-result);
+      .err(err)
+    }
+  }
+}
+
+ns QueryResult {
+  fn clear(self: QueryResult) {
+    if not self.raw.is-null() {
+      pg/clear(self.raw)
+    };
+    {}
+  }
+
+  fn row-count(self: QueryResult): size {
+    pg/n-tuples(self.raw).as[size]
+  }
+
+  fn col-count(self: QueryResult): size {
+    pg/n-fields(self.raw).as[size]
+  }
+
+  fn column-name(self: QueryResult, column: size): string {
+    let c-name = pg/field-name(self.raw, column.as[core/c-int]);
+    c-string-or-default(c-name, "<unnamed>")
+  }
+
+  fn value(self: QueryResult, row: size, column: size): ?string {
+    let row-c = row.as[core/c-int];
+    let col-c = column.as[core/c-int];
+    if pg/is-null(self.raw, row-c, col-c) != 0 {
+      return(.none)
+    };
+    let c-value = pg/get-value(self.raw, row-c, col-c);
+    .some(c-string-or-default(c-value, ""))
+  }
+}
+
+fn print-result-table(result: QueryResult) {
+  let rows = result.row-count();
+  let cols = result.col-count();
+  if cols == 0 {
+    println("(command ok)");
+    return({})
+  };
+
+  let col = 0;
+  while col < cols {
+    if col > 0 { print("\t") };
+    print(result.column-name(col));
+    col := col + 1;
+  };
+  print("\n");
+
+  let row = 0;
+  while row < rows {
+    col := 0;
+    while col < cols {
+      if col > 0 { print("\t") };
+      switch result.value(row, col) {
+        .none -> print("NULL"),
+        .some(value) -> print(value)
+      };
+      col := col + 1;
+    };
+    print("\n");
+    row := row + 1;
+  };
+
+  {}
+}
+
+fn usage(program-name: string) {
+  eprintln("Usage: {program-name} <conninfo> [query]");
+  eprintln("Example:");
+  eprintln("  {program-name} \"postgresql://localhost/postgres\" \"select now()\"");
+  {}
+}
+
+fn main(argc: u32, argv: ptr): i32 {
+  let context alloc: mem/alloc-mode = .system-heap;
+
+  let args = core/sys/parseMainArgs(argc, argv);
+  if args.len() < 2 {
+    usage(args.get(0));
+    return(1);
+  };
+
+  let conninfo = args.get(1);
+  let query = if args.len() >= 3 {
+    args.get(2)
+  } else {
+    "select 'hello from k1/libpq'::text as message"
+  };
+
+  let conn = switch connect(conninfo) {
+    .ok(conn) -> conn,
+    .err(msg) -> {
+      eprintln("connect failed: {msg}");
+      return(1)
+    }
+  };
+  defer conn.close();
+
+  let query-result = switch conn.exec(query) {
+    .ok(result) -> result,
+    .err(msg) -> {
+      eprintln("query failed: {msg}");
+      return(1)
+    }
+  };
+  defer query-result.clear();
+
+  print-result-table(query-result);
+  0
+}

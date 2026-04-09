@@ -137,6 +137,13 @@ impl StaticValue {
         }
     }
 
+    pub fn as_struct(&self) -> Option<&StaticStruct> {
+        match self {
+            StaticValue::Struct(s) => Some(s),
+            _ => None,
+        }
+    }
+
     #[doc(alias = "as_i64")]
     pub(crate) fn as_size(&self) -> Option<i64> {
         match self {

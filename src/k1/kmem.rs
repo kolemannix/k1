@@ -770,6 +770,7 @@ impl<T, Tag> MList<T, Tag> {
             if cfg!(debug_assertions) {
                 // No need to log grows from 0
                 if self.len != 0 {
+                    // eprintln!("{}", std::backtrace::Backtrace::capture());
                     eprintln!(
                         "{}:{} Slow Growing from {} -> {}",
                         loc.file(),
@@ -882,7 +883,10 @@ impl<T, Tag> MList<T, Tag> {
         mem.list_to_handle(self)
     }
 
-    pub fn fill_to_cap(&mut self, value: T) where T: Copy {
+    pub fn fill_to_cap(&mut self, value: T)
+    where
+        T: Copy,
+    {
         while self.len < self.cap() {
             self.push_unchecked(value);
         }

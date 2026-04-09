@@ -68,6 +68,10 @@ ns list {
   }
 
   fn as-span[T](self: list[T]): span[T] {
+    list/span[T](self)
+  }
+
+  fn span[T](self: list[T]): span[T] {
     span/wrapBuffer(self.asBuffer[T]())
   }
 

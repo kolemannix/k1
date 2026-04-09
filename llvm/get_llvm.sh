@@ -48,7 +48,8 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_ENABLE_RUNTIMES=compiler-rt
 
 # === Build and Install ===
-cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
+# cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
+cmake --build . -- -j2
 cmake --install .
 
 echo "LLVM built and installed under: ${INSTALL_DIR}"

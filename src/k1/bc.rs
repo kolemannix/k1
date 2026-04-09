@@ -1166,10 +1166,22 @@ impl<'k1> Builder<'k1> {
         self.k1.bytecode.b_variables.iter().find(|bv| bv.id == variable_id)
     }
 
+    fn get_physical_type_result(&mut self, type_id: TypeId) -> PhysicalTypeResult {
+        self.k1.get_physical_type(type_id)
+    }
+
     fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalType {
-        self.k1.get_physical_type(type_id).unwrap_or_else(|| {
-            b_ice!(self, "Not a physical type: {}", self.k1.type_id_to_string_ext(type_id, true))
-        })
+        match self.get_physical_type_result(type_id) {
+            PhysicalTypeResult::Never => {
+                b_ice!(self, "Type is divergent: {}", self.k1.type_id_to_string_ext(type_id, true))
+            }
+            PhysicalTypeResult::No => b_ice!(
+                self,
+                "Not a physical type: {}",
+                self.k1.type_id_to_string_ext(type_id, true)
+            ),
+            PhysicalTypeResult::Yes(pt) => pt,
+        }
     }
 
     fn type_to_inst_kind(&mut self, type_id: TypeId) -> InstKind {
@@ -2005,9 +2017,11 @@ fn compile_expr(
 
                 b.goto_block(*arm_cons_block);
                 let result = compile_expr(b, None, arm.consequent_expr)?;
-                let cons_type_id = b.k1.exprs.get_type(arm.consequent_expr);
-                let cons_diverges = cons_type_id == NEVER_TYPE_ID;
-                debug_assert_eq!(cons_diverges, b.get_value_kind(result).is_terminator());
+                let cons_diverges = b.get_value_kind(result).is_terminator();
+                debug_assert_eq!(
+                    b.k1.exprs.get_type(arm.consequent_expr) == NEVER_TYPE_ID,
+                    cons_diverges
+                );
 
                 if !cons_diverges {
                     let current_block = b.cur_block;

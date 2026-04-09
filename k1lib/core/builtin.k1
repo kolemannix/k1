@@ -533,13 +533,16 @@ ns k1 {
 
   deftype module-kind = either(u8) library, executable, script
 
+  deftype library-ref = { name: string, link-type: either(u8) default, static, dynamic }
+
   deftype module-manifest = {
     kind: module-kind,
     deps: span[string],
 
     // Primary module settings
     multithreading: bool,
-    libs: span[string],
+    libs: span[library-ref],
+    link-args: span[string],
   }
 
 }

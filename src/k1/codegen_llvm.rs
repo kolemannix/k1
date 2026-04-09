@@ -42,8 +42,8 @@ use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, STRING_TYPE_ID,
-    ScalarType, Type, TypeDefnInfo, TypeId,
+    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, PhysicalTypeResult,
+    STRING_TYPE_ID, ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
@@ -612,7 +612,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let llvm_global = if global.is_external {
-            let Some(global_pt) = self.k1.get_physical_type(global.type_id) else {
+            let PhysicalTypeResult::Yes(global_pt) = self.k1.get_physical_type(global.type_id)
+            else {
                 return failf!(global.span, "ICE: Not physical; todo reject this in typer");
             };
             let basic_type = self.codegen_type(global_pt);

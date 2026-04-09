@@ -19,7 +19,7 @@ use crate::bc::{
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
+    PhysicalTypeResult, STRING_TYPE_ID, ScalarType, Type, TypeId, TypePool,
 };
 use crate::typer::{
     ErrorKind, FunctionId, K1Message, K1Result, MessageLevel, StaticContainer, StaticContainerKind,
@@ -627,8 +627,7 @@ pub fn execute_compiled_unit(
                 Ok(k1.static_values.empty_id())
             } else {
                 let loaded = load_value(logical_return_pt, ret_addr);
-                let returned_value =
-                    vm_value_to_static_value(k1, return_type_id, loaded, span)?;
+                let returned_value = vm_value_to_static_value(k1, return_type_id, loaded, span)?;
                 Ok(returned_value)
             }
         };
@@ -2326,7 +2325,7 @@ pub fn vm_value_to_static_value(
     span: SpanId,
 ) -> K1Result<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
-    let Some(pt) = k1.get_physical_type(type_id) else {
+    let PhysicalTypeResult::Yes(pt) = k1.get_physical_type(type_id) else {
         return failf!(
             span,
             "Not a physical type, cannot bake to static: {}",
@@ -2368,7 +2367,7 @@ pub fn vm_value_to_static_value(
             };
             let count = count as usize;
             let mut elements = k1.static_values.mem.new_list(count as u32);
-            let Some(element_pt) = k1.get_physical_type(element_type) else {
+            let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
                 return failf!(
                     span,
                     "Element type is not physical: {}",
@@ -2582,13 +2581,13 @@ fn render_debug_address(w: &mut impl std::fmt::Write, vm: &Vm, value: Value) -> 
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
     match k1.get_physical_type(type_id) {
-        None => ice_span!(
+        PhysicalTypeResult::No | PhysicalTypeResult::Never => ice_span!(
             k1,
             span,
             "not a value type; zeroed() for type {} is undefined",
             k1.types.get(type_id).kind_name()
         ),
-        Some(pt) => match pt.as_enum() {
+        PhysicalTypeResult::Yes(pt) => match pt.as_enum() {
             PhysicalTypeEnum::Scalar(_) => Value(0),
             PhysicalTypeEnum::Agg(agg_id) => {
                 let layout = k1.types.agg_types.get(agg_id).layout;

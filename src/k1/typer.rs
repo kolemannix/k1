@@ -2361,11 +2361,18 @@ pub struct ModuleManifest {
     pub deps: Vec<ModuleRef>,
     pub multithreading: bool,
     pub libs: Vec<LibRef>,
+    pub link_args: Vec<StringId>,
 }
 
 impl Default for ModuleManifest {
     fn default() -> Self {
-        Self { kind: ModuleKind::Executable, deps: vec![], multithreading: false, libs: vec![] }
+        Self {
+            kind: ModuleKind::Executable,
+            deps: vec![],
+            multithreading: false,
+            libs: vec![],
+            link_args: vec![],
+        }
     }
 }
 
@@ -2879,6 +2886,7 @@ impl TypedProgram {
                     name: self.ast.strings.intern("k1rt"),
                     link_type: LibRefLinkType::Static,
                 }],
+                link_args: vec![],
             }
         } else {
             let manifest_result = self.get_module_manifest(parsed_namespace_id);
@@ -2892,6 +2900,7 @@ impl TypedProgram {
                     deps: vec![],
                     multithreading: false,
                     libs: vec![],
+                    link_args: vec![],
                 },
                 Some(manifest) => manifest,
             }
@@ -4544,28 +4553,54 @@ impl TypedProgram {
                     _ => panic!("Unrecognized module kind index: {}", int_value),
                 };
 
-                // Maybe, one day libs and deps are the same thing
-                // Currently, though, no common needs
                 let deps = vec![];
 
                 let multithreading = self.static_values.get(value_fields[2]).as_boolean().unwrap();
 
                 let libs = self.static_values.get(value_fields[3]).as_container().unwrap();
                 let mut lib_refs = vec![];
-                for lib in self.static_values.get_slice(libs.elements) {
-                    // Grab the strings out for now. Eventually we can maybe just
-                    // mmap this thing.
-                    let string_id = self.static_values.get(*lib).as_string().unwrap();
-                    lib_refs.push(LibRef { name: string_id, link_type: LibRefLinkType::Static })
+                // deftype library-ref = { name: string, link-type: either(u8) default, static, dynamic }
+                for lib_ref_struct_value_id in self.static_values.get_slice(libs.elements) {
+                    let lib_ref_struct =
+                        self.static_values.get(*lib_ref_struct_value_id).as_struct().unwrap();
+                    let lib_ref_struct_fields = self.static_values.get_slice(lib_ref_struct.fields);
+                    let name_string_id =
+                        self.static_values.get(lib_ref_struct_fields[0]).as_string().unwrap();
+                    let link_type_u8: u8 = self
+                        .static_values
+                        .get(lib_ref_struct_fields[1])
+                        .as_enum()
+                        .unwrap()
+                        .1
+                        .as_u8()
+                        .unwrap();
+                    let link_type = match link_type_u8 {
+                        0 => LibRefLinkType::Default,
+                        1 => LibRefLinkType::Static,
+                        2 => LibRefLinkType::Dynamic,
+                        _ => panic!("Bad value for link-type enum"),
+                    };
+                    lib_refs.push(LibRef { name: name_string_id, link_type })
                 }
 
-                Ok(Some(ModuleManifest { kind, deps, multithreading, libs: lib_refs }))
+                let static_link_args =
+                    self.static_values.get(value_fields[4]).as_container().unwrap();
+                let mut link_args = vec![];
+                for link_arg in self.static_values.get_slice(static_link_args.elements) {
+                    // Grab the strings out for now. Eventually we can maybe just
+                    // interpret the memory
+                    let string_id = self.static_values.get(*link_arg).as_string().unwrap();
+                    link_args.push(string_id)
+                }
+
+                Ok(Some(ModuleManifest { kind, deps, multithreading, libs: lib_refs, link_args }))
             }
             StaticValue::Zero(_) => Ok(Some(ModuleManifest {
                 kind: ModuleKind::Library,
                 deps: vec![],
                 multithreading: false,
                 libs: vec![],
+                link_args: vec![],
             })),
             _ => panic!(
                 "Expected module manifest to be a struct, got: {}",
@@ -16489,6 +16524,7 @@ impl TypedProgram {
                                 self.pattern_ctors.add(PatternCtor::Struct { fields: smallvec![] }),
                             ));
                         } else {
+                            let mut has_unreachable_field = false;
                             for (index, field) in
                                 self.types.mem.getn(struc.fields).iter().enumerate()
                             {
@@ -16504,6 +16540,10 @@ impl TypedProgram {
                                     None => field_ctors_buf.push(Vec::with_capacity(128)),
                                     Some(buf) => buf.clear(),
                                 };
+                                if dst.len() == prev_len {
+                                    // No constructors
+                                    has_unreachable_field = true
+                                }
                                 for field_ctor in dst[prev_len..].iter() {
                                     field_ctors_buf[index].push((field.name, field_ctor.ctor));
                                 }
@@ -16514,74 +16554,77 @@ impl TypedProgram {
                                 );
                                 dst.truncate(prev_len);
                             }
-                            let final_count = field_ctors_buf[0..field_count as usize]
-                                .iter()
-                                .map(|v| v.len())
-                                .reduce(|t, v| t * v)
-                                .unwrap_or(0);
 
-                            debug!(
-                                "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
-                                field_ctors_buf.len(),
-                                self.type_id_to_string(type_id)
-                            );
-                            let dst_start = dst.len();
-                            for _ in 0..final_count {
-                                let primed_struct_ctor_id =
-                                    self.pattern_ctors.add(PatternCtor::Struct {
-                                        fields: SmallVec::with_capacity(field_count as usize),
-                                    });
-                                dst.push(alive(primed_struct_ctor_id));
-                            }
-                            let result_struct_ids = &mut dst[dst_start..];
+                            if !has_unreachable_field {
+                                let final_count = field_ctors_buf[0..field_count as usize]
+                                    .iter()
+                                    .map(|v| v.len())
+                                    .reduce(|t, v| t * v)
+                                    .unwrap_or(0);
 
-                            // This entire loop is just about taking the cross-product of all the fields'
-                            // respective constructors in an efficient way; by populating slots in
-                            // a pre-allocated table, and doing a bit of math to decide how many times
-                            // a pattern should repeat or cycle. Example
-                            // {  a: bool, b: bool, c: either A, B, C }
-                            // 0  f        f        A
-                            // 1  f        f        B
-                            // 2  f        f        C
-                            // 3  f        t        A
-                            // 4  f        t        B
-                            // 5  f        t        C
-                            // 6  t        f        A
-                            // 7  t        f        B
-                            // 8  t        f        C
-                            // 9  t        t        A
-                            // 10 t        t        B
-                            // 11 t        t        C
-                            // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
-                            // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
-                            // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
-                            let mut field_index_w_multi_ctor = 0;
-                            for ctors in field_ctors_buf[0..field_count as usize].iter() {
-                                if ctors.len() == 1 {
-                                    for result_struct in result_struct_ids.iter_mut() {
-                                        self.pattern_ctors
-                                            .get_mut(result_struct.ctor)
-                                            .push_field(ctors[0]);
-                                    }
-                                } else {
-                                    // multiplier = 2 ^ field_index but only for fields that have more than
-                                    // 1 pattern
-                                    let multiplier = if field_index_w_multi_ctor == 0 {
-                                        1
+                                debug!(
+                                    "Processing {} ctors; expecting {final_count} final struct combinations for type: {}",
+                                    field_ctors_buf.len(),
+                                    self.type_id_to_string(type_id)
+                                );
+                                let dst_start = dst.len();
+                                for _ in 0..final_count {
+                                    let primed_struct_ctor_id =
+                                        self.pattern_ctors.add(PatternCtor::Struct {
+                                            fields: SmallVec::with_capacity(field_count as usize),
+                                        });
+                                    dst.push(alive(primed_struct_ctor_id));
+                                }
+                                let result_struct_ids = &mut dst[dst_start..];
+
+                                // This entire loop is just about taking the cross-product of all the fields'
+                                // respective constructors in an efficient way; by populating slots in
+                                // a pre-allocated table, and doing a bit of math to decide how many times
+                                // a pattern should repeat or cycle. Example
+                                // {  a: bool, b: bool, c: either A, B, C }
+                                // 0  f        f        A
+                                // 1  f        f        B
+                                // 2  f        f        C
+                                // 3  f        t        A
+                                // 4  f        t        B
+                                // 5  f        t        C
+                                // 6  t        f        A
+                                // 7  t        f        B
+                                // 8  t        f        C
+                                // 9  t        t        A
+                                // 10 t        t        B
+                                // 11 t        t        C
+                                // a has 2 patterns, and is in the first (meaningful) position, so we do 12 / 2 * 1 to get 6 as its 'repeat count', and repeat each pattern 6 times
+                                // b has 2 patterns, and is in the second (meaningful) position, so we do 12 / 2 * 2 to get 3 as its 'repeat count', and repeat each pattern 3 times (fff, ttt)
+                                // c has 3 patterns, and is in the third (meaningful) position, so we do 12 / 3 * 4 to get 1 as its 'repeat count', and repeat each pattern 1 time (abc, abc, abc)
+                                let mut field_index_w_multi_ctor = 0;
+                                for ctors in field_ctors_buf[0..field_count as usize].iter() {
+                                    if ctors.len() == 1 {
+                                        for result_struct in result_struct_ids.iter_mut() {
+                                            self.pattern_ctors
+                                                .get_mut(result_struct.ctor)
+                                                .push_field(ctors[0]);
+                                        }
                                     } else {
-                                        field_index_w_multi_ctor * 2
-                                    };
-                                    let repeat_count = final_count / (ctors.len() * multiplier);
-                                    for (row, result_struct) in
-                                        result_struct_ids.iter_mut().enumerate()
-                                    {
-                                        let pattern_index = (row / repeat_count) % ctors.len();
-                                        let pattern = ctors[pattern_index];
-                                        self.pattern_ctors
-                                            .get_mut(result_struct.ctor)
-                                            .push_field(pattern);
+                                        // multiplier = 2 ^ field_index but only for fields that have more than
+                                        // 1 pattern
+                                        let multiplier = if field_index_w_multi_ctor == 0 {
+                                            1
+                                        } else {
+                                            field_index_w_multi_ctor * 2
+                                        };
+                                        let repeat_count = final_count / (ctors.len() * multiplier);
+                                        for (row, result_struct) in
+                                            result_struct_ids.iter_mut().enumerate()
+                                        {
+                                            let pattern_index = (row / repeat_count) % ctors.len();
+                                            let pattern = ctors[pattern_index];
+                                            self.pattern_ctors
+                                                .get_mut(result_struct.ctor)
+                                                .push_field(pattern);
+                                        }
+                                        field_index_w_multi_ctor += 1;
                                     }
-                                    field_index_w_multi_ctor += 1;
                                 }
                             }
                         }
@@ -16595,6 +16638,7 @@ impl TypedProgram {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
             Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
+            Type::Never => self.report_hint(span_id, "never has no constructors"),
             _ => self.report_hint(
                 span_id,
                 format!(
@@ -16702,7 +16746,7 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_physical_type(&mut self, type_id: TypeId) -> Option<PhysicalType> {
+    pub fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
         self.types.get_physical_type(&self.static_values, type_id)
     }
 

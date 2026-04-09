@@ -1,25 +1,17 @@
 let MODULE_INFO: k1/module-manifest = {
-  kind: .Executable,
-  deps: [],
-  multithreading: false,
-  libs: ["raylib"]
+  let frameworks = ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"];
+  let link-args = list/empty[string]();
+  for frameworks { link-args.push("-framework"); link-args.push(it) };
+  {
+    kind: .executable,
+    deps: [],
+    multithreading: false,
+    libs: [{ name: "raylib", link-type: .static }],
+    link-args: link-args.span(),
+  }
 }
 ns raylib {
-  deftype Color = {
-    r: u8, g: u8, b: u8, a: u8
-  }
-  ns Color {
-    fn rgba(r: u8, g: u8, b: u8, a: u8): u32 {
-      let v: u32 = r.as();
-      v := v | (g.as[u32]() << 8);
-      v := v | (b.as[u32]() << 16);
-      v := v | (a.as[u32]() << 24);
-      v
-    }
-    fn u32(self: Color): u32 {
-      rgba(self.r, self.g, self.b, self.a)
-    }
-  }
+  deftype Color = { r: u8, g: u8, b: u8, a: u8 }
 
   deftype Rectangle = {
     x: f32, y: f32, width: f32, height: f32
@@ -41,13 +33,13 @@ ns raylib {
 
 }
 
-let RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 };
-let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 };
-let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 };
-let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 };
+let RED: raylib/Color = { r: 255, g: 0, b: 0, a: 255 }
+let GRAY: raylib/Color = { r: 200, g: 200, b: 200, a: 255 }
+let PINK: raylib/Color = { r: 255, g: 109, b: 194, a: 255 }
+let PURPLE: raylib/Color = { r: 200, g: 122, b: 255, a: 255 }
 
-#debug fn run(title: string): i32 {
-  let context alloc-mode: mem/alloc-mode = .Arena;
+fn run(title: string): i32 {
+  let context alloc-mode: mem/alloc-mode = .arena;
   let titleC = title.toCString();
   raylib/init(800, 450, titleC.ptr);
   raylib/SetTargetFPS(60);
