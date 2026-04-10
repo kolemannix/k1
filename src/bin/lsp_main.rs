@@ -85,11 +85,11 @@ const TOKEN_MODIFIERS: [SemanticTokenModifier; 10] = [
 #[repr(u32)]
 enum TokenModifiers {
     Declaration = 1 << 0, // nothing
-    Definition = 1 << 1, // nothing
-    Readonly = 1 << 2, // orange
-    Static = 1 << 3, // nothing
-    Deprecated = 1 << 4, // strikethrough
-    Abstract = 1 << 5, // nothing
+    Definition = 1 << 1,  // nothing
+    Readonly = 1 << 2,    // orange
+    Static = 1 << 3,      // nothing
+    Deprecated = 1 << 4,  // strikethrough
+    Abstract = 1 << 5,    // nothing
     Async = 1 << 6,
     Modification = 1 << 7,
     Documentation = 1 << 8,
@@ -541,32 +541,44 @@ impl LanguageServer for Backend {
             };
             // The goal is to use only 'atoms' to avoid overlaps and backwards movement
             let mut spans_and_kinds = vec![];
-            for type_expr in ast_for_file.type_exprs.iter() {
-                match type_expr {
-                    k1::parse::ParsedTypeExpr::TypeApplication(ty_app) => {
-                        let span_id = ty_app.name.span;
-                        let span = ast_for_file.spans.get(span_id);
-                        if span.file_id == source.file_id {
-                            debug!("type_expr span {} {}", span.start, span.len);
-                            spans_and_kinds.push((span, TokenTypes::Type as u32, 0))
-                        }
-                    }
-                    _ => {}
+            // for type_expr in ast_for_file.type_exprs.iter() {
+            //     match type_expr {
+            //         k1::parse::ParsedTypeExpr::TypeApplication(ty_app) => {
+            //             let span_id = ty_app.name.span;
+            //             let span = ast_for_file.spans.get(span_id);
+            //             if span.file_id == source.file_id {
+            //                 debug!("type_expr span {} {}", span.start, span.len);
+            //                 spans_and_kinds.push((span, TokenTypes::Type as u32, 0))
+            //             }
+            //         }
+            //         _ => {}
+            //     }
+            // }
+            for semantic_token in ast_for_file.semantic_tokens.iter() {
+                if semantic_token.span.file_id == source.file_id {
+                    let token_type = match semantic_token.kind {
+                        parse::SemanticTokenKind::Type => TokenTypes::Type,
+                        parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                        parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
+                        parse::SemanticTokenKind::Function => TokenTypes::Function,
+                        parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
+                    };
+                    spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
             }
-            for expr in ast_for_file.exprs.iter_exprs() {
-                match expr {
-                    k1::parse::ParsedExpr::Variable(parsed_var) => {
-                        let span_id = parsed_var.name.span;
-                        let span = ast_for_file.spans.get(span_id);
-                        if span.file_id == source.file_id {
-                            debug!("variable name span {} {}", span.start, span.len);
-                            spans_and_kinds.push((span, TokenTypes::Variable as u32, 0))
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            // for expr in ast_for_file.exprs.iter_exprs() {
+            //     match expr {
+            //         k1::parse::ParsedExpr::Variable(parsed_var) => {
+            //             let span_id = parsed_var.name.span;
+            //             let span = ast_for_file.spans.get(span_id);
+            //             if span.file_id == source.file_id {
+            //                 debug!("variable name span {} {}", span.start, span.len);
+            //                 spans_and_kinds.push((span, TokenTypes::Variable as u32, 0))
+            //             }
+            //         }
+            //         _ => {}
+            //     }
+            // }
             // for stmt in ast_for_file.stmts.iter() {
             //     match stmt {
             //         k1::parse::ParsedStmt::Let(parsed_let) => {

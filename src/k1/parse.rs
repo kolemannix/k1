@@ -1610,6 +1610,20 @@ impl Sources {
 pub(crate) type ParsedSlice<T> = MSlice<T, ParsedProgram>;
 pub(crate) type ParsedHandle<T> = MHandle<T, ParsedProgram>;
 
+#[derive(Clone, Copy)]
+pub enum SemanticTokenKind {
+    Type,
+    Variable,
+    Keyword,
+    Function,
+    Namespace,
+}
+nz_u32_id!(SemanticTokenId);
+pub struct SemanticToken {
+    pub span: Span,
+    pub kind: SemanticTokenKind,
+}
+
 pub struct ParsedProgram {
     pub name: String,
     pub name_id: Ident,
@@ -1630,6 +1644,8 @@ pub struct ParsedProgram {
     pub uses: ParsedUsePool,
     pub errors: Vec<ParseError>,
 
+    pub semantic_tokens: VPool<SemanticToken, SemanticTokenId>,
+
     pub mem: kmem::Mem<ParsedProgram>,
 }
 
@@ -1648,6 +1664,9 @@ impl ParsedProgram {
                 if preallocate_hints { $value } else { 0 }
             };
         }
+
+        let semantic_tokens =
+            VPool::make_with_hint("semantic_tokens", if cfg!(feature = "lsp") { 65536 } else { 0 });
 
         ParsedProgram {
             name,
@@ -1668,6 +1687,8 @@ impl ParsedProgram {
             stmts: VPool::make_with_hint("parsed_stmts", if_hint!(65536)),
             uses: ParsedUsePool::make(),
             errors: Vec::new(),
+
+            semantic_tokens,
 
             mem: kmem::Mem::make(),
         }
@@ -2290,6 +2311,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                             _ => unreachable!(),
                         };
                         self.advance();
+                        self.add_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
                         let mut parameter_names: SV4<Ident> = smallvec![];
                         if let Some(_open_token) =
                             self.maybe_consume_next_no_whitespace(K::OpenParen)
@@ -2598,6 +2620,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.ast.type_exprs.get(id).get_span()
     }
 
+    #[inline]
+    fn add_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) -> SemanticTokenId {
+        self.add_semantic_token_span(token.span, kind)
+    }
+
+    fn add_semantic_token_span(
+        &mut self,
+        span_id: SpanId,
+        kind: SemanticTokenKind,
+    ) -> SemanticTokenId {
+        if cfg!(feature = "lsp") {
+            let span = self.ast.spans.get(span_id);
+            self.ast.semantic_tokens.add(SemanticToken { span, kind })
+        } else {
+            SemanticTokenId::PENDING
+        }
+    }
+
     fn parse_literal_atom(&mut self) -> ParseResult<Option<ParsedExprId>> {
         let (first, second) = self.tokens.peek_two();
         trace!("parse_literal {} {}", first.kind, second.kind);
@@ -2826,6 +2866,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if next.kind == K::Dot {
                     self.advance();
                     let (ident_token, ident) = self.expect_ident()?;
+                    self.add_semantic_token(ident_token, SemanticTokenKind::Type);
                     let span =
                         self.extend_span(self.ast.get_type_expr_span(result), ident_token.span);
                     let new = ParsedTypeExpr::DotMemberAccess(ParsedDotMemberAccess {
@@ -2898,6 +2939,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::KeywordBuiltin {
             self.advance();
             let builtin_id = self.ast.type_exprs.add(ParsedTypeExpr::Builtin(first.span));
+            self.add_semantic_token(first, SemanticTokenKind::Keyword);
             Ok(Some(builtin_id))
         } else if let Some(literal_expr_id) = self.parse_literal_atom()? {
             if let ParsedExpr::Literal(l) = self.ast.exprs.get(literal_expr_id) {
@@ -2911,6 +2953,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if ident_chars == "either" {
                 let sum = self.expect_sum_type_expression()?;
                 let type_expr_id = self.ast.type_exprs.add(ParsedTypeExpr::Sum(sum));
+                self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(type_expr_id))
             } else if ident_chars == "typeOf" {
                 self.advance();
@@ -2919,6 +2962,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let end = self.expect_kind(K::CloseParen)?;
                 let span = self.extend_token_span(first, end);
                 let type_of = ParsedTypeExpr::TypeOf(ParsedTypeOf { target_expr, span });
+                self.add_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_of)))
             } else if ident_chars == "typeFromId" {
                 self.advance();
@@ -2928,6 +2972,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_token_span(first, end);
                 let type_from_id =
                     ParsedTypeExpr::TypeFromId(ParsedTypeFromId { id_expr: target_expr, span });
+                self.add_semantic_token(first, SemanticTokenKind::Function);
                 Ok(Some(self.ast.type_exprs.add(type_from_id)))
             } else if ident_chars == "static" {
                 self.advance();
@@ -2937,6 +2982,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     family_type_expr: inner_type_expr,
                     span,
                 });
+                self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(self.ast.type_exprs.add(static_expr)))
             } else if ident_chars == "some" {
                 self.advance();
@@ -2944,9 +2990,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_to_here(first.span);
                 let quantifier =
                     ParsedTypeExpr::SomeQuant(SomeQuantifier { inner_type_expr: inner_expr, span });
+                self.add_semantic_token(first, SemanticTokenKind::Keyword);
                 Ok(Some(self.ast.type_exprs.add(quantifier)))
             } else {
                 let base_name = self.expect_namespaced_ident()?;
+                self.add_semantic_token_span(base_name.span, SemanticTokenKind::Type);
 
                 // Note: This no longer needs to be special syntax since its not an X anymore.
                 //           I do think we should do a special syntax for slices and arrays and
@@ -2964,6 +3012,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         let span = self.extend_token_span(first, end_bracket);
 
                         let array_type = ParsedArrayType { size_expr, element_type, span };
+
                         return Ok(Some(
                             self.ast.type_exprs.add(ParsedTypeExpr::Array(array_type)),
                         ));
@@ -3634,6 +3683,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 let (args, args_span) = self.expect_fn_call_args()?;
                                 let args_handle = self.ast.mem.pushn(&args);
                                 let span = self.extend_span(namespaced_ident.span, args_span);
+                                self.add_semantic_token_span(
+                                    namespaced_ident.span,
+                                    SemanticTokenKind::Function,
+                                );
                                 Ok(Some(self.add_expression(ParsedExpr::Call(ParsedCall {
                                     name: namespaced_ident,
                                     type_args: first_type_args,
@@ -3705,6 +3758,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         }
                     } else {
                         // The last thing it can be is a simple variable reference expression
+                        self.add_semantic_token_span(
+                            namespaced_ident.span,
+                            SemanticTokenKind::Variable,
+                        );
                         Ok(Some(self.add_expression(ParsedExpr::Variable(ParsedVariable {
                             name: namespaced_ident,
                         }))))
@@ -4269,8 +4326,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 return if self.cursor_position() != initial_pos { Err(e) } else { Ok(None) };
             }
         };
-        let func_name = self.expect_kind(K::Ident)?;
-        let func_name_id = self.intern_ident_token(func_name);
+        let (func_name, func_name_id) = self.expect_ident()?;
+        self.add_semantic_token(func_name, SemanticTokenKind::Function);
         let mut type_params: SV8<ParsedTypeParam> = smallvec![];
         if self.maybe_consume(K::OpenBracket).is_some() {
             let _ = self.eat_delimited_ext(
@@ -4603,6 +4660,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if keyword.kind != K::KeywordNamespace {
             return Ok(None);
         };
+        self.add_semantic_token(keyword, SemanticTokenKind::Namespace);
         self.advance();
         let ident = self.expect_kind(K::Ident)?;
         let is_braced = match self.tokens.next() {

@@ -35,7 +35,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn make_bytes(name: &'static str, bytes: usize, expected_usage: Option<usize>) -> Self {
         let mmap = memmap2::MmapMut::map_anon(bytes).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
-        if let Some(expected_usage) = expected_usage {
+        if let Some(expected_usage) = expected_usage && expected_usage != 0 {
             mmap.advise_range(
                 memmap2::Advice::WillNeed,
                 0,
