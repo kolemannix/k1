@@ -471,8 +471,8 @@ impl LanguageServer for Backend {
         let file_url = position.text_document.uri;
         let line = position.position.line;
         let col = position.position.character;
-        let module = self.module.lock().unwrap();
-        let CompiledProgram::Typed(k1) = &*module else {
+        let mut module = self.module.lock().unwrap();
+        let CompiledProgram::Typed(k1) = &mut *module else {
             info!("Parsed but not typed (when does this happen?)");
             return Ok(None);
         };
