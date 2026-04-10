@@ -1,0 +1,64 @@
+{
+  "name": "k1-language",
+  "displayName": "K1 Language",
+  "description": "VS Code support for the k1 language via the k1 Language Server",
+  "version": "0.0.1",
+  "publisher": "kolemannix",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:k1"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "k1",
+        "aliases": [
+          "k1",
+          "K1"
+        ],
+        "extensions": [
+          ".k1"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "k1",
+      "properties": {
+        "k1.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the k1lsp binary. If empty, the extension will try $K1_HOME/bin/k1lsp then ~/.k1/bin/k1lsp."
+        },
+        "k1.languageServer.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional command-line arguments passed to k1lsp."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.3"
+  }
+}
