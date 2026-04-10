@@ -162,6 +162,7 @@ ns GameState {
   fn genWhitePawnMoves(self: GameState): list[Move] {
      let returned moves = list/empty[Move]();
      let notOccupied = self.notOccupied();
+
      // Single push: shift pawns up one rank if square is empty
      let singlePush = (self.wPawns << 8) & notOccupied;
      let _singlePushSources = self.wPawns & (singlePush >> 8);

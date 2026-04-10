@@ -1,7 +1,6 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use itertools::Itertools;
 use log::debug;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -138,7 +137,7 @@ fn error_to_diagnostic(
                 severity: Some(severity),
                 code: None,
                 code_description: None,
-                source: Some(ast.name.clone()),
+                source: None,
                 message,
                 related_information: None,
                 tags: None,
@@ -246,6 +245,21 @@ impl Backend {
         all_errors
     }
 
+    fn build_all_files_and_errors_map(&self) -> HashMap<Url, Vec<Diagnostic>> {
+        let all_files = self.all_file_urls();
+        let all_errors = self.list_all_errors();
+        let mut map: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+        for file in all_files {
+            map.insert(file, vec![]);
+        }
+
+        for (url, diagnostic) in all_errors {
+            map.entry(url).or_default().push(diagnostic);
+        }
+
+        map
+    }
+
     fn compile(&self) -> u32 {
         let out_dir: PathBuf = ".k1-out/lsp".into();
         std::fs::create_dir_all(&out_dir).unwrap();
@@ -289,18 +303,8 @@ impl Backend {
     }
 
     async fn send_diagnostics(&self) {
-        let errors = self.list_all_errors();
         let version = self.compile_iteration.load(Ordering::Relaxed);
-        let mut errors_by_file = errors.into_iter().into_group_map();
-        for e in &errors_by_file {
-            info!("Got {} messages for {}", e.1.len(), e.0);
-        }
-
-        // Ensure we clear existing diagnostics by always publishing for every file
-        let all_files = self.all_file_urls();
-        for url in all_files.into_iter() {
-            errors_by_file.entry(url).or_insert(vec![]);
-        }
+        let errors_by_file = self.build_all_files_and_errors_map();
         for (file_url, errors) in errors_by_file.into_iter() {
             if !errors.is_empty() {
                 info!("Sending {} diagnostics for {file_url} with version {version}", errors.len());
@@ -500,19 +504,23 @@ impl LanguageServer for Backend {
     ) -> Result<WorkspaceDiagnosticReportResult> {
         let _ = params;
         info!("Got a workspace/diagnostic request");
-        let diagnostics: Vec<(Url, Diagnostic)> = self.list_all_errors();
-        Ok(WorkspaceDiagnosticReportResult::Report(WorkspaceDiagnosticReport {
-            items: vec![WorkspaceDocumentDiagnosticReport::Full(
-                WorkspaceFullDocumentDiagnosticReport {
-                    uri: self.workspace_uri.read().unwrap().clone().unwrap(),
+        let errors_by_file = self.build_all_files_and_errors_map();
+
+        let items = errors_by_file
+            .into_iter()
+            .map(|(file_url, diags)| {
+                WorkspaceDocumentDiagnosticReport::Full(WorkspaceFullDocumentDiagnosticReport {
+                    uri: file_url,
                     version: None,
                     full_document_diagnostic_report: FullDocumentDiagnosticReport {
                         result_id: None,
-                        items: diagnostics.into_iter().map(|p| p.1).collect(),
+                        items: diags,
                     },
-                },
-            )],
-        }))
+                })
+            })
+            .collect();
+
+        Ok(WorkspaceDiagnosticReportResult::Report(WorkspaceDiagnosticReport { items }))
     }
 
     async fn semantic_tokens_full(
