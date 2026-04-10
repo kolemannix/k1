@@ -1517,6 +1517,9 @@ impl ParsedTypeExpressionPool {
     pub fn get(&self, id: ParsedTypeExprId) -> &ParsedTypeExpr {
         self.type_expressions.get(id)
     }
+    pub fn iter(&self) -> impl Iterator<Item = &ParsedTypeExpr> {
+        self.type_expressions.iter()
+    }
 }
 
 pub struct ParsedUsePool {

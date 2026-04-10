@@ -82,17 +82,18 @@ const TOKEN_MODIFIERS: [SemanticTokenModifier; 10] = [
     SemanticTokenModifier::DEFAULT_LIBRARY,
 ];
 #[allow(unused)]
+#[repr(u32)]
 enum TokenModifiers {
-    Declaration = 0,
-    Definition = 1,
-    Readonly = 2,
-    Static = 3,
-    Deprecated = 4,
-    Abstract = 5,
-    Async = 6,
-    Modification = 7,
-    Documentation = 8,
-    DefaultLibrary = 9,
+    Declaration = 1 << 0, // nothing
+    Definition = 1 << 1, // nothing
+    Readonly = 1 << 2, // orange
+    Static = 1 << 3, // nothing
+    Deprecated = 1 << 4, // strikethrough
+    Abstract = 1 << 5, // nothing
+    Async = 1 << 6,
+    Modification = 1 << 7,
+    Documentation = 1 << 8,
+    DefaultLibrary = 1 << 9,
 }
 
 fn span_to_range(source: &Source, spans: &Spans, span_id: SpanId) -> Option<Range> {
@@ -538,18 +539,50 @@ impl LanguageServer for Backend {
                 false => ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
+            // The goal is to use only 'atoms' to avoid overlaps and backwards movement
+            let mut spans_and_kinds = vec![];
+            for type_expr in ast_for_file.type_exprs.iter() {
+                match type_expr {
+                    k1::parse::ParsedTypeExpr::TypeApplication(ty_app) => {
+                        let span_id = ty_app.name.span;
+                        let span = ast_for_file.spans.get(span_id);
+                        if span.file_id == source.file_id {
+                            debug!("type_expr span {} {}", span.start, span.len);
+                            spans_and_kinds.push((span, TokenTypes::Type as u32, 0))
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for expr in ast_for_file.exprs.iter_exprs() {
+                match expr {
+                    k1::parse::ParsedExpr::Variable(parsed_var) => {
+                        let span_id = parsed_var.name.span;
+                        let span = ast_for_file.spans.get(span_id);
+                        if span.file_id == source.file_id {
+                            debug!("variable name span {} {}", span.start, span.len);
+                            spans_and_kinds.push((span, TokenTypes::Variable as u32, 0))
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // for stmt in ast_for_file.stmts.iter() {
+            //     match stmt {
+            //         k1::parse::ParsedStmt::Let(parsed_let) => {
+            //             let span_id = ty_app.name.span;
+            //             let span = ast_for_file.spans.get(span_id);
+            //             if span.file_id == source.file_id {
+            //                 info!("type_expr span {} {}", span.start, span.len);
+            //                 spans_and_kinds.push((span, TokenTypes::Type as u32))
+            //             }
+            //         }
+            //         _ => {}
+            //     }
+            // }
             for token in &source.tokens {
                 // Hack to retrieve the span from the edited ParsedProgram rather than the primary one
                 let span = ast_for_file.spans.get(token.span);
-                let length = span.len;
-                let Some(line) = source.get_line_for_span_start(span) else {
-                    continue;
-                };
-                let line_number = line.line_number();
-                let start_col = span.start - line.start_char;
-                let delta_line = line_number - prev_line;
-                let delta_start =
-                    if delta_line == 0 { start_col - prev_start_col } else { start_col };
                 let token_type = match token.kind {
                     lex::TokenKind::Numeric => Some(TokenTypes::Number as u32),
                     k1::lex::TokenKind::Ident => Some(TokenTypes::Variable as u32),
@@ -624,18 +657,33 @@ impl LanguageServer for Backend {
                     k1::lex::TokenKind::Eof => None,
                 };
                 if let Some(token_type) = token_type {
-                    prev_line = line_number;
-                    prev_start_col = start_col;
-                    let token = SemanticToken {
-                        delta_line,
-                        delta_start,
-                        length,
-                        token_type,
-                        token_modifiers_bitset: 0,
-                    };
-                    // info!("pushing token {:?}", token);
-                    tokens.push(token);
+                    spans_and_kinds.push((span, token_type, 0))
                 }
+            }
+            spans_and_kinds.sort_by(|f1, f2| f1.0.start.cmp(&f2.0.start));
+            for (span, token_type, bitflags) in spans_and_kinds {
+                info!("spans_and_kinds sorted {} {}", span.start, span.len);
+                let length = span.len;
+                let Some(line) = source.get_line_for_span_start(span) else {
+                    continue;
+                };
+                let line_number = line.line_number();
+                let start_col = span.start - line.start_char;
+                let delta_line = line_number - prev_line;
+                let delta_start =
+                    if delta_line == 0 { start_col - prev_start_col } else { start_col };
+
+                prev_line = line_number;
+                prev_start_col = start_col;
+                let token = SemanticToken {
+                    delta_line,
+                    delta_start,
+                    length,
+                    token_type,
+                    token_modifiers_bitset: bitflags,
+                };
+                // info!("pushing token {:?}", token);
+                tokens.push(token);
             }
             info!(
                 "semantic_tokens: iterated {} tokens, returning {}",
