@@ -687,7 +687,7 @@ impl<Tag> Mem<Tag> {
         let used_kb = self.bytes_used() / crate::KILOBYTE;
         let total = self.mmap.len() / crate::KILOBYTE;
         let percent = (used_kb as f64) / (total as f64) * 100.0;
-        println!("{name} usage: {used_kb}/{total}kb ({percent:.2}%)");
+        eprintln!("{name} usage: {used_kb}/{total}kb ({percent:.2}%)");
     }
 }
 
