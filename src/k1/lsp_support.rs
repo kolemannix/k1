@@ -31,7 +31,7 @@ pub fn get_expr_at_point(
     if let Some((expr_id, _)) = matching_exprs.first() {
         let type_id = k1.exprs.get_type(*expr_id);
         let type_string = k1.type_id_to_string(type_id);
-        let layout = k1.types.get_layout_nonmut(type_id);
+        let layout = k1.get_layout(type_id);
         let expr_string = k1.expr_to_string(*expr_id);
         let kind_name = k1.exprs.get(*expr_id).kind_name();
         let msg = format!(
