@@ -2,7 +2,7 @@ set -e
 set -x
 
 TT=$1
-DST=builds/k1-linux-x86
+DST=$2
 
 mkdir -p $DST
 cp $TT/k1 $DST/k1

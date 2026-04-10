@@ -10,12 +10,22 @@ lsp:
 lsprelease:
   cargo build --profile release --features lsp --bin lsp
 
+build-k1r:
+  cargo build --release --bin k1  --features=llvm-sys/force-static
+
 valgrind-linux:
   git pull
   cargo build --profile profiling
   valgrind --tool=callgrind --dump-instr=yes --collect-jumps=yes --callgrind-out-file=cg.out target/profiling/k1 c test_src/suite1
 
 bundle-linux-from-linux: 
-  cargo build --release --bin k1  --features=llvm-sys/force-static
+  just lsprelease
+  just build-k1r
   cargo build --release --bin lsp --features=llvm-sys/force-static --features=lsp
-  ./builds/bundle_linux.sh target/release
+  ./builds/bundle.sh target/release builds/k1-linux-x86
+
+bundle-macos-from-macos:
+  just lsprelease
+  just build-k1r
+  ./builds/bundle.sh target/release builds/k1-macos
+
