@@ -14486,11 +14486,11 @@ impl TypedProgram {
                 let mut s = String::with_capacity(256);
                 write!(
                     &mut s,
-                    "{}_{}_{}_{}",
+                    "impl_{}{}.{}_for_{}",
                     self_.ident_str(self_.abilities.get(ability_id.unwrap()).name),
-                    self_.type_id_to_string(impl_info.self_type_id),
-                    ability_id.unwrap().0,
+                    ability_id.unwrap().as_u32(),
                     self_.ident_str(ast_fn.name),
+                    self_.type_id_to_string(impl_info.self_type_id),
                 )
                 .unwrap();
                 self_.ast.idents.intern(s)

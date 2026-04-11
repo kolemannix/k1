@@ -685,17 +685,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         line.line_index + 1
     }
 
+    // FIXME: slow dumb bad mangle function
+    fn mangle(name: String) -> String {
+        name.replace("[", "_of_")
+            .replace("]", "_")
+            .replace(",", "_")
+            .replace("*", "ref")
+            .replace(" ", "_")
+    }
+
     fn write_type_name(
         &self,
         w: &mut impl std::fmt::Write,
         type_id: TypeId,
         defn_info: Option<TypeDefnInfo>,
     ) {
-        // FIXME: Using this typename is bad; it needs to be purpose-built and mangled
+        // FIXME: Using this as typename is bad; consider a really big struct.
         let name = self.k1.type_id_to_string(type_id);
+        let name = Cg::mangle(name);
+
         match defn_info {
             None => write!(w, "{}", name).unwrap(),
-            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, "/", true),
+            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, ".", true),
         };
     }
 
@@ -2463,7 +2474,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             TyperLinkage::External { fn_name: Some(link_name), .. } => {
                 self.k1.ident_str(link_name).to_string()
             }
-            _ => self.k1.make_qualified_name(typed_function.scope, typed_function.name, ".", true),
+            _ => Cg::mangle(self.k1.make_qualified_name(
+                typed_function.scope,
+                typed_function.name,
+                ".",
+                true,
+            )),
         };
 
         if self.llvm_module.get_function(&llvm_name).is_some() {

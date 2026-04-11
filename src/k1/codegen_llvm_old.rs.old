@@ -845,7 +845,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
         type_id: TypeId,
         defn_info: Option<TypeDefnInfo>,
     ) {
-        // FIXME: Using this typename is bad; it needs to be purpose-built and mangled
         let name = self.k1.type_id_to_string(type_id);
         match defn_info {
             None => write!(w, "{}", name).unwrap(),
@@ -3020,7 +3019,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                 // pointer because we know it from the type still
                 let lambda_env_value = self.codegen_expr_basic_value(cast.base_expr)?;
                 let env_pointer = self.build_alloca(lambda_env_value.get_type(), "env_ptr");
-                // fixme: this stores an aggregate but its ok as its a known small layout
                 self.builder.build_store(env_pointer, lambda_env_value).unwrap();
 
                 let fn_value =
@@ -4146,7 +4144,6 @@ impl<'ctx, 'module> Codegen<'ctx, 'module> {
                         }
                     }
                     CallConv::ARM64 => {
-                        // FIXME: Check for HFA on ARM64
                         if size <= 8 {
                             // Returns use the exact width; otherwise just i64
                             let width_bits = if is_return { size * 8 } else { 64 };
