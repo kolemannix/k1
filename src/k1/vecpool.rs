@@ -4,7 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::{num::NonZeroU32, ops::Add};
 
 use smallvec::SmallVec;
-mod virt_pool;
 
 pub trait PoolIndex:
     Copy
@@ -44,9 +43,11 @@ impl<Index: PoolIndex> Hash for SliceHandle<Index> {
 }
 
 impl<Index: PoolIndex> SliceHandle<Index> {
+    #[allow(unused)]
     pub const fn empty() -> Self {
         Self { index: None, len: 0 }
     }
+    #[allow(unused)]
     pub fn make_nz(index: Index, len: NonZeroU32) -> Self {
         Self { index: Some(index), len: len.get() }
     }
@@ -60,6 +61,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn end_index(&self) -> Option<Index> {
         match self.index {
             None => None,
@@ -76,6 +78,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -83,6 +86,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
     /// Skip this entry, resulting in a handle with a length
     /// decreased by n, and pointing n elements ahead of where it was.
     /// Returns an empty handle on an already empty handle
+    #[allow(unused)]
     pub fn skip(&self, n: usize) -> Self {
         if n == 0 {
             return *self;
@@ -103,7 +107,7 @@ impl<Index: PoolIndex> SliceHandle<Index> {
 }
 
 #[allow(unused)]
-pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
+pub struct VecPool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
     // It would be a lot more powerful if each entry could point to its 'next', or if each entry
     // were an enum allowing redirects. The issue there is we can't really provide a slice, we can
     // only provide iterators, it's just a lot more to do, and there's overhead per lookup
@@ -118,13 +122,13 @@ pub struct Pool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
 }
 
 #[allow(unused)]
-impl<T, Index: PoolIndex> Pool<T, Index> {
-    pub fn with_capacity(name: &'static str, capacity: usize) -> Pool<T, Index> {
-        Pool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
+impl<T, Index: PoolIndex> VecPool<T, Index> {
+    pub fn with_capacity(name: &'static str, capacity: usize) -> VecPool<T, Index> {
+        VecPool { name, vec: Vec::with_capacity(capacity), _index: std::marker::PhantomData }
     }
 
-    pub fn new(name: &'static str) -> Pool<T, Index> {
-        Pool { name, vec: Vec::new(), _index: std::marker::PhantomData }
+    pub fn new(name: &'static str) -> VecPool<T, Index> {
+        VecPool { name, vec: Vec::new(), _index: std::marker::PhantomData }
     }
 
     pub fn next_id(&self) -> Index {
@@ -270,7 +274,7 @@ impl<T, Index: PoolIndex> Pool<T, Index> {
 
 /// WHEN T IS CLONE IMPL
 #[allow(unused)]
-impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
+impl<T: Clone, Index: PoolIndex> VecPool<T, Index> {
     pub fn get_slice_to_smallvec<const N: usize>(
         &self,
         handle: SliceHandle<Index>,
@@ -292,7 +296,7 @@ impl<T: Clone, Index: PoolIndex> Pool<T, Index> {
 
 /// WHEN T IS COPY IMPL
 #[allow(unused)]
-impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
+impl<T: Copy, Index: PoolIndex> VecPool<T, Index> {
     pub fn copy_slice_sv<const N: usize>(&self, handle: SliceHandle<Index>) -> SmallVec<[T; N]>
     where
         [T; N]: smallvec::Array<Item = T>,
@@ -325,7 +329,7 @@ impl<T: Copy, Index: PoolIndex> Pool<T, Index> {
 
 /// WHEN T IS COPY AND EQ
 #[allow(unused)]
-impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
+impl<T: Copy + PartialEq + Eq, Index: PoolIndex> VecPool<T, Index> {
     pub fn slices_equal_copy(
         &self,
         handle1: SliceHandle<Index>,
@@ -342,13 +346,11 @@ impl<T: Copy + PartialEq + Eq, Index: PoolIndex> Pool<T, Index> {
 
 // WHEN T IS EQ
 #[allow(unused)]
-impl<T: PartialEq, Index: PoolIndex> Pool<T, Index> {
+impl<T: PartialEq, Index: PoolIndex> VecPool<T, Index> {
     pub fn slice_contains(&self, handle: SliceHandle<Index>, elem: &T) -> bool {
         self.get_slice(handle).contains(elem)
     }
 }
-
-pub use virt_pool::VPool;
 
 #[cfg(test)]
 mod test {
@@ -356,24 +358,24 @@ mod test {
 
     nz_u32_id!(MyIndex);
 
-    use super::Pool;
+    use super::VecPool;
     #[test]
     fn single() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("single");
+        let mut pool: VecPool<i32, MyIndex> = VecPool::new("single");
         let handle = pool.add(42);
         assert_eq!(*pool.get(handle), 42);
     }
 
     #[test]
     fn slice() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("slice");
+        let mut pool: VecPool<i32, MyIndex> = VecPool::new("slice");
         let handle = pool.add_slice_from_iter([1, 2, 3].iter().copied());
         assert_eq!(pool.get_slice(handle), &[1, 2, 3]);
     }
 
     #[test]
     fn mutate_slice() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_slice");
+        let mut pool: VecPool<i32, MyIndex> = VecPool::new("mutate_slice");
         let handle = pool.add_slice_from_iter([1, 2, 3].iter().copied());
         pool.get_slice_mut(handle)[1] = 42;
         assert_eq!(pool.get_slice(handle), &[1, 42, 3]);
@@ -381,7 +383,7 @@ mod test {
 
     #[test]
     fn skip_slice_handle() {
-        let mut pool: Pool<i32, MyIndex> = Pool::new("mutate_slice");
+        let mut pool: VecPool<i32, MyIndex> = VecPool::new("mutate_slice");
         let handle = pool.add_slice_from_iter([1, 2].iter().copied());
         assert_eq!(handle.len(), 2);
         let handle = handle.skip(1);

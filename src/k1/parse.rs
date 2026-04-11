@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
 use crate::kmem::{self, MHandle, MSL2, MSS2, MSlice, MSpillList};
-use crate::pool::{SliceHandle, VPool};
+use crate::vpool::{SliceHandle, VPool};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::{
     SV4, SV8, impl_copy_if_reg, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size,

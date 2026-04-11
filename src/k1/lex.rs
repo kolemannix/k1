@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
 use crate::parse::FileId;
-use crate::pool::{SliceHandle, VPool};
+use crate::vpool::{SliceHandle, VPool};
 use TokenKind as K;
 use log::debug;
 

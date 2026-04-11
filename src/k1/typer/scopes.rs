@@ -12,7 +12,7 @@ use crate::{
     lex::SpanId,
     nz_u32_id,
     parse::{IdentPool, IdentSlice, ParsedAbilityId, ParsedExprId, QIdent},
-    pool::VPool,
+    vpool::VPool,
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, Ident, K1Result, LoopType, NamespaceId, Namespaces, TypeId,

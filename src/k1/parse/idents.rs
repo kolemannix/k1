@@ -6,7 +6,7 @@ use crate::{
     impl_copy_if_small,
     lex::SpanId,
     nz_u32_id,
-    pool::{SliceHandle, VPool},
+    vpool::{SliceHandle, VPool},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

@@ -16,7 +16,7 @@ use crate::{
     kmem::{self, MSlice, MStr},
     lex::SpanId,
     nz_u32_id,
-    pool::VPool,
+    vpool::VPool,
     typer::{types::*, *},
 };
 use ahash::HashMapExt;

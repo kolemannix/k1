@@ -61,7 +61,7 @@ use crate::parse::{
     ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
     StructValueFieldKind,
 };
-use crate::pool::VPool;
+use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
 
 #[cfg(test)]

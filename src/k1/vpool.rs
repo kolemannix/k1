@@ -1,11 +1,106 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, ops::Add};
+use std::hash::{Hash, Hasher};
 
 use smallvec::SmallVec;
 
-use crate::pool::{PoolIndex, SliceHandle};
+pub trait PoolIndex:
+    Copy
+    + Into<NonZeroU32>
+    + From<NonZeroU32>
+    + PartialEq
+    + Eq
+    + Add<Self, Output = Self>
+    + Add<u32, Output = Self>
+    + Hash
+{
+}
+impl<
+    T: Copy
+        + Into<NonZeroU32>
+        + From<NonZeroU32>
+        + PartialEq
+        + Eq
+        + Add<Self, Output = Self>
+        + Add<u32, Output = Self>
+        + Hash,
+> PoolIndex for T
+{
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliceHandle<Index: PoolIndex> {
+    index: Option<Index>,
+    len: u32,
+}
+
+impl<Index: PoolIndex> Hash for SliceHandle<Index> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        self.len.hash(state);
+    }
+}
+
+impl<Index: PoolIndex> SliceHandle<Index> {
+    pub const fn empty() -> Self {
+        Self { index: None, len: 0 }
+    }
+    pub fn make_nz(index: Index, len: NonZeroU32) -> Self {
+        Self { index: Some(index), len: len.get() }
+    }
+    pub fn make(index: Index, len: u32) -> Self {
+        if len == 0 { Self { index: None, len: 0 } } else { Self { index: Some(index), len } }
+    }
+
+    #[inline]
+    pub fn index(&self) -> Option<Index> {
+        self.index
+    }
+
+    #[inline]
+    pub fn end_index(&self) -> Option<Index> {
+        match self.index {
+            None => None,
+            Some(index) => {
+                let end_index = index + self.len;
+                Some(end_index)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Skip this entry, resulting in a handle with a length
+    /// decreased by n, and pointing n elements ahead of where it was.
+    /// Returns an empty handle on an already empty handle
+    pub fn skip(&self, n: usize) -> Self {
+        if n == 0 {
+            return *self;
+        }
+        match self.index {
+            None => *self,
+            Some(index) => {
+                let new_len = (self.len).saturating_sub(n as u32);
+                if new_len == 0 {
+                    Self { index: Some(index), len: new_len }
+                } else {
+                    let new_index = index + (n as u32);
+                    Self { index: Some(new_index), len: new_len }
+                }
+            }
+        }
+    }
+}
 
 pub struct VPool<T, Index: PoolIndex> {
     // It would be a lot more powerful if each entry could point to its 'next', or if each entry
@@ -344,7 +439,7 @@ mod test {
     use itertools::Itertools;
     use std::num::NonZeroU32;
 
-    use crate::{nz_u32_id, pool::SliceHandle};
+    use crate::{nz_u32_id, vpool::SliceHandle};
 
     nz_u32_id!(MyIndex);
 
