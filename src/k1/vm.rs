@@ -300,7 +300,7 @@ impl Vm {
         writeln!(w, "Locals").unwrap();
         for block in k1.bytecode.mem.getn(unit.blocks) {
             for inst_id in k1.bytecode.mem.getn(block.instrs) {
-                let inst_index = inst_to_index(*inst_id, unit.inst_offset);
+                let inst_index = bc::inst_to_index(*inst_id, unit.inst_offset);
                 let local = self.stack.get_inst_value(frame.index, inst_index);
                 let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, *inst_id);
                 match kind {
@@ -540,10 +540,6 @@ impl std::fmt::Display for Value {
     }
 }
 
-fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
-    inst_id.as_u32() - offset
-}
-
 pub fn execute_compiled_function(
     k1: &mut TypedProgram,
     vm: &mut Vm,
@@ -674,7 +670,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         // Fetch
         let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
         vm.eval_span = *k1.bytecode.sources.get(inst_id);
-        let inst_index = inst_to_index(inst_id, inst_offset);
+        let inst_index = bc::inst_to_index(inst_id, inst_offset);
         k1.timing.total_vm_instrs += 1;
 
         // if debugger {
@@ -1653,7 +1649,7 @@ fn resolve_value(
 ) -> K1Result<Value> {
     match value {
         BcValue::Inst(inst_id) => {
-            let inst_index = inst_to_index(inst_id, inst_offset);
+            let inst_index = bc::inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_index);
             Ok(v)
         }

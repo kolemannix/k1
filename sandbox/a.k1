@@ -1,12 +1,10 @@
-fn main(): i32 {
-  let foo: result[int, { asdf: never }] = .ok(42);
-
-  require foo is .ok(i);
-
-  assertEquals(i, 42);
-  switch foo {
-    .ok(i) -> assertEquals(i, 42),
-  };
+#debug fn add(a: int, b: int): int {
+  println("inline add");
+  if a == 10 return(-1);
+  a + b
+}
+#debug fn main(): i32 {
+  add(5, 2 + 2);
   0
 }
 

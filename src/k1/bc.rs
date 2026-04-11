@@ -1892,15 +1892,8 @@ fn compile_expr(
                             b.k1.bytecode.b_units_pending_compile.push(function_id);
                         }
                     }
-                    Some(unit) => {
-                        // TODO: Function inlining!
-                        let mut total = 0;
-                        for block in b.k1.bytecode.mem.getn(unit.blocks) {
-                            total += block.instrs.len()
-                        }
-                        if total < 50 {
-                            //eprintln!("Would inline call")
-                        }
+                    Some(_unit) => {
+
                     }
                 }
             }
@@ -2321,6 +2314,8 @@ fn compile_expr(
         }
     }
 }
+
+// fn optimize_unit(unit: &CompiledUnit
 
 fn compile_variable_to_address(
     b: &mut Builder,
@@ -3081,6 +3076,10 @@ pub fn display_function(
 ) -> std::fmt::Result {
     let Some(unit) = bc.functions.get(function) else { return Ok(()) };
     display_unit(w, k1, unit, show_source)
+}
+
+pub fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
+    inst_id.as_u32() - offset
 }
 
 pub fn display_block(

@@ -12566,16 +12566,13 @@ impl TypedProgram {
         // Builtins that are handled by the typechecking phase are implemented here.
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
             if builtin.is_typer_phase() {
-                self.handle_builtin(call, builtin, ctx)
+                return self.handle_builtin(call, builtin, ctx);
             } else {
                 self.check_builtin(&call, builtin, ctx)?;
-                let call_id = self.calls.add(call);
-                Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
             }
-        } else {
-            let call_id = self.calls.add(call);
-            Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
         }
+        let call_id = self.calls.add(call);
+        Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
     }
 
     ////////////////////////////////

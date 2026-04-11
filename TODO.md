@@ -77,7 +77,7 @@ Simple but missing
 
 ## Vendor'd Libraries
 - [ ] postgres client
-- [ ] linker args / "use system lib"
+- [x] linker args / "use system lib"
 - [ ] http server
 - [ ] datastar
 
