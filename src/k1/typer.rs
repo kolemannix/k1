@@ -11,9 +11,9 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::bc::BuiltinHandler;
+use crate::ir::BuiltinHandler;
 use crate::typer::dump::K1DisplayArgs;
-use crate::{bc, clock, compiler, k1_format, k1_format_user, kbail, kerr, vm};
+use crate::{ir, clock, compiler, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -1970,7 +1970,7 @@ impl Builtin {
     }
 
     pub fn is_typer_phase(self) -> bool {
-        matches!(bc::builtin_handler(self), BuiltinHandler::Typer)
+        matches!(ir::builtin_handler(self), BuiltinHandler::Typer)
     }
 }
 
@@ -2611,7 +2611,7 @@ pub struct TypedProgram {
     /// tmp arena space
     pub tmp: kmem::Mem<MemTmp>,
 
-    pub bytecode: bc::ProgramBytecode,
+    pub ir: ir::ProgramIr,
 
     pub timing: Timing,
 
@@ -2635,7 +2635,7 @@ pub struct Timing {
     pub total_infer_nanos: i64,
     pub total_vm_nanos: i64,
     pub total_vm_instrs: i64,
-    pub total_bytecode_nanos: i64,
+    pub total_ir_nanos: i64,
 }
 
 impl Timing {
@@ -2780,7 +2780,7 @@ impl TypedProgram {
             mem: kmem::Mem::make(),
             tmp: kmem::Mem::make(),
 
-            bytecode: bc::ProgramBytecode::make(32768),
+            ir: ir::ProgramIr::make(32768),
 
             timing: Timing {
                 clock,
@@ -2788,7 +2788,7 @@ impl TypedProgram {
                 total_infer_nanos: 0,
                 total_vm_nanos: 0,
                 total_vm_instrs: 0,
-                total_bytecode_nanos: 0,
+                total_ir_nanos: 0,
             },
             global_id_k1_arena: None,
         }
@@ -5511,21 +5511,21 @@ impl TypedProgram {
         }
     }
 
-    fn compile_all_pending_bytecode(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
+    fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
             // eprintln!(
-            //     "compile_all_pending_bytecode {}",
-            //     self.bytecode.b_units_pending_compile.len()
+            //     "compile_all_pending_ir {}",
+            //     self.ir.b_units_pending_compile.len()
             // );
-            // for p in &self.bytecode.b_units_pending_compile {
+            // for p in &self.ir.b_units_pending_compile {
             //     eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
             // }
-            if let Some(function_id) = self.bytecode.b_units_pending_compile.pop() {
+            if let Some(function_id) = self.ir.b_units_pending_compile.pop() {
                 self.eval_function_body(function_id)?;
-                if let Err(e) = bc::compile_function(self, function_id) {
+                if let Err(e) = ir::compile_function(self, function_id) {
                     return failf!(
                         on_behalf_of_span,
-                        "Failed to compile bytecode for function execution: {}",
+                        "Failed to compile ir for function execution: {}",
                         e.message
                     );
                 };
@@ -5560,7 +5560,7 @@ impl TypedProgram {
         }
 
         // FIXME: We need to mask access from inside a static to outside variables!
-        //       Currently we'll just fail in bytecode gen with "missing variable"
+        //       Currently we'll just fail in ir gen with "missing variable"
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let expr_span = parsed_expr_as_block.span;
@@ -5578,8 +5578,8 @@ impl TypedProgram {
             eprintln!("COMPILED TO BLOCK\n\n{}", self.expr_to_string(expr));
         }
 
-        bc::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
-        self.compile_all_pending_bytecode(expr_span)?;
+        ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
+        self.compile_all_pending_ir(expr_span)?;
 
         let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
             let stack_trace = vm::make_stack_trace(self, &vm.stack);
@@ -5644,8 +5644,8 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<StaticValueId> {
         self.do_with_vm(span, |k1, vm| {
-            bc::compile_function(k1, function_id)?;
-            k1.compile_all_pending_bytecode(span)?;
+            ir::compile_function(k1, function_id)?;
+            k1.compile_all_pending_ir(span)?;
 
             let execution_result =
                 vm::execute_compiled_function(k1, vm, function_id, function_parameters).map_err(
@@ -5852,7 +5852,7 @@ impl TypedProgram {
         }
         function.is_concrete = is_concrete;
         self.functions.add(function);
-        self.bytecode.functions.add(None);
+        self.ir.functions.add(None);
         id
     }
 
@@ -11357,8 +11357,6 @@ impl TypedProgram {
             let actual_new_function_id = self.add_function(new_function);
             debug_assert_eq!(actual_new_function_id, new_function_id);
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
-            //bc::compile_function(self, new_function_id)
-            //    .unwrap_or_else(|e| self.ice_with_span(e.message, e.span));
             new_function_id
         };
         let dyn_function = self.get_function(dyn_function_id);
@@ -13092,12 +13090,6 @@ impl TypedProgram {
         }
 
         self.get_function_mut(function_id).body_block = Some(typed_body);
-
-        //if is_concrete {
-        //    if let Err(e) = bc::compile_function(self, function_id) {
-        //        return failf!(e.span, "Failed to compile bytecode for function: {}", e.message);
-        //    }
-        //}
 
         Ok(())
     }
@@ -17583,13 +17575,13 @@ impl TypedProgram {
         eprintln!("\t{} idents", self.ast.idents.len());
         eprintln!(
             "\t{} instructions, {}ms bc",
-            self.bytecode.instrs.len(),
-            self.timing.total_bytecode_nanos / 1_000_000
+            self.ir.instrs.len(),
+            self.timing.total_ir_nanos / 1_000_000
         );
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");
         self.types.mem.print_usage("\tmem types");
-        self.bytecode.mem.print_usage("\tmem bytecode");
+        self.ir.mem.print_usage("\tmem ir");
         writeln!(
             out,
             "\t{} infers: {:.2}ms. avg: {:.2}ms ",

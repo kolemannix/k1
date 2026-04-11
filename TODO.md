@@ -12,7 +12,7 @@
 
 More optimal final programs
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
-- [ ] Add 'switch' to bytecode; compile switches with no patterns or guards to LLVM switch
+- [ ] Add 'switch' to ir; compile switches with no patterns or guards to LLVM switch
 
 minor ideas
 - [ ] c"" string literals that are of type ptr (what about interpolation?)
@@ -61,7 +61,7 @@ Simple but missing
 - [ ] Publish a linux build
 - [ ] Publish a macos build
 
-## Project: Optimize the bytecode a bit
+## Project: Optimize the IR a bit
 - [ ] Function inlining
 - [ ] Prune unreachable blocks
 
@@ -92,9 +92,9 @@ Add `core` and/or compiler support to allow block profiling of k1 programs
 - [x] Rename `Enum` -> `Sum` in the code
 - [x] Optimize no-payload enums into non-aggregates, at the typer level.
 
-## Project: Instruction-level IR ('bytecode')
+## Project: Instruction-level IR
 Primarily an execution target for the VM, but also would DRY up the significant duplication between the two current backends, LLVM and k1::vm.
-- [x] Try to compile a function to bytecode
+- [x] Try to compile a function to ir
 - [x] Draw the rest of the owl (done)
 
 ## Project: Optimize StaticValue representation for aggregates to be the same as the VM representation
@@ -176,12 +176,12 @@ Syntax/elegance punchlist
 - [x] Allow omission of empty paren pair when type args are passed, getTypeName[T] vs getTypeName[T]()
 
 
-## Project: Make llvm codegen run off our bytecode
+## Project: Make llvm codegen run off our ir
 It currently runs directly off the typed tree
 - [x] Rewrite llvm type generation in terms of PhysicalType
 - [x] Rewrite Dwarf type generation in terms of PhysicalType
 - [x] Implement every instruction
-- [x] Augment bytecode function metadata and signatures
+- [x] Augment ir function metadata and signatures
 
 ## Project: struct passing ABI for aarch64 and x86_64
 - [x] Add abi mapping step to function type generation

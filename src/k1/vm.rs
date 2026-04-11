@@ -13,8 +13,8 @@ mod vm_ffi;
 #[cfg(test)]
 mod vm_test;
 
-use crate::bc::{
-    self, BcCallee, CompilableUnitId, CompiledUnit, Inst, InstId, InstKind, Value as BcValue,
+use crate::ir::{
+    self, IrCallee, CompilableUnitId, IrUnit, Inst, InstId, InstKind, Value as IrValue,
 };
 use crate::parse::NumericWidth;
 use crate::typer::types::{
@@ -288,26 +288,26 @@ impl Vm {
         let w = &mut s;
         let frame = &self.stack.frames[frame_index as usize];
         writeln!(w, "Frame [{frame_index}] ").unwrap();
-        bc::display_unit_name(w, k1, frame.unit).unwrap();
+        ir::display_unit_name(w, k1, frame.unit).unwrap();
         writeln!(w, "Base:  {:?}", frame.base_ptr).unwrap();
         writeln!(w).unwrap();
-        let unit = bc::get_compiled_unit(&k1.bytecode, frame.unit).unwrap();
-        for (i, param) in k1.bytecode.mem.getn(unit.fn_type.params).iter().enumerate() {
+        let unit = ir::get_compiled_unit(&k1.ir, frame.unit).unwrap();
+        for (i, param) in k1.ir.mem.getn(unit.fn_type.params).iter().enumerate() {
             writeln!(w, "Param {i}: ").unwrap();
             let value = self.stack.get_param_value(frame_index, i as u32);
             render_debug_value(w, self, k1, param.pt, value).unwrap();
         }
         writeln!(w, "Locals").unwrap();
-        for block in k1.bytecode.mem.getn(unit.blocks) {
-            for inst_id in k1.bytecode.mem.getn(block.instrs) {
-                let inst_index = bc::inst_to_index(*inst_id, unit.inst_offset);
+        for block in k1.ir.mem.getn(unit.blocks) {
+            for inst_id in k1.ir.mem.getn(block.instrs) {
+                let inst_index = ir::inst_to_index(*inst_id, unit.inst_offset);
                 let local = self.stack.get_inst_value(frame.index, inst_index);
-                let kind = bc::get_inst_kind(&k1.bytecode, &k1.types, *inst_id);
+                let kind = ir::get_inst_kind(&k1.ir, &k1.types, *inst_id);
                 match kind {
                     InstKind::Value(physical_type) => {
                         write!(w, "  i{}: ", inst_id).unwrap();
                         write!(w, " ").unwrap();
-                        let type_to_use = match k1.bytecode.instrs.get(*inst_id) {
+                        let type_to_use = match k1.ir.instrs.get(*inst_id) {
                             Inst::Alloca { t, .. } => *t,
                             _ => physical_type,
                         };
@@ -547,7 +547,7 @@ pub fn execute_compiled_function(
     arguments: &[StaticValueId],
 ) -> K1Result<StaticValueId> {
     let span = k1.get_function_span(function_id);
-    let unit = k1.bytecode.functions.get(function_id).unwrap();
+    let unit = k1.ir.functions.get(function_id).unwrap();
     execute_compiled_unit(k1, vm, unit, arguments, span)
 }
 
@@ -557,20 +557,20 @@ pub fn execute_compiled_expr(
     expr_id: TypedExprId,
 ) -> K1Result<StaticValueId> {
     let span = k1.exprs.get_span(expr_id);
-    let unit = *k1.bytecode.exprs.get(&expr_id).unwrap();
+    let unit = *k1.ir.exprs.get(&expr_id).unwrap();
     execute_compiled_unit(k1, vm, unit, &[], span)
 }
 
 pub fn execute_compiled_unit(
     k1: &mut TypedProgram,
     vm: &mut Vm,
-    unit: CompiledUnit,
+    unit: IrUnit,
     arguments: &[StaticValueId],
     span: SpanId,
 ) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     vm.eval_span = span;
-    debug!("[vm] Executing Unit\n{}", bc::compiled_unit_to_string(k1, unit.unit_id, true));
+    debug!("[vm] Executing Unit\n{}", ir::compiled_unit_to_string(k1, unit.unit_id, true));
 
     let top_frame_index = 0;
 
@@ -632,19 +632,19 @@ pub fn execute_compiled_unit(
     }
 }
 
-fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) -> K1Result<i32> {
+fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Result<i32> {
     let mut prev_b: u32 = 0;
     let mut b: u32 = 0;
     let mut ip: u32 = 0;
     let mut blocks = original_unit.blocks;
     let mut inst_offset = original_unit.inst_offset;
-    let mut instrs = k1.bytecode.mem.get_nth(original_unit.blocks, b as usize).instrs;
+    let mut instrs = k1.ir.mem.get_nth(original_unit.blocks, b as usize).instrs;
 
     macro_rules! goto_unit {
         ($gt_blocks: expr, $inst_offset: expr, $gt_block: expr, $gt_ip: expr) => {{
             blocks = $gt_blocks;
             b = $gt_block;
-            instrs = k1.bytecode.mem.get_nth(blocks, b as usize).instrs;
+            instrs = k1.ir.mem.get_nth(blocks, b as usize).instrs;
             inst_offset = $inst_offset;
             ip = $gt_ip;
         }};
@@ -654,7 +654,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         ($gt_block: expr) => {{
             prev_b = b;
             b = $gt_block;
-            instrs = k1.bytecode.mem.get_nth(blocks, b as usize).instrs;
+            instrs = k1.ir.mem.get_nth(blocks, b as usize).instrs;
             ip = 0;
         }};
     }
@@ -668,9 +668,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
     //let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
-        let inst_id = *k1.bytecode.mem.get_nth(instrs, ip as usize);
-        vm.eval_span = *k1.bytecode.sources.get(inst_id);
-        let inst_index = bc::inst_to_index(inst_id, inst_offset);
+        let inst_id = *k1.ir.mem.get_nth(instrs, ip as usize);
+        vm.eval_span = *k1.ir.sources.get(inst_id);
+        let inst_index = ir::inst_to_index(inst_id, inst_offset);
         k1.timing.total_vm_instrs += 1;
 
         // if debugger {
@@ -679,7 +679,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         //    "  ".repeat(vm.stack.current_frame_index() as usize),
         //    vm.stack.current_frame_index(),
         //    inst_id.as_u32(),
-        //    bc::inst_to_string(k1, inst_id)
+        //    ir::inst_to_string(k1, inst_id)
         //);
         //std::io::stdin().read_line(&mut line).unwrap();
         //if &line == "v\n" {
@@ -689,12 +689,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
         // }
 
         // ~Decode~ Execute
-        match *k1.bytecode.instrs.get(inst_id) {
+        match *k1.ir.instrs.get(inst_id) {
             Inst::Data(imm) => {
                 let value = match imm {
-                    bc::DataInst::U64(v) => Value::u64(v),
-                    bc::DataInst::I64(v) => Value::i64(v),
-                    bc::DataInst::Float(fv) => match fv {
+                    ir::DataInst::U64(v) => Value::u64(v),
+                    ir::DataInst::I64(v) => Value::i64(v),
+                    ir::DataInst::Float(fv) => match fv {
                         TypedFloatValue::F32(f32) => Value::f32(f32),
                         TypedFloatValue::F64(f64) => Value::f64(f64),
                     },
@@ -767,12 +767,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 ip += 1
             }
             Inst::Call { id } => {
-                let call = k1.bytecode.calls.get(id);
+                let call = k1.ir.calls.get(id);
                 let ret_pt = call.ret_type;
                 let ret_layout = k1.types.get_pt_layout(ret_pt);
                 let caller_frame_index = vm.stack.current_frame_index();
 
-                let call = k1.bytecode.calls.get(id);
+                let call = k1.ir.calls.get(id);
                 let callee = call.callee;
                 let call_args = call.args;
 
@@ -815,7 +815,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                     }};
                 }
                 let dispatch_function_id = match callee {
-                    BcCallee::Extern { library_name, function_name, function_id } => {
+                    IrCallee::Extern { library_name, function_name, function_id } => {
                         // FIXME: pass the inst_index in, so we can re-use the out storage
                         let result: Value = vm_ffi::handle_ffi_call(
                             k1,
@@ -830,8 +830,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         )?;
                         builtin_return!(result)
                     }
-                    BcCallee::Direct(function_id) => function_id,
-                    BcCallee::Indirect(_, value) => {
+                    IrCallee::Direct(function_id) => function_id,
+                    IrCallee::Indirect(_, value) => {
                         // Decode function id from 'pointer'
                         let callee_value = resolve_value!(value);
                         let function_id_u64 = callee_value.bits();
@@ -839,12 +839,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         let function_id = FunctionId::from_nzu32(function_id_nzu32);
                         function_id
                     }
-                    BcCallee::Builtin(_, bc_builtin) => {
-                        match bc_builtin {
-                            bc::BackendBuiltin::TypeSchema => {
+                    IrCallee::Builtin(_, backend_builtin) => {
+                        match backend_builtin {
+                            ir::BackendBuiltin::TypeSchema => {
                                 // intern fn typeSchema(id: u64): TypeSchema
                                 let type_id_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).bits();
                                 let type_id = TypeId::from_nzu32(
                                     NonZeroU32::new(type_id_arg as u32).unwrap(),
                                 );
@@ -865,10 +865,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 );
                                 builtin_return!(schema_vm_value);
                             }
-                            bc::BackendBuiltin::TypeName => {
+                            ir::BackendBuiltin::TypeName => {
                                 // intern fn typeName(id: u64): string
                                 let type_id_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).bits();
                                 let type_id = TypeId::from_nzu32(
                                     NonZeroU32::new(type_id_arg as u32).unwrap(),
                                 );
@@ -878,13 +878,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                     static_value_to_vm_value(k1, name_value_id, vm.eval_span);
                                 builtin_return!(name_string_value);
                             }
-                            bc::BackendBuiltin::Allocate | bc::BackendBuiltin::AllocateZeroed => {
+                            ir::BackendBuiltin::Allocate | ir::BackendBuiltin::AllocateZeroed => {
                                 // intern fn allocZeroed(size: uword, align: uword): Pointer
-                                let zero = bc_builtin == bc::BackendBuiltin::AllocateZeroed;
+                                let zero = backend_builtin == ir::BackendBuiltin::AllocateZeroed;
                                 let size: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let align: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let Ok(layout) = std::alloc::Layout::from_size_align(
                                     size.0 as usize,
                                     align.0 as usize,
@@ -901,16 +901,16 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                                 builtin_return!(Value::ptr(ptr));
                             }
-                            bc::BackendBuiltin::Reallocate => {
+                            ir::BackendBuiltin::Reallocate => {
                                 // intern fn realloc(ptr: Pointer, oldSize: uword, align: uword, newSize: uword): Pointer
                                 let old_ptr: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let old_size: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let align: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 let new_size: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 3));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 3));
                                 let layout = std::alloc::Layout::from_size_align(
                                     old_size.as_usize(),
                                     align.as_usize(),
@@ -926,13 +926,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                                 builtin_return!(Value::ptr(ptr));
                             }
-                            bc::BackendBuiltin::Free => {
+                            ir::BackendBuiltin::Free => {
                                 // intern fn free(ptr: Pointer, size: uword, align: uword): empty
                                 let ptr =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).as_ptr();
-                                let size = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1))
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).as_ptr();
+                                let size = resolve_value!(*k1.ir.mem.get_nth(call_args, 1))
                                     .as_usize();
-                                let align = resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2))
+                                let align = resolve_value!(*k1.ir.mem.get_nth(call_args, 2))
                                     .as_usize();
 
                                 let layout = std::alloc::Layout::from_size_align(
@@ -944,42 +944,42 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                                 builtin_return!(Value::ptr(ptr))
                             }
-                            bc::BackendBuiltin::MemCopy => {
+                            ir::BackendBuiltin::MemCopy => {
                                 // intern fn copy( dst: Pointer, src: Pointer, count: uword): empty
                                 let dst: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let src: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let count: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
 
                                 memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
 
                                 builtin_return!()
                             }
-                            bc::BackendBuiltin::MemSet => {
+                            ir::BackendBuiltin::MemSet => {
                                 //intern fn set(dst: Pointer, value: u8, count: uword): empty
                                 let dst: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let value: u8 =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1)).bits()
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1)).bits()
                                         as u8;
                                 let count: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 unsafe {
                                     std::ptr::write_bytes(dst.as_ptr(), value, count.as_usize())
                                 };
 
                                 builtin_return!()
                             }
-                            bc::BackendBuiltin::MemEquals => {
+                            ir::BackendBuiltin::MemEquals => {
                                 //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
                                 let p1: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let p2: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let size: Value =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
 
                                 let p1_ptr = p1.as_ptr();
                                 let p2_ptr = p2.as_ptr();
@@ -997,12 +997,12 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
 
                                 builtin_return!(value)
                             }
-                            bc::BackendBuiltin::Exit => {
+                            ir::BackendBuiltin::Exit => {
                                 let exit_code =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0)).bits();
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).bits();
                                 break exit_code as i32;
                             }
-                            bc::BackendBuiltin::CompilerMessage => {
+                            ir::BackendBuiltin::CompilerMessage => {
                                 // intern fn emitCompilerMessage(
                                 //    locn: compiler/SourceLocation,
                                 //    level: (either(u8) Info, Warn, Error),
@@ -1010,11 +1010,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                                 //  ): unit
                                 // todo!()
                                 let location_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 0));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let level_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 1));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let message_arg =
-                                    resolve_value!(*k1.bytecode.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 let location = unsafe {
                                     (location_arg.as_ptr() as *const k1_types::K1SourceLocation)
                                         .read()
@@ -1059,13 +1059,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                         }
                     }
                 };
-                let Some(compiled_function) = k1.bytecode.functions.get(dispatch_function_id)
+                let Some(compiled_function) = k1.ir.functions.get(dispatch_function_id)
                 else {
                     return failf!(
                         vm.eval_span,
                         "Call to uncompiled function: {}. ({} are pending)",
                         k1.function_id_to_string(dispatch_function_id, false),
-                        k1.bytecode.b_units_pending_compile.len()
+                        k1.ir.b_units_pending_compile.len()
                     );
                 };
                 let caller_frame_index = vm.stack.current_frame_index();
@@ -1094,13 +1094,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 debug_assert_eq!(new_frame_index, vm.stack.current_frame_index());
 
                 // Point the param registers at the function's arguments
-                for (index, arg) in k1.bytecode.mem.getn(call_args).iter().enumerate() {
+                for (index, arg) in k1.ir.mem.getn(call_args).iter().enumerate() {
                     let vm_value =
                         resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
 
                     //let arg_pt =
-                    //    bc::get_value_kind(&k1.bytecode, &k1.types, arg).expect_value().unwrap();
+                    //    ir::get_value_kind(&k1.ir, &k1.types, arg).expect_value().unwrap();
                     //eprintln!("p{index} = {}", debug_value_to_string(vm, k1, arg_pt, vm_value));
                 }
 
@@ -1160,8 +1160,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
             }
             Inst::CameFrom { t: _, incomings } => {
                 debug_assert!(!incomings.is_empty());
-                let mut value: core::mem::MaybeUninit<BcValue> = core::mem::MaybeUninit::uninit();
-                'case: for case in k1.bytecode.mem.getn(incomings) {
+                let mut value: core::mem::MaybeUninit<IrValue> = core::mem::MaybeUninit::uninit();
+                'case: for case in k1.ir.mem.getn(incomings) {
                     if case.from == prev_b {
                         value = core::mem::MaybeUninit::new(case.value);
                         break 'case;
@@ -1463,43 +1463,43 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 let b = match (width, pred) {
-                    (8, bc::IntCmpPred::Eq) => (lhs as u8) == (rhs as u8),
-                    (16, bc::IntCmpPred::Eq) => (lhs as u16) == (rhs as u16),
-                    (32, bc::IntCmpPred::Eq) => (lhs as u32) == (rhs as u32),
-                    (64, bc::IntCmpPred::Eq) => lhs == rhs,
+                    (8, ir::IntCmpPred::Eq) => (lhs as u8) == (rhs as u8),
+                    (16, ir::IntCmpPred::Eq) => (lhs as u16) == (rhs as u16),
+                    (32, ir::IntCmpPred::Eq) => (lhs as u32) == (rhs as u32),
+                    (64, ir::IntCmpPred::Eq) => lhs == rhs,
 
-                    (8, bc::IntCmpPred::Slt) => (lhs as i8) < (rhs as i8),
-                    (8, bc::IntCmpPred::Sle) => (lhs as i8) <= (rhs as i8),
-                    (8, bc::IntCmpPred::Sgt) => (lhs as i8) > (rhs as i8),
-                    (8, bc::IntCmpPred::Sge) => (lhs as i8) >= (rhs as i8),
-                    (8, bc::IntCmpPred::Ult) => (lhs as u8) < (rhs as u8),
-                    (8, bc::IntCmpPred::Ule) => (lhs as u8) <= (rhs as u8),
-                    (8, bc::IntCmpPred::Ugt) => (lhs as u8) > (rhs as u8),
-                    (8, bc::IntCmpPred::Uge) => (lhs as u8) >= (rhs as u8),
-                    (16, bc::IntCmpPred::Slt) => (lhs as i16) < (rhs as i16),
-                    (16, bc::IntCmpPred::Sle) => (lhs as i16) <= (rhs as i16),
-                    (16, bc::IntCmpPred::Sgt) => (lhs as i16) > (rhs as i16),
-                    (16, bc::IntCmpPred::Sge) => (lhs as i16) >= (rhs as i16),
-                    (16, bc::IntCmpPred::Ult) => (lhs as u16) < (rhs as u16),
-                    (16, bc::IntCmpPred::Ule) => (lhs as u16) <= (rhs as u16),
-                    (16, bc::IntCmpPred::Ugt) => (lhs as u16) > (rhs as u16),
-                    (16, bc::IntCmpPred::Uge) => (lhs as u16) >= (rhs as u16),
-                    (32, bc::IntCmpPred::Slt) => (lhs as i32) < (rhs as i32),
-                    (32, bc::IntCmpPred::Sle) => (lhs as i32) <= (rhs as i32),
-                    (32, bc::IntCmpPred::Sgt) => (lhs as i32) > (rhs as i32),
-                    (32, bc::IntCmpPred::Sge) => (lhs as i32) >= (rhs as i32),
-                    (32, bc::IntCmpPred::Ult) => (lhs as u32) < (rhs as u32),
-                    (32, bc::IntCmpPred::Ule) => (lhs as u32) <= (rhs as u32),
-                    (32, bc::IntCmpPred::Ugt) => (lhs as u32) > (rhs as u32),
-                    (32, bc::IntCmpPred::Uge) => (lhs as u32) >= (rhs as u32),
-                    (64, bc::IntCmpPred::Slt) => (lhs as i64) < (rhs as i64),
-                    (64, bc::IntCmpPred::Sle) => (lhs as i64) <= (rhs as i64),
-                    (64, bc::IntCmpPred::Sgt) => (lhs as i64) > (rhs as i64),
-                    (64, bc::IntCmpPred::Sge) => (lhs as i64) >= (rhs as i64),
-                    (64, bc::IntCmpPred::Ult) => lhs < rhs,
-                    (64, bc::IntCmpPred::Ule) => lhs <= rhs,
-                    (64, bc::IntCmpPred::Ugt) => lhs > rhs,
-                    (64, bc::IntCmpPred::Uge) => lhs >= rhs,
+                    (8, ir::IntCmpPred::Slt) => (lhs as i8) < (rhs as i8),
+                    (8, ir::IntCmpPred::Sle) => (lhs as i8) <= (rhs as i8),
+                    (8, ir::IntCmpPred::Sgt) => (lhs as i8) > (rhs as i8),
+                    (8, ir::IntCmpPred::Sge) => (lhs as i8) >= (rhs as i8),
+                    (8, ir::IntCmpPred::Ult) => (lhs as u8) < (rhs as u8),
+                    (8, ir::IntCmpPred::Ule) => (lhs as u8) <= (rhs as u8),
+                    (8, ir::IntCmpPred::Ugt) => (lhs as u8) > (rhs as u8),
+                    (8, ir::IntCmpPred::Uge) => (lhs as u8) >= (rhs as u8),
+                    (16, ir::IntCmpPred::Slt) => (lhs as i16) < (rhs as i16),
+                    (16, ir::IntCmpPred::Sle) => (lhs as i16) <= (rhs as i16),
+                    (16, ir::IntCmpPred::Sgt) => (lhs as i16) > (rhs as i16),
+                    (16, ir::IntCmpPred::Sge) => (lhs as i16) >= (rhs as i16),
+                    (16, ir::IntCmpPred::Ult) => (lhs as u16) < (rhs as u16),
+                    (16, ir::IntCmpPred::Ule) => (lhs as u16) <= (rhs as u16),
+                    (16, ir::IntCmpPred::Ugt) => (lhs as u16) > (rhs as u16),
+                    (16, ir::IntCmpPred::Uge) => (lhs as u16) >= (rhs as u16),
+                    (32, ir::IntCmpPred::Slt) => (lhs as i32) < (rhs as i32),
+                    (32, ir::IntCmpPred::Sle) => (lhs as i32) <= (rhs as i32),
+                    (32, ir::IntCmpPred::Sgt) => (lhs as i32) > (rhs as i32),
+                    (32, ir::IntCmpPred::Sge) => (lhs as i32) >= (rhs as i32),
+                    (32, ir::IntCmpPred::Ult) => (lhs as u32) < (rhs as u32),
+                    (32, ir::IntCmpPred::Ule) => (lhs as u32) <= (rhs as u32),
+                    (32, ir::IntCmpPred::Ugt) => (lhs as u32) > (rhs as u32),
+                    (32, ir::IntCmpPred::Uge) => (lhs as u32) >= (rhs as u32),
+                    (64, ir::IntCmpPred::Slt) => (lhs as i64) < (rhs as i64),
+                    (64, ir::IntCmpPred::Sle) => (lhs as i64) <= (rhs as i64),
+                    (64, ir::IntCmpPred::Sgt) => (lhs as i64) > (rhs as i64),
+                    (64, ir::IntCmpPred::Sge) => (lhs as i64) >= (rhs as i64),
+                    (64, ir::IntCmpPred::Ult) => lhs < rhs,
+                    (64, ir::IntCmpPred::Ule) => lhs <= rhs,
+                    (64, ir::IntCmpPred::Ugt) => lhs > rhs,
+                    (64, ir::IntCmpPred::Uge) => lhs >= rhs,
                     _ => unreachable!(),
                 };
 
@@ -1555,15 +1555,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: CompiledUnit) ->
                 let lhs = resolve_value!(lhs);
                 let rhs = resolve_value!(rhs);
                 let b = match (width, pred) {
-                    (_, bc::FloatCmpPred::Eq) => lhs.bits() == rhs.bits(),
-                    (32, bc::FloatCmpPred::Lt) => lhs.as_f32() < rhs.as_f32(),
-                    (32, bc::FloatCmpPred::Le) => lhs.as_f32() <= rhs.as_f32(),
-                    (32, bc::FloatCmpPred::Gt) => lhs.as_f32() > rhs.as_f32(),
-                    (32, bc::FloatCmpPred::Ge) => lhs.as_f32() >= rhs.as_f32(),
-                    (64, bc::FloatCmpPred::Lt) => lhs.as_f64() < rhs.as_f64(),
-                    (64, bc::FloatCmpPred::Le) => lhs.as_f64() <= rhs.as_f64(),
-                    (64, bc::FloatCmpPred::Gt) => lhs.as_f64() > rhs.as_f64(),
-                    (64, bc::FloatCmpPred::Ge) => lhs.as_f64() >= rhs.as_f64(),
+                    (_, ir::FloatCmpPred::Eq) => lhs.bits() == rhs.bits(),
+                    (32, ir::FloatCmpPred::Lt) => lhs.as_f32() < rhs.as_f32(),
+                    (32, ir::FloatCmpPred::Le) => lhs.as_f32() <= rhs.as_f32(),
+                    (32, ir::FloatCmpPred::Gt) => lhs.as_f32() > rhs.as_f32(),
+                    (32, ir::FloatCmpPred::Ge) => lhs.as_f32() >= rhs.as_f32(),
+                    (64, ir::FloatCmpPred::Lt) => lhs.as_f64() < rhs.as_f64(),
+                    (64, ir::FloatCmpPred::Le) => lhs.as_f64() <= rhs.as_f64(),
+                    (64, ir::FloatCmpPred::Gt) => lhs.as_f64() > rhs.as_f64(),
+                    (64, ir::FloatCmpPred::Ge) => lhs.as_f64() >= rhs.as_f64(),
                     _ => unreachable!(),
                 };
 
@@ -1645,28 +1645,28 @@ fn resolve_value(
     vm: &mut Vm,
     frame_index: u32,
     inst_offset: u32,
-    value: BcValue,
+    value: IrValue,
 ) -> K1Result<Value> {
     match value {
-        BcValue::Inst(inst_id) => {
-            let inst_index = bc::inst_to_index(inst_id, inst_offset);
+        IrValue::Inst(inst_id) => {
+            let inst_index = ir::inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_index);
             Ok(v)
         }
-        BcValue::StaticValue { t: _, id } => {
+        IrValue::StaticValue { t: _, id } => {
             let v = static_value_to_vm_value(k1, id, vm.eval_span);
             Ok(v)
         }
-        BcValue::FunctionAddr(function_id) => {
+        IrValue::FunctionAddr(function_id) => {
             let value = function_id_to_ref_value(function_id);
             Ok(value)
         }
-        BcValue::FnParam { t: _, index } => {
+        IrValue::FnParam { t: _, index } => {
             let value = vm.stack.get_param_value(frame_index, index);
             // eprintln!("Accessed frame{} p{index}: {}", vm.stack.current_frame_index(), value);
             Ok(value)
         }
-        BcValue::Data32 { t, data } => {
+        IrValue::Data32 { t, data } => {
             let u32_data = data;
             let value = match t {
                 ScalarType::F32 => Value(u32_data as u64),
@@ -1684,8 +1684,8 @@ fn resolve_value(
             };
             Ok(value)
         }
-        BcValue::GlobalAddr { storage_pt: t, id } => resolve_global(k1, vm, id, t),
-        BcValue::Empty => Ok(Value(0)),
+        IrValue::GlobalAddr { storage_pt: t, id } => resolve_global(k1, vm, id, t),
+        IrValue::Empty => Ok(Value(0)),
     }
 }
 
@@ -1696,7 +1696,7 @@ fn resolve_global(
     global_id: TypedGlobalId,
     t: PhysicalType,
 ) -> K1Result<Value> {
-    // Globals in `bc` always represent an Address, or Storage, of the global, not the value
+    // Globals in `ir` always represent an Address, or Storage, of the global, not the value
 
     // Case 1: It's a constant, already evaluated, stored in the global static space
     if let Some(v) = k1.vm_global_constant_lookups.get(&global_id) {
@@ -2092,7 +2092,7 @@ pub struct StackFrameRecord {
     inst_slice: *mut [Value],
     call_span: Option<SpanId>,
     param_count: u32,
-    blocks: MSlice<bc::CompiledBlock, bc::ProgramBytecode>,
+    blocks: MSlice<ir::CompiledBlock, ir::ProgramIr>,
     inst_offset: u32,
     unit: CompilableUnitId,
     ret_info: RetInfo,
@@ -2103,7 +2103,7 @@ impl StackFrameRecord {
         index: u32,
         base_ptr: *mut u8,
         call_span: Option<SpanId>,
-        owner: &CompiledUnit,
+        owner: &IrUnit,
         ret_info: RetInfo,
         inst_slice: *mut [Value],
     ) -> StackFrameRecord {
@@ -2155,7 +2155,7 @@ impl Stack {
     fn push_new_frame(
         &mut self,
         call_span: Option<SpanId>,
-        owner: &CompiledUnit,
+        owner: &IrUnit,
         ret_info: RetInfo,
     ) {
         let index = self.frames.len() as u32;
@@ -2633,7 +2633,7 @@ pub fn make_stack_trace(k1: &TypedProgram, stack: &Stack) -> String {
     let mut s = String::new();
     for f in stack.frames.iter() {
         write!(&mut s, "[{:02}] ", f.index).unwrap();
-        bc::display_unit_name(&mut s, k1, f.unit).unwrap();
+        ir::display_unit_name(&mut s, k1, f.unit).unwrap();
         match f.call_span {
             None => {}
             Some(span) => {

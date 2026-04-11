@@ -36,7 +36,7 @@ macro_rules! b_ice {
 }
 
 #[derive(Clone, Copy)]
-pub struct BcDebugVariableInfo {
+pub struct IrDebugVariableInfo {
     pub name: Ident,
     pub original_type_id: TypeId,
     pub user_hidden: bool,
@@ -44,23 +44,23 @@ pub struct BcDebugVariableInfo {
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct BcDebugInfo {
-    pub variable_info: Option<BcDebugVariableInfo>,
+pub struct IrDebugInfo {
+    pub variable_info: Option<IrDebugVariableInfo>,
 }
 
-nz_u32_id!(BcCallId);
-pub struct ProgramBytecode {
-    pub mem: kmem::Mem<ProgramBytecode>,
+nz_u32_id!(IrCallId);
+pub struct ProgramIr {
+    pub mem: kmem::Mem<ProgramIr>,
     pub instrs: VPool<Inst, InstId>,
     pub sources: VPool<SpanId, InstId>,
-    pub comments: VPool<BcStr, InstId>,
-    pub debug_info: VPool<BcDebugInfo, InstId>,
-    /// Compiled bytecode for actual functions
-    pub functions: VPool<Option<CompiledUnit>, FunctionId>,
-    /// Compiled bytecode for #static exprs and global initializers
-    pub exprs: FxHashMap<TypedExprId, CompiledUnit>,
-    pub module_config: BcModuleConfig,
-    pub calls: VPool<BcCall, BcCallId>,
+    pub comments: VPool<IrStr, InstId>,
+    pub debug_info: VPool<IrDebugInfo, InstId>,
+    /// Compiled ir for actual functions
+    pub functions: VPool<Option<IrUnit>, FunctionId>,
+    /// Compiled ir for #static exprs and global initializers
+    pub exprs: FxHashMap<TypedExprId, IrUnit>,
+    pub module_config: IrModuleConfig,
+    pub calls: VPool<IrCall, IrCallId>,
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
@@ -69,7 +69,7 @@ pub struct ProgramBytecode {
     b_loops: FxHashMap<ScopeId, LoopInfo>,
     pub b_units_pending_compile: Vec<FunctionId>,
 }
-type BcStr = MStr<ProgramBytecode>;
+type IrStr = MStr<ProgramIr>;
 
 #[derive(Clone, Copy)]
 pub enum CompilableUnitId {
@@ -77,22 +77,22 @@ pub enum CompilableUnitId {
     Expr(TypedExprId),
 }
 
-pub struct BcModuleConfig {}
+pub struct IrModuleConfig {}
 
-impl ProgramBytecode {
+impl ProgramIr {
     pub fn make(instr_count_hint: usize) -> Self {
         let function_count_hint = instr_count_hint / 16;
-        ProgramBytecode {
+        ProgramIr {
             mem: kmem::Mem::make(),
-            instrs: VPool::make_with_hint("bytecode_soa_instrs", instr_count_hint),
-            sources: VPool::make_with_hint("bytecode_soa_sources", instr_count_hint),
-            comments: VPool::make_with_hint("bytecode_soa_comments", instr_count_hint),
-            debug_info: VPool::make_with_hint("bytecode_soa_debug_info", instr_count_hint),
-            functions: VPool::make_with_hint("bytecode_functions", function_count_hint),
-            calls: VPool::make_with_hint("bytecode_calls", instr_count_hint / 2),
+            instrs: VPool::make_with_hint("ir_soa_instrs", instr_count_hint),
+            sources: VPool::make_with_hint("ir_soa_sources", instr_count_hint),
+            comments: VPool::make_with_hint("ir_soa_comments", instr_count_hint),
+            debug_info: VPool::make_with_hint("ir_soa_debug_info", instr_count_hint),
+            functions: VPool::make_with_hint("ir_functions", function_count_hint),
+            calls: VPool::make_with_hint("ir_calls", instr_count_hint / 2),
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
-            module_config: BcModuleConfig {},
+            module_config: IrModuleConfig {},
             b_blocks: Vec::with_capacity(256),
             b_variables: Vec::with_capacity(256),
             b_loops: FxHashMap::default(),
@@ -107,18 +107,18 @@ impl ProgramBytecode {
 
 #[derive(Clone)]
 pub struct Block {
-    pub name: BcStr,
+    pub name: IrStr,
     pub instrs: Vec<InstId>,
 }
 
 #[derive(Clone, Copy)]
 pub struct CompiledBlock {
-    pub name: BcStr,
-    pub instrs: MSlice<InstId, ProgramBytecode>,
+    pub name: IrStr,
+    pub instrs: MSlice<InstId, ProgramIr>,
 }
 
 #[derive(Clone, Copy)]
-pub struct CompiledUnit {
+pub struct IrUnit {
     pub result_type_id: TypeId,
     pub unit_id: CompilableUnitId,
     pub fn_type: PhysicalFunctionType,
@@ -129,7 +129,7 @@ pub struct CompiledUnit {
     // The number of instructions in this unit; used to reserve N 'registers' in our register buffer
     pub inst_count: u32,
 
-    pub blocks: MSlice<CompiledBlock, ProgramBytecode>,
+    pub blocks: MSlice<CompiledBlock, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 }
@@ -153,7 +153,7 @@ pub type BlockId = u32;
 pub enum BackendBuiltin {
     // In LLVM backend, this is becomes a runtime switch
     // In the VM, just a lookup. So we leave it as a builtin
-    // rather than generate bytecode for it due to that difference
+    // rather than generate ir for it due to that difference
     TypeSchema,
     TypeName,
 
@@ -180,7 +180,7 @@ pub struct PhysicalFunctionParam {
 pub struct PhysicalFunctionType {
     pub return_type: PhysicalType,
     pub diverges: bool,
-    pub params: MSlice<PhysicalFunctionParam, ProgramBytecode>,
+    pub params: MSlice<PhysicalFunctionParam, ProgramIr>,
     pub abi_mode: AbiMode,
 }
 
@@ -196,7 +196,7 @@ impl PhysicalFunctionType {
 }
 
 #[derive(Clone, Copy)]
-pub enum BcCallee {
+pub enum IrCallee {
     Builtin(FunctionId, BackendBuiltin),
     Direct(FunctionId),
     Indirect(PhysicalFunctionType, Value),
@@ -208,11 +208,11 @@ pub enum BcCallee {
     // No lambda call; been compiled down to just calls and args by now
 }
 
-impl BcCallee {
+impl IrCallee {
     fn known_function_id(&self) -> Option<FunctionId> {
         match self {
-            BcCallee::Direct(fid) => Some(*fid),
-            BcCallee::Extern { function_id, .. } => Some(*function_id),
+            IrCallee::Direct(fid) => Some(*fid),
+            IrCallee::Extern { function_id, .. } => Some(*function_id),
             _ => None,
         }
     }
@@ -268,10 +268,10 @@ impl Value {
 }
 
 #[derive(Clone, Copy)]
-pub struct BcCall {
+pub struct IrCall {
     pub ret_type: PhysicalType,
-    pub callee: BcCallee,
-    pub args: MSlice<Value, ProgramBytecode>,
+    pub callee: IrCallee,
+    pub args: MSlice<Value, ProgramIr>,
     pub dst: Option<Value>,
 }
 
@@ -286,7 +286,7 @@ pub struct BcCall {
 /// This would allow for a universal wire-format for k1 data and we could say that "nothing is platform-specific"* in terms of data layout which would be great
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
-//task(bc): Get inst down to 32 bytes
+//task(ir): Get inst down to 32 bytes
 #[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
@@ -332,7 +332,7 @@ pub enum Inst {
     /// the most and best information needed by the 'backend' for generating
     /// ideal code for the return value's placement
     Call {
-        id: BcCallId,
+        id: IrCallId,
     },
 
     // Control Flow
@@ -346,7 +346,7 @@ pub enum Inst {
     // goto considered harmful, but came-from is friend (phi node)
     CameFrom {
         t: PhysicalType,
-        incomings: MSlice<CameFromCase, ProgramBytecode>,
+        incomings: MSlice<CameFromCase, ProgramIr>,
     },
     Ret {
         v: Value,
@@ -580,9 +580,9 @@ impl std::fmt::Display for FloatCmpPred {
     }
 }
 
-pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: Value) -> InstKind {
+pub fn get_value_kind(ir: &ProgramIr, types: &TypePool, value: Value) -> InstKind {
     match value {
-        Value::Inst(inst_id) => get_inst_kind(bc, types, inst_id),
+        Value::Inst(inst_id) => get_inst_kind(ir, types, inst_id),
         Value::GlobalAddr { storage_pt: _, id: _ } => InstKind::PTR,
         Value::StaticValue { t, id: _ } => InstKind::Value(t),
         Value::FunctionAddr(_) => InstKind::PTR,
@@ -594,8 +594,8 @@ pub fn get_value_kind(bc: &ProgramBytecode, types: &TypePool, value: Value) -> I
     }
 }
 
-pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) -> InstKind {
-    match *bc.instrs.get(inst_id) {
+pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstKind {
+    match *ir.instrs.get(inst_id) {
         Inst::Data(imm) => match imm {
             DataInst::I64(_) => InstKind::scalar(ScalarType::I64),
             DataInst::U64(_) => InstKind::scalar(ScalarType::U64),
@@ -608,14 +608,14 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
-        Inst::Call { id } => InstKind::Value(bc.calls.get(id).ret_type),
+        Inst::Call { id } => InstKind::Value(ir.calls.get(id).ret_type),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
         Inst::CameFrom { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::BOOL,
-        Inst::BitNot { v } => get_value_kind(bc, types, v),
+        Inst::BitNot { v } => get_value_kind(ir, types, v),
         Inst::BitCast { to, .. } => InstKind::Value(to),
         Inst::IntTrunc { to, .. } => InstKind::scalar(to),
         Inst::IntExtU { to, .. } => InstKind::scalar(to),
@@ -628,28 +628,28 @@ pub fn get_inst_kind(bc: &ProgramBytecode, types: &TypePool, inst_id: InstId) ->
         Inst::Float64ToIntSigned { to, .. } => InstKind::scalar(to),
         Inst::IntToFloatUnsigned { to, .. } => InstKind::scalar(to),
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(to),
-        Inst::PtrToWord { .. } => InstKind::scalar(bc.word_sized_int()),
+        Inst::PtrToWord { .. } => InstKind::scalar(ir.word_sized_int()),
         Inst::WordToPtr { .. } => InstKind::PTR,
-        Inst::IntAdd { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntSub { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntMul { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntDivUnsigned { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntDivSigned { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntRemUnsigned { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::IntRemSigned { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::IntAdd { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntSub { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntMul { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntDivUnsigned { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntDivSigned { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntRemUnsigned { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::IntRemSigned { lhs, .. } => get_value_kind(ir, types, lhs),
         Inst::IntCmp { .. } => InstKind::BOOL,
-        Inst::FloatAdd { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::FloatSub { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::FloatMul { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::FloatDiv { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::FloatRem { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::FloatAdd { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::FloatSub { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::FloatMul { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::FloatDiv { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::FloatRem { lhs, .. } => get_value_kind(ir, types, lhs),
         Inst::FloatCmp { .. } => InstKind::BOOL,
-        Inst::BitAnd { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BitOr { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BitXor { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BitShiftLeft { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
-        Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(bc, types, lhs),
+        Inst::BitAnd { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitOr { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitXor { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitShiftLeft { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitUnsignedShiftRight { lhs, .. } => get_value_kind(ir, types, lhs),
+        Inst::BitSignedShiftRight { lhs, .. } => get_value_kind(ir, types, lhs),
         Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::U64),
     }
 }
@@ -720,20 +720,20 @@ impl InstKind {
 
 pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Result<()> {
     let start = k1.timing.clock.raw();
-    if k1.bytecode.functions.get(function_id).is_some() {
+    if k1.ir.functions.get(function_id).is_some() {
         return Ok(());
     }
 
     let mut b = Builder::new(k1);
 
-    //eprintln!("bc::compile_function {}", b.k1.function_id_to_string(function_id, false));
+    //eprintln!("ir::compile_function {}", b.k1.function_id_to_string(function_id, false));
     let f = b.k1.get_function(function_id);
     let function_type = b.k1.types.get(f.type_id).expect_function();
     let return_type_id = function_type.return_type;
     if let Some(err) = f.body_failure.clone() {
         return Err(K1Message {
             message: format!(
-                "Cannot generate bytecode for function {}, which failed compilation",
+                "Cannot generate ir for function {}, which failed compilation",
                 b.k1.ident_str(f.name)
             ),
             span: err.span,
@@ -761,7 +761,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         // them up. Consider a function that takes an empty named t: `t: {}`. It should be legal to
         // use `t`.
         //let phys_param =
-        //    b.k1.bytecode
+        //    b.k1.ir
         //        .mem
         //        .getn(fn_phys_type.params)
         //        .iter()
@@ -775,9 +775,9 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         };
         let builder_variable =
             BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
-        b.k1.bytecode.b_variables.push(builder_variable);
+        b.k1.ir.b_variables.push(builder_variable);
     }
-    // debug_assert_eq!(b.k1.bytecode.b_variables.len() as u32, fn_phys_type.params.len());
+    // debug_assert_eq!(b.k1.ir.b_variables.len() as u32, fn_phys_type.params.len());
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
@@ -785,7 +785,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
         match f.linkage {
-            Linkage::Standard => panic!("bc: function should have a body I think"),
+            Linkage::Standard => panic!("ir: function should have a body I think"),
             Linkage::External { .. } => {}
             Linkage::Intrinsic => {}
         }
@@ -795,13 +795,13 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     let builtin_kind = match intrinsic_type {
         None => None,
         Some(i) => match builtin_handler(i) {
-            BuiltinHandler::Backend(bc_builtin) => Some(bc_builtin),
+            BuiltinHandler::Backend(backend_builtin) => Some(backend_builtin),
             _ => None,
         },
     };
     let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
 
-    *b.k1.bytecode.functions.get_mut(function_id) = Some(unit);
+    *b.k1.ir.functions.get_mut(function_id) = Some(unit);
 
     if is_debug {
         let s = compiled_unit_to_string(b.k1, unit_id, true);
@@ -811,7 +811,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed as i64;
+    k1.timing.total_ir_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -828,7 +828,7 @@ pub fn compile_top_level_expr(
     for (variable_id, static_value_id) in input_parameters {
         let variable = b.k1.variables.get(*variable_id);
         let pt = b.get_physical_type(variable.type_id);
-        b.k1.bytecode.b_variables.push(BuilderVariable {
+        b.k1.ir.b_variables.push(BuilderVariable {
             id: *variable_id,
             value: Value::StaticValue { t: pt, id: *static_value_id },
             storage_pt: pt,
@@ -854,7 +854,7 @@ pub fn compile_top_level_expr(
         is_debug,
         None,
     );
-    b.k1.bytecode.exprs.insert(expr, compiled_expr);
+    b.k1.ir.exprs.insert(expr, compiled_expr);
 
     let unit_id = CompilableUnitId::Expr(expr);
     validate_unit(k1, unit_id)?;
@@ -865,7 +865,7 @@ pub fn compile_top_level_expr(
     }
 
     let elapsed = k1.timing.elapsed_nanos(start);
-    k1.timing.total_bytecode_nanos += elapsed as i64;
+    k1.timing.total_ir_nanos += elapsed as i64;
     Ok(())
 }
 
@@ -876,11 +876,11 @@ fn finalize_unit(
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
-) -> CompiledUnit {
-    let inst_count = (b.k1.bytecode.instrs.len() as u32 + 1) - b.inst_offset;
+) -> IrUnit {
+    let inst_count = (b.k1.ir.instrs.len() as u32 + 1) - b.inst_offset;
     let compiled_blocks = b.bake_blocks();
-    //b.k1.bytecode.mem.print_usage("after bake");
-    let unit = CompiledUnit {
+    //b.k1.ir.mem.print_usage("after bake");
+    let unit = IrUnit {
         result_type_id,
         unit_id,
         fn_type,
@@ -922,7 +922,7 @@ pub struct Builder<'k1> {
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram) -> Self {
-        let inst_offset = k1.bytecode.instrs.len() as u32 + 1;
+        let inst_offset = k1.ir.instrs.len() as u32 + 1;
         Self {
             inst_offset,
             k1,
@@ -937,69 +937,69 @@ impl<'k1> Builder<'k1> {
     }
 
     fn reset_compilation_unit(&mut self) {
-        for b in &mut self.k1.bytecode.b_blocks[0..self.block_count as usize] {
+        for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
             b.instrs.clear();
         }
         self.block_count = 0;
         self.fn_type = PhysicalFunctionType::nil();
-        self.k1.bytecode.b_variables.clear();
+        self.k1.ir.b_variables.clear();
         self.last_alloca_index = None;
         self.cur_span = SpanId::NONE;
         self.entry_span = SpanId::NONE;
-        self.k1.bytecode.b_loops.clear();
+        self.k1.ir.b_loops.clear();
     }
 
-    fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramBytecode> {
-        let mut blocks = self.k1.bytecode.mem.new_list(self.block_count);
-        for b in Builder::builder_blocks_iter(self.block_count, &self.k1.bytecode.b_blocks) {
-            let instrs = self.k1.bytecode.mem.pushn(&b.instrs);
+    fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramIr> {
+        let mut blocks = self.k1.ir.mem.new_list(self.block_count);
+        for b in Builder::builder_blocks_iter(self.block_count, &self.k1.ir.b_blocks) {
+            let instrs = self.k1.ir.mem.pushn(&b.instrs);
             if instrs.is_empty() {
                 debug!("baking an empty basic block; wonder where it came from?");
             }
             let b = CompiledBlock { name: b.name, instrs };
             blocks.push(b)
         }
-        self.k1.bytecode.mem.list_to_handle(blocks)
+        self.k1.ir.mem.list_to_handle(blocks)
     }
 
     fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
         b_blocks[0..block_count as usize].iter()
     }
 
-    fn make_inst(&mut self, inst: Inst, comment: BcStr, debug_info: BcDebugInfo) -> InstId {
+    fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
         let span = self.cur_span;
         self.make_inst_ext(inst, comment, debug_info, span)
     }
     fn make_inst_ext(
         &mut self,
         inst: Inst,
-        comment: BcStr,
-        debug_info: BcDebugInfo,
+        comment: IrStr,
+        debug_info: IrDebugInfo,
         span: SpanId,
     ) -> InstId {
-        let id = self.k1.bytecode.instrs.add(inst);
-        self.k1.bytecode.sources.add_expected_id(span, id);
-        self.k1.bytecode.comments.add_expected_id(comment, id);
-        self.k1.bytecode.debug_info.add_expected_id(debug_info, id);
+        let id = self.k1.ir.instrs.add(inst);
+        self.k1.ir.sources.add_expected_id(span, id);
+        self.k1.ir.comments.add_expected_id(comment, id);
+        self.k1.ir.debug_info.add_expected_id(debug_info, id);
         id
     }
 
-    fn push_inst_to(&mut self, block: BlockId, inst: Inst, comment: BcStr) -> InstId {
-        let id = self.make_inst(inst, comment, BcDebugInfo::default());
+    fn push_inst_to(&mut self, block: BlockId, inst: Inst, comment: IrStr) -> InstId {
+        let id = self.make_inst(inst, comment, IrDebugInfo::default());
 
-        self.k1.bytecode.b_blocks[block as usize].instrs.push(id);
+        self.k1.ir.b_blocks[block as usize].instrs.push(id);
         id
     }
 
-    fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<BcStr>) -> InstId {
-        self.push_alloca_ext(pt, comment, BcDebugInfo::default(), false)
+    fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<IrStr>) -> InstId {
+        self.push_alloca_ext(pt, comment, IrDebugInfo::default(), false)
     }
 
     fn push_alloca_ext(
         &mut self,
         pt: PhysicalType,
-        comment: impl Into<BcStr>,
-        debug_info: BcDebugInfo,
+        comment: impl Into<IrStr>,
+        debug_info: IrDebugInfo,
         returned: bool,
     ) -> InstId {
         let layout = self.k1.types.get_pt_layout(pt);
@@ -1014,20 +1014,20 @@ impl<'k1> Builder<'k1> {
             debug_info,
             alloca_span,
         );
-        self.k1.bytecode.b_blocks[0].instrs.insert(index, inst_id);
+        self.k1.ir.b_blocks[0].instrs.insert(index, inst_id);
         self.last_alloca_index = Some(index as u32);
         inst_id
     }
 
     pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
-        get_inst_kind(&self.k1.bytecode, &self.k1.types, inst)
+        get_inst_kind(&self.k1.ir, &self.k1.types, inst)
     }
 
     pub fn get_value_kind(&self, value: Value) -> InstKind {
-        get_value_kind(&self.k1.bytecode, &self.k1.types, value)
+        get_value_kind(&self.k1.ir, &self.k1.types, value)
     }
 
-    fn push_inst(&mut self, inst: Inst, comment: impl Into<BcStr>) -> InstId {
+    fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
         self.push_inst_to(self.cur_block, inst, comment.into())
     }
 
@@ -1040,7 +1040,7 @@ impl<'k1> Builder<'k1> {
         struct_agg_id: AggregateTypeId,
         base: Value,
         field_index: u32,
-        comment: impl Into<BcStr>,
+        comment: impl Into<IrStr>,
     ) -> Value {
         if field_index == 0 {
             return base;
@@ -1055,7 +1055,7 @@ impl<'k1> Builder<'k1> {
         .as_value()
     }
 
-    fn push_jump(&mut self, block_id: BlockId, comment: impl Into<BcStr>) -> InstId {
+    fn push_jump(&mut self, block_id: BlockId, comment: impl Into<IrStr>) -> InstId {
         self.push_inst(Inst::Jump(block_id), comment)
     }
 
@@ -1064,7 +1064,7 @@ impl<'k1> Builder<'k1> {
         cond: Value,
         cons: BlockId,
         alt: BlockId,
-        comment: impl Into<BcStr>,
+        comment: impl Into<IrStr>,
     ) -> InstId {
         if let Value::Data32 { t: ScalarType::U8, data: b32 } = cond {
             if b32 == 1 {
@@ -1086,7 +1086,7 @@ impl<'k1> Builder<'k1> {
         dst: Value,
         src: Value,
         pt: PhysicalType,
-        comment: impl Into<BcStr>,
+        comment: impl Into<IrStr>,
     ) -> Option<InstId> {
         let layout = self.k1.types.get_pt_layout(pt);
         if pt.is_empty() {
@@ -1098,16 +1098,16 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_load(&mut self, st: ScalarType, src: Value, comment: impl Into<BcStr>) -> InstId {
+    fn push_load(&mut self, st: ScalarType, src: Value, comment: impl Into<IrStr>) -> InstId {
         self.push_inst(Inst::Load { t: st, src }, comment)
     }
 
-    fn push_store(&mut self, dst: Value, value: Value, comment: impl Into<BcStr>) -> InstId {
+    fn push_store(&mut self, dst: Value, value: Value, comment: impl Into<IrStr>) -> InstId {
         let t = self.get_value_kind(value).expect_value().unwrap().expect_scalar();
         self.push_inst(Inst::Store { dst, value, t }, comment)
     }
 
-    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: impl Into<BcStr>) -> Value {
+    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: impl Into<IrStr>) -> Value {
         match int_value {
             TypedIntValue::U8(i) => Value::Data32 { t: ScalarType::U8, data: *i as u32 },
             TypedIntValue::U16(i) => Value::Data32 { t: ScalarType::U16, data: *i as u32 },
@@ -1134,10 +1134,10 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: impl Into<BcStr>) -> BlockId {
+    fn push_block(&mut self, name: impl Into<IrStr>) -> BlockId {
         let id = self.block_count;
         // Recycle builder blocks
-        match self.k1.bytecode.b_blocks.get_mut(self.block_count as usize) {
+        match self.k1.ir.b_blocks.get_mut(self.block_count as usize) {
             Some(recycled) => {
                 self.block_count += 1;
                 recycled.name = name.into();
@@ -1145,7 +1145,7 @@ impl<'k1> Builder<'k1> {
             None => {
                 self.block_count += 1;
                 self.k1
-                    .bytecode
+                    .ir
                     .b_blocks
                     .push(Block { name: name.into(), instrs: Vec::with_capacity(256) });
             }
@@ -1156,14 +1156,14 @@ impl<'k1> Builder<'k1> {
 
     #[track_caller]
     fn goto_block(&mut self, block_id: BlockId) {
-        match self.k1.bytecode.b_blocks.get(block_id as usize) {
+        match self.k1.ir.b_blocks.get(block_id as usize) {
             None => panic!("goto_block on non-existent block: {}", block_id),
             Some(_) => self.cur_block = block_id,
         }
     }
 
     fn get_variable(&self, variable_id: VariableId) -> Option<&BuilderVariable> {
-        self.k1.bytecode.b_variables.iter().find(|bv| bv.id == variable_id)
+        self.k1.ir.b_variables.iter().find(|bv| bv.id == variable_id)
     }
 
     fn get_physical_type_result(&mut self, type_id: TypeId) -> PhysicalTypeResult {
@@ -1194,13 +1194,13 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_physical_fn_type(&mut self, type_id: TypeId) -> PhysicalFunctionType {
-        if let Some(pt) = self.k1.bytecode.phys_fn_type_cache.get(&type_id) {
+        if let Some(pt) = self.k1.ir.phys_fn_type_cache.get(&type_id) {
             return *pt;
         }
         let function_type = *self.k1.types.get(type_id).expect_function();
         let (return_type, diverges) = self.get_function_return_type(function_type.return_type);
 
-        let mut phys_params = self.k1.bytecode.mem.new_list(function_type.physical_params.len());
+        let mut phys_params = self.k1.ir.mem.new_list(function_type.physical_params.len());
         for (index, param) in
             self.k1.types.mem.getn(function_type.physical_params).iter().enumerate()
         {
@@ -1214,13 +1214,13 @@ impl<'k1> Builder<'k1> {
             phys_params.push(PhysicalFunctionParam { original_index: Some(index as u16), pt })
         }
         let fn_ty = PhysicalFunctionType {
-            params: phys_params.into_handle(&mut self.k1.bytecode.mem),
+            params: phys_params.into_handle(&mut self.k1.ir.mem),
             diverges,
             return_type,
             abi_mode: function_type.abi_mode,
         };
 
-        self.k1.bytecode.phys_fn_type_cache.insert(type_id, fn_ty);
+        self.k1.ir.phys_fn_type_cache.insert(type_id, fn_ty);
         fn_ty
     }
 
@@ -1250,7 +1250,7 @@ fn store_rich_if_dst(
     dst: Option<Value>,
     pt: PhysicalType,
     value: Value,
-    comment: impl Into<BcStr>,
+    comment: impl Into<IrStr>,
 ) -> Value {
     match dst {
         None => {
@@ -1314,8 +1314,8 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
             let returned = typed_var.is_returned();
-            let debug_info = BcDebugInfo {
-                variable_info: Some(BcDebugVariableInfo {
+            let debug_info = IrDebugInfo {
+                variable_info: Some(IrDebugVariableInfo {
                     name: typed_var.name,
                     original_type_id: let_stmt.variable_type,
                     user_hidden: typed_var.is_user_hidden(),
@@ -1328,7 +1328,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, None, init)?;
                 }
-                b.k1.bytecode.b_variables.push(BuilderVariable {
+                b.k1.ir.b_variables.push(BuilderVariable {
                     id: let_stmt.variable_id,
                     value: Value::Empty,
                     storage_pt: rich_pt,
@@ -1349,7 +1349,7 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 // non-referencing int -> indirect
                 // non-referencing agg -> direct
                 let is_direct = if rich_pt.is_agg() { true } else { let_stmt.is_referencing };
-                b.k1.bytecode.b_variables.push(BuilderVariable {
+                b.k1.ir.b_variables.push(BuilderVariable {
                     id: let_stmt.variable_id,
                     value: variable_alloca.as_value(),
                     storage_pt: var_pt,
@@ -1415,14 +1415,14 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
 }
 
 pub enum BuiltinHandler {
-    BcBakeStaticValue,
-    BcZeroed,
-    BcBoolNegate,
-    BcBitNot,
-    BcBitCast,
-    BcArithBinop(ArithOpKind),
-    BcBitwiseBinop(BitwiseBinopKind),
-    BcPointerIndex,
+    IrBakeStaticValue,
+    IrZeroed,
+    IrBoolNegate,
+    IrBitNot,
+    IrBitCast,
+    IrArithBinop(ArithOpKind),
+    IrBitwiseBinop(BitwiseBinopKind),
+    IrPointerIndex,
     Typer,
     Backend(BackendBuiltin),
 }
@@ -1438,19 +1438,19 @@ pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
         Builtin::TypeId => H::Typer,
         Builtin::EnumGetValue => H::Typer,
 
-        Builtin::BakeStaticValue => H::BcBakeStaticValue,
+        Builtin::BakeStaticValue => H::IrBakeStaticValue,
         Builtin::CompilerMessage => H::Backend(BackendBuiltin::CompilerMessage),
-        Builtin::Zeroed => H::BcZeroed,
+        Builtin::Zeroed => H::IrZeroed,
 
         Builtin::TypeName => H::Backend(BackendBuiltin::TypeName),
         Builtin::TypeSchema => H::Backend(BackendBuiltin::TypeSchema),
 
-        Builtin::BoolNegate => H::BcBoolNegate,
-        Builtin::BitNot => H::BcBitNot,
-        Builtin::BitCast => H::BcBitCast,
-        Builtin::ArithBinop(kind) => H::BcArithBinop(kind),
-        Builtin::BitwiseBinop(kind) => H::BcBitwiseBinop(kind),
-        Builtin::PointerIndex => H::BcPointerIndex,
+        Builtin::BoolNegate => H::IrBoolNegate,
+        Builtin::BitNot => H::IrBitNot,
+        Builtin::BitCast => H::IrBitCast,
+        Builtin::ArithBinop(kind) => H::IrArithBinop(kind),
+        Builtin::BitwiseBinop(kind) => H::IrBitwiseBinop(kind),
+        Builtin::PointerIndex => H::IrPointerIndex,
 
         Builtin::Allocate => H::Backend(BackendBuiltin::Allocate),
         Builtin::AllocateZeroed => H::Backend(BackendBuiltin::AllocateZeroed),
@@ -1605,7 +1605,7 @@ fn compile_expr(
             let (callee, environment_arg) = match (intrinsic_op, linkage) {
                 (Some(intrinsic), _) => {
                     let backend_builtin = match builtin_handler(intrinsic) {
-                        BuiltinHandler::BcBakeStaticValue => {
+                        BuiltinHandler::IrBakeStaticValue => {
                             return {
                                 // intern fn bakeStaticValue[T](value: T): u64
                                 let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
@@ -1627,7 +1627,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        BuiltinHandler::BcZeroed => {
+                        BuiltinHandler::IrZeroed => {
                             return {
                                 let type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let pt = b.get_physical_type(type_id);
@@ -1646,23 +1646,23 @@ fn compile_expr(
                                             "memset size",
                                         );
                                         let memset_args =
-                                            b.k1.bytecode.mem.pushn(&[dst, zero_u8, count]);
+                                            b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
                                         let Some(memset_function_id) = b.k1.scopes.find_function(
                                             b.k1.scopes.mem_scope_id,
                                             b.k1.ast.idents.b.set,
                                         ) else {
                                             b_ice!(b, "Missing memset function");
                                         };
-                                        let memset_call = BcCall {
+                                        let memset_call = IrCall {
                                             ret_type: PhysicalType::EMPTY,
-                                            callee: BcCallee::Builtin(
+                                            callee: IrCallee::Builtin(
                                                 memset_function_id,
                                                 BackendBuiltin::MemSet,
                                             ),
                                             args: memset_args,
                                             dst: None,
                                         };
-                                        let call_id = b.k1.bytecode.calls.add(memset_call);
+                                        let call_id = b.k1.ir.calls.add(memset_call);
                                         b.push_inst(Inst::Call { id: call_id }, "zeroed memset");
                                         Ok(dst)
                                     }
@@ -1674,7 +1674,7 @@ fn compile_expr(
                                 }
                             };
                         }
-                        BuiltinHandler::BcBoolNegate => {
+                        BuiltinHandler::IrBoolNegate => {
                             return {
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let base = compile_expr(b, None, arg0)?;
@@ -1683,7 +1683,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        BuiltinHandler::BcBitNot => {
+                        BuiltinHandler::IrBitNot => {
                             return {
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let base = compile_expr(b, None, arg0)?;
@@ -1692,7 +1692,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        BuiltinHandler::BcBitCast => {
+                        BuiltinHandler::IrBitCast => {
                             return {
                                 let from_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
                                 let to_type_id = b.k1.mem.get_nth(call.type_args, 1).type_id;
@@ -1773,10 +1773,10 @@ fn compile_expr(
                                 }
                             };
                         }
-                        BuiltinHandler::BcArithBinop(op) => {
+                        BuiltinHandler::IrArithBinop(op) => {
                             return compile_arith_binop(b, op, &call, dst);
                         }
-                        BuiltinHandler::BcBitwiseBinop(op) => {
+                        BuiltinHandler::IrBitwiseBinop(op) => {
                             return {
                                 let arg0 = *b.k1.mem.get_nth(call.args, 0);
                                 let lhs = compile_expr(b, None, arg0)?;
@@ -1803,7 +1803,7 @@ fn compile_expr(
                                 Ok(stored)
                             };
                         }
-                        BuiltinHandler::BcPointerIndex => {
+                        BuiltinHandler::IrPointerIndex => {
                             return {
                                 // intern fn refAtIndex[T](self: Pointer, index: uword): T*
                                 let elem_type_id = b.k1.mem.get_nth(call.type_args, 0).type_id;
@@ -1821,12 +1821,12 @@ fn compile_expr(
                             };
                         }
                         BuiltinHandler::Typer => unreachable!(),
-                        BuiltinHandler::Backend(bc_builtin) => bc_builtin,
+                        BuiltinHandler::Backend(backend_builtin) => backend_builtin,
                     };
                     let Some(function_id) = maybe_function_id else {
                         b_ice!(b, "Missing function id for intrinsic {:?}", intrinsic)
                     };
-                    (BcCallee::Builtin(function_id, backend_builtin), None)
+                    (IrCallee::Builtin(function_id, backend_builtin), None)
                 }
                 (_, Some(Linkage::External { lib_name, fn_name, .. })) => {
                     let function_id = maybe_function_id.unwrap();
@@ -1834,10 +1834,10 @@ fn compile_expr(
                         None => b.k1.get_function(function_id).name,
                         Some(fn_name) => fn_name,
                     };
-                    (BcCallee::Extern { library_name: lib_name, function_name, function_id }, None)
+                    (IrCallee::Extern { library_name: lib_name, function_name, function_id }, None)
                 }
                 _ => match &call.callee {
-                    Callee::StaticFunction(function_id) => (BcCallee::Direct(*function_id), None),
+                    Callee::StaticFunction(function_id) => (IrCallee::Direct(*function_id), None),
                     Callee::StaticLambda { function_id, lambda_value_expr, .. } => {
                         let lambda_env = compile_expr(b, None, *lambda_value_expr)?;
                         let lambda_env_type_id = b.k1.exprs.get_type(*lambda_value_expr);
@@ -1848,10 +1848,10 @@ fn compile_expr(
                         // no stack-volatile things!
                         let env_ptr = b.push_alloca(env_pt, "lambda env location").as_value();
                         store_value(b, env_pt, env_ptr, lambda_env, "store lambda env for call");
-                        (BcCallee::Direct(*function_id), Some(env_ptr))
+                        (IrCallee::Direct(*function_id), Some(env_ptr))
                     }
-                    Callee::Abstract { .. } => return failf!(b.cur_span, "bc abstract callee"),
-                    Callee::Builtin { .. } => return failf!(b.cur_span, "bc builtin callee"),
+                    Callee::Abstract { .. } => return failf!(b.cur_span, "ir abstract callee"),
+                    Callee::Builtin { .. } => return failf!(b.cur_span, "ir builtin callee"),
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.types.builtins.dyn_lambda_obj.unwrap();
@@ -1872,24 +1872,24 @@ fn compile_expr(
                         );
                         let env = load_value(b, ptr_pt, env_addr, false, "");
 
-                        (BcCallee::Indirect(callee_fn_type, fn_ptr), Some(env))
+                        (IrCallee::Indirect(callee_fn_type, fn_ptr), Some(env))
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         let callee_inst = compile_expr(b, None, *function_pointer_expr)?;
-                        (BcCallee::Indirect(callee_fn_type, callee_inst), None)
+                        (IrCallee::Indirect(callee_fn_type, callee_inst), None)
                     }
                     Callee::DynamicAbstract { .. } => {
-                        return failf!(b.cur_span, "bc abstract call");
+                        return failf!(b.cur_span, "ir abstract call");
                     }
                 },
             };
 
             // Add function to compile queue, and (maybe) do some inlining one day!
             if let Some(function_id) = callee.known_function_id() {
-                match b.k1.bytecode.functions.get(function_id) {
+                match b.k1.ir.functions.get(function_id) {
                     None => {
-                        if !b.k1.bytecode.b_units_pending_compile.contains(&function_id) {
-                            b.k1.bytecode.b_units_pending_compile.push(function_id);
+                        if !b.k1.ir.b_units_pending_compile.contains(&function_id) {
+                            b.k1.ir.b_units_pending_compile.push(function_id);
                         }
                     }
                     Some(_unit) => {
@@ -1899,7 +1899,7 @@ fn compile_expr(
             }
 
             let mut args =
-                b.k1.bytecode.mem.new_list(call.args.len() + environment_arg.iter().count() as u32);
+                b.k1.ir.mem.new_list(call.args.len() + environment_arg.iter().count() as u32);
 
             if let Some(environment_arg) = environment_arg {
                 args.push(environment_arg)
@@ -1914,7 +1914,7 @@ fn compile_expr(
                 // For this non-physical argument, find the corresponding physical parameter
                 // If there is not one, don't push an argument
                 let phys_param =
-                    b.k1.bytecode
+                    b.k1.ir
                         .mem
                         .getn(callee_fn_type.params)
                         .iter()
@@ -1926,8 +1926,8 @@ fn compile_expr(
                 }
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
-            let args_handle = b.k1.bytecode.mem.list_to_handle(args);
-            let call_id = b.k1.bytecode.calls.add(BcCall {
+            let args_handle = b.k1.ir.mem.list_to_handle(args);
+            let call_id = b.k1.ir.calls.add(IrCall {
                 ret_type: callee_fn_type.return_type,
                 callee,
                 args: args_handle,
@@ -1951,7 +1951,7 @@ fn compile_expr(
                 compile_stmt(b, None, *stmt)?;
             }
 
-            let mut arm_blocks = b.k1.bytecode.mem.new_list(match_expr.arms.len());
+            let mut arm_blocks = b.k1.ir.mem.new_list(match_expr.arms.len());
             for _arm in b.k1.mem.getn(match_expr.arms).iter() {
                 let arm_block = b.push_block("arm_cond");
                 let arm_consequent_block = b.push_block("arm_cons");
@@ -1987,7 +1987,7 @@ fn compile_expr(
             };
 
             let mut incomings: MList<CameFromCase, _> =
-                b.k1.bytecode.mem.new_list(match_expr.arms.len());
+                b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -2034,9 +2034,9 @@ fn compile_expr(
                     }
                 }
                 Some(came_from) => {
-                    let real_incomings = b.k1.bytecode.mem.list_to_handle(incomings);
+                    let real_incomings = b.k1.ir.mem.list_to_handle(incomings);
                     let Inst::CameFrom { incomings: i, .. } =
-                        b.k1.bytecode.instrs.get_mut(came_from)
+                        b.k1.ir.instrs.get_mut(came_from)
                     else {
                         unreachable!()
                     };
@@ -2058,7 +2058,7 @@ fn compile_expr(
             let end_block = b.push_block("while_loop_end");
             let TypedExpr::Block(body_block) = b.k1.exprs.get(w.body) else { unreachable!() };
             let loop_scope_id = body_block.scope_id;
-            b.k1.bytecode.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
+            b.k1.ir.b_loops.insert(loop_scope_id, LoopInfo { break_value: None, end_block });
 
             b.push_jump(cond_block, "enter while cond");
 
@@ -2089,7 +2089,7 @@ fn compile_expr(
                 unreachable!()
             };
             let body_scope_id = body_block.scope_id;
-            b.k1.bytecode
+            b.k1.ir
                 .b_loops
                 .insert(body_scope_id, LoopInfo { break_value, end_block: loop_end_block });
 
@@ -2117,7 +2117,7 @@ fn compile_expr(
             }
         }
         TypedExpr::Break(brk) => {
-            let loop_info = b.k1.bytecode.b_loops.get(&brk.loop_scope).unwrap();
+            let loop_info = b.k1.ir.b_loops.get(&brk.loop_scope).unwrap();
             let end_block = loop_info.end_block;
             if let Some(break_dst) = loop_info.break_value {
                 let _stored = compile_expr(b, Some(break_dst.as_value()), brk.value)?;
@@ -2237,7 +2237,7 @@ fn compile_expr(
             let dst = match typed_return.returned_variable {
                 None if return_pt.is_agg() => {
                     let rvo_storage =
-                        b.push_alloca_ext(return_pt, "rvo storage", BcDebugInfo::default(), true);
+                        b.push_alloca_ext(return_pt, "rvo storage", IrDebugInfo::default(), true);
                     Some(rvo_storage.as_value())
                 }
                 _ => None,
@@ -2255,17 +2255,17 @@ fn compile_expr(
             let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
-            b.k1.bytecode.b_units_pending_compile.push(function_id);
+            b.k1.ir.b_units_pending_compile.push(function_id);
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
-            b.k1.bytecode.b_units_pending_compile.push(fpe.function_id);
+            b.k1.ir.b_units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
-        TypedExpr::PendingCapture(_) => b_ice!(b, "bytecode on PendingCapture"),
+        TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
         TypedExpr::StaticValue(stat) => {
             let t = b.get_physical_type(expr_type);
             // We lower the simple scalar static values
@@ -2296,7 +2296,7 @@ fn compile_expr(
                 }
                 StaticValue::Float(float) => {
                     let float = *float;
-                    //task(bc): Pack small floats
+                    //task(ir): Pack small floats
                     let imm = b.push_inst(Inst::Data(DataInst::Float(float)), "static float");
                     let store = store_scalar_if_dst(b, dst, imm.as_value());
                     Ok(store)
@@ -2340,7 +2340,7 @@ fn compile_variable_to_address(
             let Some(var) = b.get_variable(variable_id) else {
                 eprintln!(
                     "Variables are: {}",
-                    b.k1.bytecode
+                    b.k1.ir
                         .b_variables
                         .iter()
                         .map(|bv| format!("{} {}", bv.id, bv.value))
@@ -2639,7 +2639,7 @@ fn load_value(
     pt: PhysicalType,
     src: Value,
     make_copy: bool,
-    comment: impl Into<BcStr>,
+    comment: impl Into<IrStr>,
 ) -> Value {
     match pt.as_enum() {
         PhysicalTypeEnum::Agg(_) => {
@@ -2662,7 +2662,7 @@ fn store_value(
     pt: PhysicalType,
     dst: Value,
     value: Value,
-    comment: impl Into<BcStr>,
+    comment: impl Into<IrStr>,
 ) -> Option<InstId> {
     match pt.as_enum() {
         PhysicalTypeEnum::Agg(_) => {
@@ -2686,7 +2686,7 @@ fn load_or_copy(
     dst: Option<Value>,
     src: Value,
     copy_aggregates: bool,
-    comment: impl Into<BcStr>,
+    comment: impl Into<IrStr>,
 ) -> Value {
     match dst {
         Some(dst) => {
@@ -2754,10 +2754,10 @@ pub fn zero(t: ScalarType) -> Value {
     }
 }
 
-pub fn get_compiled_unit(bc: &ProgramBytecode, unit: CompilableUnitId) -> Option<CompiledUnit> {
+pub fn get_compiled_unit(ir: &ProgramIr, unit: CompilableUnitId) -> Option<IrUnit> {
     match unit {
-        CompilableUnitId::Function(function_id) => bc.functions.get(function_id).as_ref().copied(),
-        CompilableUnitId::Expr(typed_expr_id) => bc.exprs.get(&typed_expr_id).copied(),
+        CompilableUnitId::Function(function_id) => ir.functions.get(function_id).as_ref().copied(),
+        CompilableUnitId::Expr(typed_expr_id) => ir.exprs.get(&typed_expr_id).copied(),
     }
 }
 
@@ -2772,16 +2772,16 @@ pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnitId) -> SpanId {
 
 pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<()> {
     let mut errors = Vec::new();
-    let bc = &k1.bytecode;
+    let ir = &k1.ir;
     let span = get_unit_span(k1, unit_id);
-    let Some(unit) = get_compiled_unit(&k1.bytecode, unit_id) else {
+    let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return failf!(span, "Not compiled");
     };
-    for (block_index, block) in bc.mem.getn(unit.blocks).iter().enumerate() {
-        for (index, inst_id) in bc.mem.getn(block.instrs).iter().enumerate() {
+    for (block_index, block) in ir.mem.getn(unit.blocks).iter().enumerate() {
+        for (index, inst_id) in ir.mem.getn(block.instrs).iter().enumerate() {
             let is_last = index as u32 == block.instrs.len() - 1;
-            let inst = bc.instrs.get(*inst_id);
-            let inst_kind = get_inst_kind(bc, &k1.types, *inst_id);
+            let inst = ir.instrs.get(*inst_id);
+            let inst_kind = get_inst_kind(ir, &k1.types, *inst_id);
             if !is_last && inst_kind.is_terminator() {
                 errors.push(format!("b{block_index}: stray terminator"))
             };
@@ -2793,36 +2793,36 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                 Inst::Data(_imm) => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
-                    let dst_type = get_value_kind(bc, &k1.types, dst);
+                    let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("store dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::Load { src, .. } => {
-                    let src_kind = get_value_kind(bc, &k1.types, src);
+                    let src_kind = get_value_kind(ir, &k1.types, src);
                     if !src_kind.is_storage() {
                         errors.push(format!("i{inst_id}: load src is not storage"))
                     }
                 }
                 Inst::Copy { dst, src, .. } => {
-                    let src_type = get_value_kind(bc, &k1.types, src);
+                    let src_type = get_value_kind(ir, &k1.types, src);
                     if !src_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy src is not a ptr"))
                     }
-                    let dst_type = get_value_kind(bc, &k1.types, dst);
+                    let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
                         errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", *inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
-                    let base_type = get_value_kind(bc, &k1.types, base);
+                    let base_type = get_value_kind(ir, &k1.types, base);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: struct_offset base is not a ptr"))
                     }
                 }
                 Inst::ArrayOffset { base, element_index, .. } => {
-                    let base_type = get_value_kind(bc, &k1.types, base);
-                    let index_type = get_value_kind(bc, &k1.types, element_index);
+                    let base_type = get_value_kind(ir, &k1.types, base);
+                    let index_type = get_value_kind(ir, &k1.types, element_index);
                     if !base_type.is_storage() {
                         errors.push(format!("i{inst_id}: array_offset base is not a ptr"))
                     }
@@ -2842,7 +2842,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::JumpIf { cond, .. } => {
-                    let cond_type = get_value_kind(bc, &k1.types, cond);
+                    let cond_type = get_value_kind(ir, &k1.types, cond);
                     if !cond_type.is_value() {
                         errors.push(format!("i{inst_id}: jumpif cond is not a value"))
                     }
@@ -2850,19 +2850,19 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                 Inst::Unreachable => (),
                 Inst::CameFrom { .. } => (),
                 Inst::Ret { v, .. } => {
-                    let ret_val_type = get_value_kind(bc, &k1.types, v);
+                    let ret_val_type = get_value_kind(ir, &k1.types, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
                         errors.push(format!("i{inst_id}: ret value is not a value"))
                     }
                 }
                 Inst::BoolNegate { v } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !inst_type.is_u8() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
                 Inst::BitNot { v } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: bit_not src is not an int"))
                     }
@@ -2874,7 +2874,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !inst_type.is_int() {
                         errors.push(format!("i{inst_id}: int_ext_u src is not an int"))
                     }
@@ -2883,7 +2883,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::FloatTrunc { v, to } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float_trunc src is not f64"))
@@ -2893,7 +2893,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::FloatExt { v, to } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float_ext src is not f32"))
@@ -2903,7 +2903,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
                     {
                         errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
@@ -2913,7 +2913,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                     }
                 }
                 Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
                     {
                         errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
@@ -2925,13 +2925,13 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
                 Inst::IntToFloatUnsigned { .. } => (),
                 Inst::IntToFloatSigned { .. } => (),
                 Inst::PtrToWord { v } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if !inst_type.is_storage() {
                         errors.push(format!("i{inst_id}: ptr_to_word src is not a ptr"))
                     }
                 }
                 Inst::WordToPtr { v } => {
-                    let inst_type = get_value_kind(bc, &k1.types, v);
+                    let inst_type = get_value_kind(ir, &k1.types, v);
                     if inst_type.as_value().and_then(|t| t.as_scalar()).is_none() {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a scalar int",))
                     }
@@ -2965,7 +2965,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
         Err(K1Message {
             span,
             message: format!(
-                "Bytecode Unit failed validation\n{}\n{}",
+                "IR Unit failed validation\n{}\n{}",
                 compiled_unit_to_string(k1, unit_id, true),
                 error_string
             ),
@@ -2985,7 +2985,7 @@ pub fn compiled_unit_to_string(
     show_source: bool,
 ) -> String {
     let mut s = String::new();
-    let unit = get_compiled_unit(&k1.bytecode, unit).unwrap();
+    let unit = get_compiled_unit(&k1.ir, unit).unwrap();
     display_unit(&mut s, k1, &unit, show_source).unwrap();
     s
 }
@@ -3015,7 +3015,7 @@ pub fn display_phys_fn_type(
     p_fn_ty: &PhysicalFunctionType,
 ) -> std::fmt::Result {
     w.write_str("fn(")?;
-    for (index, param) in k1.bytecode.mem.getn(p_fn_ty.params).iter().enumerate() {
+    for (index, param) in k1.ir.mem.getn(p_fn_ty.params).iter().enumerate() {
         write!(w, "p{}: ", index)?;
         k1.types.display_pt(w, param.pt)?;
         let last = index == p_fn_ty.params.len() as usize - 1;
@@ -3031,7 +3031,7 @@ pub fn display_phys_fn_type(
 pub fn display_unit(
     w: &mut impl Write,
     k1: &TypedProgram,
-    unit: &CompiledUnit,
+    unit: &IrUnit,
     show_source: bool,
 ) -> std::fmt::Result {
     match unit.unit_id {
@@ -3049,9 +3049,9 @@ pub fn display_unit(
         }
     };
     writeln!(w, " (offset={}, inst count={})", unit.inst_offset, unit.inst_count)?;
-    for (index, _block) in k1.bytecode.mem.getn(unit.blocks).iter().enumerate() {
+    for (index, _block) in k1.ir.mem.getn(unit.blocks).iter().enumerate() {
         let id = index as BlockId;
-        display_block(w, k1, &k1.bytecode, unit, id, show_source)?;
+        display_block(w, k1, &k1.ir, unit, id, show_source)?;
     }
     Ok(())
 }
@@ -3059,22 +3059,22 @@ pub fn display_unit(
 pub fn display_compiled_expr(
     w: &mut impl Write,
     k1: &TypedProgram,
-    bc: &ProgramBytecode,
+    ir: &ProgramIr,
     expr_id: TypedExprId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let Some(unit) = bc.exprs.get(&expr_id) else { return Ok(()) };
+    let Some(unit) = ir.exprs.get(&expr_id) else { return Ok(()) };
     display_unit(w, k1, unit, show_source)
 }
 
 pub fn display_function(
     w: &mut impl Write,
     k1: &TypedProgram,
-    bc: &ProgramBytecode,
+    ir: &ProgramIr,
     function: FunctionId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let Some(unit) = bc.functions.get(function) else { return Ok(()) };
+    let Some(unit) = ir.functions.get(function) else { return Ok(()) };
     display_unit(w, k1, unit, show_source)
 }
 
@@ -3085,20 +3085,20 @@ pub fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
 pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
-    bc: &ProgramBytecode,
-    unit: &CompiledUnit,
+    ir: &ProgramIr,
+    unit: &IrUnit,
     block_id: BlockId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let block = bc.mem.get_nth(unit.blocks, block_id as usize);
+    let block = ir.mem.get_nth(unit.blocks, block_id as usize);
     write!(w, "b{} ", block_id)?;
     if !block.name.is_empty() {
         w.write_str(block.name.as_ref())?;
     }
     writeln!(w)?;
-    for inst_id in bc.mem.getn(block.instrs).iter() {
+    for inst_id in ir.mem.getn(block.instrs).iter() {
         if show_source {
-            let span_id = *bc.sources.get(*inst_id);
+            let span_id = *ir.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(span_id);
             let the_span = k1.ast.spans.get(span_id);
             let (_, line) = k1.get_span_location(span_id);
@@ -3108,8 +3108,8 @@ pub fn display_block(
         }
 
         write!(w, " i{:3} = ", *inst_id)?;
-        display_inst(w, k1, bc, *inst_id)?;
-        let comment = bc.comments.get(*inst_id);
+        display_inst(w, k1, ir, *inst_id)?;
+        let comment = ir.comments.get(*inst_id);
         if !comment.is_empty() {
             write!(w, " ; {}", comment)?;
         }
@@ -3121,17 +3121,17 @@ pub fn display_block(
 
 pub fn inst_to_string(k1: &TypedProgram, inst_id: InstId) -> String {
     let mut s = String::new();
-    display_inst(&mut s, k1, &k1.bytecode, inst_id).unwrap();
+    display_inst(&mut s, k1, &k1.ir, inst_id).unwrap();
     s
 }
 
 pub fn display_inst(
     w: &mut impl Write,
     k1: &TypedProgram,
-    bc: &ProgramBytecode,
+    ir: &ProgramIr,
     inst_id: InstId,
 ) -> std::fmt::Result {
-    match *bc.instrs.get(inst_id) {
+    match *ir.instrs.get(inst_id) {
         Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
@@ -3168,7 +3168,7 @@ pub fn display_inst(
             write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { id } => {
-            let call = bc.calls.get(id);
+            let call = ir.calls.get(id);
             write!(w, "call ")?;
             if let Some(dst) = call.dst {
                 w.write_str("into ")?;
@@ -3177,17 +3177,17 @@ pub fn display_inst(
             }
             k1.types.display_pt(w, call.ret_type)?;
             match &call.callee {
-                BcCallee::Builtin(_, intrinsic_operation) => {
+                IrCallee::Builtin(_, intrinsic_operation) => {
                     write!(w, " builtin {:?}", intrinsic_operation)?;
                 }
-                BcCallee::Direct(function_id) => {
+                IrCallee::Direct(function_id) => {
                     write!(w, " ")?;
                     w.write_str(k1.ident_str(k1.get_function(*function_id).name))?;
                 }
-                BcCallee::Indirect(_, callee_inst) => {
+                IrCallee::Indirect(_, callee_inst) => {
                     write!(w, " indirect {}", *callee_inst)?;
                 }
-                BcCallee::Extern { library_name, function_name, .. } => {
+                IrCallee::Extern { library_name, function_name, .. } => {
                     write!(
                         w,
                         " extern {} {}",
@@ -3197,7 +3197,7 @@ pub fn display_inst(
                 }
             };
             w.write_str("(")?;
-            for (index, arg) in bc.mem.getn(call.args).iter().enumerate() {
+            for (index, arg) in ir.mem.getn(call.args).iter().enumerate() {
                 write!(w, "{}", *arg)?;
                 let last = index == call.args.len() as usize - 1;
                 if !last {
@@ -3219,7 +3219,7 @@ pub fn display_inst(
             write!(w, "comefrom ")?;
             k1.types.display_pt(w, t)?;
             write!(w, " [")?;
-            for (i, incoming) in bc.mem.getn(incomings).iter().enumerate() {
+            for (i, incoming) in ir.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
@@ -3232,7 +3232,7 @@ pub fn display_inst(
             if agg {
                 w.write_str("agg ")?;
             }
-            display_inst_kind(w, &k1.types, get_value_kind(bc, &k1.types, v))?;
+            display_inst_kind(w, &k1.types, get_value_kind(ir, &k1.types, v))?;
             write!(w, " {}", v)?;
         }
         Inst::BoolNegate { v } => {

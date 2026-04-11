@@ -4,7 +4,7 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 use log::debug;
 
-use crate::bc::{self, PhysicalFunctionType, ProgramBytecode};
+use crate::ir::{self, PhysicalFunctionType, ProgramIr};
 use crate::errf;
 use crate::lex::SpanId;
 use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
@@ -19,7 +19,7 @@ pub(super) fn handle_ffi_call(
     frame_index: u32,
     inst_offset: u32,
     return_pt: PhysicalType,
-    args: MSlice<bc::Value, ProgramBytecode>,
+    args: MSlice<ir::Value, ProgramIr>,
     lib_name: Option<Ident>,
     fn_name: Ident,
     function_id: FunctionId,
@@ -28,11 +28,11 @@ pub(super) fn handle_ffi_call(
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
-    let fn_type = k1.bytecode.functions.get(function_id).unwrap().fn_type;
+    let fn_type = k1.ir.functions.get(function_id).unwrap().fn_type;
     let function_params = fn_type.params;
 
     for (arg_value, param) in
-        k1.bytecode.mem.getn(args).iter().zip(k1.bytecode.mem.getn(function_params))
+        k1.ir.mem.getn(args).iter().zip(k1.ir.mem.getn(function_params))
     {
         let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
 
@@ -127,7 +127,7 @@ fn prep_ffi_cif(
     let return_type = physical_function_type.return_type;
     let mut ffi_args_types_storage = k1.mem.new_list(param_count as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
-    for fn_param in k1.bytecode.mem.getn(fn_params) {
+    for fn_param in k1.ir.mem.getn(fn_params) {
         let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
             .map_err(|msg| errf!(span, "Function type is not FFI compatible: {msg}"))?;
 

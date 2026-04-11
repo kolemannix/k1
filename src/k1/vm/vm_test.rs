@@ -10,11 +10,11 @@ mod stack_tests {
     use crate::typer::*;
     use crate::vm::*;
 
-    fn fake_unit() -> CompiledUnit {
-        CompiledUnit {
+    fn fake_unit() -> IrUnit {
+        IrUnit {
             result_type_id: EMPTY_TYPE_ID,
             unit_id: CompilableUnitId::Function(FunctionId::PENDING),
-            fn_type: bc::PhysicalFunctionType {
+            fn_type: ir::PhysicalFunctionType {
                 return_type: PhysicalType::EMPTY,
                 diverges: false,
                 params: MSlice::empty(),

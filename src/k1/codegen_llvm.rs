@@ -34,8 +34,8 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
 use log::{debug, info, trace};
 
-use crate::bc::{
-    BackendBuiltin, BcCallee, CompiledBlock, Inst, InstId, PhysicalFunctionType, ProgramBytecode,
+use crate::ir::{
+    BackendBuiltin, IrCallee, CompiledBlock, Inst, InstId, PhysicalFunctionType, ProgramIr,
 };
 use crate::compiler::{self};
 use crate::kmem::{MHandle, MList, MSlice};
@@ -49,7 +49,7 @@ use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
-use crate::{SV8, bc, failf, kmem};
+use crate::{SV8, ir, failf, kmem};
 
 #[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
@@ -1021,7 +1021,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_final_params.push(self.builtin_types.ptr.into())
         }
 
-        for param in self.k1.bytecode.mem.getn(param_types) {
+        for param in self.k1.ir.mem.getn(param_types) {
             let param_cg_type = self.codegen_type(param.pt);
             let abi_mapping = self.get_abi_mapping_for_type(abi_mode, param.pt, false);
             param_abi_mappings.push(abi_mapping);
@@ -1454,10 +1454,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_function_call(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        call_id: bc::BcCallId,
+        call_id: ir::IrCallId,
         span: SpanId,
     ) -> K1Result<Option<BasicValueEnum<'ctx>>> {
-        let call = self.k1.bytecode.calls.get(call_id);
+        let call = self.k1.ir.calls.get(call_id);
         let callee = call.callee;
         let call_args = call.args;
         let call_dst = call.dst;
@@ -1467,14 +1467,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Indirect(PointerValue<'ctx>),
         }
         let (llvm_callee, cg_fn_type) = match callee {
-            BcCallee::Builtin(function_id, _)
-            | BcCallee::Direct(function_id)
-            | BcCallee::Extern { function_id, .. } => {
+            IrCallee::Builtin(function_id, _)
+            | IrCallee::Direct(function_id)
+            | IrCallee::Extern { function_id, .. } => {
                 self.declare_llvm_function(function_id)?;
                 let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type.clone();
                 (CallKind::Direct(function_id), fn_type)
             }
-            BcCallee::Indirect(fn_type, value) => {
+            IrCallee::Indirect(fn_type, value) => {
                 let callee_value = self.resolve_value(inst_mappings, value)?.into_pointer_value();
                 let cg_fn_type = self.make_cg_function_type(&fn_type)?;
                 (CallKind::Indirect(callee_value), cg_fn_type)
@@ -1504,8 +1504,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             args.push(sret_dst.into())
         }
 
-        for (index, arg_bc_value) in self.k1.bytecode.mem.getn(call_args).iter().enumerate() {
-            let arg_value = self.resolve_value(inst_mappings, *arg_bc_value)?;
+        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+            let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
 
             let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
             let abi_mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index);
@@ -1845,11 +1845,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         block_id: u32,
-        block: &bc::CompiledBlock,
+        block: &ir::CompiledBlock,
     ) -> K1Result<BasicBlock<'ctx>> {
         let llvm_block = self.get_block_id(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.bytecode.mem.getn(block.instrs) {
+        for inst in self.k1.ir.mem.getn(block.instrs) {
             self.codegen_inst(inst_mappings, *inst)?;
         }
         Ok(llvm_block)
@@ -1858,36 +1858,36 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn resolve_value(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        value: bc::Value,
+        value: ir::Value,
     ) -> K1Result<BasicValueEnum<'ctx>> {
         //eprintln!("codegen_value {}", value);
         match value {
-            bc::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
+            ir::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
                 Some(v) => Ok(*v),
                 None => {
                     failf!(
                         self.debug.current_span(),
                         "Whiffed inst id lookup: {} {}",
                         inst_id.as_u32(),
-                        bc::inst_to_string(self.k1, inst_id)
+                        ir::inst_to_string(self.k1, inst_id)
                     )
                 }
             },
-            bc::Value::GlobalAddr { id, .. } => {
+            ir::Value::GlobalAddr { id, .. } => {
                 let global_value = self.codegen_global(id)?;
                 Ok(global_value.as_pointer_value().as_basic_value_enum())
             }
-            bc::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
-            bc::Value::FunctionAddr(function_id) => {
+            ir::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
+            ir::Value::FunctionAddr(function_id) => {
                 let function_value = self.declare_llvm_function(function_id)?;
                 Ok(function_value.as_global_value().as_pointer_value().into())
             }
-            bc::Value::FnParam { index, .. } => {
+            ir::Value::FnParam { index, .. } => {
                 let function = self.get_current_function();
                 let v = function.param_values[index as usize];
                 Ok(v)
             }
-            bc::Value::Data32 { t, data } => {
+            ir::Value::Data32 { t, data } => {
                 let v: BasicValueEnum<'ctx> = match t {
                     ScalarType::U8 => self.ctx.i8_type().const_int(data as u64, false).into(),
                     ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
@@ -1921,7 +1921,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 Ok(v)
             }
-            bc::Value::Empty => Ok(self.builtin_types.empty_value()),
+            ir::Value::Empty => Ok(self.builtin_types.empty_value()),
         }
     }
 
@@ -1930,17 +1930,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         inst_id: InstId,
     ) -> K1Result<()> {
-        let bc = &self.k1.bytecode;
-        let span = *bc.sources.get(inst_id);
+        let ir = &self.k1.ir;
+        let span = *ir.sources.get(inst_id);
         self.set_debug_location_from_span(span);
-        //eprintln!("codegen_inst {} {}", inst_id.as_u32(), bc::inst_to_string(self.k1, inst_id));
-        let inst = *bc.instrs.get(inst_id);
+        //eprintln!("codegen_inst {} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
+        let inst = *ir.instrs.get(inst_id);
         match inst {
             Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
-                    bc::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
-                    bc::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
-                    bc::DataInst::Float(f) => match f {
+                    ir::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
+                    ir::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
+                    ir::DataInst::Float(f) => match f {
                         TypedFloatValue::F32(f32) => {
                             self.ctx.f32_type().const_float(f32 as f64).into()
                         }
@@ -1975,8 +1975,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
-                let bc_debug_info = self.k1.bytecode.debug_info.get(inst_id);
-                if let Some(var_info) = bc_debug_info.variable_info
+                let ir_debug_info = self.k1.ir.debug_info.get(inst_id);
+                if let Some(var_info) = ir_debug_info.variable_info
                     && !var_info.user_hidden
                 {
                     let name_str = self.k1.ident_str(var_info.name);
@@ -2137,8 +2137,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitCast { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?;
 
-                // From agg to scalar -> handled by BC
-                // From scalar to agg -> handled by BC
+                // From agg to scalar -> handled by IF
+                // From scalar to agg -> handled by IF
                 match to.as_enum() {
                     PhysicalTypeEnum::Empty => panic!("BitCast on ZST"),
                     // From agg to agg -> canon type is ptr, nothing to do.
@@ -2165,7 +2165,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
-                let signed = matches!(inst, bc::Inst::IntExtS { .. });
+                let signed = matches!(inst, ir::Inst::IntExtS { .. });
                 let ext =
                     self.builder.build_int_cast_sign_flag(input, to_int_type, signed, "").unwrap();
                 inst_mappings.insert(inst_id, ext.as_basic_value_enum());
@@ -2283,15 +2283,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Inst::IntCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
-                    bc::IntCmpPred::Eq => IntPredicate::EQ,
-                    bc::IntCmpPred::Slt => IntPredicate::SLT,
-                    bc::IntCmpPred::Sle => IntPredicate::SLE,
-                    bc::IntCmpPred::Sgt => IntPredicate::SGT,
-                    bc::IntCmpPred::Sge => IntPredicate::SGE,
-                    bc::IntCmpPred::Ult => IntPredicate::ULT,
-                    bc::IntCmpPred::Ule => IntPredicate::ULE,
-                    bc::IntCmpPred::Ugt => IntPredicate::UGT,
-                    bc::IntCmpPred::Uge => IntPredicate::UGE,
+                    ir::IntCmpPred::Eq => IntPredicate::EQ,
+                    ir::IntCmpPred::Slt => IntPredicate::SLT,
+                    ir::IntCmpPred::Sle => IntPredicate::SLE,
+                    ir::IntCmpPred::Sgt => IntPredicate::SGT,
+                    ir::IntCmpPred::Sge => IntPredicate::SGE,
+                    ir::IntCmpPred::Ult => IntPredicate::ULT,
+                    ir::IntCmpPred::Ule => IntPredicate::ULE,
+                    ir::IntCmpPred::Ugt => IntPredicate::UGT,
+                    ir::IntCmpPred::Uge => IntPredicate::UGE,
                 };
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
@@ -2331,11 +2331,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Inst::FloatCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
-                    bc::FloatCmpPred::Eq => FloatPredicate::OEQ,
-                    bc::FloatCmpPred::Lt => FloatPredicate::OLT,
-                    bc::FloatCmpPred::Le => FloatPredicate::OLE,
-                    bc::FloatCmpPred::Gt => FloatPredicate::OGT,
-                    bc::FloatCmpPred::Ge => FloatPredicate::OGE,
+                    ir::FloatCmpPred::Eq => FloatPredicate::OEQ,
+                    ir::FloatCmpPred::Lt => FloatPredicate::OLT,
+                    ir::FloatCmpPred::Le => FloatPredicate::OLE,
+                    ir::FloatCmpPred::Gt => FloatPredicate::OGT,
+                    ir::FloatCmpPred::Ge => FloatPredicate::OGE,
                 };
                 let lhs = self.resolve_value(inst_mappings, lhs)?.into_float_value();
                 let rhs = self.resolve_value(inst_mappings, rhs)?.into_float_value();
@@ -2494,17 +2494,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         }
 
-        bc::compile_function(self.k1, function_id)?;
-        let Some(bytecode_fn) = self.k1.bytecode.functions.get(function_id) else {
+        ir::compile_function(self.k1, function_id)?;
+        let Some(ir_fn) = self.k1.ir.functions.get(function_id) else {
             return failf!(
                 function_span,
-                "Internal Compiler Error: missing bytecode for function {}",
+                "Internal Compiler Error: missing ir for function {}",
                 self.k1.function_id_to_string(function_id, false)
             );
         };
-        let bytecode_fn = *bytecode_fn;
+        let ir_fn = *ir_fn;
 
-        let llvm_function_type = self.make_cg_function_type(&bytecode_fn.fn_type)?;
+        let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type)?;
         debug!(
             "-> res (is_sret={}) {}",
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
@@ -2879,9 +2879,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             );
         }
 
-        let bc_unit = self.k1.bytecode.functions.get(function_id).unwrap();
+        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
         self.set_debug_location_from_span(function_span);
-        match bc_unit.function_builtin_kind {
+        match ir_unit.function_builtin_kind {
             Some(builtin_kind) => {
                 let _terminator_instr =
                     self.codegen_builtin_function_body(builtin_kind, function_id)?;
@@ -2889,13 +2889,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             None => {
                 //eprintln!(
                 //    "llvm codegen unit\n{}",
-                //    bc::compiled_unit_to_string(
+                //    ir::compiled_unit_to_string(
                 //        self.k1,
                 //        CompilableUnitId::Function(function_id),
                 //        true
                 //    )
                 //);
-                self.codegen_unit_body(inst_mappings, bc_unit.blocks)?;
+                self.codegen_unit_body(inst_mappings, ir_unit.blocks)?;
             }
         };
         self.debug.pop_scope();
@@ -2906,15 +2906,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_unit_body(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        blocks: MSlice<CompiledBlock, ProgramBytecode>,
+        blocks: MSlice<CompiledBlock, ProgramIr>,
     ) -> K1Result<()> {
         let fv = self.get_current_function().function_value;
-        for block in self.k1.bytecode.mem.getn_lt(blocks) {
+        for block in self.k1.ir.mem.getn_lt(blocks) {
             self.ctx.append_basic_block(fv, block.name.as_str());
         }
 
         inst_mappings.clear();
-        for (index, block) in self.k1.bytecode.mem.getn(blocks).iter().enumerate() {
+        for (index, block) in self.k1.ir.mem.getn(blocks).iter().enumerate() {
             if index == 0 {
                 let debug_locn = self.builder.get_current_debug_location().unwrap();
                 self.builder.unset_current_debug_location();
@@ -2930,9 +2930,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // Fulfill phis later, since they're uniquely out-of-order
         // Is that true? Could for example simple add or store reference an inst from another
         // block? allocas are hoisted... so, yeah, but phis can't be
-        for block in self.k1.bytecode.mem.getn(blocks) {
-            for inst in self.k1.bytecode.mem.getn(block.instrs) {
-                if let Inst::CameFrom { incomings, .. } = self.k1.bytecode.instrs.get(*inst) {
+        for block in self.k1.ir.mem.getn(blocks) {
+            for inst in self.k1.ir.mem.getn(block.instrs) {
+                if let Inst::CameFrom { incomings, .. } = self.k1.ir.instrs.get(*inst) {
                     let phi_inst = inst_mappings.get(inst).unwrap();
                     debug_assert!(
                         phi_inst.as_instruction_value().unwrap().get_opcode()
@@ -2940,7 +2940,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     );
                     let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
 
-                    for incoming in self.k1.bytecode.mem.getn(*incomings) {
+                    for incoming in self.k1.ir.mem.getn(*incomings) {
                         let value = self.resolve_value(inst_mappings, incoming.value)?;
                         let block = self.get_block_id(incoming.from)?;
                         phi.add_incoming(&[(&value, block)])
