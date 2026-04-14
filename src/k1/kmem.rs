@@ -50,10 +50,45 @@ pub struct Mem<Tag = ()> {
     _marker: PhantomData<Tag>,
 }
 
+#[derive(Clone, Copy)]
+pub struct MdlNode<T, Tag> {
+    data: T,
+    prev: MHandle<MdlNode<T, Tag>, Tag>,
+    next: MHandle<MdlNode<T, Tag>, Tag>,
+}
+
+#[derive(Clone, Copy)]
+pub struct MdlList<T, Tag> {
+    first: MHandle<MdlNode<T, Tag>, Tag>,
+    last: MHandle<MdlNode<T, Tag>, Tag>,
+}
+
+impl<T, Tag> MdlList<T, Tag> {
+    fn empty() -> Self {
+        MdlList { first: MHandle::nil(), last: MHandle::nil() }
+    }
+}
+
 // We use NonZeroU32 so that the handles are niched, allowing for use
 // for no size cost in types like Option and Result
-pub struct MHandle<T, Tag>(NonZeroU32, PhantomData<T>, PhantomData<Tag>);
+pub struct MHandle<T, Tag>(Option<NonZeroU32>, PhantomData<T>, PhantomData<Tag>);
 static_assert_size!(MHandle<u128, ()>, 4);
+
+impl<T, Tag> PartialEq for MHandle<T, Tag> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T, Tag> MHandle<T, Tag> {
+    pub fn nil() -> Self {
+        MHandle(None, PhantomData, PhantomData)
+    }
+
+    pub fn is_nil(&self) -> bool {
+        self.0.is_none()
+    }
+}
 
 impl<T, Tag> Copy for MHandle<T, Tag> {}
 impl<T, Tag> Clone for MHandle<T, Tag> {
@@ -278,17 +313,17 @@ impl<Tag> Mem<Tag> {
         NonZeroU32::new(diff as u32).unwrap()
     }
 
-    fn offset_to_ptr<T>(&self, offset: NonZeroU32) -> *const T {
-        unsafe { self.base_ptr().add(offset.get() as usize) as *const T }
+    fn offset_to_ptr<T>(&self, offset: NonZeroU32) -> *mut T {
+        unsafe { self.base_ptr().add(offset.get() as usize) as *mut T }
     }
 
     fn pack_handle<T>(&self, ptr: *const T) -> MHandle<T, Tag> {
         let offset = self.ptr_to_offset(ptr);
-        MHandle(offset, PhantomData, PhantomData)
+        MHandle(Some(offset), PhantomData, PhantomData)
     }
 
-    fn unpack_handle<T>(&self, handle: MHandle<T, Tag>) -> *const T {
-        self.offset_to_ptr::<T>(handle.0)
+    fn unpack_handle<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
+        self.offset_to_ptr::<T>(handle.0.unwrap())
     }
 
     pub fn list_to_handle<T>(&self, list: MList<T, Tag>) -> MSlice<T, Tag> {
@@ -515,14 +550,22 @@ impl<Tag> Mem<Tag> {
         MStr::from_parts(base, len as usize)
     }
 
-    pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
+    pub fn get_raw<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             if size_of::<T>() != 0 {
                 self.check_mine(ptr.addr())
             }
         }
-        unsafe { &*ptr }
+        ptr
+    }
+
+    pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
+        unsafe { &*self.get_raw(handle) }
+    }
+
+    pub fn get_mut<T>(&mut self, handle: MHandle<T, Tag>) -> &mut T {
+        unsafe { &mut *self.get_raw(handle) }
     }
 
     pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
@@ -634,6 +677,211 @@ impl<Tag> Mem<Tag> {
 
     pub fn bytes_used(&self) -> usize {
         self.cursor.addr() - self.base_ptr().addr()
+    }
+}
+//////////////// Doubly Linked List Impl
+
+impl<Tag> Mem<Tag> {
+    pub fn dlist_new<T>(&mut self) -> MdlList<T, Tag> {
+        MdlList::empty()
+    }
+
+    pub fn dlist_push<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
+        let node = self.push_h(MdlNode { data, prev: list.last, next: MHandle::nil() });
+        if list.last.is_nil() {
+            // List is empty, so new node is also the first node
+            list.first = node;
+            list.last = node;
+        } else {
+            self.get_mut(list.last).next = node;
+            list.last = node;
+        }
+    }
+
+    pub fn dlist_push_front<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
+        let new_node = self.push_h(MdlNode { data, prev: MHandle::nil(), next: list.first });
+        if list.first.is_nil() {
+            list.first = new_node;
+            list.last = new_node;
+        } else {
+            self.get_mut(list.first).prev = new_node;
+            list.first = new_node;
+        }
+    }
+
+    pub fn dlist_insert<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize, data: T) {
+        // Find the node currently at `index`.
+        // If `index == len`, this will end up as nil(), meaning "insert at end".
+        let mut next = list.first;
+        for _ in 0..index {
+            if next.is_nil() {
+                panic!("Index out of bounds for dlist_insert");
+            }
+            next = self.get(next).next;
+        }
+
+        let prev = if next.is_nil() { list.last } else { self.get(next).prev };
+        let node = self.push_h(MdlNode { data, prev, next });
+
+        if prev.is_nil() {
+            list.first = node;
+        } else {
+            self.get_mut(prev).next = node;
+        }
+
+        if next.is_nil() {
+            list.last = node;
+        } else {
+            self.get_mut(next).prev = node;
+        }
+    }
+
+    pub fn dlist_try_remove<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize) -> bool {
+        let mut cur = list.first;
+        for _ in 0..index {
+            if cur.is_nil() {
+                return false;
+            }
+            cur = self.get(cur).next;
+        }
+
+        if cur.is_nil() {
+            return false;
+        }
+
+        let prev = self.get(cur).prev;
+        let next = self.get(cur).next;
+
+        if prev.is_nil() {
+            list.first = next;
+        } else {
+            self.get_mut(prev).next = next;
+        }
+
+        if next.is_nil() {
+            list.last = prev;
+        } else {
+            self.get_mut(next).prev = prev;
+        }
+
+        true
+    }
+
+    pub fn dlist_remove<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize) {
+        if !self.dlist_try_remove(list, index) {
+            panic!("Index {index} out of bounds for dlist_remove");
+        }
+    }
+
+    pub fn dlist_iter<'a, T: 'a>(&'a self, list: MdlList<T, Tag>) -> impl Iterator<Item = &'a T> {
+        let mut current = list.first;
+        std::iter::from_fn(move || {
+            if current.is_nil() {
+                None
+            } else {
+                let node = self.get(current);
+                current = node.next;
+                Some(&node.data)
+            }
+        })
+    }
+
+    pub fn dlist_nth<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<&T> {
+        let mut current = list.first;
+        for _ in 0..n {
+            if current.is_nil() {
+                return None;
+            }
+            current = self.get(current).next;
+        }
+        if current.is_nil() { None } else { Some(&self.get(current).data) }
+    }
+
+    pub fn dlist_compute_len<T>(&self, list: MdlList<T, Tag>) -> usize {
+        self.dlist_iter(list).count()
+    }
+
+    pub fn dlist_assert_valid<T>(&self, list: MdlList<T, Tag>) {
+        // Empty/non-empty consistency
+        assert!(
+            list.first.is_nil() == list.last.is_nil(),
+            "dlist invariant violated: first and last must both be nil or both be non-nil"
+        );
+
+        // Endpoints must be properly terminated.
+        assert!(
+            self.get(list.first).prev.is_nil(),
+            "dlist invariant violated: first.prev must be nil"
+        );
+        assert!(
+            self.get(list.last).next.is_nil(),
+            "dlist invariant violated: last.next must be nil"
+        );
+
+        // Walk forward and check prev/next consistency.
+        let mut forward_len = 0;
+        let mut prev = MHandle::nil();
+        let mut cur = list.first;
+
+        while !cur.is_nil() {
+            let node = self.get(cur);
+
+            assert!(
+                node.prev == prev,
+                "dlist invariant violated: broken prev link in forward traversal"
+            );
+
+            if !prev.is_nil() {
+                assert!(
+                    self.get(prev).next == cur,
+                    "dlist invariant violated: prev.next does not point back to current node"
+                );
+            }
+
+            prev = cur;
+            cur = node.next;
+            forward_len += 1;
+        }
+
+        assert!(
+            prev == list.last,
+            "dlist invariant violated: forward traversal did not end at list.last"
+        );
+
+        // Walk backward and check prev/next consistency.
+        let mut backward_len = 0;
+        let mut next = MHandle::nil();
+        let mut cur = list.last;
+
+        while !cur.is_nil() {
+            let node = self.get(cur);
+
+            assert!(
+                node.next == next,
+                "dlist invariant violated: broken next link in backward traversal"
+            );
+
+            if !next.is_nil() {
+                assert!(
+                    self.get(next).prev == cur,
+                    "dlist invariant violated: next.prev does not point back to current node"
+                );
+            }
+
+            next = cur;
+            cur = node.prev;
+            backward_len += 1;
+        }
+
+        assert!(
+            next == list.first,
+            "dlist invariant violated: backward traversal did not end at list.first"
+        );
+
+        assert!(
+            forward_len == backward_len,
+            "dlist invariant violated: forward and backward lengths differ"
+        );
     }
 }
 
@@ -1247,201 +1495,4 @@ impl<T: Copy, Tag, const N: usize> MSpillSlice<T, N, Tag> {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test() {
-        let mut arena: Mem<()> = Mem::make();
-        let handle = arena.push_h(42u32);
-        let value = arena.get(handle);
-        assert_eq!(*value, 42);
-        let handle2 = arena.push_h(43u32);
-        let value2 = *arena.get(handle2);
-        assert_eq!(value2, 43);
-
-        let h3 = arena.pushn(&[1, 2, 3, 4]);
-        assert_eq!(h3.len(), 4);
-
-        assert_eq!(arena.getn(h3), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn push_slice_iter() {
-        let mut arena: Mem<()> = Mem::make();
-        let h = arena.pushn_iter((0..10).map(|x| x * 10));
-        assert_eq!(h.len(), 10);
-        assert_eq!(arena.getn(h), &[0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
-
-        let empty_h = arena.pushn_iter(std::iter::empty::<u32>());
-        assert_eq!(empty_h.len(), 0);
-        assert!(arena.getn(empty_h).is_empty());
-    }
-
-    #[test]
-    fn vec() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(16);
-        for i in 0..16 {
-            v.push(i * 10);
-        }
-        assert_eq!(v.len(), 16);
-        for i in 0..16 {
-            assert_eq!(v.as_slice()[i], i * 10);
-        }
-        let err = v.try_push(42);
-        assert!(err.is_err());
-    }
-
-    #[test]
-    fn vec_extend() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(16);
-        v.extend(&[1, 2, 3, 4, 5]);
-        assert_eq!(v.len(), 5);
-        for i in 0..5 {
-            assert_eq!(v.as_slice()[i], i + 1);
-        }
-
-        v.extend(&[6]);
-        assert_eq!(v.len(), 6);
-    }
-
-    #[test]
-    #[should_panic(expected = "MList is full")]
-    fn vec_extend_oob() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(3);
-        v.extend(&[1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    #[should_panic(expected = "MList is full")]
-    fn vec_oob() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(4);
-        for i in 0..5 {
-            v.push(i * 10);
-        }
-    }
-
-    #[test]
-    fn dup_slice() {
-        let mut arena: Mem<()> = Mem::make();
-        let h = arena.pushn(&[1, 2, 3, 4, 5]);
-        let h2 = arena.dupn(h);
-        assert_eq!(h.len(), h2.len());
-        assert_eq!(arena.getn(h), arena.getn(h2));
-        assert_ne!(h.offset, h2.offset);
-    }
-
-    #[test]
-    fn insert() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(5);
-        v.push(1);
-        v.push(2);
-        v.push(4);
-        v.insert(2, 3);
-        assert_eq!(v.len(), 4);
-        assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn grow() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(2);
-        let initial_base = v.base_ptr();
-        v.push_grow(&mut arena, 1);
-        v.push_grow(&mut arena, 2);
-        v.push_grow(&mut arena, 3);
-
-        // Check that the in-place growth optimization occurs
-        assert_eq!(v.base_ptr(), initial_base);
-        assert_eq!(v.len(), 3);
-        assert_eq!(v.as_slice(), &[1, 2, 3]);
-    }
-
-    #[test]
-    fn grow_from_zero() {
-        let mut arena: Mem<()> = Mem::make();
-        let mut v = arena.new_list(0);
-        v.push_grow(&mut arena, 1);
-        v.push_grow(&mut arena, 2);
-        v.push_grow(&mut arena, 3);
-        assert_eq!(v.len(), 3);
-        assert_eq!(v.as_slice(), &[1, 2, 3]);
-    }
-
-    #[test]
-    fn spill_list_inline_and_spill() {
-        let mut arena: Mem<()> = Mem::make();
-
-        // Inline path (N=2): 0, 1, 2 elements
-        let mut a: MSL2<u32> = MSpillList::new();
-        assert!(!a.is_spilled() && a.is_empty() && a.as_slice(&arena).is_empty());
-        a.push(&mut arena, 10);
-        assert!(!a.is_spilled() && a.len() == 1 && a.as_slice(&arena) == [10]);
-        a.push(&mut arena, 20);
-        assert!(!a.is_spilled() && a.len() == 2 && a.as_slice(&arena) == [10, 20]);
-
-        // First overflow triggers spill; order preserved
-        a.push(&mut arena, 30);
-        assert!(a.is_spilled() && a.len() == 3 && a.as_slice(&arena) == [10, 20, 30]);
-
-        // Further pushes go to spilled list
-        a.push(&mut arena, 40);
-        a.push(&mut arena, 50);
-        assert!(a.is_spilled() && a.len() == 5 && a.as_slice(&arena) == [10, 20, 30, 40, 50]);
-    }
-
-    #[test]
-    fn spill_list_into_handle_both_paths() {
-        let mut arena: Mem<()> = Mem::make();
-
-        // Inline -> handle allocates exactly and matches contents
-        let mut inl: MSL2<u32> = MSpillList::new();
-        inl.push(&mut arena, 1);
-        inl.push(&mut arena, 2);
-        assert!(!inl.is_spilled());
-        let h_inl = inl.into_slice(&mut arena);
-        assert_eq!(h_inl.len(), 2);
-        assert_eq!(arena.getn(h_inl), &[1, 2]);
-
-        // Spilled -> handle should reuse underlying buffer (offset should match list buf)
-        let mut sp: MSL2<u32> = MSpillList::new();
-        sp.push(&mut arena, 7);
-        sp.push(&mut arena, 8);
-        sp.push(&mut arena, 9); // spill
-        assert!(sp.is_spilled());
-        let before_ptr = sp.as_slice(&arena).as_ptr().addr();
-        let h_sp = sp.into_slice(&mut arena);
-        let after_ptr = arena.getn(h_sp).as_ptr().addr();
-        assert_eq!(arena.getn(h_sp), &[7, 8, 9]);
-        assert_eq!(before_ptr, after_ptr);
-    }
-
-    #[test]
-    fn spill_list_many_pushes_growth_smoke() {
-        let mut arena: Mem<()> = Mem::make();
-
-        // Ensure spill + repeated pushes stays correct across grows
-        let mut v: MSL2<u32> = MSpillList::new();
-        for i in 0..10 {
-            v.push(&mut arena, i);
-        }
-        assert!(v.is_spilled() && v.len() == 10);
-        let s = v.as_slice(&arena);
-        assert_eq!(s.len(), 10);
-        assert_eq!(s[0], 0);
-        assert_eq!(s[1], 1);
-        assert_eq!(s[2], 2);
-        assert_eq!(s[5], 5);
-        assert_eq!(s[9], 9);
-
-        let h = v.into_slice(&mut arena);
-        assert_eq!(h.len(), 10);
-        assert_eq!(arena.get_nth(h, 0), &0);
-        assert_eq!(arena.get_nth(h, 9), &9);
-    }
-}
+mod kmem_test;

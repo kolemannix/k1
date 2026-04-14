@@ -13,7 +13,7 @@ mod stack_tests {
     fn fake_unit() -> IrUnit {
         IrUnit {
             result_type_id: EMPTY_TYPE_ID,
-            unit_id: CompilableUnitId::Function(FunctionId::PENDING),
+            unit_id: IrUnitId::Function(FunctionId::PENDING),
             fn_type: ir::PhysicalFunctionType {
                 return_type: PhysicalType::EMPTY,
                 diverges: false,
@@ -25,6 +25,8 @@ mod stack_tests {
             blocks: MSlice::empty(),
             is_debug: false,
             function_builtin_kind: None,
+
+            inline_done: false,
         }
     }
 

@@ -14,7 +14,7 @@ mod vm_ffi;
 mod vm_test;
 
 use crate::ir::{
-    self, IrCallee, CompilableUnitId, IrUnit, Inst, InstId, InstKind, Value as IrValue,
+    self, IrCallee, IrUnitId, IrUnit, Inst, InstKind, Value as IrValue,
 };
 use crate::parse::NumericWidth;
 use crate::typer::types::{
@@ -2094,7 +2094,7 @@ pub struct StackFrameRecord {
     param_count: u32,
     blocks: MSlice<ir::CompiledBlock, ir::ProgramIr>,
     inst_offset: u32,
-    unit: CompilableUnitId,
+    unit: IrUnitId,
     ret_info: RetInfo,
 }
 

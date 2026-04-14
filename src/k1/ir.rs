@@ -7,7 +7,7 @@
 /// But I currently think there's going to be a lot of value
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
-use crate::kmem::MList;
+use crate::kmem::{MHandle, MList};
 use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
@@ -16,11 +16,11 @@ use crate::{
     kmem::{self, MSlice, MStr},
     lex::SpanId,
     nz_u32_id,
-    vpool::VPool,
     typer::{types::*, *},
+    vpool::VPool,
 };
-use ahash::HashMapExt;
-use fxhash::FxHashMap;
+use ahash::{HashMapExt, HashSetExt};
+use fxhash::{FxHashMap, FxHashSet};
 use itertools::Itertools;
 use log::debug;
 use std::fmt::Write;
@@ -71,8 +71,8 @@ pub struct ProgramIr {
 }
 type IrStr = MStr<ProgramIr>;
 
-#[derive(Clone, Copy)]
-pub enum CompilableUnitId {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IrUnitId {
     Function(FunctionId),
     Expr(TypedExprId),
 }
@@ -120,7 +120,7 @@ pub struct CompiledBlock {
 #[derive(Clone, Copy)]
 pub struct IrUnit {
     pub result_type_id: TypeId,
-    pub unit_id: CompilableUnitId,
+    pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
     // The offset of the first instruction id
     // used by this compiled unit.
@@ -132,6 +132,8 @@ pub struct IrUnit {
     pub blocks: MSlice<CompiledBlock, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
+
+    pub inline_done: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -147,7 +149,6 @@ impl InstId {
         Value::Inst(*self)
     }
 }
-pub type BlockId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendBuiltin {
@@ -791,7 +792,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
         }
     };
 
-    let unit_id = CompilableUnitId::Function(function_id);
+    let unit_id = IrUnitId::Function(function_id);
     let builtin_kind = match intrinsic_type {
         None => None,
         Some(i) => match builtin_handler(i) {
@@ -846,17 +847,11 @@ pub fn compile_top_level_expr(
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
     b.push_block("expr_");
     let _result = compile_expr(&mut b, None, expr)?;
-    let compiled_expr = finalize_unit(
-        &mut b,
-        return_type_id,
-        CompilableUnitId::Expr(expr),
-        phys_fn_type,
-        is_debug,
-        None,
-    );
+    let compiled_expr =
+        finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
     b.k1.ir.exprs.insert(expr, compiled_expr);
 
-    let unit_id = CompilableUnitId::Expr(expr);
+    let unit_id = IrUnitId::Expr(expr);
     validate_unit(k1, unit_id)?;
 
     if is_debug {
@@ -872,7 +867,7 @@ pub fn compile_top_level_expr(
 fn finalize_unit(
     b: &mut Builder,
     result_type_id: TypeId,
-    unit_id: CompilableUnitId,
+    unit_id: IrUnitId,
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
@@ -889,6 +884,7 @@ fn finalize_unit(
         blocks: compiled_blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
+        inline_done: false,
     };
     b.reset_compilation_unit();
     unit
@@ -906,6 +902,10 @@ struct LoopInfo {
     break_value: Option<InstId>,
     end_block: BlockId,
 }
+
+// nocommit
+type BlockId = u32;
+
 pub struct Builder<'k1> {
     // Dependencies
     k1: &'k1 mut TypedProgram,
@@ -984,13 +984,6 @@ impl<'k1> Builder<'k1> {
         id
     }
 
-    fn push_inst_to(&mut self, block: BlockId, inst: Inst, comment: IrStr) -> InstId {
-        let id = self.make_inst(inst, comment, IrDebugInfo::default());
-
-        self.k1.ir.b_blocks[block as usize].instrs.push(id);
-        id
-    }
-
     fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<IrStr>) -> InstId {
         self.push_alloca_ext(pt, comment, IrDebugInfo::default(), false)
     }
@@ -1028,7 +1021,10 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
-        self.push_inst_to(self.cur_block, inst, comment.into())
+        let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
+
+        self.k1.ir.b_blocks[self.cur_block as usize].instrs.push(id);
+        id
     }
 
     fn push_inst_anon(&mut self, inst: Inst) -> InstId {
@@ -1645,8 +1641,7 @@ fn compile_expr(
                                             &TypedIntValue::I64(pt_layout.size as i64),
                                             "memset size",
                                         );
-                                        let memset_args =
-                                            b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
+                                        let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
                                         let Some(memset_function_id) = b.k1.scopes.find_function(
                                             b.k1.scopes.mem_scope_id,
                                             b.k1.ast.idents.b.set,
@@ -1892,9 +1887,7 @@ fn compile_expr(
                             b.k1.ir.b_units_pending_compile.push(function_id);
                         }
                     }
-                    Some(_unit) => {
-
-                    }
+                    Some(_unit) => {}
                 }
             }
 
@@ -1986,8 +1979,7 @@ fn compile_expr(
                 InstKind::Terminator => (None, false),
             };
 
-            let mut incomings: MList<CameFromCase, _> =
-                b.k1.ir.mem.new_list(match_expr.arms.len());
+            let mut incomings: MList<CameFromCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -2035,8 +2027,7 @@ fn compile_expr(
                 }
                 Some(came_from) => {
                     let real_incomings = b.k1.ir.mem.list_to_handle(incomings);
-                    let Inst::CameFrom { incomings: i, .. } =
-                        b.k1.ir.instrs.get_mut(came_from)
+                    let Inst::CameFrom { incomings: i, .. } = b.k1.ir.instrs.get_mut(came_from)
                     else {
                         unreachable!()
                     };
@@ -2314,8 +2305,6 @@ fn compile_expr(
         }
     }
 }
-
-// fn optimize_unit(unit: &CompiledUnit
 
 fn compile_variable_to_address(
     b: &mut Builder,
@@ -2754,23 +2743,23 @@ pub fn zero(t: ScalarType) -> Value {
     }
 }
 
-pub fn get_compiled_unit(ir: &ProgramIr, unit: CompilableUnitId) -> Option<IrUnit> {
+pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {
     match unit {
-        CompilableUnitId::Function(function_id) => ir.functions.get(function_id).as_ref().copied(),
-        CompilableUnitId::Expr(typed_expr_id) => ir.exprs.get(&typed_expr_id).copied(),
+        IrUnitId::Function(function_id) => ir.functions.get(function_id).as_ref().copied(),
+        IrUnitId::Expr(typed_expr_id) => ir.exprs.get(&typed_expr_id).copied(),
     }
 }
 
-pub fn get_unit_span(k1: &TypedProgram, unit: CompilableUnitId) -> SpanId {
+pub fn get_unit_span(k1: &TypedProgram, unit: IrUnitId) -> SpanId {
     match unit {
-        CompilableUnitId::Function(function_id) => k1.get_function_span(function_id),
-        CompilableUnitId::Expr(typed_expr_id) => k1.exprs.get_span(typed_expr_id),
+        IrUnitId::Function(function_id) => k1.get_function_span(function_id),
+        IrUnitId::Expr(typed_expr_id) => k1.exprs.get_span(typed_expr_id),
     }
 }
 
 ////////////////////////////// Validation //////////////////////////////
 
-pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<()> {
+pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     let mut errors = Vec::new();
     let ir = &k1.ir;
     let span = get_unit_span(k1, unit_id);
@@ -2977,13 +2966,129 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: CompilableUnitId) -> K1Result<(
     }
 }
 
+////////////////////////////// Optimize //////////////////////////////
+
+pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
+    let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
+        return;
+    };
+    k1.compile_all_pending_ir(SpanId::NONE).unwrap(); // nocommit
+
+    enum Visit {
+        Enter(IrUnitId),
+        Leave(IrUnitId),
+    }
+    let mut stack = vec![Visit::Enter(unit_id)];
+    let mut order: Vec<IrUnitId> = Vec::new();
+    let mut visited = FxHashSet::new();
+
+    while let Some(visit) = stack.pop() {
+        match visit {
+            Visit::Enter(unit_id) => {
+                if !visited.insert(unit_id) {
+                    continue;
+                }
+                stack.push(Visit::Leave(unit_id)); // come back after children
+                // nocommit allocation churn
+                for callee_id in collect_direct_unoptimized_callees(k1, unit_id) {
+                    stack.push(Visit::Enter(IrUnitId::Function(callee_id)));
+                }
+            }
+            Visit::Leave(unit_id) => {
+                order.push(unit_id); // true post-order
+            }
+        }
+    }
+
+    for unit_id in order.iter() {
+        eprintln!("Optimizing {}", unit_name_to_string(k1, *unit_id));
+        inline_calls_in_unit(k1, *unit_id)
+    }
+}
+
+fn collect_direct_unoptimized_callees(k1: &TypedProgram, unit_id: IrUnitId) -> Vec<FunctionId> {
+    let mut callees = vec![];
+    let unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
+    for block in k1.ir.mem.getn(unit.blocks) {
+        for inst_id in k1.ir.mem.getn(block.instrs) {
+            let inst = k1.ir.instrs.get(*inst_id);
+            if let Inst::Call { id: call_id } = inst {
+                // Inline calls
+                let call = k1.ir.calls.get(*call_id);
+                match call.callee {
+                    IrCallee::Direct(function_id) => {
+                        let callee_unit =
+                            get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
+                        if !callee_unit.inline_done {
+                            callees.push(function_id)
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    callees
+}
+
+fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
+    eprintln!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
+    while do_pass(k1, unit_id) {}
+
+    fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
+        let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
+        for block in k1.ir.mem.getn(self_unit.blocks) {
+            for inst_id in k1.ir.mem.getn(block.instrs) {
+                let inst = k1.ir.instrs.get(*inst_id);
+                if let Inst::Call { id: call_id } = inst {
+                    // Inline calls
+                    let call = *k1.ir.calls.get(*call_id);
+                    match call.callee {
+                        IrCallee::Direct(function_id) => {
+                            let callee_unit =
+                                get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
+
+                            if callee_unit.inst_count < 20 {
+                                inline_call(k1, self_unit, *inst_id, call);
+                                // We want to just start the iteration completely over
+                                // at this point, since we've mutated the unit, and stop when
+                                // we find nothing to inline
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    fn inline_call(k1: &mut TypedProgram, self_unit: IrUnit, inst_id: InstId, call: IrCall) {
+        eprintln!("Inlining call i{}", inst_id.as_u32());
+        let mut new_blocks = k1.ir.mem.new_list(self_unit.blocks.len());
+        new_blocks.extend(k1.ir.mem.getn(self_unit.blocks));
+        let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
+        let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
+
+        // Allocas must be hoisted
+        let callee_entry = k1.ir.mem.get_nth(callee_unit.blocks, 0);
+        for prelude_inst in k1.ir.mem.getn(callee_entry.instrs) {
+            if let Inst::Alloca { .. } = k1.ir.instrs.get(*prelude_inst) {
+
+            }
+        }
+        // eval each param (already done)
+        // All parameter references must be replaced by the parameter values
+        // - Downstream block references (phis or jumps) must be updated to be the final block
+        // of the inlined function
+
+    }
+}
+
 ////////////////////////////// Display //////////////////////////////
 
-pub fn compiled_unit_to_string(
-    k1: &TypedProgram,
-    unit: CompilableUnitId,
-    show_source: bool,
-) -> String {
+pub fn compiled_unit_to_string(k1: &TypedProgram, unit: IrUnitId, show_source: bool) -> String {
     let mut s = String::new();
     let unit = get_compiled_unit(&k1.ir, unit).unwrap();
     display_unit(&mut s, k1, &unit, show_source).unwrap();
@@ -2993,20 +3098,26 @@ pub fn compiled_unit_to_string(
 pub fn display_unit_name(
     w: &mut impl Write,
     k1: &TypedProgram,
-    unit: CompilableUnitId,
+    unit: IrUnitId,
 ) -> std::fmt::Result {
     match unit {
-        CompilableUnitId::Function(function_id) => {
+        IrUnitId::Function(function_id) => {
             let function = k1.functions.get(function_id);
             k1.write_qualified_name(w, function.scope, k1.ident_str(function.name), "/", true);
         }
-        CompilableUnitId::Expr(typed_expr_id) => {
+        IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
             write!(w, "expr {}:{}", &source.filename, line.line_number())?;
         }
     };
     Ok(())
+}
+
+pub fn unit_name_to_string(k1: &TypedProgram, unit: IrUnitId) -> String {
+    let mut s = String::new();
+    display_unit_name(&mut s, k1, unit).unwrap();
+    s
 }
 
 pub fn display_phys_fn_type(
@@ -3035,12 +3146,12 @@ pub fn display_unit(
     show_source: bool,
 ) -> std::fmt::Result {
     match unit.unit_id {
-        CompilableUnitId::Function(function_id) => {
+        IrUnitId::Function(function_id) => {
             k1.write_ident(w, k1.functions.get(function_id).name)?;
             w.write_str(" ")?;
             display_phys_fn_type(w, k1, &unit.fn_type)?;
         }
-        CompilableUnitId::Expr(typed_expr_id) => {
+        IrUnitId::Expr(typed_expr_id) => {
             let expr_span = k1.exprs.get_span(typed_expr_id);
             let (source, line) = k1.get_span_location(expr_span);
             w.write_str("expr ")?;

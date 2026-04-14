@@ -6,7 +6,6 @@ use smallvec::SmallVec;
 pub mod ir;
 pub mod codegen_llvm;
 pub mod compiler;
-pub mod bc;
 mod fixmap;
 mod kmem;
 mod clock;

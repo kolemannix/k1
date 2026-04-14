@@ -13,7 +13,7 @@ pub(crate) mod visit;
 
 use crate::ir::BuiltinHandler;
 use crate::typer::dump::K1DisplayArgs;
-use crate::{ir, clock, compiler, k1_format, k1_format_user, kbail, kerr, vm};
+use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
 use ecow::{EcoVec, eco_vec};
 use itertools::Itertools;
@@ -5511,7 +5511,7 @@ impl TypedProgram {
         }
     }
 
-    fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
+    pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
             // eprintln!(
             //     "compile_all_pending_ir {}",
@@ -16627,7 +16627,7 @@ impl TypedProgram {
                 dst.push(alive(self.pattern_ctors.add(PatternCtor::LambdaObject)))
             }
             Type::StaticValue(_) => dst.push(alive(self.pattern_ctors.add(PatternCtor::ValueType))),
-            Type::Never => self.report_hint(span_id, "never has no constructors"),
+            Type::Never => {}
             _ => self.report_hint(
                 span_id,
                 format!(

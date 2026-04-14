@@ -34,10 +34,11 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
 use log::{debug, info, trace};
 
-use crate::ir::{
-    BackendBuiltin, IrCallee, CompiledBlock, Inst, InstId, PhysicalFunctionType, ProgramIr,
-};
 use crate::compiler::{self};
+use crate::ir::{
+    BackendBuiltin, IrUnitId, CompiledBlock, Inst, InstId, IrCallee, PhysicalFunctionType,
+    ProgramIr,
+};
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
@@ -49,7 +50,7 @@ use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, StaticContainerKind, StaticValue, StaticValueId,
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
-use crate::{SV8, ir, failf, kmem};
+use crate::{SV8, failf, ir, kmem};
 
 #[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
@@ -566,6 +567,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let Some(main_function_id) = self.k1.get_main_function_id() else {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
+        ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         let function_value = self.declare_llvm_function(main_function_id)?;
 
         let mut inst_mappings = FxHashMap::with_capacity(512);

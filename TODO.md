@@ -24,6 +24,7 @@ minor ideas
 On ai confidence, and how the conclusions truly precede the reasoning: https://claude.ai/share/e8f37966-8428-498a-8591-c21e228abc5c
 
 Simple but missing
+- [ ] Exported functions and globals
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [x] support ability constraints on generics
