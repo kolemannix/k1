@@ -195,17 +195,20 @@ fn spill_list_many_pushes_growth_smoke() {
     assert_eq!(mem.get_nth(h, 9), &9);
 }
 
+#[allow(clippy::needless_range_loop)]
+fn assert_dlist(mem: &Mem<()>, l: MdlList<char, ()>, expected: &[char]) {
+    let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
+    mem.dlist_assert_valid(l);
+    assert_eq!(&elems, expected);
+    assert_eq!(mem.dlist_compute_len(l), expected.len());
+    for i in 0..mem.dlist_compute_len(l) {
+        assert_eq!(mem.dlist_nth(l, i).data, expected[i]);
+        assert_eq!(*mem.dlist_nth_data(l, i), expected[i]);
+    }
+}
+
 #[test]
 fn mdl_basic() {
-    fn assert_dlist(mem: Mem<()>, l: MdlList<char, ()>, expected: &[char]) {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, expected);
-        for _ in 0..mem.dlist_compute_len(l) {
-            assert_eq!(mem.dlist_nth(l, 0).data, expected[0]);
-            assert_eq!(*mem.dlist_nth_data(l, 0), expected[0]);
-        }
-    }
     let mut mem: Mem<()> = Mem::make();
     let mut l = mem.dlist_new();
     mem.dlist_push(&mut l, '5');
@@ -214,59 +217,60 @@ fn mdl_basic() {
     mem.dlist_push(&mut l, '3');
     mem.dlist_push(&mut l, '2');
     mem.dlist_push(&mut l, '1');
-    mem.dlist_assert_valid(l);
-    let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-    assert_eq!(&elems, &['5', '4', '3', '2', '1']);
-    assert_eq!(mem.dlist_compute_len(l), 5);
+    assert_dlist(&mem, l, &['5', '4', '3', '2', '1']);
 
     // Insert begin
     mem.dlist_insert(&mut l, 0, '6');
-    {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, &['6', '5', '4', '3', '2', '1']);
-        assert_eq!(mem.dlist_compute_len(l), 6);
-    }
+    assert_dlist(&mem, l, &['6', '5', '4', '3', '2', '1']);
 
     // Insert end
     mem.dlist_insert(&mut l, 6, '0');
-    {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, &['6', '5', '4', '3', '2', '1', '0']);
-        assert_eq!(mem.dlist_compute_len(l), 7);
-    }
+    assert_dlist(&mem, l, &['6', '5', '4', '3', '2', '1', '0']);
 
     // Insert middle
     mem.dlist_insert(&mut l, 3, 'Y');
+    assert_dlist(&mem, l, &['6', '5', '4', 'Y', '3', '2', '1', '0']);
     mem.dlist_insert(&mut l, 3, 'X');
-    {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, &['6', '5', '4', 'X', 'Y', '3', '2', '1', '0']);
-        assert_eq!(mem.dlist_compute_len(l), 9);
-    }
+    assert_dlist(&mem, l, &['6', '5', '4', 'X', 'Y', '3', '2', '1', '0']);
 
     // Remove first, last, and middle
     assert!(mem.dlist_try_remove(&mut l, 0));
     assert!(!mem.dlist_try_remove(&mut l, 9));
     assert!(mem.dlist_try_remove(&mut l, 7));
     assert!(mem.dlist_try_remove(&mut l, 4));
-    // nocommit: Remove last
-    {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, &['5', '4', 'X', 'Y', '2', '1']);
-    }
+    assert_dlist(&mem, l, &['5', '4', 'X', 'Y', '2', '1']);
 
-    // pop_last
     assert_eq!(mem.dlist_pop_last(&mut l).unwrap().data, '1');
-    // nocommit: pop last last
-    
-    {
-        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
-        mem.dlist_assert_valid(l);
-        assert_eq!(&elems, &['5', '4', 'X', 'Y', '2']);
-    }
-
+    assert_dlist(&mem, l, &['5', '4', 'X', 'Y', '2']);
 }
+
+#[test]
+fn mdl_pop_last() {
+    let mut mem: Mem<()> = Mem::make();
+    let mut l = mem.dlist_new();
+
+    assert!(mem.dlist_pop_last(&mut l).is_none());
+
+    mem.dlist_push(&mut l, 'a');
+    let Some(popped) = mem.dlist_pop_last(&mut l) else { panic!() };
+    assert_eq!(popped.data, 'a');
+    assert_dlist(&mem, l, &[]);
+
+    mem.dlist_push(&mut l, 'a');
+    mem.dlist_remove(&mut l, 0);
+    assert_dlist(&mem, l, &[]);
+}
+
+#[test]
+fn mdl_pop_first() {
+    let mut mem: Mem<()> = Mem::make();
+    let mut l = mem.dlist_new();
+
+    assert!(mem.dlist_pop_first(&mut l).is_none());
+
+    mem.dlist_push(&mut l, 'a');
+    let Some(popped) = mem.dlist_pop_first(&mut l) else { panic!() };
+    assert_eq!(popped.data, 'a');
+    assert_dlist(&mem, l, &[]);
+}
+

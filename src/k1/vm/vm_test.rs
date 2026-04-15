@@ -22,7 +22,7 @@ mod stack_tests {
             },
             inst_offset: 0,
             inst_count: 0,
-            blocks: MSlice::empty(),
+            blocks: MdlList::empty(),
             is_debug: false,
             function_builtin_kind: None,
 
@@ -34,10 +34,11 @@ mod stack_tests {
         RetInfo {
             pt: PhysicalType::scalar(ScalarType::U32),
             frame_index: 0,
-            inst_index: 0,
+            // inst_index: 0,
+            inst_id: InstId::PENDING,
             has_dst: false,
-            ip: 0,
-            block: 0,
+            ip: MHandle::nil(),
+            block: MHandle::nil(),
         }
     }
 
@@ -56,21 +57,23 @@ mod stack_tests {
         stack.push_new_frame(None, &unit, fake_ret_info());
         let frame_space_for_registers =
             stack.cursor().addr() - stack.current_frame().base_ptr.addr();
-        assert_eq!(frame_space_for_registers, (42 + 10) * size_of::<Value>());
+        assert_eq!(frame_space_for_registers, (10) * size_of::<Value>());
         let x_addr = stack.push_t(b'X');
         stack.set_param_value(1, 0, Value(23));
         stack.set_param_value(1, 9, Value(24));
 
-        stack.set_inst_value(1, 41, Value(41));
-        stack.set_inst_value(1, 1, Value(1));
-        stack.set_inst_value(1, 2, Value(2));
+        // This test makes less sense now that the inst values are just a simple hashmap
+        // vs an intricate stack layout, but oh well
+        stack.set_inst_value(1, InstId::from_u32(41).unwrap(), Value(41));
+        stack.set_inst_value(1, InstId::from_u32(1).unwrap(), Value(1));
+        stack.set_inst_value(1, InstId::from_u32(2).unwrap(), Value(2));
 
         assert_eq!(stack.get_param_value(1, 0).bits(), Value(23).bits());
         assert_eq!(stack.get_param_value(1, 9).bits(), Value(24).bits());
 
-        assert_eq!(stack.get_inst_value(1, 41).bits(), Value(41).bits());
-        assert_eq!(stack.get_inst_value(1, 1).bits(), Value(1).bits());
-        assert_eq!(stack.get_inst_value(1, 2).bits(), Value(2).bits());
+        assert_eq!(stack.get_inst_value(1, InstId::from_u32(41).unwrap()).bits(), Value(41).bits());
+        assert_eq!(stack.get_inst_value(1, InstId::from_u32(1).unwrap()).bits(), Value(1).bits());
+        assert_eq!(stack.get_inst_value(1, InstId::from_u32(2).unwrap()).bits(), Value(2).bits());
 
         assert_eq!(unsafe { *x_addr }, b'X');
     }

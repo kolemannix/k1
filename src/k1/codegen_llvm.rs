@@ -36,9 +36,10 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, Block, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
+    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType,
+    ProgramIr,
 };
-use crate::kmem::{MHandle, MList, MSlice};
+use crate::kmem::{MHandle, MList, MSlice, MdlList};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
@@ -270,6 +271,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
 pub struct CgFunction<'ctx> {
     pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
+    pub blocks: FxHashMap<BlockId, BasicBlock<'ctx>>,
     /// These are canonical, not ABI-mapped, and also logical, as in,
     /// sret is excluded, so the first item is the first param the function actually takes
     pub param_values: Vec<BasicValueEnum<'ctx>>,
@@ -568,7 +570,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
-        ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+        // ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         let function_value = self.declare_llvm_function(main_function_id)?;
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
@@ -1362,12 +1364,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         codegened_function
     }
 
-    fn get_block_id(&self, block_id: u32) -> K1Result<BasicBlock<'ctx>> {
-        // We skip the 'prelude' block
-        let real_index = block_id as usize + 1;
-        match self.get_current_function().function_value.get_basic_block_iter().nth(real_index) {
-            Some(bb) => Ok(bb),
-            None => failf!(self.debug.current_span(), "Failed to get nth block: {real_index}"),
+    fn get_llvm_block(&self, block_id: BlockId) -> K1Result<BasicBlock<'ctx>> {
+        // We skip our 'prelude' block which exists only in the llvm ir
+        match self.get_current_function().blocks.get(&block_id) {
+            Some(bb) => Ok(*bb),
+            None => failf!(
+                self.debug.current_span(),
+                "Failed to get block: {}",
+                block_id.raw_index().unwrap()
+            ),
         }
     }
 
@@ -1847,12 +1852,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_block(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        block_id: u32,
-        block: &ir::Block,
+        block_id: BlockId,
     ) -> K1Result<BasicBlock<'ctx>> {
-        let llvm_block = self.get_block_id(block_id)?;
+        let block = self.k1.ir.mem.get(block_id);
+        let llvm_block = self.get_llvm_block(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
+        for inst in self.k1.ir.mem.dlist_iter(block.data.instrs) {
             self.codegen_inst(inst_mappings, *inst)?;
         }
         Ok(llvm_block)
@@ -2059,15 +2064,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Jump(block_id) => {
-                let dst_block = self.get_block_id(block_id)?;
+                let dst_block = self.get_llvm_block(block_id)?;
                 let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
                 Ok(())
             }
             Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = self.resolve_value(inst_mappings, cond)?;
                 let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
-                let then_block = self.get_block_id(cons)?;
-                let else_block = self.get_block_id(alt)?;
+                let then_block = self.get_llvm_block(cons)?;
+                let else_block = self.get_llvm_block(alt)?;
                 let _branch = self
                     .builder
                     .build_conditional_branch(cond_value_i1, then_block, else_block)
@@ -2590,6 +2595,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 param_values: Vec::with_capacity(llvm_function_type.param_k1_types.len() as usize),
                 function_type: llvm_function_type,
                 function_value,
+                blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
                 instruction_count: 0,
@@ -2909,34 +2915,40 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_unit_body(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        blocks: MSlice<CompiledBlock, ProgramIr>,
+        blocks: MdlList<Block, ProgramIr>,
     ) -> K1Result<()> {
-        let fv = self.get_current_function().function_value;
-        for block in self.k1.ir.mem.getn_lt(blocks) {
-            self.ctx.append_basic_block(fv, block.name.as_str());
+        let mut block_mapping = FxHashMap::new();
+        let llvm_function = self.get_current_function().function_value;
+        for block in self.k1.ir.mem.dlist_iter_handles(blocks) {
+            let name = self.k1.ir.mem.get(block).data.name;
+            let b = self.ctx.append_basic_block(llvm_function, name);
+            block_mapping.insert(block, b);
+        }
+        self.get_current_function_mut().blocks = block_mapping;
+
+        {
+            // Jump from prelude to entry block
+            let debug_locn = self.builder.get_current_debug_location().unwrap();
+            self.builder.unset_current_debug_location();
+
+            let entry = self.get_llvm_block(blocks.first)?;
+            self.builder.build_unconditional_branch(entry).unwrap();
+
+            self.builder.set_current_debug_location(debug_locn);
         }
 
         inst_mappings.clear();
-        for (index, block) in self.k1.ir.mem.getn(blocks).iter().enumerate() {
-            if index == 0 {
-                let debug_locn = self.builder.get_current_debug_location().unwrap();
-                self.builder.unset_current_debug_location();
-
-                let entry = self.get_block_id(0)?;
-                self.builder.build_unconditional_branch(entry).unwrap();
-
-                self.builder.set_current_debug_location(debug_locn);
-            }
-            self.codegen_block(inst_mappings, index as u32, block)?;
+        for block in self.k1.ir.mem.dlist_iter_handles(blocks) {
+            self.codegen_block(inst_mappings, block)?;
         }
 
         // Fulfill phis later, since they're uniquely out-of-order
         // Is that true? Could for example simple add or store reference an inst from another
         // block? allocas are hoisted... so, yeah, but phis can't be
-        for block in self.k1.ir.mem.getn(blocks) {
-            for inst in self.k1.ir.mem.getn(block.instrs) {
+        for block in self.k1.ir.mem.dlist_iter(blocks) {
+            for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
                 if let Inst::CameFrom { incomings, .. } = self.k1.ir.instrs.get(*inst) {
-                    let phi_inst = inst_mappings.get(inst).unwrap();
+                    let phi_inst = inst_mappings.get(&inst).unwrap();
                     debug_assert!(
                         phi_inst.as_instruction_value().unwrap().get_opcode()
                             == InstructionOpcode::Phi
@@ -2945,7 +2957,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                     for incoming in self.k1.ir.mem.getn(*incomings) {
                         let value = self.resolve_value(inst_mappings, incoming.value)?;
-                        let block = self.get_block_id(incoming.from)?;
+                        let block = self.get_llvm_block(incoming.from)?;
                         phi.add_incoming(&[(&value, block)])
                     }
                 }

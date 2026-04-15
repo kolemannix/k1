@@ -796,11 +796,11 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
         b.k1.ir.b_variables.push(builder_variable);
     }
-    // debug_assert_eq!(b.k1.ir.b_variables.len() as u32, fn_phys_type.params.len());
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
-        b.push_block("entry");
+        let entry_block = b.push_block("entry");
+        b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
         match f.linkage {
@@ -863,7 +863,8 @@ pub fn compile_top_level_expr(
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    b.push_block("expr_toplevel");
+    let entry_block = b.push_block("expr_toplevel");
+    b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
     let compiled_expr =
         finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
@@ -923,7 +924,7 @@ struct LoopInfo {
 
 // nocommit
 // type BlockId = u32;
-type BlockId = MHandle<MdlNode<Block, ProgramIr>, ProgramIr>;
+pub type BlockId = MHandle<MdlNode<Block, ProgramIr>, ProgramIr>;
 
 pub struct Builder<'k1> {
     // Dependencies
@@ -956,16 +957,19 @@ impl<'k1> Builder<'k1> {
     }
 
     fn reset_compilation_unit(&mut self) {
+        // nocommit: No need to recycle builder anymore since it doesn't hold any buffers
         // for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
         //     b.instrs.clear();
         // }
         // self.block_count = 0;
-        self.fn_type = PhysicalFunctionType::nil();
+        self.k1.ir.b_blocks = MdlList::empty();
         self.k1.ir.b_variables.clear();
+        self.k1.ir.b_loops.clear();
+
+        self.fn_type = PhysicalFunctionType::nil();
         self.last_alloca_index = None;
         self.cur_span = SpanId::NONE;
         self.entry_span = SpanId::NONE;
-        self.k1.ir.b_loops.clear();
     }
 
     fn bake_blocks(&mut self) -> MdlList<Block, ProgramIr> {
@@ -3087,9 +3091,15 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         false
     }
 
-    fn inline_call(k1: &mut TypedProgram, self_unit_id: IrUnitId, call_inst_id: InstId, call: IrCall) {
+    fn inline_call(
+        k1: &mut TypedProgram,
+        self_unit_id: IrUnitId,
+        call_inst_id: InstId,
+        call: IrCall,
+    ) {
         eprintln!("Inlining call i{}", call_inst_id.as_u32());
-        let mut self_unit = RawRef::from_mut(get_compiled_unit_mut(&mut k1.ir, self_unit_id).unwrap());
+        let mut self_unit =
+            RawRef::from_mut(get_compiled_unit_mut(&mut k1.ir, self_unit_id).unwrap());
         let self_blocks = &mut self_unit.blocks;
         let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
         let call_span = *k1.ir.sources.get(call_inst_id);
@@ -3122,8 +3132,9 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         // Walk the inlined code, rewriting instructions, and hoisting allocas
         let call_args = k1.ir.mem.getn(call.args);
 
-
-        let mut insert_block = if single_block { call_block_node } else { 
+        let mut insert_block = if single_block {
+            call_block_node
+        } else {
             // TODO: Split block at call, remove the call
             let (mut call_pre, call_post) = split_block(k1, *call_block_node, call_inst_id);
             k1.ir.mem.dlist_pop_last(&mut call_pre.data.instrs);
@@ -3133,7 +3144,11 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             insert_block = if single_block {
                 call_block_node
             } else {
-                k1.ir.mem.dlist_insert_after(self_blocks, &mut insert_block, Block { name: "inlined something todo", instrs: MdlList::empty() })
+                k1.ir.mem.dlist_insert_after(
+                    self_blocks,
+                    &mut insert_block,
+                    Block { name: "inlined something todo", instrs: MdlList::empty() },
+                )
             };
             for callee_inst in k1.ir.mem.dlist_iter(callee_block.instrs) {
                 let mut inst = *k1.ir.instrs.get(*callee_inst);
@@ -3167,8 +3182,12 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 }
 
 // Splits block_node at inst into pre and post, leaving `inst` as the last item in pre.
-fn split_block(k1: &mut TypedProgram, block_node: MdlNode<Block, ProgramIr>, inst: InstId) -> (RawRef<MdlNode<Block, ProgramIr>>, RawRef<MdlNode<Block, ProgramIr>>) {
-  todo!()
+fn split_block(
+    k1: &mut TypedProgram,
+    block_node: MdlNode<Block, ProgramIr>,
+    inst: InstId,
+) -> (RawRef<MdlNode<Block, ProgramIr>>, RawRef<MdlNode<Block, ProgramIr>>) {
+    todo!()
 }
 
 fn rewrite_value(
@@ -3424,7 +3443,13 @@ pub fn display_inst(
             write!(w, "jmp b{}", k1.ir.mem.get(block_id).data.name)?;
         }
         Inst::JumpIf { cond, cons, alt } => {
-            write!(w, "jmpif {}, b{}, b{}", cond, k1.ir.mem.get(cons).data.name, k1.ir.mem.get(alt).data.name)?;
+            write!(
+                w,
+                "jmpif {}, b{}, b{}",
+                cond,
+                k1.ir.mem.get(cons).data.name,
+                k1.ir.mem.get(alt).data.name
+            )?;
         }
         Inst::Unreachable => {
             write!(w, "unreachable")?;
