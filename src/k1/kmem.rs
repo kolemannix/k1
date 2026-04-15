@@ -807,6 +807,20 @@ impl<Tag: 'static> Mem<Tag> {
         }
     }
 
+    pub fn dlist_insert_after<T>(&mut self, list: &mut MdlList<T, Tag>, node: &mut MdlNode<T, Tag>, data: T) -> RawRef<MdlNode<T, Tag>> {
+        let next = node.next;
+        let new_node = self.push_h(MdlNode { data, prev: self.pack_handle(node as *const _), next });
+
+        node.next = new_node;
+
+        if next.is_nil() {
+            list.last = new_node;
+        } else {
+            self.get_mut(next).prev = new_node;
+        }
+        self.get_raw_ref(new_node)
+    }
+
     pub fn dlist_try_remove<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize) -> bool {
         let mut cur = list.first;
         for _ in 0..index {
@@ -844,12 +858,26 @@ impl<Tag: 'static> Mem<Tag> {
         }
     }
 
+    pub fn dlist_pop_last<T: Copy>(&mut self, list: &mut MdlList<T, Tag>) -> Option<MdlNode<T, Tag>> {
+        if list.last.is_nil() { return None };
+        let last = *self.get(list.last);
+        list.last = last.prev;
+        if list.last.is_nil() {
+            list.first = MHandle::nil();
+        }
+        Some(last)
+    }
+
 
     pub fn dlist_iter_nodes<T>(
         &self,
         list: MdlList<T, Tag>,
     ) -> MdlListIter<T, Tag> {
         MdlListIter { mem: RawRef::from_ref(self), next: list.first }
+    }
+
+    pub fn dlist_iter_handles<T>(&self, list: MdlList<T, Tag>) -> impl Iterator<Item = MHandle<MdlNode<T, Tag>, Tag>> {
+        self.dlist_iter_nodes(list).map(|node| self.pack_handle(node.as_ptr().cast_const()))
     }
 
     pub fn dlist_iter<T: 'static>(&self, list: MdlList<T, Tag>) -> impl Iterator<Item = RawRef<T>> + 'static {
@@ -891,7 +919,7 @@ impl<Tag: 'static> Mem<Tag> {
         self.dlist_nth_data_opt(list, n).expect("Index out of bounds in dlist_nth_mut")
     }
 
-    pub fn dlist_compute_len<T>(&self, list: MdlList<T, Tag>) -> usize {
+    pub fn dlist_compute_len<T: 'static>(&self, list: MdlList<T, Tag>) -> usize {
         self.dlist_iter(list).count()
     }
 

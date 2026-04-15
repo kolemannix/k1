@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 /// but without the borrow checker tracking the lifetime.
 ///
 /// Safety: caller must ensure the pointee outlives all uses of this handle.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RawRef<T>(NonNull<T>);
 
 impl<T> RawRef<T> {
@@ -30,6 +30,10 @@ impl<T> RawRef<T> {
         unsafe { self.0.as_ref() }
     }
 
+    pub fn as_ptr(&self) -> *mut T {
+        self.0.as_ptr()
+    }
+
     pub fn map<U>(&self, f: impl FnOnce(&T) -> &U) -> RawRef<U> {
         RawRef::from_ptr(f(self.as_ref()) as *const U as *mut U)
     }
@@ -40,6 +44,12 @@ impl<T> std::ops::Deref for RawRef<T> {
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
+    }
+}
+
+impl<T> std::ops::DerefMut for RawRef<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
     }
 }
 

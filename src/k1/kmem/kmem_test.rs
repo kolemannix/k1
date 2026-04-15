@@ -198,11 +198,11 @@ fn spill_list_many_pushes_growth_smoke() {
 #[test]
 fn mdl_basic() {
     fn assert_dlist(mem: Mem<()>, l: MdlList<char, ()>, expected: &[char]) {
-        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, expected);
         for _ in 0..mem.dlist_compute_len(l) {
-            assert_eq!(mem.dlist_nth(l, 0), &expected[0]);
+            assert_eq!(mem.dlist_nth(l, 0).data, expected[0]);
             assert_eq!(*mem.dlist_nth_data(l, 0), expected[0]);
         }
     }
@@ -215,14 +215,14 @@ fn mdl_basic() {
     mem.dlist_push(&mut l, '2');
     mem.dlist_push(&mut l, '1');
     mem.dlist_assert_valid(l);
-    let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+    let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
     assert_eq!(&elems, &['5', '4', '3', '2', '1']);
     assert_eq!(mem.dlist_compute_len(l), 5);
 
     // Insert begin
     mem.dlist_insert(&mut l, 0, '6');
     {
-        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, &['6', '5', '4', '3', '2', '1']);
         assert_eq!(mem.dlist_compute_len(l), 6);
@@ -231,7 +231,7 @@ fn mdl_basic() {
     // Insert end
     mem.dlist_insert(&mut l, 6, '0');
     {
-        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, &['6', '5', '4', '3', '2', '1', '0']);
         assert_eq!(mem.dlist_compute_len(l), 7);
@@ -241,7 +241,7 @@ fn mdl_basic() {
     mem.dlist_insert(&mut l, 3, 'Y');
     mem.dlist_insert(&mut l, 3, 'X');
     {
-        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, &['6', '5', '4', 'X', 'Y', '3', '2', '1', '0']);
         assert_eq!(mem.dlist_compute_len(l), 9);
@@ -252,9 +252,21 @@ fn mdl_basic() {
     assert!(!mem.dlist_try_remove(&mut l, 9));
     assert!(mem.dlist_try_remove(&mut l, 7));
     assert!(mem.dlist_try_remove(&mut l, 4));
+    // nocommit: Remove last
     {
-        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, &['5', '4', 'X', 'Y', '2', '1']);
     }
+
+    // pop_last
+    assert_eq!(mem.dlist_pop_last(&mut l).unwrap().data, '1');
+    // nocommit: pop last last
+    
+    {
+        let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
+        mem.dlist_assert_valid(l);
+        assert_eq!(&elems, &['5', '4', 'X', 'Y', '2']);
+    }
+
 }

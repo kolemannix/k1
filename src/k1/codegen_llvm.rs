@@ -36,8 +36,7 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, IrUnitId, CompiledBlock, Inst, InstId, IrCallee, PhysicalFunctionType,
-    ProgramIr,
+    BackendBuiltin, Block, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
 };
 use crate::kmem::{MHandle, MList, MSlice};
 use crate::lex::SpanId;
@@ -1849,11 +1848,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         block_id: u32,
-        block: &ir::CompiledBlock,
+        block: &ir::Block,
     ) -> K1Result<BasicBlock<'ctx>> {
         let llvm_block = self.get_block_id(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.ir.mem.getn(block.instrs) {
+        for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
             self.codegen_inst(inst_mappings, *inst)?;
         }
         Ok(llvm_block)
