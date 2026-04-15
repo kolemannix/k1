@@ -814,7 +814,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             _ => None,
         },
     };
-    let unit = finalize_unit(&b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
+    let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
 
     *b.k1.ir.functions.get_mut(function_id) = Some(unit);
 
@@ -863,7 +863,7 @@ pub fn compile_top_level_expr(
     b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
     let compiled_expr =
-        finalize_unit(&b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
+        finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
     b.k1.ir.exprs.insert(expr, compiled_expr);
 
     let unit_id = IrUnitId::Expr(expr);
@@ -880,24 +880,27 @@ pub fn compile_top_level_expr(
 }
 
 fn finalize_unit(
-    b: &Builder,
+    b: &mut Builder,
     result_type_id: TypeId,
     unit_id: IrUnitId,
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
 ) -> IrUnit {
-    let inst_count = b.k1.ir.mem.dlist_iter(b.blocks).map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32).sum();
+    let inst_count = b.k1.ir.mem.dlist_iter(b.k1.ir.b_blocks).map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32).sum();
     let unit = IrUnit {
         result_type_id,
         unit_id,
         fn_type,
         inst_count,
-        blocks: b.blocks,
+        blocks: b.k1.ir.b_blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
     };
+    b.k1.ir.b_blocks = MdlList::empty();
+    b.k1.ir.b_variables.clear();
+    b.k1.ir.b_loops.clear();
     unit
 }
 
@@ -923,7 +926,6 @@ pub struct Builder<'k1> {
     k1: &'k1 mut TypedProgram,
 
     fn_type: PhysicalFunctionType,
-    blocks: MdlList<Block, ProgramIr>,
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
@@ -938,7 +940,6 @@ impl<'k1> Builder<'k1> {
 
             fn_type: PhysicalFunctionType::nil(),
 
-            blocks: MdlList::empty(),
             last_alloca_index: None,
             cur_block: MHandle::nil(),
             cur_span: SpanId::NONE,
