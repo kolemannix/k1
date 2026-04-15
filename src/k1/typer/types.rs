@@ -1914,7 +1914,7 @@ impl TypePool {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => {
                                 // We simply skip this variant!
-                                eprintln!("I am skipping this sum variant")
+                                debug!("I am skipping this sum variant")
                             }
                             PhysicalTypeResult::Yes(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });

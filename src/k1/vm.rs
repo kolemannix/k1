@@ -670,7 +670,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
         // Fetch
         let inst_id = *k1.ir.mem.get_nth(instrs, ip as usize);
         vm.eval_span = *k1.ir.sources.get(inst_id);
+        // nocommit: I think this is really just ip?
         let inst_index = ir::inst_to_index(inst_id, inst_offset);
+        let inst_index = ip as u32;
         k1.timing.total_vm_instrs += 1;
 
         // if debugger {

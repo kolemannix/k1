@@ -3,8 +3,22 @@
   if a == 10 return(-1);
   a + b
 }
+#debug fn add2(a: int, b: int): int {
+  a + b
+}
 #debug fn main(): i32 {
   add(5, 2 + 2);
+  // If single block, no jmp needed.
+  // let _inline_res = {
+  //   let a = 5;
+  //   let b = 2 + 2;
+
+  //   println("inline add");
+  //   if a == 10 { _inline_res := -1; goto end };
+  //   _inline_res := a + b; goto end;
+  // };
+  // end: 
+
   0
 }
 

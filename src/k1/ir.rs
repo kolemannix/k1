@@ -7,7 +7,7 @@
 /// But I currently think there's going to be a lot of value
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
-use crate::kmem::{MHandle, MList};
+use crate::kmem::{MHandle, MList, MdlList, MdlNode};
 use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
@@ -64,7 +64,7 @@ pub struct ProgramIr {
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
-    b_blocks: Vec<Block>,
+    b_blocks: MdlList<Block, ProgramIr>,
     b_variables: Vec<BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
     pub b_units_pending_compile: Vec<FunctionId>,
@@ -93,7 +93,7 @@ impl ProgramIr {
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
-            b_blocks: Vec::with_capacity(256),
+            b_blocks: MdlList::empty(),
             b_variables: Vec::with_capacity(256),
             b_loops: FxHashMap::default(),
             b_units_pending_compile: vec![],
@@ -103,18 +103,34 @@ impl ProgramIr {
     fn word_sized_int(&self) -> ScalarType {
         ScalarType::U64
     }
-}
 
-#[derive(Clone)]
-pub struct Block {
-    pub name: IrStr,
-    pub instrs: Vec<InstId>,
+    pub fn add_inst(
+        &mut self,
+        inst: Inst,
+        comment: IrStr,
+        debug_info: IrDebugInfo,
+        span: SpanId,
+    ) -> InstId {
+        let id = self.instrs.add(inst);
+        self.sources.add_expected_id(span, id);
+        self.comments.add_expected_id(comment, id);
+        self.debug_info.add_expected_id(debug_info, id);
+        id
+    }
 }
 
 #[derive(Clone, Copy)]
-pub struct CompiledBlock {
-    pub name: IrStr,
-    pub instrs: MSlice<InstId, ProgramIr>,
+pub struct Block {
+    pub name: &'static str,
+    pub instrs: MdlList<InstId, ProgramIr>,
+}
+
+impl Block {
+    pub fn identical(&self, other: &Block) -> bool {
+        self.name == other.name
+            && self.instrs.first == other.instrs.first
+            && self.instrs.last == other.instrs.last
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -129,7 +145,7 @@ pub struct IrUnit {
     // The number of instructions in this unit; used to reserve N 'registers' in our register buffer
     pub inst_count: u32,
 
-    pub blocks: MSlice<CompiledBlock, ProgramIr>,
+    pub blocks: MdlList<Block, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 
@@ -270,6 +286,7 @@ impl Value {
 
 #[derive(Clone, Copy)]
 pub struct IrCall {
+    /// This is the logical return type, no ABI or sret shenanigans
     pub ret_type: PhysicalType,
     pub callee: IrCallee,
     pub args: MSlice<Value, ProgramIr>,
@@ -845,7 +862,7 @@ pub fn compile_top_level_expr(
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    b.push_block("expr_");
+    b.push_block("expr_toplevel");
     let _result = compile_expr(&mut b, None, expr)?;
     let compiled_expr =
         finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
@@ -904,7 +921,8 @@ struct LoopInfo {
 }
 
 // nocommit
-type BlockId = u32;
+// type BlockId = u32;
+type BlockId = MHandle<MdlNode<Block, ProgramIr>, ProgramIr>;
 
 pub struct Builder<'k1> {
     // Dependencies
@@ -912,7 +930,7 @@ pub struct Builder<'k1> {
 
     fn_type: PhysicalFunctionType,
     inst_offset: u32,
-    block_count: u32,
+    // block_count: u32,
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
@@ -928,19 +946,19 @@ impl<'k1> Builder<'k1> {
             k1,
 
             fn_type: PhysicalFunctionType::nil(),
-            block_count: 0,
+            // block_count: 0,
             last_alloca_index: None,
-            cur_block: 0,
+            cur_block: MHandle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
         }
     }
 
     fn reset_compilation_unit(&mut self) {
-        for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
-            b.instrs.clear();
-        }
-        self.block_count = 0;
+        // for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
+        //     b.instrs.clear();
+        // }
+        // self.block_count = 0;
         self.fn_type = PhysicalFunctionType::nil();
         self.k1.ir.b_variables.clear();
         self.last_alloca_index = None;
@@ -949,17 +967,18 @@ impl<'k1> Builder<'k1> {
         self.k1.ir.b_loops.clear();
     }
 
-    fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramIr> {
-        let mut blocks = self.k1.ir.mem.new_list(self.block_count);
-        for b in Builder::builder_blocks_iter(self.block_count, &self.k1.ir.b_blocks) {
-            let instrs = self.k1.ir.mem.pushn(&b.instrs);
-            if instrs.is_empty() {
-                debug!("baking an empty basic block; wonder where it came from?");
-            }
-            let b = CompiledBlock { name: b.name, instrs };
-            blocks.push(b)
-        }
-        self.k1.ir.mem.list_to_handle(blocks)
+    fn bake_blocks(&mut self) -> MdlList<Block, ProgramIr> {
+        self.k1.ir.b_blocks
+        // let mut blocks = self.k1.ir.mem.new_list(self.block_count);
+        // for b in Builder::builder_blocks_iter(self.block_count, &self.k1.ir.b_blocks) {
+        //     let instrs = self.k1.ir.mem.pushn(&b.instrs);
+        //     if instrs.is_empty() {
+        //         debug!("baking an empty basic block; wonder where it came from?");
+        //     }
+        //     let b = CompiledBlock { name: b.name, instrs };
+        //     blocks.push(b)
+        // }
+        // self.k1.ir.mem.list_to_handle(blocks)
     }
 
     fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
@@ -968,20 +987,7 @@ impl<'k1> Builder<'k1> {
 
     fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
         let span = self.cur_span;
-        self.make_inst_ext(inst, comment, debug_info, span)
-    }
-    fn make_inst_ext(
-        &mut self,
-        inst: Inst,
-        comment: IrStr,
-        debug_info: IrDebugInfo,
-        span: SpanId,
-    ) -> InstId {
-        let id = self.k1.ir.instrs.add(inst);
-        self.k1.ir.sources.add_expected_id(span, id);
-        self.k1.ir.comments.add_expected_id(comment, id);
-        self.k1.ir.debug_info.add_expected_id(debug_info, id);
-        id
+        self.k1.ir.add_inst(inst, comment, debug_info, span)
     }
 
     fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<IrStr>) -> InstId {
@@ -1001,13 +1007,14 @@ impl<'k1> Builder<'k1> {
             Some(i) => i as usize + 1,
         };
         let alloca_span = self.entry_span;
-        let inst_id = self.make_inst_ext(
+        let inst_id = self.k1.ir.add_inst(
             Inst::Alloca { t: pt, vm_layout: layout, returned },
             comment.into(),
             debug_info,
             alloca_span,
         );
-        self.k1.ir.b_blocks[0].instrs.insert(index, inst_id);
+        let first_block = self.k1.ir.mem.dlist_nth_data(self.k1.ir.b_blocks, 0).as_mut();
+        self.k1.ir.mem.dlist_insert(&mut first_block.instrs, index, inst_id);
         self.last_alloca_index = Some(index as u32);
         inst_id
     }
@@ -1023,7 +1030,8 @@ impl<'k1> Builder<'k1> {
     fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
         let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
 
-        self.k1.ir.b_blocks[self.cur_block as usize].instrs.push(id);
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_push(&mut blocks.data.instrs, id);
         id
     }
 
@@ -1130,31 +1138,34 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: impl Into<IrStr>) -> BlockId {
-        let id = self.block_count;
+    fn push_block(&mut self, name: &'static str) -> BlockId {
+        let node = self
+            .k1
+            .ir
+            .mem
+            .dlist_push(&mut self.k1.ir.b_blocks, Block { name, instrs: MdlList::empty() });
+        node
+        // let id = self.block_count;
         // Recycle builder blocks
-        match self.k1.ir.b_blocks.get_mut(self.block_count as usize) {
-            Some(recycled) => {
-                self.block_count += 1;
-                recycled.name = name.into();
-            }
-            None => {
-                self.block_count += 1;
-                self.k1
-                    .ir
-                    .b_blocks
-                    .push(Block { name: name.into(), instrs: Vec::with_capacity(256) });
-            }
-        }
-
-        id as BlockId
+        // match self.k1.ir.b_blocks.get_mut(self.block_count as usize) {
+        //     Some(recycled) => {
+        //         self.block_count += 1;
+        //         recycled.name = name;
+        //     }
+        //     None => {
+        //         self.block_count += 1;
+        //         self.k1.ir.b_blocks.push(Block { name, instrs: Vec::with_capacity(256) });
+        //     }
+        // }
+        // id as BlockId
     }
 
     #[track_caller]
     fn goto_block(&mut self, block_id: BlockId) {
-        match self.k1.ir.b_blocks.get(block_id as usize) {
-            None => panic!("goto_block on non-existent block: {}", block_id),
-            Some(_) => self.cur_block = block_id,
+        self.cur_block = block_id;
+        #[cfg(debug_assertions)]
+        {
+            self.k1.ir.mem.get(block_id);
         }
     }
 
@@ -2766,11 +2777,12 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return failf!(span, "Not compiled");
     };
-    for (block_index, block) in ir.mem.getn(unit.blocks).iter().enumerate() {
-        for (index, inst_id) in ir.mem.getn(block.instrs).iter().enumerate() {
-            let is_last = index as u32 == block.instrs.len() - 1;
-            let inst = ir.instrs.get(*inst_id);
-            let inst_kind = get_inst_kind(ir, &k1.types, *inst_id);
+    for (block_index, block) in ir.mem.dlist_iter(unit.blocks).enumerate() {
+        for (index, inst_node) in ir.mem.dlist_iter_nodes(block.instrs).enumerate() {
+            let inst_id = inst_node.data;
+            let is_last = inst_node.is_last();
+            let inst = ir.instrs.get(inst_id);
+            let inst_kind = get_inst_kind(ir, &k1.types, inst_id);
             if !is_last && inst_kind.is_terminator() {
                 errors.push(format!("b{block_index}: stray terminator"))
             };
@@ -2784,7 +2796,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::Store { dst, .. } => {
                     let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
-                        errors.push(format!("store dst v{} is not a ptr", *inst_id))
+                        errors.push(format!("store dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::Load { src, .. } => {
@@ -2800,7 +2812,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                     let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
-                        errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", *inst_id))
+                        errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
@@ -2826,8 +2838,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::Call { .. } => (),
                 Inst::Jump(block) => {
-                    if block >= unit.blocks.len() {
-                        errors.push(format!("i{inst_id}: jump to non-existent block b{}", block))
+                    if !ir.mem.dlist_iter(unit.blocks).any(|b| b.identical(&ir.mem.get(block).data))
+                    {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
                     }
                 }
                 Inst::JumpIf { cond, .. } => {
@@ -2972,7 +2985,6 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return;
     };
-    k1.compile_all_pending_ir(SpanId::NONE).unwrap(); // nocommit
 
     enum Visit {
         Enter(IrUnitId),
@@ -3009,8 +3021,8 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 fn collect_direct_unoptimized_callees(k1: &TypedProgram, unit_id: IrUnitId) -> Vec<FunctionId> {
     let mut callees = vec![];
     let unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
-    for block in k1.ir.mem.getn(unit.blocks) {
-        for inst_id in k1.ir.mem.getn(block.instrs) {
+    for block in k1.ir.mem.dlist_iter(unit.blocks) {
+        for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
             let inst = k1.ir.instrs.get(*inst_id);
             if let Inst::Call { id: call_id } = inst {
                 // Inline calls
@@ -3037,8 +3049,8 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
     fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
         let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
-        for block in k1.ir.mem.getn(self_unit.blocks) {
-            for inst_id in k1.ir.mem.getn(block.instrs) {
+        for block in k1.ir.mem.dlist_iter(self_unit.blocks) {
+            for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
                 let inst = k1.ir.instrs.get(*inst_id);
                 if let Inst::Call { id: call_id } = inst {
                     // Inline calls
@@ -3053,7 +3065,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                                 // We want to just start the iteration completely over
                                 // at this point, since we've mutated the unit, and stop when
                                 // we find nothing to inline
-                                return true;
+                                return false;
                             }
                         }
                         _ => {}
@@ -3061,29 +3073,85 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                 }
             }
         }
-        return false;
+        false
     }
 
-    fn inline_call(k1: &mut TypedProgram, self_unit: IrUnit, inst_id: InstId, call: IrCall) {
-        eprintln!("Inlining call i{}", inst_id.as_u32());
-        let mut new_blocks = k1.ir.mem.new_list(self_unit.blocks.len());
-        new_blocks.extend(k1.ir.mem.getn(self_unit.blocks));
+    fn inline_call(k1: &mut TypedProgram, self_unit: IrUnit, call_inst_id: InstId, call: IrCall) {
+        eprintln!("Inlining call i{}", call_inst_id.as_u32());
         let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
+        let call_span = *k1.ir.sources.get(call_inst_id);
         let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
+        let single_block = callee_unit.blocks.is_singleton();
+        let self_entry_block = self_unit.blocks.first;
 
-        // Allocas must be hoisted
-        let callee_entry = k1.ir.mem.get_nth(callee_unit.blocks, 0);
-        for prelude_inst in k1.ir.mem.getn(callee_entry.instrs) {
-            if let Inst::Alloca { .. } = k1.ir.instrs.get(*prelude_inst) {
+        // Allocate the destination slot
+        let ret_layout = k1.types.get_pt_layout(call.ret_type);
+        let dst_alloca = k1.ir.instrs.add(Inst::Alloca {
+            t: call.ret_type,
+            vm_layout: ret_layout,
+            returned: false,
+        });
+        let self_entry_instrs = &mut k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
+        k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
 
+        // Inline and hoist all of the allocas from the inlined code
+        let callee_entry_block = *k1.ir.mem.get(callee_unit.blocks.first);
+
+        // Walk the inlined code, rewriting instructions, and hoisting allocas
+        let mut inst_old_new_mappings = FxHashMap::new();
+        let call_args = k1.ir.mem.getn(call.args);
+        for callee_block in k1.ir.mem.dlist_iter(callee_unit.blocks) {
+            let insert_block = if single_block {
+                call_block
+            } else {
+
+            };
+            for callee_inst in k1.ir.mem.dlist_iter(callee_block.instrs) {
+                let inst = *k1.ir.instrs.get(*callee_inst);
+                match &mut inst {
+                    inst @ Inst::Alloca { .. } => {
+                        let new_alloca_id: InstId =
+                            k1.ir.add_inst(*inst, MStr::empty(), IrDebugInfo::default(), call_span);
+                        k1.ir.mem.dlist_insert(self_entry_instrs, 0, new_alloca_id);
+                        inst_old_new_mappings.insert(*callee_inst, new_alloca_id);
+                        continue;
+                    }
+                    Inst::IntAdd { lhs, rhs, width } => {
+                        rewrite_value(inst_old_new_mappings, call_args, lhs);
+                        rewrite_value(inst_old_new_mappings, call_args, rhs);
+                    }
+                    _ => {}
+                }
+                let new_inst = k1.ir.add_inst(*inst, MStr::empty(), IrDebugInfo::default(), call_span);
+                k1.ir
             }
         }
-        // eval each param (already done)
+
+        // - Replace old with new alloca ids
+        // - Replace param values (p0, p1, ..) with the 'Value's of the corresponding param from the call
+        // - Replace 'return' instructions with stores/copies (fulfills) to the destination slot
         // All parameter references must be replaced by the parameter values
         // - Downstream block references (phis or jumps) must be updated to be the final block
         // of the inlined function
-
     }
+}
+
+fn rewrite_value(
+    inst_mappings: FxHashMap<InstId, InstId>,
+    fn_param_mappings: &[Value],
+    value: &mut Value,
+) {
+    match value {
+        Value::Inst(inst) => {
+            if let Some(new) = inst_mappings.get(inst) {
+                *inst = *new;
+            }
+        }
+        Value::FnParam { index, .. } => {
+            *value = fn_param_mappings[*index as usize];
+        }
+        _ => {}
+    };
 }
 
 ////////////////////////////// Display //////////////////////////////
@@ -3198,16 +3266,16 @@ pub fn display_block(
     k1: &TypedProgram,
     ir: &ProgramIr,
     unit: &IrUnit,
-    block_id: BlockId,
+    block_index: BlockId,
     show_source: bool,
 ) -> std::fmt::Result {
-    let block = ir.mem.get_nth(unit.blocks, block_id as usize);
-    write!(w, "b{} ", block_id)?;
+    let block = ir.mem.dlist_nth(unit.blocks, block_index as usize);
+    write!(w, "b{} ", block_index)?;
     if !block.name.is_empty() {
         w.write_str(block.name.as_ref())?;
     }
     writeln!(w)?;
-    for inst_id in ir.mem.getn(block.instrs).iter() {
+    for inst_id in ir.mem.dlist_iter(block.instrs) {
         if show_source {
             let span_id = *ir.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(span_id);

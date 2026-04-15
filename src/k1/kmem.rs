@@ -24,7 +24,7 @@
 /// a passion in general so this POD approach can actually cook
 use smallvec::SmallVec;
 
-use crate::{static_assert_size, typer::dump::DepDisplay};
+use crate::{rawref::RawRef, static_assert_size, typer::dump::DepDisplay};
 macro_rules! fuckit {
     ($($t:tt)*) => {
         unsafe { $($t)* }
@@ -50,22 +50,79 @@ pub struct Mem<Tag = ()> {
     _marker: PhantomData<Tag>,
 }
 
-#[derive(Clone, Copy)]
 pub struct MdlNode<T, Tag> {
-    data: T,
+    pub data: T,
     prev: MHandle<MdlNode<T, Tag>, Tag>,
     next: MHandle<MdlNode<T, Tag>, Tag>,
 }
 
-#[derive(Clone, Copy)]
+impl<T, Tag> MdlNode<T, Tag> {
+    pub fn is_first(&self) -> bool {
+        self.prev.is_nil()
+    }
+
+    pub fn is_last(&self) -> bool {
+        self.next.is_nil()
+    }
+
+    pub fn prev(&self) -> Option<MHandle<MdlNode<T, Tag>, Tag>> {
+        if self.prev.is_nil() { None } else { Some(self.prev) }
+    }
+
+    pub fn next(&self) -> Option<MHandle<MdlNode<T, Tag>, Tag>> {
+        if self.next.is_nil() { None } else { Some(self.next) }
+    }
+}
+
+impl<T, Tag> Copy for MdlNode<T, Tag> where T: Copy {}
+impl<T, Tag> Clone for MdlNode<T, Tag> where T: Copy {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 pub struct MdlList<T, Tag> {
-    first: MHandle<MdlNode<T, Tag>, Tag>,
-    last: MHandle<MdlNode<T, Tag>, Tag>,
+    pub first: MHandle<MdlNode<T, Tag>, Tag>,
+    pub last: MHandle<MdlNode<T, Tag>, Tag>,
 }
 
 impl<T, Tag> MdlList<T, Tag> {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         MdlList { first: MHandle::nil(), last: MHandle::nil() }
+    }
+
+    pub fn is_singleton(&self) -> bool {
+        !self.first.is_nil() && self.first == self.last
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.first.is_nil()
+    }
+}
+
+impl<T, Tag> Copy for MdlList<T, Tag> {}
+impl<T, Tag> Clone for MdlList<T, Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+pub struct MdlListIter<T, Tag> {
+    mem: RawRef<Mem<Tag>>,
+    next: MHandle<MdlNode<T, Tag>, Tag>,
+}
+
+impl<T, Tag> Iterator for MdlListIter<T, Tag> {
+    type Item = RawRef<MdlNode<T, Tag>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next.is_nil() {
+            None
+        } else {
+            let node_ref = self.mem.get_raw_ref(self.next);
+            self.next = node_ref.next;
+            Some(node_ref)
+        }
     }
 }
 
@@ -550,7 +607,7 @@ impl<Tag> Mem<Tag> {
         MStr::from_parts(base, len as usize)
     }
 
-    pub fn get_raw<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
+    fn get_raw_ptr<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             if size_of::<T>() != 0 {
@@ -561,11 +618,15 @@ impl<Tag> Mem<Tag> {
     }
 
     pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
-        unsafe { &*self.get_raw(handle) }
+        unsafe { &*self.get_raw_ptr(handle) }
     }
 
-    pub fn get_mut<T>(&mut self, handle: MHandle<T, Tag>) -> &mut T {
-        unsafe { &mut *self.get_raw(handle) }
+    pub fn get_mut<T>(&self, handle: MHandle<T, Tag>) -> &mut T {
+        unsafe { &mut *self.get_raw_ptr(handle) }
+    }
+
+    pub fn get_raw_ref<T>(&self, handle: MHandle<T, Tag>) -> RawRef<T> {
+        RawRef::from_ptr(self.get_raw_ptr(handle))
     }
 
     pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
@@ -681,12 +742,16 @@ impl<Tag> Mem<Tag> {
 }
 //////////////// Doubly Linked List Impl
 
-impl<Tag> Mem<Tag> {
+impl<Tag: 'static> Mem<Tag> {
     pub fn dlist_new<T>(&mut self) -> MdlList<T, Tag> {
         MdlList::empty()
     }
 
-    pub fn dlist_push<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
+    pub fn dlist_push<T>(
+        &mut self,
+        list: &mut MdlList<T, Tag>,
+        data: T,
+    ) -> MHandle<MdlNode<T, Tag>, Tag> {
         let node = self.push_h(MdlNode { data, prev: list.last, next: MHandle::nil() });
         if list.last.is_nil() {
             // List is empty, so new node is also the first node
@@ -696,17 +761,23 @@ impl<Tag> Mem<Tag> {
             self.get_mut(list.last).next = node;
             list.last = node;
         }
+        node
     }
 
-    pub fn dlist_push_front<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
-        let new_node = self.push_h(MdlNode { data, prev: MHandle::nil(), next: list.first });
+    pub fn dlist_push_front<T>(
+        &mut self,
+        list: &mut MdlList<T, Tag>,
+        data: T,
+    ) -> MHandle<MdlNode<T, Tag>, Tag> {
+        let node = self.push_h(MdlNode { data, prev: MHandle::nil(), next: list.first });
         if list.first.is_nil() {
-            list.first = new_node;
-            list.last = new_node;
+            list.first = node;
+            list.last = node;
         } else {
-            self.get_mut(list.first).prev = new_node;
-            list.first = new_node;
+            self.get_mut(list.first).prev = node;
+            list.first = node;
         }
+        node
     }
 
     pub fn dlist_insert<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize, data: T) {
@@ -773,20 +844,19 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn dlist_iter<'a, T: 'a>(&'a self, list: MdlList<T, Tag>) -> impl Iterator<Item = &'a T> {
-        let mut current = list.first;
-        std::iter::from_fn(move || {
-            if current.is_nil() {
-                None
-            } else {
-                let node = self.get(current);
-                current = node.next;
-                Some(&node.data)
-            }
-        })
+
+    pub fn dlist_iter_nodes<T>(
+        &self,
+        list: MdlList<T, Tag>,
+    ) -> MdlListIter<T, Tag> {
+        MdlListIter { mem: RawRef::from_ref(self), next: list.first }
     }
 
-    pub fn dlist_nth<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<&T> {
+    pub fn dlist_iter<T: 'static>(&self, list: MdlList<T, Tag>) -> impl Iterator<Item = RawRef<T>> + 'static {
+        self.dlist_iter_nodes(list).map(|node| node.map(|n| &n.data))
+    }
+
+    pub fn dlist_nth_opt<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<&MdlNode<T, Tag>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -794,7 +864,31 @@ impl<Tag> Mem<Tag> {
             }
             current = self.get(current).next;
         }
-        if current.is_nil() { None } else { Some(&self.get(current).data) }
+        if current.is_nil() { None } else { Some(&self.get(current)) }
+    }
+
+    pub fn dlist_nth_data_opt<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<RawRef<T>> {
+        let mut current = list.first;
+        for _ in 0..n {
+            if current.is_nil() {
+                return None;
+            }
+            current = self.get(current).next;
+        }
+        if current.is_nil() {
+            None
+        } else {
+            let node = self.get_mut(current);
+            Some(RawRef::from_mut(&mut node.data))
+        }
+    }
+
+    pub fn dlist_nth<T>(&self, list: MdlList<T, Tag>, n: usize) -> &MdlNode<T, Tag> {
+        self.dlist_nth_opt(list, n).expect("Index out of bounds in dlist_nth")
+    }
+
+    pub fn dlist_nth_data<T>(&self, list: MdlList<T, Tag>, n: usize) -> RawRef<T> {
+        self.dlist_nth_data_opt(list, n).expect("Index out of bounds in dlist_nth_mut")
     }
 
     pub fn dlist_compute_len<T>(&self, list: MdlList<T, Tag>) -> usize {

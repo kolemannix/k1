@@ -567,6 +567,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let Some(main_function_id) = self.k1.get_main_function_id() else {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
+
+        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
         ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         let function_value = self.declare_llvm_function(main_function_id)?;
 

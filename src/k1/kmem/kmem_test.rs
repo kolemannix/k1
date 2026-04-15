@@ -197,6 +197,15 @@ fn spill_list_many_pushes_growth_smoke() {
 
 #[test]
 fn mdl_basic() {
+    fn assert_dlist(mem: Mem<()>, l: MdlList<char, ()>, expected: &[char]) {
+        let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
+        mem.dlist_assert_valid(l);
+        assert_eq!(&elems, expected);
+        for _ in 0..mem.dlist_compute_len(l) {
+            assert_eq!(mem.dlist_nth(l, 0), &expected[0]);
+            assert_eq!(*mem.dlist_nth_data(l, 0), expected[0]);
+        }
+    }
     let mut mem: Mem<()> = Mem::make();
     let mut l = mem.dlist_new();
     mem.dlist_push(&mut l, '5');
@@ -247,6 +256,5 @@ fn mdl_basic() {
         let elems: Vec<_> = mem.dlist_iter(l).copied().collect();
         mem.dlist_assert_valid(l);
         assert_eq!(&elems, &['5', '4', 'X', 'Y', '2', '1']);
-        
     }
 }
