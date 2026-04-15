@@ -5,6 +5,7 @@
 mod stack_tests {
 
     use crate::kmem::MSlice;
+    use crate::kmem::MdlList;
     use crate::typer::types::AbiMode;
     use crate::typer::types::EMPTY_TYPE_ID;
     use crate::typer::*;
@@ -20,7 +21,6 @@ mod stack_tests {
                 params: MSlice::empty(),
                 abi_mode: AbiMode::Internal,
             },
-            inst_offset: 0,
             inst_count: 0,
             blocks: MdlList::empty(),
             is_debug: false,
@@ -34,10 +34,8 @@ mod stack_tests {
         RetInfo {
             pt: PhysicalType::scalar(ScalarType::U32),
             frame_index: 0,
-            // inst_index: 0,
-            inst_id: InstId::PENDING,
+            call_inst_node: MdlNode::singleton(InstId::PENDING),
             has_dst: false,
-            ip: MHandle::nil(),
             block: MHandle::nil(),
         }
     }
@@ -87,7 +85,6 @@ mod value_roundtrip_tests {
     use crate::typer::types::IntegerType;
     use crate::vm::*;
 
-    // Helper macro to test integer roundtrips
     macro_rules! test_int {
         ($name:ident, $typ:ty, $int_type:expr, $variant:ident) => {
             #[test]
@@ -140,9 +137,7 @@ mod value_roundtrip_tests {
             let v = Value::f32(val);
             assert_eq!(v.as_f32(), val);
         }
-        // NaN special case
         assert!(Value::f32(f32::NAN).as_f32().is_nan());
-        // Verify -0.0 sign is preserved
         assert!(Value::f32(-0.0).as_f32().is_sign_negative());
     }
 
@@ -167,9 +162,7 @@ mod value_roundtrip_tests {
             let v = Value::f64(val);
             assert_eq!(v.as_f64(), val);
         }
-        // NaN special case
         assert!(Value::f64(f64::NAN).as_f64().is_nan());
-        // Verify -0.0 sign is preserved
         assert!(Value::f64(-0.0).as_f64().is_sign_negative());
     }
 

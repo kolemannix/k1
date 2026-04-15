@@ -139,11 +139,7 @@ pub struct IrUnit {
     pub result_type_id: TypeId,
     pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
-    // The offset of the first instruction id
-    // used by this compiled unit.
-    // Subtract this to get sane indices for dense storage
-    pub inst_offset: u32,
-    // The number of instructions in this unit; used to reserve N 'registers' in our register buffer
+    // The number of instructions in this unit
     pub inst_count: u32,
 
     pub blocks: MdlList<Block, ProgramIr>,
@@ -818,7 +814,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             _ => None,
         },
     };
-    let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
+    let unit = finalize_unit(&b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
 
     *b.k1.ir.functions.get_mut(function_id) = Some(unit);
 
@@ -867,7 +863,7 @@ pub fn compile_top_level_expr(
     b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
     let compiled_expr =
-        finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
+        finalize_unit(&b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
     b.k1.ir.exprs.insert(expr, compiled_expr);
 
     let unit_id = IrUnitId::Expr(expr);
@@ -884,28 +880,24 @@ pub fn compile_top_level_expr(
 }
 
 fn finalize_unit(
-    b: &mut Builder,
+    b: &Builder,
     result_type_id: TypeId,
     unit_id: IrUnitId,
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
 ) -> IrUnit {
-    let inst_count = (b.k1.ir.instrs.len() as u32 + 1) - b.inst_offset;
-    let compiled_blocks = b.bake_blocks();
-    //b.k1.ir.mem.print_usage("after bake");
+    let inst_count = b.k1.ir.mem.dlist_iter(b.blocks).map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32).sum();
     let unit = IrUnit {
         result_type_id,
         unit_id,
         fn_type,
-        inst_offset: b.inst_offset,
         inst_count,
-        blocks: compiled_blocks,
+        blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
     };
-    b.reset_compilation_unit();
     unit
 }
 
@@ -931,8 +923,7 @@ pub struct Builder<'k1> {
     k1: &'k1 mut TypedProgram,
 
     fn_type: PhysicalFunctionType,
-    inst_offset: u32,
-    // block_count: u32,
+    blocks: MdlList<Block, ProgramIr>,
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
@@ -942,52 +933,17 @@ pub struct Builder<'k1> {
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram) -> Self {
-        let inst_offset = k1.ir.instrs.len() as u32 + 1;
         Self {
-            inst_offset,
             k1,
 
             fn_type: PhysicalFunctionType::nil(),
-            // block_count: 0,
+
+            blocks: MdlList::empty(),
             last_alloca_index: None,
             cur_block: MHandle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
         }
-    }
-
-    fn reset_compilation_unit(&mut self) {
-        // nocommit: No need to recycle builder anymore since it doesn't hold any buffers
-        // for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
-        //     b.instrs.clear();
-        // }
-        // self.block_count = 0;
-        self.k1.ir.b_blocks = MdlList::empty();
-        self.k1.ir.b_variables.clear();
-        self.k1.ir.b_loops.clear();
-
-        self.fn_type = PhysicalFunctionType::nil();
-        self.last_alloca_index = None;
-        self.cur_span = SpanId::NONE;
-        self.entry_span = SpanId::NONE;
-    }
-
-    fn bake_blocks(&mut self) -> MdlList<Block, ProgramIr> {
-        self.k1.ir.b_blocks
-        // let mut blocks = self.k1.ir.mem.new_list(self.block_count);
-        // for b in Builder::builder_blocks_iter(self.block_count, &self.k1.ir.b_blocks) {
-        //     let instrs = self.k1.ir.mem.pushn(&b.instrs);
-        //     if instrs.is_empty() {
-        //         debug!("baking an empty basic block; wonder where it came from?");
-        //     }
-        //     let b = CompiledBlock { name: b.name, instrs };
-        //     blocks.push(b)
-        // }
-        // self.k1.ir.mem.list_to_handle(blocks)
-    }
-
-    fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
-        b_blocks[0..block_count as usize].iter()
     }
 
     fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
@@ -2793,7 +2749,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
         return failf!(span, "Not compiled");
     };
     for (block_index, block) in ir.mem.dlist_iter(unit.blocks).enumerate() {
-        for (index, inst_node) in ir.mem.dlist_iter_nodes(block.instrs).enumerate() {
+        for inst_node in ir.mem.dlist_iter_nodes(block.instrs) {
             let inst_id = inst_node.data;
             let is_last = inst_node.is_last();
             let inst = ir.instrs.get(inst_id);
@@ -3182,11 +3138,13 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 }
 
 // Splits block_node at inst into pre and post, leaving `inst` as the last item in pre.
+pub type BlockNode = MdlNode<Block, ProgramIr>;
+pub type BlockNodeRef = RawRef<BlockNode>;
 fn split_block(
     k1: &mut TypedProgram,
     block_node: MdlNode<Block, ProgramIr>,
     inst: InstId,
-) -> (RawRef<MdlNode<Block, ProgramIr>>, RawRef<MdlNode<Block, ProgramIr>>) {
+) -> (RawRef<BlockNode>, RawRef<BlockNode>) {
     todo!()
 }
 
@@ -3281,9 +3239,9 @@ pub fn display_unit(
             write!(w, " from {}:{}", &source.filename, line.line_number())?;
         }
     };
-    writeln!(w, " (offset={}, inst count={})", unit.inst_offset, unit.inst_count)?;
+    writeln!(w, " (inst count={})", unit.inst_count)?;
     for (index, block) in k1.ir.mem.dlist_iter_handles(unit.blocks).enumerate() {
-        display_block(w, k1, &k1.ir, unit, block, index, show_source)?;
+        display_block(w, k1, &k1.ir, block, index, show_source)?;
     }
     Ok(())
 }
@@ -3318,7 +3276,6 @@ pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
     ir: &ProgramIr,
-    unit: &IrUnit,
     block_id: BlockId,
     index: usize,
     show_source: bool,

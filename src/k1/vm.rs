@@ -16,7 +16,7 @@ mod vm_test;
 use crate::ir::{
     self, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, ProgramIr, Value as IrValue,
 };
-use crate::kmem::{MHandle, MdlList, MdlNode};
+use crate::kmem::{MHandle, MdlNode};
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
@@ -581,9 +581,8 @@ pub fn execute_compiled_unit(
         pt: unit.fn_type.return_type,
         frame_index: 0,
         // inst_index: 0,
-        inst_id: InstId::PENDING,
+        call_inst_node: MdlNode::singleton(InstId::PENDING),
         has_dst: false,
-        ip: MHandle::nil(),
         block: MHandle::nil(),
     };
 
@@ -640,16 +639,11 @@ type InstNodeHandle = MHandle<MdlNode<InstId, ProgramIr>, ProgramIr>;
 fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Result<i32> {
     let mut prev_b: ir::BlockId = original_unit.blocks.first;
     let mut b: ir::BlockId = original_unit.blocks.first;
-    // let mut blocks = original_unit.blocks;
-    let mut inst_offset = original_unit.inst_offset;
-    // let mut instrs = k1.ir.mem.get(original_unit.blocks.first).data.instrs;
     let mut ip: InstNodeHandle = k1.ir.mem.get(original_unit.blocks.first).data.instrs.first;
 
     macro_rules! goto_unit {
-        ($gt_blocks: expr, $inst_offset: expr, $gt_block: expr, $gt_ip: expr) => {{
-            // blocks = $gt_blocks;
+        ($gt_block: expr, $gt_ip: expr) => {{
             b = $gt_block;
-            inst_offset = $inst_offset;
             ip = match $gt_ip {
                 None => k1.ir.mem.get(b).data.instrs.first,
                 Some(inst_node) => inst_node,
@@ -668,7 +662,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
 
     macro_rules! resolve_value {
         ($v:expr) => {
-            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)?
+            resolve_value(k1, vm, vm.stack.current_frame_index(), $v)?
         };
     }
 
@@ -830,7 +824,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             k1,
                             vm,
                             vm.stack.current_frame_index(),
-                            inst_offset,
                             ret_pt,
                             call_args,
                             library_name,
@@ -1061,9 +1054,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     );
                 };
                 let caller_frame_index = vm.stack.current_frame_index();
-                let caller_inst_offset = inst_offset;
                 let called_blocks = compiled_function.blocks;
-                let called_inst_offset = compiled_function.inst_offset;
                 let new_frame_index = caller_frame_index + 1;
 
                 // - Push a stack frame
@@ -1074,9 +1065,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         pt: ret_pt,
                         frame_index: caller_frame_index,
                         // inst_index,
-                        inst_id,
+                        call_inst_node: inst_node,
                         has_dst,
-                        ip: inst_node.next,
+                        // ip: inst_node.next,
                         // ip: ip + 1,
                         block: b,
                     },
@@ -1090,7 +1081,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 // Point the param registers at the function's arguments
                 for (index, arg) in k1.ir.mem.getn(call_args).iter().enumerate() {
                     let vm_value =
-                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
+                        resolve_value(k1, vm, caller_frame_index, *arg)?;
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
 
                     //let arg_pt =
@@ -1099,7 +1090,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 }
 
                 // - Set 'pc' (which is blocks + b + i)
-                goto_unit!(called_blocks, called_inst_offset, called_blocks.first, None);
+                goto_unit!(called_blocks.first, None);
             }
             Inst::Ret { v, agg: _ } => {
                 let cur_frame = vm.stack.current_frame();
@@ -1118,18 +1109,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         vm,
                         ret_info.frame_index,
                         //ret_info.inst_index,
-                        ret_info.inst_id,
+                        ret_info.call_inst_node.data,
                         ret_info.has_dst,
                         ret_info.pt,
                         returned_value,
                     );
                     let _popped = vm.stack.pop_frame();
-                    let current = vm.stack.current_frame_opt().unwrap();
                     goto_unit!(
-                        current.blocks,
-                        current.inst_offset,
                         ret_info.block,
-                        Some(ret_info.ip)
+                        Some(ret_info.call_inst_node.next)
                     );
                 } else {
                     // Shove the return value in a special place
@@ -1644,12 +1632,10 @@ fn resolve_value(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     frame_index: u32,
-    inst_offset: u32,
     value: IrValue,
 ) -> K1Result<Value> {
     match value {
         IrValue::Inst(inst_id) => {
-            // let inst_index = ir::inst_to_index(inst_id, inst_offset);
             let v = vm.stack.get_inst_value(frame_index, inst_id);
             Ok(v)
         }
@@ -1756,7 +1742,6 @@ fn fulfill_return(
     k1: &TypedProgram,
     vm: &mut Vm,
     call_frame_index: u32,
-    // call_inst_index: u32,
     call_inst_id: InstId,
     has_dst: bool,
     ret_type: PhysicalType,
@@ -2082,14 +2067,13 @@ pub struct RetInfo {
     /// We either directly write the value into the instruction register at (frame_index, inst_index)
     /// Or we perform a store to the address in that register. We use pt and size to help us know which
     frame_index: u32,
-    // inst_index: u32,
-    // nocommit: Isn't this always ip.prev?
-    inst_id: InstId,
+    // The call instruction. When we return, we should return to call_inst_node.next
+    call_inst_node: MdlNode<InstId, ProgramIr>,
     /// There's a memory address stored in (frame_index, inst_index) that you need to write to
     /// Otherwise, just write the value
     has_dst: bool,
 
-    ip: InstNodeHandle,
+    // ip: InstNodeHandle,
     block: ir::BlockId,
 }
 
@@ -2097,12 +2081,8 @@ pub struct RetInfo {
 pub struct StackFrameRecord {
     index: u32,
     base_ptr: *mut u8,
-    // inst_slice: *mut [Value],
-    // inst_map: FxHashMap<InstId, Value>,
     call_span: Option<SpanId>,
     param_count: u32,
-    blocks: MdlList<ir::Block, ir::ProgramIr>,
-    inst_offset: u32,
     unit: IrUnitId,
     ret_info: RetInfo,
 }
@@ -2114,8 +2094,6 @@ impl StackFrameRecord {
         call_span: Option<SpanId>,
         owner: &IrUnit,
         ret_info: RetInfo,
-        // inst_slice: *mut [Value],
-        // inst_map: FxHashMap<InstId, Value>,
     ) -> StackFrameRecord {
         // Frames must be 8-byte aligned
         debug_assert!((base_ptr as *const Value).is_aligned());
@@ -2123,13 +2101,9 @@ impl StackFrameRecord {
         StackFrameRecord {
             index,
             base_ptr,
-            //inst_slice,
-            //inst_map,
             call_span,
             unit: owner.unit_id,
             param_count: owner.fn_type.params.len(),
-            blocks: owner.blocks,
-            inst_offset: owner.inst_offset,
             ret_info,
         }
     }
@@ -2217,6 +2191,7 @@ impl Stack {
         self.frames.last_mut().unwrap()
     }
 
+    #[allow(unused)]
     fn current_frame_opt(&self) -> Option<&StackFrameRecord> {
         self.frames.last()
     }

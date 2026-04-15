@@ -36,7 +36,7 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType,
+    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, PhysicalFunctionType,
     ProgramIr,
 };
 use crate::kmem::{MHandle, MList, MSlice, MdlList};

@@ -57,6 +57,11 @@ pub struct MdlNode<T, Tag> {
 }
 
 impl<T, Tag> MdlNode<T, Tag> {
+
+    pub fn singleton(data: T) -> Self {
+        MdlNode { data, prev: MHandle::nil(), next: MHandle::nil() }
+    }
+
     pub fn is_first(&self) -> bool {
         self.prev.is_nil()
     }
@@ -961,7 +966,7 @@ impl<Tag: 'static> Mem<Tag> {
             }
             current = self.get(current).next;
         }
-        if current.is_nil() { None } else { Some(&self.get(current)) }
+        if current.is_nil() { None } else { Some(self.get(current)) }
     }
 
     pub fn dlist_nth_data_opt<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<RawRef<T>> {
