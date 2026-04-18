@@ -767,11 +767,11 @@ impl<Tag> Mem<Tag> {
 //////////////// Doubly Linked List Impl
 
 impl<Tag: 'static> Mem<Tag> {
-    pub fn dlist_new<T>(&mut self) -> Dlist<T, Tag> {
+    pub fn dlist_new<T: 'static>(&mut self) -> Dlist<T, Tag> {
         Dlist::empty()
     }
 
-    pub fn dlist_push<T>(
+    pub fn dlist_push<T: 'static>(
         &mut self,
         list: &mut Dlist<T, Tag>,
         data: T,
@@ -788,7 +788,7 @@ impl<Tag: 'static> Mem<Tag> {
         node
     }
 
-    pub fn dlist_push_front<T>(
+    pub fn dlist_push_front<T: 'static>(
         &mut self,
         list: &mut Dlist<T, Tag>,
         data: T,
@@ -804,7 +804,7 @@ impl<Tag: 'static> Mem<Tag> {
         node
     }
 
-    pub fn dlist_insert<T>(&mut self, list: &mut Dlist<T, Tag>, index: usize, data: T) {
+    pub fn dlist_insert<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, index: usize, data: T) {
         // Find the node currently at `index`.
         // If `index == len`, this will end up as nil(), meaning "insert at end".
         let mut next = list.first;
@@ -831,13 +831,13 @@ impl<Tag: 'static> Mem<Tag> {
         }
     }
 
-    pub fn dlist_insert_after<T>(
+    pub fn dlist_insert_after<T: 'static>(
         &mut self,
         list: &mut Dlist<T, Tag>,
         node: NodeHandle<T, Tag>,
         data: T,
     ) -> Handle<DlNode<T, Tag>, Tag> {
-        self.dlist_debug_assert_mine(list, node);
+        self.dlist_debug_assert_mine(*list, node);
         let mut node_node = self.get_raw_ref(node);
         let next = node_node.next;
         let new_node = self.push_h(DlNode { data, prev: node, next });
@@ -852,7 +852,7 @@ impl<Tag: 'static> Mem<Tag> {
         new_node
     }
 
-    pub fn dlist_remove_index<T>(&mut self, list: &mut Dlist<T, Tag>, index: usize) {
+    pub fn dlist_remove_index<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, index: usize) {
         let mut cur = list.first;
         for _ in 0..index {
             if cur.is_nil() {
@@ -868,8 +868,8 @@ impl<Tag: 'static> Mem<Tag> {
         self.dlist_remove(list, cur);
     }
 
-    pub fn dlist_remove<T>(&mut self, list: &mut Dlist<T, Tag>, node: Handle<DlNode<T, Tag>, Tag>) {
-        self.dlist_debug_assert_mine(list, node);
+    pub fn dlist_remove<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, node: Handle<DlNode<T, Tag>, Tag>) {
+        self.dlist_debug_assert_mine(*list, node);
         let prev = self.get(node).prev;
         let next = self.get(node).next;
 
@@ -928,7 +928,7 @@ impl<Tag: 'static> Mem<Tag> {
         Some(node)
     }
 
-    pub fn dlist_split_at_index<T>(
+    pub fn dlist_split_at_index<T: 'static>(
         &mut self,
         list: &mut Dlist<T, Tag>,
         index: usize,
@@ -960,12 +960,12 @@ impl<Tag: 'static> Mem<Tag> {
         // right
     }
 
-    pub fn dlist_split_at_node<T>(
+    pub fn dlist_split_at_node<T: 'static>(
         &mut self,
         list: &mut Dlist<T, Tag>,
         node: Handle<DlNode<T, Tag>, Tag>,
     ) -> Dlist<T, Tag> {
-        self.dlist_debug_assert_mine(list, node);
+        self.dlist_debug_assert_mine(*list, node);
         if node.is_nil() {
             panic!("Cannot split at nil node");
         }
@@ -984,23 +984,23 @@ impl<Tag: 'static> Mem<Tag> {
         right
     }
 
-    pub fn dlist_iter_nodes_from<T>(&self, list: Dlist<T, Tag>, from_node: NodeHandle<T, Tag>) -> DlistIter<T, Tag> {
+    pub fn dlist_iter_nodes_from<T: 'static>(&self, list: Dlist<T, Tag>, from_node: NodeHandle<T, Tag>) -> DlistIter<T, Tag> {
         self.dlist_debug_assert_mine(list, from_node);
         DlistIter { mem: RawRef::from_ref(self), next: from_node }
     }
 
-    pub fn dlist_iter_nodes<T>(&self, list: Dlist<T, Tag>) -> DlistIter<T, Tag> {
+    pub fn dlist_iter_nodes<T: 'static>(&self, list: Dlist<T, Tag>) -> DlistIter<T, Tag> {
         DlistIter { mem: RawRef::from_ref(self), next: list.first }
     }
 
-    pub fn dlist_iter_handles<T: Copy + 'static>(
+    pub fn dlist_iter_handles<T: 'static>(
         &self,
         list: Dlist<T, Tag>,
-    ) -> impl Iterator<Item = (NodeHandle<T, Tag>, DlNode<T, Tag>)> + 'static {
+    ) -> impl Iterator<Item = (NodeHandle<T, Tag>, RawRef<DlNode<T, Tag>>)> + 'static {
         let base_ptr = self.base_ptr();
         self.dlist_iter_nodes(list).map(move |node| {
             let offset = Self::ptr_to_offset_fn(base_ptr, node.as_ptr().cast_const());
-            (Handle(Some(offset), PhantomData, PhantomData), *node)
+            (Handle(Some(offset), PhantomData, PhantomData), node)
         })
     }
 
@@ -1011,7 +1011,7 @@ impl<Tag: 'static> Mem<Tag> {
         self.dlist_iter_nodes(list).map(|node| node.map(|n| &n.data))
     }
 
-    pub fn dlist_nth_opt<T>(&self, list: Dlist<T, Tag>, n: usize) -> Option<&DlNode<T, Tag>> {
+    pub fn dlist_nth_opt<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> Option<&DlNode<T, Tag>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -1022,7 +1022,7 @@ impl<Tag: 'static> Mem<Tag> {
         if current.is_nil() { None } else { Some(self.get(current)) }
     }
 
-    pub fn dlist_nth_data_opt<T>(&self, list: Dlist<T, Tag>, n: usize) -> Option<RawRef<T>> {
+    pub fn dlist_nth_data_opt<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> Option<RawRef<T>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -1038,11 +1038,11 @@ impl<Tag: 'static> Mem<Tag> {
         }
     }
 
-    pub fn dlist_nth<T>(&self, list: Dlist<T, Tag>, n: usize) -> &DlNode<T, Tag> {
+    pub fn dlist_nth<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> &DlNode<T, Tag> {
         self.dlist_nth_opt(list, n).expect("Index out of bounds in dlist_nth")
     }
 
-    pub fn dlist_nth_data<T>(&self, list: Dlist<T, Tag>, n: usize) -> RawRef<T> {
+    pub fn dlist_nth_data<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> RawRef<T> {
         self.dlist_nth_data_opt(list, n).expect("Index out of bounds in dlist_nth_mut")
     }
 
@@ -1052,7 +1052,7 @@ impl<Tag: 'static> Mem<Tag> {
 
     ///////////////////// Dlist checks
 
-    pub fn dlist_debug_assert_mine<T: Copy + 'static>(&self, list: Dlist<T, Tag>, node: NodeHandle<T, Tag>) {
+    pub fn dlist_debug_assert_mine<T: 'static>(&self, list: Dlist<T, Tag>, node: NodeHandle<T, Tag>) {
         if node.is_nil() {
             return;
         }
@@ -1065,7 +1065,7 @@ impl<Tag: 'static> Mem<Tag> {
         panic!("Node handle does not belong to this list");
     }
 
-    pub fn dlist_assert_valid<T>(&self, list: Dlist<T, Tag>) {
+    pub fn dlist_assert_valid<T: 'static>(&self, list: Dlist<T, Tag>) {
         // Empty/non-empty consistency
         assert!(
             list.first.is_nil() == list.last.is_nil(),
