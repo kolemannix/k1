@@ -2917,7 +2917,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> K1Result<()> {
         let mut block_mapping = FxHashMap::new();
         let llvm_function = self.get_current_function().function_value;
-        for (block, block_node) in self.k1.ir.mem.dlist_iter_with_handles(blocks) {
+        for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
             let name = block_node.data.name;
             let b = self.ctx.append_basic_block(llvm_function, name);
             block_mapping.insert(block, b);
@@ -2936,7 +2936,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
-        for (block, _) in self.k1.ir.mem.dlist_iter_with_handles(blocks) {
+        for (block, _) in self.k1.ir.mem.dlist_iter_handles(blocks) {
             self.codegen_block(inst_mappings, block)?;
         }
 

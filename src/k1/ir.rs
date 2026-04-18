@@ -1210,16 +1210,16 @@ impl<'k1> Builder<'k1> {
         self.k1
             .ir
             .mem
-            .dlist_iter_with_handles(self.blocks)
+            .dlist_iter_handles(self.blocks)
             .find(|(_h, b)| self.k1.ir.mem.dlist_iter(b.data.instrs).any(|i| *i == inst_id))
             .unwrap()
             .0
     }
 
     fn _locate_inst(&self, inst_id: InstId) -> (BlockId, Handle<InstNode, ProgramIr>, usize) {
-        for (block_handle, block) in self.k1.ir.mem.dlist_iter_with_handles(self.blocks) {
+        for (block_handle, block) in self.k1.ir.mem.dlist_iter_handles(self.blocks) {
             for (index, (inst_handle, inst)) in
-                self.k1.ir.mem.dlist_iter_with_handles(block.data.instrs).enumerate()
+                self.k1.ir.mem.dlist_iter_handles(block.data.instrs).enumerate()
             {
                 if inst.data == inst_id {
                     return (block_handle, inst_handle, index);
@@ -3079,7 +3079,7 @@ pub fn display_blocks(
     blocks: Dlist<Block, ProgramIr>,
     show_source: bool,
 ) -> std::fmt::Result {
-    for (index, (block, _)) in k1.ir.mem.dlist_iter_with_handles(blocks).enumerate() {
+    for (index, (block, _)) in k1.ir.mem.dlist_iter_handles(blocks).enumerate() {
         display_block(w, k1, block, index, show_source)?;
     }
     Ok(())

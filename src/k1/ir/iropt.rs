@@ -82,7 +82,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
         let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
         for block in k1.ir.mem.dlist_iter(self_unit.blocks) {
-            for (inst_node_handle, inst_node) in k1.ir.mem.dlist_iter_with_handles(block.instrs) {
+            for (inst_node_handle, inst_node) in k1.ir.mem.dlist_iter_handles(block.instrs) {
                 let inst_id = inst_node.data;
                 let inst = k1.ir.instrs.get(inst_id);
                 if let Inst::Call { call_id } = inst {
@@ -186,7 +186,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             fn_params: None,
         };
         self_rewrites.block_exits.insert(call_block_handle, call_post_block);
-        for (self_block, _) in b.k1.ir.mem.dlist_iter_with_handles(b.blocks) {
+        for (self_block, _) in b.k1.ir.mem.dlist_iter_handles(b.blocks) {
             rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites);
         }
 
@@ -195,7 +195,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
         // Walk the inlined code, rewriting instructions, and hoisting allocas
         for (index, (callee_block_id, callee_block)) in
-            b.k1.ir.mem.dlist_iter_with_handles(callee_unit.blocks).enumerate()
+            b.k1.ir.mem.dlist_iter_handles(callee_unit.blocks).enumerate()
         {
             let inlined_block = b.k1.ir.mem.dlist_insert_after(
                 &mut b.blocks,
@@ -240,6 +240,10 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                 }
             }
             rewrite_map.eprint();
+        }
+
+        for (self_block, _) in b.k1.ir.mem.dlist_iter_handles(b.blocks) {
+            rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites);
         }
 
         get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap().blocks = b.blocks;
