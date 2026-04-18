@@ -6,6 +6,8 @@ use std::hash::{Hash, Hasher};
 
 use smallvec::SmallVec;
 
+use crate::rawref::RawRef;
+
 pub trait PoolIndex:
     Copy
     + Into<NonZeroU32>
@@ -275,6 +277,12 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn get_mut(&mut self, id: Index) -> &mut T {
         let index = Self::id_to_actual_index(id);
         &mut self.data_mut_inbounds()[index]
+    }
+
+    pub fn get_raw(&mut self, id: Index) -> RawRef<T> {
+        let index = Self::id_to_actual_index(id);
+        let refmut = &mut self.data_mut_inbounds()[index];
+        RawRef::from_mut(refmut)
     }
 
     pub fn get_slice(&self, handle: SliceHandle<Index>) -> &[T] {

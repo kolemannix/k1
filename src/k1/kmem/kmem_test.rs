@@ -196,7 +196,7 @@ fn spill_list_many_pushes_growth_smoke() {
 }
 
 #[allow(clippy::needless_range_loop)]
-fn assert_dlist(mem: &Mem<()>, l: MdlList<char, ()>, expected: &[char]) {
+fn assert_dlist(mem: &Mem<()>, l: Dlist<char, ()>, expected: &[char]) {
     let elems: Vec<_> = mem.dlist_iter(l).map(|x| *x).collect();
     mem.dlist_assert_valid(l);
     assert_eq!(&elems, expected);
@@ -234,10 +234,9 @@ fn mdl_basic() {
     assert_dlist(&mem, l, &['6', '5', '4', 'X', 'Y', '3', '2', '1', '0']);
 
     // Remove first, last, and middle
-    assert!(mem.dlist_try_remove(&mut l, 0));
-    assert!(!mem.dlist_try_remove(&mut l, 9));
-    assert!(mem.dlist_try_remove(&mut l, 7));
-    assert!(mem.dlist_try_remove(&mut l, 4));
+    mem.dlist_remove_index(&mut l, 0);
+    mem.dlist_remove_index(&mut l, 7);
+    mem.dlist_remove_index(&mut l, 4);
     assert_dlist(&mem, l, &['5', '4', 'X', 'Y', '2', '1']);
 
     assert_eq!(mem.dlist_pop_last(&mut l).unwrap().data, '1');
@@ -257,7 +256,8 @@ fn mdl_pop_last() {
     assert_dlist(&mem, l, &[]);
 
     mem.dlist_push(&mut l, 'a');
-    mem.dlist_remove(&mut l, 0);
+    let first = l.first;
+    mem.dlist_remove(&mut l, first);
     assert_dlist(&mem, l, &[]);
 }
 
@@ -274,3 +274,29 @@ fn mdl_pop_first() {
     assert_dlist(&mem, l, &[]);
 }
 
+#[test]
+fn mdl_split() {
+    let mut mem: Mem<()> = Mem::make();
+    let mut l = mem.dlist_new();
+    for c in ['a', 'b', 'c', 'd', 'e'] {
+        mem.dlist_push(&mut l, c);
+    }
+    assert_dlist(&mem, l, &['a', 'b', 'c', 'd', 'e']);
+
+    let mut l2 = mem.dlist_split_at_index(&mut l, 2);
+    assert_dlist(&mem, l, &['a', 'b']);
+    assert_dlist(&mem, l2, &['c', 'd', 'e']);
+
+    let l3 = mem.dlist_split_at_index(&mut l2, 0);
+    assert_dlist(&mem, l2, &[]);
+    assert_dlist(&mem, l3, &['c', 'd', 'e']);
+
+    let l4 = mem.dlist_split_at_index(&mut l, 2);
+    assert_dlist(&mem, l, &['a', 'b']);
+    assert_dlist(&mem, l4, &[]);
+
+    let last = l.last;
+    let l5 = mem.dlist_split_at_node(&mut l, last);
+    assert_dlist(&mem, l, &['a']);
+    assert_dlist(&mem, l5, &['b']);
+}

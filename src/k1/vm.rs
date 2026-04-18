@@ -16,7 +16,7 @@ mod vm_test;
 use crate::ir::{
     self, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, ProgramIr, Value as IrValue,
 };
-use crate::kmem::{MHandle, MdlNode};
+use crate::kmem::{Handle, DlNode};
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
@@ -571,7 +571,7 @@ pub fn execute_compiled_unit(
 ) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     vm.eval_span = span;
-    debug!("[vm] Executing Unit\n{}", ir::compiled_unit_to_string(k1, unit.unit_id, true));
+    debug!("[vm] Executing Unit\n{}", ir::unit_to_string(k1, unit.unit_id, true));
 
     let top_frame_index = 0;
 
@@ -581,9 +581,9 @@ pub fn execute_compiled_unit(
         pt: unit.fn_type.return_type,
         frame_index: 0,
         // inst_index: 0,
-        call_inst_node: MdlNode::singleton(InstId::PENDING),
+        call_inst_node: DlNode::singleton(InstId::PENDING),
         has_dst: false,
-        block: MHandle::nil(),
+        block: Handle::nil(),
     };
 
     let logical_return_pt = unit.fn_type.return_type;
@@ -634,7 +634,7 @@ pub fn execute_compiled_unit(
     }
 }
 
-type InstNodeHandle = MHandle<MdlNode<InstId, ProgramIr>, ProgramIr>;
+type InstNodeHandle = Handle<DlNode<InstId, ProgramIr>, ProgramIr>;
 
 fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Result<i32> {
     let mut prev_b: ir::BlockId = original_unit.blocks.first;
@@ -769,7 +769,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 vm.stack.set_cur_inst_value(inst_id, Value::ptr(element_ptr));
                 ip = inst_node.next
             }
-            Inst::Call { id } => {
+            Inst::Call { call_id: id } => {
                 let call = k1.ir.calls.get(id);
                 let ret_pt = call.ret_type;
                 let ret_layout = k1.types.get_pt_layout(ret_pt);
@@ -2068,7 +2068,7 @@ pub struct RetInfo {
     /// Or we perform a store to the address in that register. We use pt and size to help us know which
     frame_index: u32,
     // The call instruction. When we return, we should return to call_inst_node.next
-    call_inst_node: MdlNode<InstId, ProgramIr>,
+    call_inst_node: DlNode<InstId, ProgramIr>,
     /// There's a memory address stored in (frame_index, inst_index) that you need to write to
     /// Otherwise, just write the value
     has_dst: bool,

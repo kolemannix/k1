@@ -36,10 +36,10 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, PhysicalFunctionType,
+    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType,
     ProgramIr,
 };
-use crate::kmem::{MHandle, MList, MSlice, MdlList};
+use crate::kmem::{Dlist, Handle, List, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
@@ -135,7 +135,7 @@ struct CgArrayType<'ctx> {
     count: u32,
     array_type: ArrayType<'ctx>,
     #[allow(unused)]
-    element_type: MHandle<CgType<'ctx>, CgPerm>,
+    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -570,7 +570,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
-        // ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+        ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         let function_value = self.declare_llvm_function(main_function_id)?;
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
@@ -1011,15 +1011,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let param_count = param_types.len();
 
         // The logical parameters closest to K1 model
-        let mut param_llvm_types: MList<CgType<'ctx>, _> = self.mem.new_list(param_count);
+        let mut param_llvm_types: List<CgType<'ctx>, _> = self.mem.new_list(param_count);
         // Foreach k1 param above, describe how to map it to LLVM params
-        let mut param_abi_mappings: MList<AbiParamMapping, _> = self.mem.new_list(param_count);
+        let mut param_abi_mappings: List<AbiParamMapping, _> = self.mem.new_list(param_count);
 
         // The physical LLVM params; the ones the function will have.
         // For now this is 1:1 in count with the logical params, as I choose to pass the int pairs
         // in a struct, but it need not be; that is, 1 k1 param could result in n llvm params,
         // where n could even be 0 for a ZST or uninhabited type
-        let mut function_final_params: MList<BasicMetadataTypeEnum<'ctx>, _> =
+        let mut function_final_params: List<BasicMetadataTypeEnum<'ctx>, _> =
             self.mem.new_list(param_count + is_sret as u32);
 
         if is_sret {
@@ -1368,11 +1368,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // We skip our 'prelude' block which exists only in the llvm ir
         match self.get_current_function().blocks.get(&block_id) {
             Some(bb) => Ok(*bb),
-            None => failf!(
-                self.debug.current_span(),
-                "Failed to get block: {}",
-                block_id.raw_index().unwrap()
-            ),
+            None => {
+                failf!(self.debug.current_span(), "Failed to get block: {}", block_id.raw_index())
+            }
         }
     }
 
@@ -1489,7 +1487,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
 
-        let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
+        let mut args: List<BasicMetadataValueEnum<'ctx>, _> =
             self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
 
         let sret_dst = if cg_fn_type.is_sret {
@@ -2055,7 +2053,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
-            Inst::Call { id } => {
+            Inst::Call { call_id: id } => {
                 if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
                 } else {
@@ -2915,12 +2913,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_unit_body(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        blocks: MdlList<Block, ProgramIr>,
+        blocks: Dlist<Block, ProgramIr>,
     ) -> K1Result<()> {
         let mut block_mapping = FxHashMap::new();
         let llvm_function = self.get_current_function().function_value;
-        for block in self.k1.ir.mem.dlist_iter_handles(blocks) {
-            let name = self.k1.ir.mem.get(block).data.name;
+        for (block, block_node) in self.k1.ir.mem.dlist_iter_with_handles(blocks) {
+            let name = block_node.data.name;
             let b = self.ctx.append_basic_block(llvm_function, name);
             block_mapping.insert(block, b);
         }
@@ -2938,7 +2936,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
-        for block in self.k1.ir.mem.dlist_iter_handles(blocks) {
+        for (block, _) in self.k1.ir.mem.dlist_iter_with_handles(blocks) {
             self.codegen_block(inst_mappings, block)?;
         }
 

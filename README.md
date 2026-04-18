@@ -1,3 +1,4 @@
+nocommit https://asciinema.org/
 For the joy of programming
 
 `k1` is like C with 

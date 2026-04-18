@@ -4,7 +4,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
-use crate::kmem::{self, MHandle, MSL2, MSS2, MSlice, MSpillList};
+use crate::kmem::{self, Handle, MSL2, MSS2, MSlice, MSpillList};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::{SliceHandle, VPool};
 use crate::{
@@ -1608,7 +1608,7 @@ impl Sources {
 }
 
 pub(crate) type ParsedSlice<T> = MSlice<T, ParsedProgram>;
-pub(crate) type ParsedHandle<T> = MHandle<T, ParsedProgram>;
+pub(crate) type ParsedHandle<T> = Handle<T, ParsedProgram>;
 
 #[derive(Clone, Copy)]
 pub enum SemanticTokenKind {

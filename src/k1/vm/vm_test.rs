@@ -5,7 +5,7 @@
 mod stack_tests {
 
     use crate::kmem::MSlice;
-    use crate::kmem::MdlList;
+    use crate::kmem::Dlist;
     use crate::typer::types::AbiMode;
     use crate::typer::types::EMPTY_TYPE_ID;
     use crate::typer::*;
@@ -22,7 +22,7 @@ mod stack_tests {
                 abi_mode: AbiMode::Internal,
             },
             inst_count: 0,
-            blocks: MdlList::empty(),
+            blocks: Dlist::empty(),
             is_debug: false,
             function_builtin_kind: None,
 
@@ -34,9 +34,9 @@ mod stack_tests {
         RetInfo {
             pt: PhysicalType::scalar(ScalarType::U32),
             frame_index: 0,
-            call_inst_node: MdlNode::singleton(InstId::PENDING),
+            call_inst_node: DlNode::singleton(InstId::PENDING),
             has_dst: false,
-            block: MHandle::nil(),
+            block: Handle::nil(),
         }
     }
 

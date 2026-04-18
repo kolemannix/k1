@@ -1,6 +1,5 @@
-ns fib; 
-
 fn fib(n: int): int {
+  // println("fib {n}");
   switch n {
       0 -> 0,
       1 -> 1,
@@ -8,7 +7,5 @@ fn fib(n: int): int {
   }
 }
 
-fn test() {
-  let result = fib(8);
-  assert(result == 21);
-}
+#static println("fiblist is {[4,3,2,fib(5 + 2)].sorted()}")
+

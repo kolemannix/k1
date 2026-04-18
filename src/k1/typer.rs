@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{MHandle, MList, MSlice, MSpillSlice, MStr, Mem};
+use crate::kmem::{Handle, List, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
@@ -619,7 +619,7 @@ pub struct TypePattern {
 // <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
 // <type> ::= "type["<ty expr>"]("<pattern>")"
 
-type TypedPatternId = MHandle<TypedPattern, TypedPatternPool>;
+type TypedPatternId = Handle<TypedPattern, TypedPatternPool>;
 type TypedPatternSlice = MSlice<TypedPatternId, TypedPatternPool>;
 
 pub struct TypedPatternPool {
@@ -779,7 +779,7 @@ pub struct TypedLambda {
 
 pub struct BlockBuilder {
     pub scope_id: ScopeId,
-    pub statements: MList<TypedStmtId, TypedProgram>,
+    pub statements: List<TypedStmtId, TypedProgram>,
     pub span: SpanId,
 }
 
@@ -3182,7 +3182,7 @@ impl TypedProgram {
             ScopeOwnerId::None,
             Some(parsed_type_defn.name),
         );
-        let mut type_params: MList<NameAndType, _> =
+        let mut type_params: List<NameAndType, _> =
             self.mem.new_list(parsed_type_defn.type_params.len());
         for type_param in self.ast.mem.getn(parsed_type_defn.type_params).iter() {
             let maybe_static_constraint =
@@ -3331,7 +3331,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = struct_defn.clone();
-                let mut fields: MList<StructTypeField, TypePool> =
+                let mut fields: List<StructTypeField, TypePool> =
                     self.types.mem.new_list(struct_defn.fields.len() as u32);
                 for ast_field in struct_defn.fields.iter() {
                     if let Some(existing_field) = fields.iter().find(|f| f.name == ast_field.name) {
@@ -3681,7 +3681,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = fun_type.clone();
-                let mut params: MList<FnParamType, _> =
+                let mut params: List<FnParamType, _> =
                     self.types.mem.new_list(fun_type.params.len() as u32);
 
                 for (index, param) in fun_type.params.iter().enumerate() {
@@ -4088,7 +4088,7 @@ impl TypedProgram {
                         }
                         let g_params = g.params;
                         let mut type_arguments = self.types.mem.new_list(ty_app.args.len());
-                        let mut subst_pairs: MList<TypeSubstitutionPair, MemTmp> =
+                        let mut subst_pairs: List<TypeSubstitutionPair, MemTmp> =
                             self.tmp.new_list(ty_app.args.len());
                         for (param, parsed_arg) in
                             self.mem.getn(g_params).iter().zip(self.ast.mem.getn(ty_app.args))
@@ -4405,7 +4405,7 @@ impl TypedProgram {
                 if new_return_type != old_return_type {
                     any_new = true
                 };
-                let mut new_params: MList<FnParamType, _> = self.tmp.new_list(old_params.len());
+                let mut new_params: List<FnParamType, _> = self.tmp.new_list(old_params.len());
                 for param in self.types.mem.getn(old_params) {
                     let new_param_type = self.substitute_in_type(param.type_id, substitution_pairs);
                     if new_param_type != param.type_id {
@@ -6509,7 +6509,7 @@ impl TypedProgram {
 
         let blanket_ability_args_handle =
             self.abilities.get(blanket_impl.ability_id).kind.arguments();
-        let mut substituted_ability_args: MList<NameAndType, _> =
+        let mut substituted_ability_args: List<NameAndType, _> =
             self.mem.new_list(blanket_ability_args_handle.len());
         for blanket_arg in self.mem.getn(blanket_ability_args_handle) {
             // Substitute T, U, V, in for each
@@ -6528,7 +6528,7 @@ impl TypedProgram {
             blanket_impl.scope_id,
         );
 
-        let mut substituted_impl_arguments: MList<NameAndType, _> =
+        let mut substituted_impl_arguments: List<NameAndType, _> =
             self.mem.new_list(blanket_impl.impl_arguments.len());
         for blanket_impl_arg in self.mem.getn(blanket_impl.impl_arguments) {
             // Substitute T, U, V, in for each
@@ -7819,7 +7819,7 @@ impl TypedProgram {
             self.synth_block(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count as u32);
         let list_lit_scope = list_lit_block.scope_id;
         let mut element_type = None;
-        let elements: MList<TypedExprId, MemTmp> = {
+        let elements: List<TypedExprId, MemTmp> = {
             let mut elements = self.tmp.new_list(element_count as u32);
             for elem in parsed_elements.iter() {
                 let current_expected_type = element_type.or(expected_element_type);
@@ -8303,8 +8303,8 @@ impl TypedProgram {
             );
         }
 
-        let mut field_values: MList<StructLiteralField, _> = self.mem.new_list(field_count);
-        let mut field_types: MList<StructTypeField, _> = self.types.mem.new_list(field_count);
+        let mut field_values: List<StructLiteralField, _> = self.mem.new_list(field_count);
+        let mut field_types: List<StructTypeField, _> = self.types.mem.new_list(field_count);
         for ((passed_expr, passed_field, _), expected_field) in
             passed_fields_aligned.iter().zip(self.types.mem.getn(expected_struct.fields).iter())
         {
@@ -8914,11 +8914,11 @@ impl TypedProgram {
             .map(|parsed_case| parsed_case.patterns.len())
             .sum();
 
-        let mut typed_arms: MList<TypedMatchArm, _> = self.mem.new_list(parsed_pattern_count + 1); // Add one for fallback arm
+        let mut typed_arms: List<TypedMatchArm, _> = self.mem.new_list(parsed_pattern_count + 1); // Add one for fallback arm
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
-        let mut all_unguarded_patterns: MList<TypedPatternId, MemTmp> =
+        let mut all_unguarded_patterns: List<TypedPatternId, MemTmp> =
             self.tmp.new_list(parsed_pattern_count);
         let subject_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let subject_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
@@ -9169,7 +9169,7 @@ impl TypedProgram {
         &mut self,
         pattern_id: TypedPatternId,
         target_expr: TypedExprId,
-        instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
+        instrs: &mut List<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
         ctx: EvalExprContext,
     ) -> K1Result<()> {
@@ -10065,7 +10065,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SV4<(TypedPatternId, TypedExprId)> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: MList<MatchingConditionInstr, _> = self.mem.new_list(16);
+        let mut instrs: List<MatchingConditionInstr, _> = self.mem.new_list(16);
         let condition_span = self.ast.get_expr_span(condition);
         // If there are no boolean conditions, we can check for infallibility
         let mut is_single_pattern_only = true;
@@ -10179,7 +10179,7 @@ impl TypedProgram {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SV4<(TypedPatternId, TypedExprId)>,
-        instrs: &mut MList<MatchingConditionInstr, TypedProgram>,
+        instrs: &mut List<MatchingConditionInstr, TypedProgram>,
         is_single_pattern_only: &mut bool,
         ctx: EvalExprContext,
     ) -> K1Result<()> {
@@ -11614,7 +11614,7 @@ impl TypedProgram {
             .mem
             .pushn(&[NameAndType { name: self.ast.idents.b.self_, type_id: ability_self_type_id }]);
 
-        let mut passed_args: MList<MaybeTypedExpr, MemTmp> = self.tmp.new_list(passed_len as u32);
+        let mut passed_args: List<MaybeTypedExpr, MemTmp> = self.tmp.new_list(passed_len as u32);
         match known_args {
             Some(known_args) => {
                 for known_arg_expr in known_args.1 {
@@ -11675,7 +11675,7 @@ impl TypedProgram {
             ctx.scope_id,
         )?;
 
-        let mut parameter_constraints: MList<Option<TypeId>, MemTmp> =
+        let mut parameter_constraints: List<Option<TypeId>, MemTmp> =
             self.tmp.new_list(ability_params.len());
         for ab_param in self.mem.getn(ability_params) {
             if ab_param.is_impl_param {
@@ -12076,7 +12076,7 @@ impl TypedProgram {
                         }
                     }
                 } else {
-                    let mut passed_params: MList<NameAndType, _> =
+                    let mut passed_params: List<NameAndType, _> =
                         self.mem.new_list(g_params.len());
                     for (generic_param, passed_type_arg) in
                         self.mem.getn(g_params).iter().zip(self.ast.mem.getn(type_args))
@@ -12764,8 +12764,8 @@ impl TypedProgram {
             ),
             self.pretty_print_type_substitutions(set, ", ")
         );
-        let mut ability_args_new: MList<NameAndType, _> = self.mem.new_list(all_base_params.len());
-        let mut impl_args_new: MList<NameAndType, _> = self.mem.new_list(all_base_params.len());
+        let mut ability_args_new: List<NameAndType, _> = self.mem.new_list(all_base_params.len());
+        let mut impl_args_new: List<NameAndType, _> = self.mem.new_list(all_base_params.len());
         for (index, ability_param) in
             self.mem.getn(all_base_params).iter().filter(|p| !p.is_impl_param).enumerate()
         {
@@ -14186,8 +14186,8 @@ impl TypedProgram {
             }
         }
 
-        let mut ability_arguments: MList<NameAndType, _> = self.mem.new_list(arguments.len());
-        let mut impl_arguments: MList<NameAndType, _> = self.mem.new_list(arguments.len());
+        let mut ability_arguments: List<NameAndType, _> = self.mem.new_list(arguments.len());
+        let mut impl_arguments: List<NameAndType, _> = self.mem.new_list(arguments.len());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         for param in self
             .mem
@@ -14387,7 +14387,7 @@ impl TypedProgram {
         let ability_expr = self.ast.mem.get(ability_expr_id).clone();
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
 
-        let mut arguments: MList<NameAndType, _> = self.mem.new_list(ability_expr.arguments.len());
+        let mut arguments: List<NameAndType, _> = self.mem.new_list(ability_expr.arguments.len());
         for arg in self.ast.mem.getn(ability_expr.arguments) {
             // TODO: Possible now to pass 'dont cares'. I think we allow them in ability exprs that are constraints but
             //       nowhere else
@@ -14495,9 +14495,9 @@ impl TypedProgram {
         );
 
         // Instantiate type arguments.
-        let mut type_params: MList<NameAndType, _> =
+        let mut type_params: List<NameAndType, _> =
             self_.mem.new_list(ast_fn.type_params.len() + 1);
-        let mut fnlike_type_params: MList<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
+        let mut fnlike_type_params: List<FunctionTypeParam, TypedProgram> = self_.mem.new_list(0);
 
         // Inject the 'Self' type parameter
         if is_ability_decl {
@@ -14564,7 +14564,7 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = ast_fn.context_params.len() + ast_fn.params.len();
-        let mut param_types: MList<FnParamType, _> = self_.types.mem.new_list(param_count);
+        let mut param_types: List<FnParamType, _> = self_.types.mem.new_list(param_count);
         let mut params = self_.mem.new_list(param_count);
         for (idx, fn_param) in self_
             .ast
@@ -14961,7 +14961,7 @@ impl TypedProgram {
         );
 
         let self_ident_id = self.ast.idents.b.self_;
-        let mut ability_params: MList<TypedAbilityParam, _> =
+        let mut ability_params: List<TypedAbilityParam, _> =
             self.mem.new_list(parsed_ability.params.len() as u32 + 1);
         let self_type_id = self.add_type_parameter(
             TypeParameter {
@@ -15169,7 +15169,7 @@ impl TypedProgram {
         let impl_scope_id =
             self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None, None);
 
-        let mut blanket_type_params: MList<NameAndType, _> =
+        let mut blanket_type_params: List<NameAndType, _> =
             self.mem.new_list(parsed_ability_impl.generic_impl_params.len() as u32);
         for blanket_impl_param in &parsed_ability_impl.generic_impl_params {
             let maybe_static_constraint =
@@ -15297,7 +15297,7 @@ impl TypedProgram {
             }
         }
 
-        let mut impl_arguments: MList<NameAndType, _> = self.mem.new_list(ability.parameters.len());
+        let mut impl_arguments: List<NameAndType, _> = self.mem.new_list(ability.parameters.len());
         for impl_param in self.mem.getn(ability.parameters).iter().filter(|p| p.is_impl_param) {
             let Some(&matching_arg) = self
                 .ast
@@ -16968,7 +16968,7 @@ impl TypedProgram {
                     self.types.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
                 // { name: string), typeId: u64, offset: size }
                 let struct_layout = self.get_struct_layout(type_id);
-                let mut field_values: MList<StaticValueId, StaticValuePool> =
+                let mut field_values: List<StaticValueId, StaticValuePool> =
                     self.static_values.mem.new_list(struct_type_fields.len());
                 for (index, f) in self.types.mem.getn(struct_type_fields).iter().enumerate() {
                     let name_string_id = self.ast.strings.intern(self.ast.idents.get_name(f.name));
