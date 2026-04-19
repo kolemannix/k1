@@ -1,38 +1,38 @@
 use super::*;
 
+pub enum OptVisit {
+    Enter(IrUnitId),
+    Leave(IrUnitId),
+}
+
 pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     let start = k1.timing.raw();
     let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return;
     };
 
-    enum Visit {
-        Enter(IrUnitId),
-        Leave(IrUnitId),
-    }
-    // nocommit reuse them buffers
-    let mut stack = vec![Visit::Enter(unit_id)];
-    let mut order: Vec<IrUnitId> = Vec::new();
-    let mut visited = FxHashSet::new();
+    let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
+    visit_stack.push(OptVisit::Enter(unit_id));
+    let mut order: Vec<IrUnitId> = std::mem::take(&mut k1.ir.opt_buf_order);
+    let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
+    let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
 
-    let mut callee_buffer = Vec::new();
-
-    while let Some(visit) = stack.pop() {
+    while let Some(visit) = visit_stack.pop() {
         match visit {
-            Visit::Enter(unit_id) => {
+            OptVisit::Enter(unit_id) => {
                 if !visited.insert(unit_id) {
                     continue;
                 }
-                stack.push(Visit::Leave(unit_id)); // come back after children
+                visit_stack.push(OptVisit::Leave(unit_id)); // come back after children
 
-                callee_buffer.clear();
-                collect_direct_unoptimized_callees(k1, &mut callee_buffer, unit_id);
-                for callee_id in &callee_buffer {
-                    stack.push(Visit::Enter(IrUnitId::Function(*callee_id)));
+                callees.clear();
+                collect_direct_unoptimized_callees(k1, &mut callees, unit_id);
+                for callee_id in &callees {
+                    visit_stack.push(OptVisit::Enter(IrUnitId::Function(*callee_id)));
                 }
             }
-            Visit::Leave(unit_id) => {
-                order.push(unit_id); // true post-order
+            OptVisit::Leave(unit_id) => {
+                order.push(unit_id);
             }
         }
     }
@@ -40,6 +40,16 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     for unit_id in order.iter() {
         inline_calls_in_unit(k1, *unit_id)
     }
+
+    visit_stack.clear();
+    order.clear();
+    visited.clear();
+    callees.clear();
+    k1.ir.opt_buf_stack = visit_stack;
+    k1.ir.opt_buf_order = order;
+    k1.ir.opt_buf_visited = visited;
+    k1.ir.opt_buf_callees = callees;
+
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_iropt_nanos += elapsed as i64;
 }
@@ -72,7 +82,7 @@ fn collect_direct_unoptimized_callees(
 }
 
 fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
-    eprintln!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
+    debug!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
     while do_pass(k1, unit_id) {}
 
     fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {

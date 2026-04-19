@@ -67,7 +67,12 @@ pub struct ProgramIr {
     // Builder data
     b_variables: Vec<BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
-    pub b_units_pending_compile: Vec<FunctionId>,
+    pub units_pending_compile: Vec<FunctionId>,
+
+    opt_buf_stack: Vec<iropt::OptVisit>,
+    opt_buf_order: Vec<IrUnitId>,
+    opt_buf_visited: FxHashSet<IrUnitId>,
+    opt_buf_callees: Vec<FunctionId>,
 }
 type IrStr = MStr<ProgramIr>;
 
@@ -95,7 +100,12 @@ impl ProgramIr {
             module_config: IrModuleConfig {},
             b_variables: Vec::with_capacity(256),
             b_loops: FxHashMap::default(),
-            b_units_pending_compile: vec![],
+            units_pending_compile: vec![],
+
+            opt_buf_stack: vec![],
+            opt_buf_order: vec![],
+            opt_buf_visited: FxHashSet::new(),
+            opt_buf_callees: vec![],
         }
     }
 
@@ -1907,8 +1917,8 @@ fn compile_expr(
             if let Some(function_id) = callee.known_function_id() {
                 match b.k1.ir.functions.get(function_id) {
                     None => {
-                        if !b.k1.ir.b_units_pending_compile.contains(&function_id) {
-                            b.k1.ir.b_units_pending_compile.push(function_id);
+                        if !b.k1.ir.units_pending_compile.contains(&function_id) {
+                            b.k1.ir.units_pending_compile.push(function_id);
                         }
                     }
                     Some(_unit) => {}
@@ -2270,14 +2280,14 @@ fn compile_expr(
             let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
-            b.k1.ir.b_units_pending_compile.push(function_id);
+            b.k1.ir.units_pending_compile.push(function_id);
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
-            b.k1.ir.b_units_pending_compile.push(fpe.function_id);
+            b.k1.ir.units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
         TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
@@ -3089,8 +3099,8 @@ pub fn display_blocks(
     blocks: Dlist<Block, ProgramIr>,
     show_source: bool,
 ) -> std::fmt::Result {
-    for (index, (block, _)) in k1.ir.mem.dlist_iter_handles(blocks).enumerate() {
-        display_block(w, k1, block, index, show_source)?;
+    for (block, _) in k1.ir.mem.dlist_iter_handles(blocks) {
+        display_block(w, k1, block, show_source)?;
     }
     Ok(())
 }
@@ -3135,7 +3145,6 @@ pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
     block_id: BlockId,
-    index: usize,
     show_source: bool,
 ) -> std::fmt::Result {
     let ir = &k1.ir;

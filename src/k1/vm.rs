@@ -1050,7 +1050,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         vm.eval_span,
                         "Call to uncompiled function: {}. ({} are pending)",
                         k1.function_id_to_string(dispatch_function_id, false),
-                        k1.ir.b_units_pending_compile.len()
+                        k1.ir.units_pending_compile.len()
                     );
                 };
                 let caller_frame_index = vm.stack.current_frame_index();

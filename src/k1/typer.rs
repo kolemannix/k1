@@ -5522,7 +5522,7 @@ impl TypedProgram {
             // for p in &self.ir.b_units_pending_compile {
             //     eprintln!("PENDING: {} {}", p.as_u32(), self.function_id_to_string(*p, false));
             // }
-            if let Some(function_id) = self.ir.b_units_pending_compile.pop() {
+            if let Some(function_id) = self.ir.units_pending_compile.pop() {
                 self.eval_function_body(function_id)?;
                 if let Err(e) = ir::compile_function(self, function_id) {
                     return failf!(
@@ -5582,7 +5582,7 @@ impl TypedProgram {
 
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_ir(expr_span)?;
-        // ir::optimize_unit(self, IrUnitId::Expr(expr));
+        ir::optimize_unit(self, IrUnitId::Expr(expr));
 
         let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
             let stack_trace = vm::make_stack_trace(self, &vm.stack);
