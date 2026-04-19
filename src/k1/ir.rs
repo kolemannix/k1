@@ -994,6 +994,15 @@ impl<'k1> Builder<'k1> {
         get_value_kind(&self.k1.ir, &self.k1.types, value)
     }
 
+    // nocommit We actually need before/after node, then front/back in terms of first and last!
+    fn push_inst_front(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
+        let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
+
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_push_front(&mut blocks.data.instrs, id);
+        id
+    }
+
     fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
         let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
 
@@ -1235,11 +1244,12 @@ impl<'k1> Builder<'k1> {
         inst_node: IrHandle<InstNode>,
     ) -> Handle<BlockNode, ProgramIr> {
         let mut block_ref = self.k1.ir.mem.get_raw_ref(block_node);
+        let name = block_ref.data.name;
         let after_insts = self.k1.ir.mem.dlist_split_at_node(&mut block_ref.data.instrs, inst_node);
         let after_block = self.k1.ir.mem.dlist_insert_after(
             &mut self.blocks,
             block_node,
-            Block { name: "rsplit", instrs: after_insts },
+            Block { name, instrs: after_insts },
         );
         after_block
     }

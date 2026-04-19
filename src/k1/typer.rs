@@ -11,7 +11,7 @@ pub(crate) mod typed_int_value;
 pub(crate) mod types;
 pub(crate) mod visit;
 
-use crate::ir::BuiltinHandler;
+use crate::ir::{BuiltinHandler, IrUnitId};
 use crate::typer::dump::K1DisplayArgs;
 use crate::{clock, compiler, ir, k1_format, k1_format_user, kbail, kerr, vm};
 use bitflags::bitflags;
@@ -2636,6 +2636,7 @@ pub struct Timing {
     pub total_vm_nanos: i64,
     pub total_vm_instrs: i64,
     pub total_ir_nanos: i64,
+    pub total_iropt_nanos: i64,
 }
 
 impl Timing {
@@ -2789,6 +2790,7 @@ impl TypedProgram {
                 total_vm_nanos: 0,
                 total_vm_instrs: 0,
                 total_ir_nanos: 0,
+                total_iropt_nanos: 0,
             },
             global_id_k1_arena: None,
         }
@@ -5580,6 +5582,7 @@ impl TypedProgram {
 
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_ir(expr_span)?;
+        // ir::optimize_unit(self, IrUnitId::Expr(expr));
 
         let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
             let stack_trace = vm::make_stack_trace(self, &vm.stack);
@@ -12076,8 +12079,7 @@ impl TypedProgram {
                         }
                     }
                 } else {
-                    let mut passed_params: List<NameAndType, _> =
-                        self.mem.new_list(g_params.len());
+                    let mut passed_params: List<NameAndType, _> = self.mem.new_list(g_params.len());
                     for (generic_param, passed_type_arg) in
                         self.mem.getn(g_params).iter().zip(self.ast.mem.getn(type_args))
                     {
@@ -17574,9 +17576,10 @@ impl TypedProgram {
         eprintln!("\t{} types", self.types.type_count());
         eprintln!("\t{} idents", self.ast.idents.len());
         eprintln!(
-            "\t{} instructions, {}ms bc",
+            "\t{} instructions, {}ms ir, {}ms iropt",
             self.ir.instrs.len(),
-            self.timing.total_ir_nanos / 1_000_000
+            self.timing.total_ir_nanos / 1_000_000,
+            self.timing.total_iropt_nanos / 1_000_000,
         );
         self.tmp.print_usage("\ttmp");
         self.mem.print_usage("\tperm");

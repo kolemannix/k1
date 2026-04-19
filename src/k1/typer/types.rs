@@ -1082,6 +1082,10 @@ impl PhysicalType {
         self.0 >= Self::MIN_AGG_ID
     }
 
+    pub const fn is_scalar(self) -> bool {
+        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Pointer as u32
+    }
+
     pub const fn is_int(self) -> bool {
         self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32
     }

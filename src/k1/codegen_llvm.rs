@@ -569,9 +569,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
 
-        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
-        ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
         let function_value = self.declare_llvm_function(main_function_id)?;
+        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
+        if self.k1.config.optimize {
+            ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+        }
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
@@ -1939,7 +1941,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let ir = &self.k1.ir;
         let span = *ir.sources.get(inst_id);
         self.set_debug_location_from_span(span);
-        //eprintln!("codegen_inst {} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
+        // eprintln!("codegen_inst i{} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
         let inst = *ir.instrs.get(inst_id);
         match inst {
             Inst::Data(data_inst) => {
@@ -2816,7 +2818,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> K1Result<()> {
-        // eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, true));
+        debug!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
 
@@ -2887,6 +2889,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        debug!(
+            "codegen_function_body ir\n{}",
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+        );
         self.set_debug_location_from_span(function_span);
         match ir_unit.function_builtin_kind {
             Some(builtin_kind) => {

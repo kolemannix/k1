@@ -868,7 +868,11 @@ impl<Tag: 'static> Mem<Tag> {
         self.dlist_remove(list, cur);
     }
 
-    pub fn dlist_remove<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, node: Handle<DlNode<T, Tag>, Tag>) {
+    pub fn dlist_remove<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: Handle<DlNode<T, Tag>, Tag>,
+    ) {
         self.dlist_debug_assert_mine(*list, node);
         let prev = self.get(node).prev;
         let next = self.get(node).next;
@@ -984,7 +988,11 @@ impl<Tag: 'static> Mem<Tag> {
         right
     }
 
-    pub fn dlist_iter_nodes_from<T: 'static>(&self, list: Dlist<T, Tag>, from_node: NodeHandle<T, Tag>) -> DlistIter<T, Tag> {
+    pub fn dlist_iter_nodes_from<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        from_node: NodeHandle<T, Tag>,
+    ) -> DlistIter<T, Tag> {
         self.dlist_debug_assert_mine(list, from_node);
         DlistIter { mem: RawRef::from_ref(self), next: from_node }
     }
@@ -997,8 +1005,16 @@ impl<Tag: 'static> Mem<Tag> {
         &self,
         list: Dlist<T, Tag>,
     ) -> impl Iterator<Item = (NodeHandle<T, Tag>, RawRef<DlNode<T, Tag>>)> + 'static {
+        self.dlist_iter_handles_from(list, list.first)
+    }
+
+    pub fn dlist_iter_handles_from<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+    ) -> impl Iterator<Item = (NodeHandle<T, Tag>, RawRef<DlNode<T, Tag>>)> + 'static {
         let base_ptr = self.base_ptr();
-        self.dlist_iter_nodes(list).map(move |node| {
+        self.dlist_iter_nodes_from(list, node).map(move |node| {
             let offset = Self::ptr_to_offset_fn(base_ptr, node.as_ptr().cast_const());
             (Handle(Some(offset), PhantomData, PhantomData), node)
         })
@@ -1011,7 +1027,11 @@ impl<Tag: 'static> Mem<Tag> {
         self.dlist_iter_nodes(list).map(|node| node.map(|n| &n.data))
     }
 
-    pub fn dlist_nth_opt<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> Option<&DlNode<T, Tag>> {
+    pub fn dlist_nth_opt<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        n: usize,
+    ) -> Option<&DlNode<T, Tag>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -1022,7 +1042,11 @@ impl<Tag: 'static> Mem<Tag> {
         if current.is_nil() { None } else { Some(self.get(current)) }
     }
 
-    pub fn dlist_nth_data_opt<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> Option<RawRef<T>> {
+    pub fn dlist_nth_data_opt<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        n: usize,
+    ) -> Option<RawRef<T>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -1052,13 +1076,19 @@ impl<Tag: 'static> Mem<Tag> {
 
     ///////////////////// Dlist checks
 
-    pub fn dlist_debug_assert_mine<T: 'static>(&self, list: Dlist<T, Tag>, node: NodeHandle<T, Tag>) {
+    pub fn dlist_debug_assert_mine<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+    ) {
         if node.is_nil() {
             return;
         }
 
-        for (n, _) in self.dlist_iter_handles(list) {
-            if n == node {
+        let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
+        for n in iter {
+            let h = self.pack_handle(n.as_ptr());
+            if h == node {
                 return;
             }
         }
