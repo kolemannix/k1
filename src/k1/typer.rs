@@ -875,6 +875,7 @@ pub struct TypedFunction {
     pub compiler_debug: bool,
     pub kind: TypedFunctionKind,
     pub is_concrete: bool,
+    pub is_recursive: bool,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
     /// 'let returned', RVO
@@ -8673,6 +8674,7 @@ impl TypedProgram {
                 compiler_debug: false,
                 kind: TypedFunctionKind::Lambda,
                 is_concrete: false,
+                is_recursive: false,
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
@@ -8806,6 +8808,7 @@ impl TypedProgram {
             kind: TypedFunctionKind::Lambda,
             // Set by add_function
             is_concrete: false,
+            is_recursive: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -12571,6 +12574,16 @@ impl TypedProgram {
                 self.check_builtin(&call, builtin, ctx)?;
             }
         }
+
+        if let Some(function_id) = callee.maybe_function_id() {
+            if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
+                if enclosing_id == function_id {
+                    eprintln!("Marking {} as recursive", self.function_id_to_string(enclosing_id, false));
+                    self.functions.get_mut(function_id).is_recursive = true;
+                }
+            }
+        }
+
         let call_id = self.calls.add(call);
         Ok(self.exprs.add(TypedExpr::Call { call_id }, call_return_type, span))
     }
@@ -13012,6 +13025,7 @@ impl TypedProgram {
             compiler_debug: generic_function.compiler_debug,
             kind: generic_function.kind,
             is_concrete: false,
+            is_recursive: generic_function.is_recursive,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,
@@ -14808,6 +14822,7 @@ impl TypedProgram {
             compiler_debug: is_debug,
             type_id: function_type_id,
             is_concrete: false,
+            is_recursive: false,
             dyn_fn_id: None,
             returned_variable: None,
             body_failure: None,

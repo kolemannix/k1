@@ -1875,7 +1875,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => {
                     failf!(
                         self.debug.current_span(),
-                        "Whiffed inst id lookup: {} {}",
+                        "Whiffed inst id lookup: i{} {}",
                         inst_id.as_u32(),
                         ir::inst_to_string(self.k1, inst_id)
                     )
@@ -2900,14 +2900,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.codegen_builtin_function_body(builtin_kind, function_id)?;
             }
             None => {
-                //eprintln!(
-                //    "llvm codegen unit\n{}",
-                //    ir::compiled_unit_to_string(
-                //        self.k1,
-                //        CompilableUnitId::Function(function_id),
-                //        true
-                //    )
-                //);
                 self.codegen_unit_body(inst_mappings, ir_unit.blocks)?;
             }
         };

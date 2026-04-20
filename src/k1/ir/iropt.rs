@@ -84,6 +84,16 @@ fn collect_direct_unoptimized_callees(
 fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
     debug!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
     while do_pass(k1, unit_id) {}
+    let blocks = get_compiled_unit(&k1.ir, unit_id).unwrap().blocks;
+    let inst_count = k1
+        .ir
+        .mem
+        .dlist_iter(blocks)
+        .map(|block| k1.ir.mem.dlist_compute_len(block.instrs) as u32)
+        .sum();
+    let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
+    unit.inline_done = true;
+    unit.inst_count = inst_count;
 
     fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
         let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
@@ -96,6 +106,15 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     let call = *k1.ir.calls.get(*call_id);
                     match call.callee {
                         IrCallee::Direct(function_id) => {
+                            // nocommit: This only prevents direct recursion, corecursive
+                            // units still cause us to fail. We need to detect these cycles and
+                            // avoid inlining them
+                            if unit_id == IrUnitId::Function(function_id) {
+                                continue;
+                            }
+                            if k1.functions.get(function_id).is_recursive {
+                                continue;
+                            }
                             let callee_unit =
                                 get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
 
@@ -164,10 +183,6 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         let call_next = if callee_unit.fn_type.diverges {
             // There will be an 'unreachable' here, remove it too
             let next_next = b.k1.ir.mem.get(call_next).next;
-            // eprintln!(
-            //     "removing unreachable: {}",
-            //     inst_to_string(b.k1, b.k1.ir.mem.get(next_next).data)
-            // );
             b.k1.ir.mem.dlist_remove(&mut call_block_node_ref.data.instrs, call_next);
             next_next
         } else {
@@ -175,38 +190,52 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         };
         // eprintln!("removed call: {}", inst_to_string(b.k1, call_inst_id));
 
-        let call_post_block = b.split_block_at_inst(call_block_handle, call_next);
-        let dst_storage = match call.dst {
-            None => {
-                let dst_alloca = b.k1.ir.add_inst(
-                    Inst::Alloca { t: call.ret_type, vm_layout: ret_layout, returned: false },
-                    "inline ret".into(),
-                    IrDebugInfo::default(),
-                    call_span,
-                );
-                let self_entry_instrs =
-                    &mut b.k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
-                b.k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
-
-                let dst_inst = if call.ret_type.is_scalar() {
-                    b.goto_block(call_post_block);
-                    let loaded = b.push_inst_front(
-                        Inst::Load { t: call.ret_type.expect_scalar(), src: dst_alloca.as_value() },
-                        "load inlined dst value",
-                    );
-                    loaded
-                } else {
-                    dst_alloca
-                };
-                self_rewrites.instrs.insert(call_inst_id, dst_inst);
-                dst_alloca.as_value()
-            }
-            Some(dst) => dst,
+        // None when the call is the last instruction in the block
+        let call_post_block: Option<BlockId> = match call_next.is_nil() {
+            false => Some(b.split_block_at_inst(call_block_handle, call_next)),
+            true => None,
         };
-        // All phis that came from call_block will now come from call_post_block
-        // So that's a rewrite we will be doing on the self blocks
-        // Might as well go ahead and do that.
-        self_rewrites.block_exits.insert(call_block_handle, call_post_block);
+        let dst_storage = if call.ret_type.is_empty() {
+            None
+        } else {
+            match call.dst {
+                None => {
+                    let dst_alloca = b.k1.ir.add_inst(
+                        Inst::Alloca { t: call.ret_type, vm_layout: ret_layout, returned: false },
+                        "inline ret".into(),
+                        IrDebugInfo::default(),
+                        call_span,
+                    );
+                    let self_entry_instrs =
+                        &mut b.k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
+                    b.k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
+
+                    // nocommit: for inlined scalar returns, use a phi instead of an alloca
+                    let dst_inst = if call.ret_type.is_scalar() {
+                        // There's always a post block that contains at least a ret if the return
+                        // type is not 'void' or 'never' (its a scalar here)
+                        b.goto_block(call_post_block.unwrap());
+                        let loaded = b.push_inst_front(
+                            Inst::Load {
+                                t: call.ret_type.expect_scalar(),
+                                src: dst_alloca.as_value(),
+                            },
+                            "load inlined dst value",
+                        );
+                        loaded
+                    } else {
+                        dst_alloca
+                    };
+                    self_rewrites.instrs.insert(call_inst_id, dst_inst);
+                    Some(dst_alloca.as_value())
+                }
+                Some(dst) => Some(dst),
+            }
+        };
+
+        if let Some(call_post_block) = call_post_block {
+            self_rewrites.block_exits.insert(call_block_handle, call_post_block);
+        }
         for (self_block, _) in b.k1.ir.mem.dlist_iter_handles(b.blocks) {
             rewrite_in_block(&mut b.k1.ir, self_block, &mut self_rewrites);
         }
@@ -245,9 +274,12 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     }
                     Inst::Ret { v, .. } => {
                         // Store to dst_alloca, and jmp to after block
-                        store_value(&mut b, call.ret_type, dst_storage, *v, "inlined ret");
-                        b.push_jump(call_post_block, "inlined ret");
-
+                        if let Some(dst_storage) = dst_storage {
+                            store_value(&mut b, call.ret_type, dst_storage, *v, "inlined ret");
+                        }
+                        if let Some(call_post_block) = call_post_block {
+                            b.push_jump(call_post_block, "inlined ret");
+                        }
                         include = false;
                     }
                     _ => {}
@@ -272,18 +304,8 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             }
         }
 
-        // nocommit clean up management of the unit
-        let inst_count =
-            b.k1.ir
-                .mem
-                .dlist_iter(b.blocks)
-                .map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32)
-                .sum();
         let unit = get_compiled_unit_mut(&mut b.k1.ir, self_unit_id).unwrap();
         unit.blocks = b.blocks;
-        unit.inline_done = true;
-        unit.inst_count = inst_count;
-
         // eprintln!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
         if let Err(e) = validate_unit(b.k1, self_unit_id) {
             k1.report(e)

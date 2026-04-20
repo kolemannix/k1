@@ -1225,7 +1225,6 @@ impl<'k1> Builder<'k1> {
     }
 
     fn get_instr_block(&self, inst_id: InstId) -> IrHandle<BlockNode> {
-        // nocommit: inst to block is terrible
         self.k1
             .ir
             .mem
@@ -2269,8 +2268,11 @@ fn compile_expr(
             };
             let value = compile_expr(b, dst, typed_return.value)?;
             let is_agg_return = b.fn_type.return_type.is_agg();
+
+            // kills a dependency on an empty value
+            let returned_value = if return_pt.is_empty() { Value::Empty } else { value };
             let ret = b.push_inst(
-                Inst::Ret { v: value, agg: is_agg_return },
+                Inst::Ret { v: returned_value, agg: is_agg_return },
                 if is_agg_return { "return aggregate at address" } else { "" },
             );
             Ok(ret.as_value())

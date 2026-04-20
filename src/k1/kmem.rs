@@ -852,6 +852,27 @@ impl<Tag: 'static> Mem<Tag> {
         new_node
     }
 
+    pub fn dlist_insert_before<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+        data: T,
+    ) -> Handle<DlNode<T, Tag>, Tag> {
+        self.dlist_debug_assert_mine(*list, node);
+        let mut node_node = self.get_raw_ref(node);
+        let prev = node_node.prev;
+        let new_node = self.push_h(DlNode { data, prev, next: node });
+
+        node_node.prev = new_node;
+
+        if prev.is_nil() {
+            list.first = new_node;
+        } else {
+            self.get_mut(prev).next = new_node;
+        }
+        new_node
+    }
+
     pub fn dlist_remove_index<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, index: usize) {
         let mut cur = list.first;
         for _ in 0..index {
@@ -1031,7 +1052,7 @@ impl<Tag: 'static> Mem<Tag> {
         &self,
         list: Dlist<T, Tag>,
         n: usize,
-    ) -> Option<&DlNode<T, Tag>> {
+    ) -> Option<NodeHandle<T, Tag>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -1039,7 +1060,7 @@ impl<Tag: 'static> Mem<Tag> {
             }
             current = self.get(current).next;
         }
-        if current.is_nil() { None } else { Some(self.get(current)) }
+        if current.is_nil() { None } else { Some(current) }
     }
 
     pub fn dlist_nth_data_opt<T: 'static>(
@@ -1062,7 +1083,7 @@ impl<Tag: 'static> Mem<Tag> {
         }
     }
 
-    pub fn dlist_nth<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> &DlNode<T, Tag> {
+    pub fn dlist_nth<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> NodeHandle<T, Tag> {
         self.dlist_nth_opt(list, n).expect("Index out of bounds in dlist_nth")
     }
 

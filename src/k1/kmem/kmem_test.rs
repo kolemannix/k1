@@ -202,7 +202,7 @@ fn assert_dlist(mem: &Mem<()>, l: Dlist<char, ()>, expected: &[char]) {
     assert_eq!(&elems, expected);
     assert_eq!(mem.dlist_compute_len(l), expected.len());
     for i in 0..mem.dlist_compute_len(l) {
-        assert_eq!(mem.dlist_nth(l, i).data, expected[i]);
+        assert_eq!(mem.get(mem.dlist_nth(l, i)).data, expected[i]);
         assert_eq!(*mem.dlist_nth_data(l, i), expected[i]);
     }
 }
@@ -299,4 +299,29 @@ fn mdl_split() {
     let l5 = mem.dlist_split_at_node(&mut l, last);
     assert_dlist(&mem, l, &['a']);
     assert_dlist(&mem, l5, &['b']);
+}
+
+#[test]
+fn dlist_insert_before_after() {
+    let mut mem: Mem<()> = Mem::make();
+    let mut l = mem.dlist_new();
+    for c in ['a', 'b', 'c'] {
+        mem.dlist_push(&mut l, c);
+    }
+    assert_dlist(&mem, l, &['a', 'b', 'c']);
+
+    let second = mem.dlist_nth(l, 1);
+    mem.dlist_insert_before(&mut l, second, 'x');
+    assert_dlist(&mem, l, &['a', 'x', 'b', 'c']);
+
+    mem.dlist_insert_after(&mut l, second, 'y');
+    assert_dlist(&mem, l, &['a', 'x', 'b', 'y', 'c']);
+
+    // at beginning
+    let fst = l.first;
+    let last = l.last;
+    mem.dlist_insert_before(&mut l, fst, 'z');
+    mem.dlist_insert_after(&mut l, last, 'z');
+
+    assert_dlist(&mem, l, &['z', 'a', 'x', 'b', 'y', 'c', 'z']);
 }
