@@ -106,7 +106,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                     let call = *k1.ir.calls.get(*call_id);
                     match call.callee {
                         IrCallee::Direct(function_id) => {
-                            // nocommit: This only prevents direct recursion, corecursive
+                            // FIXME: inlining This only prevents direct recursion, corecursive
                             // units still cause us to fail. We need to detect these cycles and
                             // avoid inlining them
                             if unit_id == IrUnitId::Function(function_id) {

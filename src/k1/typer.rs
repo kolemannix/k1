@@ -12578,7 +12578,7 @@ impl TypedProgram {
         if let Some(function_id) = callee.maybe_function_id() {
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
                 if enclosing_id == function_id {
-                    eprintln!("Marking {} as recursive", self.function_id_to_string(enclosing_id, false));
+                    debug!("Marking {} as recursive", self.function_id_to_string(enclosing_id, false));
                     self.functions.get_mut(function_id).is_recursive = true;
                 }
             }
