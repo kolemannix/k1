@@ -1823,7 +1823,6 @@ impl TypePool {
         }
     }
 
-    // nocommit: Log everywhere we actually return 'No', see if we can just make that an error
     pub fn compile_physical_type(
         &mut self,
         static_values: &StaticValuePool,
@@ -1988,7 +1987,9 @@ impl TypePool {
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
-            | Type::Unresolved(_) => PhysicalTypeResult::No,
+            | Type::Unresolved(_) => {
+                PhysicalTypeResult::No
+            },
         }
     }
 
@@ -2107,11 +2108,15 @@ impl TypePool {
         }
     }
 
-    pub fn get_layout(&mut self, static_values: &StaticValuePool, type_id: TypeId) -> Layout {
+    pub fn get_layout(
+        &mut self,
+        static_values: &StaticValuePool,
+        type_id: TypeId,
+    ) -> Option<Layout> {
         match self.get_physical_type(static_values, type_id) {
-            PhysicalTypeResult::No => Layout::ZERO_SIZED,
-            PhysicalTypeResult::Never => Layout::ZERO_SIZED,
-            PhysicalTypeResult::Yes(pt) => self.get_pt_layout(pt),
+            PhysicalTypeResult::No => None,
+            PhysicalTypeResult::Never => None,
+            PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }
     }
 

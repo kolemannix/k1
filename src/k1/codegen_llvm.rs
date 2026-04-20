@@ -633,7 +633,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 false => LlvmLinkage::Private,
                 true => LlvmLinkage::External,
             };
-            let layout = self.k1.get_layout(global.type_id);
+            let layout = self.k1.get_layout(global.type_id).unwrap();
             self.make_global_from_value(
                 initializer_basic_value,
                 layout.align,
@@ -671,10 +671,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         locn
     }
-    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
-        let locn = self.get_debug_location_from_span(span);
-        self.builder.set_current_debug_location(locn);
-        locn
+    fn set_debug_location_from_span(&self, span: SpanId) {
+        if span != SpanId::NONE {
+            let locn = self.get_debug_location_from_span(span);
+            self.builder.set_current_debug_location(locn);
+        }
     }
 
     #[allow(unused)]
@@ -3065,7 +3066,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 debug_assert_eq!(
                     self.layout_per_llvm(&struct_value.get_type()).size,
-                    self.k1.get_layout(s_type_id).size,
+                    self.k1.get_layout(s_type_id).unwrap().size,
                     "Checking Size of: {}",
                     struct_value
                 );
@@ -3142,7 +3143,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 match cont.kind {
                     StaticContainerKind::Span => {
-                        let element_type_layout = self.k1.get_layout(element_type);
+                        let element_type_layout = self.k1.get_layout(element_type).unwrap();
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
@@ -3182,7 +3183,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
-        let element_layout = self.k1.get_layout(element_type);
+        let element_layout = self.k1.get_layout(element_type).unwrap();
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
@@ -3210,7 +3211,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let direct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
         let type_id = self.k1.static_values.get(static_value_id).get_type();
-        let layout = self.k1.get_layout(type_id);
+        let layout = self.k1.get_layout(type_id).unwrap();
         let global = self.make_global_from_value(
             direct_value,
             layout.align,

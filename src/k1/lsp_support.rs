@@ -31,13 +31,13 @@ pub fn get_expr_at_point(
     if let Some((expr_id, _)) = matching_exprs.first() {
         let type_id = k1.exprs.get_type(*expr_id);
         let type_string = k1.type_id_to_string(type_id);
-        let layout = k1.get_layout(type_id);
+        let layout_string = match k1.get_layout(type_id) {
+            None => "No layout".to_string(),
+            Some(layout) => format!("Size: {}, Align: {}", layout.size, layout.align),
+        };
         let expr_string = k1.expr_to_string(*expr_id);
         let kind_name = k1.exprs.get(*expr_id).kind_name();
-        let msg = format!(
-            "Kind: {kind_name}\n`{expr_string}`\n`{type_string}`\nSize: {}, Align: {}",
-            layout.size, layout.align
-        );
+        let msg = format!("Kind: {kind_name}\n`{expr_string}`\n`{type_string}`\n{layout_string}",);
         return Some(msg);
     }
     None

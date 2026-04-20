@@ -1895,9 +1895,9 @@ pub enum BitCastKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
-    SizeOf,
-    SizeOfStride,
-    AlignOf,
+    TypeSize,
+    TypeStride,
+    TypeAlign,
     Zeroed,
     TypeId,
     CompilerSourceLocation,
@@ -1933,9 +1933,9 @@ pub enum Builtin {
 impl Builtin {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Builtin::SizeOf => "size_of",
-            Builtin::SizeOfStride => "size_of_stride",
-            Builtin::AlignOf => "align_of",
+            Builtin::TypeSize => "size_of",
+            Builtin::TypeStride => "size_of_stride",
+            Builtin::TypeAlign => "align_of",
             Builtin::Zeroed => "zeroed",
             Builtin::TypeId => "type_id",
             Builtin::CompilerSourceLocation => "compiler_source_location",
@@ -12578,7 +12578,10 @@ impl TypedProgram {
         if let Some(function_id) = callee.maybe_function_id() {
             if let Some(enclosing_id) = self.scopes.enclosing_functions.get(ctx.scope_id).function {
                 if enclosing_id == function_id {
-                    debug!("Marking {} as recursive", self.function_id_to_string(enclosing_id, false));
+                    debug!(
+                        "Marking {} as recursive",
+                        self.function_id_to_string(enclosing_id, false)
+                    );
                     self.functions.get_mut(function_id).is_recursive = true;
                 }
             }
@@ -12699,16 +12702,22 @@ impl TypedProgram {
                 let int_expr = self.synth_int(TypedIntValue::U64(type_id_u64), span);
                 Ok(int_expr)
             }
-            Builtin::SizeOf | Builtin::SizeOfStride | Builtin::AlignOf => {
+            Builtin::TypeSize | Builtin::TypeStride | Builtin::TypeAlign => {
                 let type_id = self.mem.get_nth(call.type_args, 0).type_id;
-                let layout = self.get_layout(type_id);
-                let value_bytes = match intrinsic {
-                    Builtin::SizeOf => layout.size as u64,
-                    Builtin::SizeOfStride => layout.stride() as u64,
-                    Builtin::AlignOf => layout.align as u64,
-                    _ => unreachable!(),
-                };
-                Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
+                match self.get_physical_type(type_id) {
+                    PhysicalTypeResult::No => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
+                    PhysicalTypeResult::Never => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
+                    PhysicalTypeResult::Yes(_) => {
+                        let layout = self.get_layout(type_id).unwrap();
+                        let value_bytes = match intrinsic {
+                            Builtin::TypeSize => layout.size as u64,
+                            Builtin::TypeStride => layout.stride() as u64,
+                            Builtin::TypeAlign => layout.align as u64,
+                            _ => unreachable!(),
+                        };
+                        Ok(self.synth_i64(to_k1_size_u64(value_bytes), span))
+                    }
+                }
             }
             Builtin::EnumGetValue => {
                 let enum_arg = *self.mem.get_nth(call.args, 0);
@@ -12729,8 +12738,12 @@ impl TypedProgram {
             Builtin::BitCast => {
                 let type_from = self.mem.get_nth(call.type_args, 0).type_id;
                 let type_to = self.mem.get_nth(call.type_args, 1).type_id;
-                let layout_from = self.get_layout(type_from);
-                let layout_to = self.get_layout(type_to);
+                let Some(layout_from) = self.get_layout(type_from) else {
+                    kbail!(self, call.span, "Cannot bitcast from unsized type: {}", type_from)
+                };
+                let Some(layout_to) = self.get_layout(type_to) else {
+                    kbail!(self, call.span, "Cannot bitcast to unsized type: {}", type_from)
+                };
                 if layout_from.size == 0 {
                     kbail!(self, call.span, "Cannot bitcast from zero-sized type: {}", type_from)
                 }
@@ -13883,9 +13896,9 @@ impl TypedProgram {
                     "type-id" => Some(Builtin::TypeId),
                     "type-name" => Some(Builtin::TypeName),
                     "type-schema" => Some(Builtin::TypeSchema),
-                    "size-of" => Some(Builtin::SizeOf),
-                    "size-of-stride" => Some(Builtin::SizeOfStride),
-                    "align-of" => Some(Builtin::AlignOf),
+                    "size-of" => Some(Builtin::TypeSize),
+                    "size-of-stride" => Some(Builtin::TypeStride),
+                    "align-of" => Some(Builtin::TypeAlign),
                     _ => None,
                 },
                 Some("compiler") => match fn_name_str {
@@ -16756,7 +16769,7 @@ impl TypedProgram {
         self.types.get_physical_type(&self.static_values, type_id)
     }
 
-    pub fn get_layout(&mut self, type_id: TypeId) -> Layout {
+    pub fn get_layout(&mut self, type_id: TypeId) -> Option<Layout> {
         self.types.get_layout(&self.static_values, type_id)
     }
 

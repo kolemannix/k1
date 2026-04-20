@@ -16,7 +16,7 @@ mod vm_test;
 use crate::ir::{
     self, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, ProgramIr, Value as IrValue,
 };
-use crate::kmem::{Handle, DlNode};
+use crate::kmem::{DlNode, Handle};
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
@@ -1080,8 +1080,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
 
                 // Point the param registers at the function's arguments
                 for (index, arg) in k1.ir.mem.getn(call_args).iter().enumerate() {
-                    let vm_value =
-                        resolve_value(k1, vm, caller_frame_index, *arg)?;
+                    let vm_value = resolve_value(k1, vm, caller_frame_index, *arg)?;
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
 
                     //let arg_pt =
@@ -1115,10 +1114,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         returned_value,
                     );
                     let _popped = vm.stack.pop_frame();
-                    goto_unit!(
-                        ret_info.block,
-                        Some(ret_info.call_inst_node.next)
-                    );
+                    goto_unit!(ret_info.block, Some(ret_info.call_inst_node.next));
                 } else {
                     // Shove the return value in a special place
                     if !ret_info.pt.is_empty() {
@@ -1795,7 +1791,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
         StaticValue::Struct(static_struct) => {
-            let layout = k1.get_layout(static_struct.type_id);
+            let layout = k1.get_layout(static_struct.type_id).unwrap();
             let struct_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, struct_base, static_value_id);
@@ -1803,7 +1799,7 @@ pub fn static_value_to_vm_value(
             Value::ptr(struct_base)
         }
         StaticValue::Sum(sum) => {
-            let layout = k1.get_layout(sum.sum_type_id);
+            let layout = k1.get_layout(sum.sum_type_id).unwrap();
             let sum_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, sum_base, static_value_id);
@@ -1816,7 +1812,7 @@ pub fn static_value_to_vm_value(
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
-            let layout = k1.get_layout(element_type);
+            let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = k1.vm_static_stack.push_layout_uninit(array_allocation_layout);
@@ -1853,7 +1849,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             store_value(&k1.types, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
-            let layout = k1.get_layout(*type_id);
+            let layout = k1.get_layout(*type_id).unwrap();
             unsafe { std::ptr::write_bytes(dst, 0, layout.size as usize) };
         }
         StaticValue::Struct(static_struct) => {
@@ -1890,7 +1886,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
-            let layout = k1.get_layout(element_type);
+            let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = match kind {
@@ -1922,7 +1918,7 @@ fn store_static_array_elements(
     elements: MSlice<StaticValueId, StaticValuePool>,
 ) {
     debug!("static_value_to_vm_value storing {} elements", elements.len());
-    let element_layout = k1.get_layout(element_type);
+    let element_layout = k1.get_layout(element_type).unwrap();
 
     for index in 0..elements.len() {
         let elem_value_id = k1.static_values.mem.get_nth(elements, index as usize);
@@ -1944,8 +1940,8 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let char_span_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
-        let string_layout = k1.get_layout(STRING_TYPE_ID);
-        debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id));
+        let string_layout = k1.get_layout(STRING_TYPE_ID).unwrap();
+        debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id).unwrap());
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 

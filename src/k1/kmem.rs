@@ -1102,18 +1102,21 @@ impl<Tag: 'static> Mem<Tag> {
         list: Dlist<T, Tag>,
         node: NodeHandle<T, Tag>,
     ) {
-        if node.is_nil() {
-            return;
-        }
-
-        let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
-        for n in iter {
-            let h = self.pack_handle(n.as_ptr());
-            if h == node {
-                return;
+        #[cfg(debug_assertions)]
+        {
+            if node.is_nil() {
+                panic!("nil node is not mine");
             }
+
+            let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
+            for n in iter {
+                let h = self.pack_handle(n.as_ptr());
+                if h == node {
+                    return;
+                }
+            }
+            panic!("Node handle does not belong to this list");
         }
-        panic!("Node handle does not belong to this list");
     }
 
     pub fn dlist_assert_valid<T: 'static>(&self, list: Dlist<T, Tag>) {

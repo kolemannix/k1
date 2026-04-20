@@ -1469,9 +1469,9 @@ pub enum BuiltinHandler {
 pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
     use BuiltinHandler as H;
     match intrinsic_op {
-        Builtin::SizeOf => H::Typer,
-        Builtin::SizeOfStride => H::Typer,
-        Builtin::AlignOf => H::Typer,
+        Builtin::TypeSize => H::Typer,
+        Builtin::TypeStride => H::Typer,
+        Builtin::TypeAlign => H::Typer,
         Builtin::CompilerSourceLocation => H::Typer,
         Builtin::GetStaticValue => H::Typer,
         Builtin::StaticTypeToValue => H::Typer,

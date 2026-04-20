@@ -145,6 +145,10 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         let call_span = *k1.ir.sources.get(call_inst_id);
         let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
 
+        let entry_span = match self_unit_id {
+            IrUnitId::Expr(e) => k1.exprs.get_span(e),
+            IrUnitId::Function(id) => k1.get_function_span(id),
+        };
         let mut b = Builder {
             k1,
             blocks: self_unit.blocks,
@@ -152,8 +156,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
             last_alloca_index: None,
             cur_block: Handle::nil(),
             cur_span: call_span,
-            entry_span: SpanId::NONE, // nocommit entry_span for inlined code; codegen skips dbg
-                                      // info when span is SpanId::NONE
+            entry_span,
         };
 
         let call_block_handle = b.get_instr_block(call_inst_id);
@@ -200,6 +203,10 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         } else {
             match call.dst {
                 None => {
+                    // nocommit: for inlined scalar returns, use a phi instead of an alloca
+                    // match call.ret_type().as_enum() {
+                    //
+                    // }
                     let dst_alloca = b.k1.ir.add_inst(
                         Inst::Alloca { t: call.ret_type, vm_layout: ret_layout, returned: false },
                         "inline ret".into(),
@@ -210,7 +217,6 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         &mut b.k1.ir.mem.get_raw_ref(self_entry_block).as_mut().data.instrs;
                     b.k1.ir.mem.dlist_insert(self_entry_instrs, 0, dst_alloca);
 
-                    // nocommit: for inlined scalar returns, use a phi instead of an alloca
                     let dst_inst = if call.ret_type.is_scalar() {
                         // There's always a post block that contains at least a ret if the return
                         // type is not 'void' or 'never' (its a scalar here)
