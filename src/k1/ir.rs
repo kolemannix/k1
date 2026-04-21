@@ -128,13 +128,21 @@ impl ProgramIr {
     }
 }
 
+pub type IrList<T> = Dlist<T, ProgramIr>;
+
 #[derive(Clone, Copy)]
 pub struct Block {
     pub name: &'static str,
-    pub instrs: Dlist<InstId, ProgramIr>,
+    pub instrs: IrList<InstId>,
+
+    pub preds: IrList<BlockId>,
+    pub succs: IrList<BlockId>,
 }
 
 impl Block {
+    pub fn empty(name: &'static str) -> Block {
+        Block { name, instrs: IrList::empty(), preds: IrList::empty(), succs: IrList::empty() }
+    }
     pub fn identical(&self, other: &Block) -> bool {
         self.name == other.name
             && self.instrs.first == other.instrs.first
@@ -155,6 +163,7 @@ pub struct IrUnit {
     pub is_debug: bool,
 
     pub inline_done: bool,
+    pub cfg_valid: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -910,6 +919,7 @@ fn finalize_unit(
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
+        cfg_valid: false,
     };
     b.k1.ir.b_variables.clear();
     b.k1.ir.b_loops.clear();
@@ -1136,22 +1146,8 @@ impl<'k1> Builder<'k1> {
     }
 
     fn push_block(&mut self, name: &'static str) -> BlockId {
-        let node =
-            self.k1.ir.mem.dlist_push(&mut self.blocks, Block { name, instrs: Dlist::empty() });
+        let node = self.k1.ir.mem.dlist_push(&mut self.blocks, Block::empty(name));
         node
-        // let id = self.block_count;
-        // Recycle builder blocks
-        // match self.k1.ir.b_blocks.get_mut(self.block_count as usize) {
-        //     Some(recycled) => {
-        //         self.block_count += 1;
-        //         recycled.name = name;
-        //     }
-        //     None => {
-        //         self.block_count += 1;
-        //         self.k1.ir.b_blocks.push(Block { name, instrs: Vec::with_capacity(256) });
-        //     }
-        // }
-        // id as BlockId
     }
 
     #[track_caller]
@@ -1269,7 +1265,7 @@ impl<'k1> Builder<'k1> {
         let after_block = self.k1.ir.mem.dlist_insert_after(
             &mut self.blocks,
             block_node,
-            Block { name, instrs: after_insts },
+            Block { name, instrs: after_insts, preds: Dlist::empty(), succs: Dlist::empty() },
         );
         after_block
     }
@@ -3102,7 +3098,7 @@ pub fn display_unit(
         }
     };
     writeln!(w, " (inst count={})", unit.inst_count)?;
-    display_blocks(w, k1, unit.blocks, show_source)?;
+    display_blocks(w, k1, unit.blocks, unit.cfg_valid, show_source)?;
     Ok(())
 }
 
@@ -3110,10 +3106,11 @@ pub fn display_blocks(
     w: &mut impl Write,
     k1: &TypedProgram,
     blocks: Dlist<Block, ProgramIr>,
+    cfg_valid: bool,
     show_source: bool,
 ) -> std::fmt::Result {
     for (block, _) in k1.ir.mem.dlist_iter_handles(blocks) {
-        display_block(w, k1, block, show_source)?;
+        display_block(w, k1, block, cfg_valid, show_source)?;
     }
     Ok(())
 }
@@ -3121,10 +3118,11 @@ pub fn display_blocks(
 pub fn blocks_to_string(
     k1: &TypedProgram,
     blocks: Dlist<Block, ProgramIr>,
+    cfg_valid: bool,
     show_source: bool,
 ) -> String {
     let mut s = String::new();
-    display_blocks(&mut s, k1, blocks, show_source).unwrap();
+    display_blocks(&mut s, k1, blocks, cfg_valid, show_source).unwrap();
     s
 }
 
@@ -3158,13 +3156,29 @@ pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
     block_id: BlockId,
+    cfg_valid: bool,
     show_source: bool,
 ) -> std::fmt::Result {
     let ir = &k1.ir;
     let block = ir.mem.get(block_id).data;
     write!(w, "b{} {}", block_id.raw_index(), block.name)?;
+    if cfg_valid {
+        let preds_string =
+            ir.mem.dlist_iter(block.preds).map(|pred| format!("b{}", pred.raw_index())).join(", ");
+        let succs_string =
+            ir.mem.dlist_iter(block.succs).map(|pred| format!("b{}", pred.raw_index())).join(", ");
+        write!(w, "  preds: [{}], succs: [{}]", preds_string, succs_string)?;
+    }
     writeln!(w)?;
     for inst_id in ir.mem.dlist_iter(block.instrs) {
+        write!(w, " i{:3} = ", *inst_id)?;
+        let inst_str = inst_to_string(k1, *inst_id);
+        write!(w, "{:80}", inst_str)?;
+        let comment = ir.comments.get(*inst_id);
+        if !comment.is_empty() {
+            write!(w, " ; {}", comment)?;
+        }
+
         if show_source {
             let span_id = *ir.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(span_id);
@@ -3172,14 +3186,7 @@ pub fn display_block(
             let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
             let column = the_span.start + 1 - line.start_char;
-            write!(w, "|  {first_line:80}| L{:3}:{} |", line.line_number(), column)?;
-        }
-
-        write!(w, " i{:3} = ", *inst_id)?;
-        display_inst(w, k1, ir, *inst_id)?;
-        let comment = ir.comments.get(*inst_id);
-        if !comment.is_empty() {
-            write!(w, " ; {}", comment)?;
+            write!(w, "| {first_line:80}| L{:3}:{} |", line.line_number(), column)?;
         }
         writeln!(w)?;
     }
@@ -3189,17 +3196,12 @@ pub fn display_block(
 
 pub fn inst_to_string(k1: &TypedProgram, inst_id: InstId) -> String {
     let mut s = String::new();
-    display_inst(&mut s, k1, &k1.ir, inst_id).unwrap();
+    display_inst(&mut s, k1, inst_id).unwrap();
     s
 }
 
-pub fn display_inst(
-    w: &mut impl Write,
-    k1: &TypedProgram,
-    ir: &ProgramIr,
-    inst_id: InstId,
-) -> std::fmt::Result {
-    match *ir.instrs.get(inst_id) {
+pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> std::fmt::Result {
+    match *k1.ir.instrs.get(inst_id) {
         Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
@@ -3236,7 +3238,7 @@ pub fn display_inst(
             write!(w, " {}[{}]", base, element_index)?;
         }
         Inst::Call { call_id: id } => {
-            let call = ir.calls.get(id);
+            let call = k1.ir.calls.get(id);
             write!(w, "call ")?;
             if let Some(dst) = call.dst {
                 w.write_str("into ")?;
@@ -3265,7 +3267,7 @@ pub fn display_inst(
                 }
             };
             w.write_str("(")?;
-            for (index, arg) in ir.mem.getn(call.args).iter().enumerate() {
+            for (index, arg) in k1.ir.mem.getn(call.args).iter().enumerate() {
                 write!(w, "{}", *arg)?;
                 let last = index == call.args.len() as usize - 1;
                 if !last {
@@ -3293,7 +3295,7 @@ pub fn display_inst(
             write!(w, "comefrom ")?;
             k1.types.display_pt(w, t)?;
             write!(w, " [")?;
-            for (i, incoming) in ir.mem.getn(incomings).iter().enumerate() {
+            for (i, incoming) in k1.ir.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
@@ -3306,7 +3308,7 @@ pub fn display_inst(
             if agg {
                 w.write_str("agg ")?;
             }
-            display_inst_kind(w, &k1.types, get_value_kind(ir, &k1.types, v))?;
+            display_inst_kind(w, &k1.types, get_value_kind(&k1.ir, &k1.types, v))?;
             write!(w, " {}", v)?;
         }
         Inst::BoolNegate { v } => {

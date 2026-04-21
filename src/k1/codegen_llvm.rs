@@ -1876,7 +1876,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => {
                     failf!(
                         self.debug.current_span(),
-                        "Whiffed inst id lookup: i{} {}",
+                        "codegen llvm has no value for this instruction: i{} {}",
                         inst_id.as_u32(),
                         ir::inst_to_string(self.k1, inst_id)
                     )

@@ -4,8 +4,8 @@
 #[cfg(test)]
 mod stack_tests {
 
-    use crate::kmem::MSlice;
     use crate::kmem::Dlist;
+    use crate::kmem::MSlice;
     use crate::typer::types::AbiMode;
     use crate::typer::types::EMPTY_TYPE_ID;
     use crate::typer::*;
@@ -27,6 +27,7 @@ mod stack_tests {
             function_builtin_kind: None,
 
             inline_done: false,
+            cfg_valid: false,
         }
     }
 

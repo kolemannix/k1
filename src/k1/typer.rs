@@ -5584,6 +5584,12 @@ impl TypedProgram {
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_ir(expr_span)?;
         ir::optimize_unit(self, IrUnitId::Expr(expr));
+        if is_debug {
+            eprintln!(
+                "executing optimized unit.\n{}",
+                ir::unit_to_string(self, IrUnitId::Expr(expr), true)
+            );
+        }
 
         let execution_result = vm::execute_compiled_expr(self, vm, expr).map_err(|mut e| {
             let stack_trace = vm::make_stack_trace(self, &vm.stack);
