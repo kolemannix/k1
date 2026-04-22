@@ -250,7 +250,7 @@ impl IrCallee {
 }
 
 #[derive(Clone, Copy)]
-pub struct CameFromCase {
+pub struct PhiCase {
     pub from: BlockId,
     pub value: Value,
 }
@@ -376,9 +376,9 @@ pub enum Inst {
     },
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
-    CameFrom {
+    Phi {
         t: PhysicalType,
-        incomings: MSlice<CameFromCase, ProgramIr>,
+        incomings: MSlice<PhiCase, ProgramIr>,
     },
     Ret {
         v: Value,
@@ -644,7 +644,7 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
-        Inst::CameFrom { t, .. } => InstKind::Value(t),
+        Inst::Phi { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::BOOL,
         Inst::BitNot { v } => get_value_kind(ir, types, v),
@@ -2001,16 +2001,16 @@ fn compile_expr(
             let match_end_block = b.push_block("match_end");
             b.goto_block(match_end_block);
             let result_inst_kind = b.type_to_inst_kind(match_result_type);
-            let (result_came_from, is_empty) = match result_inst_kind {
+            let (result_phi, is_empty) = match result_inst_kind {
                 InstKind::Value(pt) => {
                     if pt.is_empty() {
                         (None, true)
                     } else {
-                        let came_from_inst = b.push_inst(
-                            Inst::CameFrom { t: pt, incomings: MSlice::empty() },
+                        let phi_inst = b.push_inst(
+                            Inst::Phi { t: pt, incomings: MSlice::empty() },
                             "match phi",
                         );
-                        (Some(came_from_inst), false)
+                        (Some(phi_inst), false)
                     }
                 }
                 InstKind::Void => {
@@ -2019,7 +2019,7 @@ fn compile_expr(
                 InstKind::Terminator => (None, false),
             };
 
-            let mut incomings: List<CameFromCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
+            let mut incomings: List<PhiCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -2050,12 +2050,12 @@ fn compile_expr(
 
                 if !cons_diverges {
                     let current_block = b.cur_block;
-                    incomings.push(CameFromCase { from: current_block, value: result });
+                    incomings.push(PhiCase { from: current_block, value: result });
                     b.push_jump(match_end_block, "");
                 }
             }
             b.goto_block(match_end_block);
-            match result_came_from {
+            match result_phi {
                 None => {
                     if is_empty {
                         Ok(Value::Empty)
@@ -2065,9 +2065,9 @@ fn compile_expr(
                         Ok(inst.as_value())
                     }
                 }
-                Some(came_from) => {
+                Some(phi_id) => {
                     let real_incomings = b.k1.ir.mem.list_to_handle(incomings);
-                    let Inst::CameFrom { incomings: i, .. } = b.k1.ir.instrs.get_mut(came_from)
+                    let Inst::Phi { incomings: i, .. } = b.k1.ir.instrs.get_mut(phi_id)
                     else {
                         unreachable!()
                     };
@@ -2077,7 +2077,7 @@ fn compile_expr(
                         b,
                         dst,
                         pt_id,
-                        came_from.as_value(),
+                        phi_id.as_value(),
                         "deliver match result value",
                     ))
                 }
@@ -2740,14 +2740,18 @@ fn compile_matching_condition(
         b.push_jump(cons_block, "empty condition");
         return Ok(());
     }
-    for inst in b.k1.mem.getn(mc.instrs).iter() {
+    for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
+        let is_last = index == mc.instrs.len() as usize - 1;
         match inst {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;
+                if is_last {
+                    b.push_jump(cons_block, "matching cond binding fallthrough to cons");
+                }
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_block = b.push_block("matching_cond_continue");
+                let continue_block = if is_last { cons_block } else { b.push_block("matching_cond_continue") };
 
                 // If the matching condition was typechecked as 'infallible', we don't have a fail
                 // block, and we just jump to continue.
@@ -2762,7 +2766,6 @@ fn compile_matching_condition(
             }
         }
     }
-    b.push_jump(cons_block, "matching cond fallthrough cons");
     Ok(())
 }
 
@@ -2892,7 +2895,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Unreachable => (),
-                Inst::CameFrom { .. } => (),
+                Inst::Phi { .. } => (),
                 Inst::Ret { v, .. } => {
                     let ret_val_type = get_value_kind(ir, &k1.types, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
@@ -3282,16 +3285,18 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         Inst::JumpIf { cond, cons, alt } => {
             write!(
                 w,
-                "jmpif {}, b{}, b{}",
+                "jmpif {}, b{} {}, b{} {}",
                 cond,
+                cons.raw_index(),
                 k1.ir.mem.get(cons).data.name,
+                alt.raw_index(),
                 k1.ir.mem.get(alt).data.name
             )?;
         }
         Inst::Unreachable => {
             write!(w, "unreachable")?;
         }
-        Inst::CameFrom { t, incomings } => {
+        Inst::Phi { t, incomings } => {
             write!(w, "comefrom ")?;
             k1.types.display_pt(w, t)?;
             write!(w, " [")?;

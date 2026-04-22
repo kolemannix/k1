@@ -11,6 +11,9 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         return;
     };
 
+    cfg_compute(&mut k1.ir, unit.blocks);
+    // cfg_simplify(&mut k1.ir, unit.blocks);
+
     let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_stack);
     visit_stack.push(OptVisit::Enter(unit_id));
     let mut order: Vec<IrUnitId> = std::mem::take(&mut k1.ir.opt_buf_order);
@@ -41,19 +44,22 @@ pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         inline_calls_in_unit(k1, *unit_id)
     }
 
+    {
+        visit_stack.clear();
+        order.clear();
+        visited.clear();
+        callees.clear();
+        k1.ir.opt_buf_stack = visit_stack;
+        k1.ir.opt_buf_order = order;
+        k1.ir.opt_buf_visited = visited;
+        k1.ir.opt_buf_callees = callees;
+    }
+
     // nocommit
-    compute_cfg(&mut k1.ir, unit.blocks);
+    cfg_compute(&mut k1.ir, unit.blocks);
+    // cfg_simplify(k1, unit.blocks);
     let unit = get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap();
     unit.cfg_valid = true;
-
-    visit_stack.clear();
-    order.clear();
-    visited.clear();
-    callees.clear();
-    k1.ir.opt_buf_stack = visit_stack;
-    k1.ir.opt_buf_order = order;
-    k1.ir.opt_buf_visited = visited;
-    k1.ir.opt_buf_callees = callees;
 
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_iropt_nanos += elapsed as i64;
@@ -206,7 +212,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         enum InlinedReturnInfo {
             Empty,
             AggInStorage(Value),
-            ScalarInPhi(InstId, List<CameFromCase, ProgramIr>),
+            ScalarInPhi(InstId, List<PhiCase, ProgramIr>),
         }
         let mut return_info = match call.dst {
             None => {
@@ -218,7 +224,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                         b.goto_block(call_post_block.unwrap());
                         // phi instead
                         let phi = b.push_inst_front(
-                            Inst::CameFrom { t: call.ret_type, incomings: MSlice::empty() },
+                            Inst::Phi { t: call.ret_type, incomings: MSlice::empty() },
                             "inlined scalar return",
                         );
                         // let loaded = b.push_inst_front(
@@ -316,7 +322,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
                             }
                             InlinedReturnInfo::ScalarInPhi(_, cases) => cases.push_grow(
                                 &mut b.k1.ir.mem,
-                                CameFromCase { from: inlined_block, value: *v },
+                                PhiCase { from: inlined_block, value: *v },
                             ),
                         }
                         if let Some(call_post_block) = call_post_block {
@@ -339,7 +345,7 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         }
         if let InlinedReturnInfo::ScalarInPhi(phi, actual_incomings) = return_info {
             let mut inst = b.k1.ir.instrs.get_raw(phi);
-            let Inst::CameFrom { incomings, .. } = inst.as_mut() else { panic!() };
+            let Inst::Phi { incomings, .. } = inst.as_mut() else { panic!() };
             *incomings = b.k1.ir.mem.list_to_handle(actual_incomings);
             rewrite_instr(&mut b.k1.ir, &mut rewrite_map, &mut inst);
         }
@@ -473,7 +479,7 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
             }
         }
         Inst::Unreachable => {}
-        Inst::CameFrom { incomings, .. } => {
+        Inst::Phi { incomings, .. } => {
             let new_incomings = ir.mem.dupn(*incomings);
             for inc in ir.mem.getn_mut(new_incomings) {
                 rewrite_value(mappings, &mut inc.value);
@@ -638,7 +644,7 @@ fn rewrite_value(mappings: &mut RewriteMappings, value: &mut Value) {
     };
 }
 
-fn compute_cfg(ir: &mut ProgramIr, blocks: IrList<Block>) {
+fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
     for (_, mut node) in ir.mem.dlist_iter_handles(blocks) {
         let preds = &mut node.data.preds;
         *preds = Dlist::empty();
@@ -670,50 +676,72 @@ fn compute_cfg(ir: &mut ProgramIr, blocks: IrList<Block>) {
     }
 }
 
-fn simplify_cfg(ir: &mut ProgramIr, blocks: IrList<Block>) {
-    for (block_id, mut node) in ir.mem.dlist_iter_handles(blocks) {
-        if node.data.prev.is_nil() {
-            continue;
+fn cfg_simplify(k1: &mut TypedProgram, blocks: IrList<Block>) {
+    eprintln!("cfg_simplify on {}", blocks_to_string(k1, blocks, true, false));
+    let ir = &mut k1.ir;
+    for (block_id, node) in ir.mem.dlist_iter_handles(blocks) {
+        let is_entry = node.prev.is_nil();
+        if !is_entry && node.data.preds.is_empty() && node.data.succs.is_empty() {
+            eprintln!("removing unreachable block b{}", block_id.raw_index());
         }
 
-        if let Some(succ) = ir.mem.dlist_single(node.data.succs) {
-            let mut succ_node = ir.mem.get_raw_ref(succ);
-            if let Some(pred) = ir.mem.dlist_single(succ_node.data.preds) {
-                if pred == block_id {
-                    // We can merge block_id and succ
-                    // eprintln!("merging b{} and b{}", block_id.raw_index(), succ.raw_index());
+        if node.data.succs.is_singleton() {
+            let succ_node_cfg = ir.mem.get_raw_ref(node.data.succs.first);
+            let succ_block_id: BlockId = succ_node_cfg.data;
+            let mut succ_node = ir.mem.get_raw_ref(succ_block_id);
+
+            if succ_node.data.preds.is_singleton() {
+                let pred_node_cfg = ir.mem.get(succ_node.data.preds.first);
+                if pred_node_cfg.data == block_id {
+                    // Merge block_id with its successor, because we dominate it and we have no
+                    // other successors
+                    eprintln!(
+                        "merging b{} and b{}",
+                        block_id.raw_index(),
+                        succ_block_id.raw_index()
+                    );
                     // Remove the jump from block_id to succ
                     let mut block_node = ir.mem.get_raw_ref(block_id);
-                    for (inst_handle, inst_node) in ir.mem.dlist_iter_handles(block_node.data.instrs) {
-                        if let Inst::Jump(target) = ir.instrs.get(inst_node.data) {
-                            if *target == succ {
-                                ir.mem.dlist_remove(&mut block_node.data.instrs, inst_handle);
-                                break;
-                            }
-                        }
-                    }
+                    let popped_jump = ir.mem.dlist_pop_last(&mut block_node.data.instrs).unwrap();
+                    debug_assert!(matches!(ir.instrs.get(popped_jump.data), Inst::Jump { .. }));
                     // Move all instructions from succ to block_id
-                    for (_inst_handle, inst_node) in ir.mem.dlist_iter_handles(succ_node.data.instrs) {
-                        let inst = *ir.instrs.get(inst_node.data);
-                        ir.instrs.add(inst);
+                    for (_inst_handle, inst_node) in
+                        ir.mem.dlist_iter_handles(succ_node.data.instrs)
+                    {
+                        let inst_content = ir.instrs.get_mut(inst_node.data);
+                        match inst_content {
+                            Inst::Phi { incomings, .. } => {
+                                let new_incomings = ir.mem.dupn(*incomings);
+                                for inc in ir.mem.getn_mut(new_incomings) {
+                                    if inc.from == succ_block_id {
+                                        eprintln!("rewriting succ phi to be {}", block_id.raw_index());
+                                        inc.from = block_id
+                                    }
+                                    
+                                }
+                                *incomings = new_incomings;
+                            }
+                            _ => {}
+                        }
                         ir.mem.dlist_push(&mut block_node.data.instrs, inst_node.data);
                     }
-                    // Update the CFG links
+
+                    // Update our new successor's predecessor list
                     block_node.data.succs = succ_node.data.succs;
                     for new_succ in ir.mem.dlist_iter(succ_node.data.succs) {
-                        let mut new_succ_node = ir.mem.get_raw_ref(*new_succ);
-                        for pred in ir.mem.dlist_iter(new_succ_node.data.preds) {
-                            if *pred == succ {
+                        let new_succ_node = ir.mem.get(*new_succ);
+                        for mut pred in ir.mem.dlist_iter(new_succ_node.data.preds) {
+                            if *pred == succ_block_id {
                                 *pred = block_id;
                                 break;
                             }
                         }
                     }
-                    // Mark succ as removed
                     succ_node.data.preds = Dlist::empty();
                     succ_node.data.succs = Dlist::empty();
                 }
             }
         }
     }
+    eprintln!("cfg_simplify end {}", blocks_to_string(k1, blocks, true, false));
 }

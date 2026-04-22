@@ -5587,7 +5587,7 @@ impl TypedProgram {
         if is_debug {
             eprintln!(
                 "executing optimized unit.\n{}",
-                ir::unit_to_string(self, IrUnitId::Expr(expr), true)
+                ir::unit_to_string(self, IrUnitId::Expr(expr), false)
             );
         }
 

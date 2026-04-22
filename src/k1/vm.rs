@@ -1142,7 +1142,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
             Inst::Unreachable => {
                 return failf!(vm.eval_span, "Reached unreachable instruction");
             }
-            Inst::CameFrom { t: _, incomings } => {
+            Inst::Phi { t: _, incomings } => {
                 debug_assert!(!incomings.is_empty());
                 let mut value: core::mem::MaybeUninit<IrValue> = core::mem::MaybeUninit::uninit();
                 'case: for case in k1.ir.mem.getn(incomings) {

@@ -2084,7 +2084,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
                 Ok(())
             }
-            Inst::CameFrom { t, incomings: _ } => {
+            Inst::Phi { t, incomings: _ } => {
                 // On this first pass, we do not evaluate the incomings, because we want to wait
                 // until all instructions are mapped
                 let phi_ty = self.pt_canon_type(t);
@@ -2944,7 +2944,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         // block? allocas are hoisted... so, yeah, but phis can't be
         for block in self.k1.ir.mem.dlist_iter(blocks) {
             for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
-                if let Inst::CameFrom { incomings, .. } = self.k1.ir.instrs.get(*inst) {
+                if let Inst::Phi { incomings, .. } = self.k1.ir.instrs.get(*inst) {
                     let phi_inst = inst_mappings.get(&inst).unwrap();
                     debug_assert!(
                         phi_inst.as_instruction_value().unwrap().get_opcode()
