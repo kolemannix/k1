@@ -971,18 +971,6 @@ impl<Tag: 'static> Mem<Tag> {
         }
 
         self.dlist_split_at_node(list, cur)
-        // let right = DlList { first: cur, last: list.last };
-        // let prev = self.get(cur).prev;
-        //
-        // if prev.is_nil() {
-        //     *list = DlList::empty();
-        // } else {
-        //     self.get_mut(prev).next = MHandle::nil();
-        //     self.get_mut(cur).prev = MHandle::nil();
-        //     list.last = prev;
-        // }
-        //
-        // right
     }
 
     pub fn dlist_split_at_node<T: 'static>(
@@ -1014,7 +1002,9 @@ impl<Tag: 'static> Mem<Tag> {
         list: Dlist<T, Tag>,
         from_node: NodeHandle<T, Tag>,
     ) -> DlistIter<T, Tag> {
-        self.dlist_debug_assert_mine(list, from_node);
+        if !list.is_empty() {
+            self.dlist_debug_assert_mine(list, from_node);
+        }
         DlistIter { mem: RawRef::from_ref(self), next: from_node }
     }
 
@@ -1046,6 +1036,10 @@ impl<Tag: 'static> Mem<Tag> {
         list: Dlist<T, Tag>,
     ) -> impl Iterator<Item = RawRef<T>> + 'static {
         self.dlist_iter_nodes(list).map(|node| node.map(|n| &n.data))
+    }
+
+    pub fn dlist_get_singleton<T: 'static + Copy>(&self, list: Dlist<T, Tag>) -> Option<T> {
+        if list.is_singleton() { Some(self.get(list.first).data) } else { None }
     }
 
     pub fn dlist_nth_opt<T: 'static>(

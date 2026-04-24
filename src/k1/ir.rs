@@ -910,6 +910,7 @@ fn finalize_unit(
             .dlist_iter(b.blocks)
             .map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32)
             .sum();
+    iropt::cfg_compute(&mut b.k1.ir, b.blocks);
     let unit = IrUnit {
         result_type_id,
         unit_id,
@@ -919,7 +920,7 @@ fn finalize_unit(
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
-        cfg_valid: false,
+        cfg_valid: true,
     };
     b.k1.ir.b_variables.clear();
     b.k1.ir.b_loops.clear();
@@ -1999,25 +2000,6 @@ fn compile_expr(
             b.push_inst_anon(Inst::Unreachable);
 
             let match_end_block = b.push_block("match_end");
-            b.goto_block(match_end_block);
-            let result_inst_kind = b.type_to_inst_kind(match_result_type);
-            let (result_phi, is_empty) = match result_inst_kind {
-                InstKind::Value(pt) => {
-                    if pt.is_empty() {
-                        (None, true)
-                    } else {
-                        let phi_inst = b.push_inst(
-                            Inst::Phi { t: pt, incomings: MSlice::empty() },
-                            "match phi",
-                        );
-                        (Some(phi_inst), false)
-                    }
-                }
-                InstKind::Void => {
-                    return failf!(b.cur_span, "come from void");
-                }
-                InstKind::Terminator => (None, false),
-            };
 
             let mut incomings: List<PhiCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
@@ -2054,32 +2036,37 @@ fn compile_expr(
                     b.push_jump(match_end_block, "");
                 }
             }
+
             b.goto_block(match_end_block);
-            match result_phi {
-                None => {
-                    if is_empty {
+            let result_inst_kind = b.type_to_inst_kind(match_result_type);
+            match result_inst_kind {
+                InstKind::Value(pt) => {
+                    if pt.is_empty() {
                         Ok(Value::Empty)
                     } else {
-                        // match is divergent
-                        let inst = b.push_inst(Inst::Unreachable, "divergent match");
-                        Ok(inst.as_value())
+                        let value = if incomings.len() == 1 {
+                            let phi_case = incomings[0];
+                            phi_case.value
+                        } else {
+                            let incomings_handle = b.k1.ir.mem.list_to_handle(incomings);
+                            let phi_inst = b.push_inst(
+                                Inst::Phi { t: pt, incomings: incomings_handle },
+                                "match phi",
+                            );
+                            phi_inst.as_value()
+                        };
+                        // Interesting thought: If dst is Some, we could just do stores to it instead of phi.
+                        let fulfilled = store_rich_if_dst(b, dst, pt, value, "fulfill match dst");
+                        Ok(fulfilled)
                     }
                 }
-                Some(phi_id) => {
-                    let real_incomings = b.k1.ir.mem.list_to_handle(incomings);
-                    let Inst::Phi { incomings: i, .. } = b.k1.ir.instrs.get_mut(phi_id)
-                    else {
-                        unreachable!()
-                    };
-                    *i = real_incomings;
-                    let pt_id = b.get_physical_type(match_result_type);
-                    Ok(store_rich_if_dst(
-                        b,
-                        dst,
-                        pt_id,
-                        phi_id.as_value(),
-                        "deliver match result value",
-                    ))
+                InstKind::Void => {
+                    failf!(b.cur_span, "match result void")
+                }
+                InstKind::Terminator => {
+                    // match is divergent
+                    let inst = b.push_inst(Inst::Unreachable, "divergent match");
+                    Ok(inst.as_value())
                 }
             }
         }
@@ -2265,6 +2252,8 @@ fn compile_expr(
         TypedExpr::Return(typed_return) => {
             debug_assert!(dst.is_none());
             let return_pt = b.fn_type.return_type;
+            // nocommit: This is flawed in the case where there are multiple returns; only this one
+            // will actually return the 'returned' alloca that we make, which is malformed.
             let dst = match typed_return.returned_variable {
                 None if return_pt.is_agg() => {
                     let rvo_storage =
@@ -2751,7 +2740,8 @@ fn compile_matching_condition(
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_block = if is_last { cons_block } else { b.push_block("matching_cond_continue") };
+                let continue_block =
+                    if is_last { cons_block } else { b.push_block("matching_cond_continue") };
 
                 // If the matching condition was typechecked as 'infallible', we don't have a fail
                 // block, and we just jump to continue.
@@ -2822,17 +2812,20 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return failf!(span, "Not compiled");
     };
-    for (block_index, block) in ir.mem.dlist_iter(unit.blocks).enumerate() {
-        for inst_node in ir.mem.dlist_iter_nodes(block.instrs) {
+    // eprintln!("validate_unit: {}", unit_name_to_string(k1, unit_id));
+    // eprintln!("blocks.first: {}", unit.blocks.first.raw_index());
+    // eprintln!("blocks.last: {}", unit.blocks.first.raw_index());
+    for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
+        for inst_node in ir.mem.dlist_iter_nodes(block.data.instrs) {
             let inst_id = inst_node.data;
             let is_last = inst_node.is_last();
             let inst = ir.instrs.get(inst_id);
             let inst_kind = get_inst_kind(ir, &k1.types, inst_id);
             if !is_last && inst_kind.is_terminator() {
-                errors.push(format!("b{block_index}: stray terminator"))
+                errors.push(format!("b{}: stray terminator", block_id.raw_index()))
             };
             if is_last && !inst_kind.is_terminator() {
-                errors.push(format!("b{block_index}: unterminated"))
+                errors.push(format!("b{}: unterminated", block_id.raw_index()))
             }
 
             match *inst {
@@ -2895,7 +2888,28 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Unreachable => (),
-                Inst::Phi { .. } => (),
+                Inst::Phi { incomings, t } => {
+                    for incoming in ir.mem.getn(incomings) {
+                        let Ok(_value_type) =
+                            get_value_kind(ir, &k1.types, incoming.value).expect_value()
+                        else {
+                            errors.push(format!("i{inst_id}: phi type not a value kind"));
+                            continue;
+                        };
+                        // if value_type != phi_type {
+                        //     errors.push(format!("i{inst_id}: phi incoming value wrong type: {}"))
+                        // }
+                        if incoming.from == block_id {
+                            errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
+                        } else if !ir
+                            .mem
+                            .dlist_iter_handles(unit.blocks)
+                            .any(|(b, _)| b == incoming.from)
+                        {
+                            errors.push(format!("i{inst_id}: phi incoming block does not exist"))
+                        }
+                    }
+                }
                 Inst::Ret { v, .. } => {
                     let ret_val_type = get_value_kind(ir, &k1.types, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
@@ -3025,6 +3039,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
 }
 
 mod iropt;
+pub use iropt::cfg_simplify;
 pub use iropt::optimize_unit;
 
 ////////////////////////////// Display //////////////////////////////
@@ -3176,10 +3191,10 @@ pub fn display_block(
     for inst_id in ir.mem.dlist_iter(block.instrs) {
         write!(w, " i{:3} = ", *inst_id)?;
         let inst_str = inst_to_string(k1, *inst_id);
-        write!(w, "{:80}", inst_str)?;
+        write!(w, "{:60}", inst_str)?;
         let comment = ir.comments.get(*inst_id);
         if !comment.is_empty() {
-            write!(w, " ; {}", comment)?;
+            write!(w, "; {}", comment)?;
         }
 
         if show_source {
@@ -3189,7 +3204,7 @@ pub fn display_block(
             let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
             let column = the_span.start + 1 - line.start_char;
-            write!(w, "| {first_line:80}| L{:3}:{} |", line.line_number(), column)?;
+            write!(w, "| {first_line:60}|{:3}:{}|", line.line_number(), column)?;
         }
         writeln!(w)?;
     }
@@ -3297,14 +3312,20 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
             write!(w, "unreachable")?;
         }
         Inst::Phi { t, incomings } => {
-            write!(w, "comefrom ")?;
+            write!(w, "phi ")?;
             k1.types.display_pt(w, t)?;
             write!(w, " [")?;
             for (i, incoming) in k1.ir.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
-                write!(w, "(b{}: {})", k1.ir.mem.get(incoming.from).data.name, incoming.value)?;
+                write!(
+                    w,
+                    "(b{} {}: {})",
+                    incoming.from.raw_index(),
+                    k1.ir.mem.get(incoming.from).data.name,
+                    incoming.value
+                )?;
             }
             write!(w, "]")?;
         }

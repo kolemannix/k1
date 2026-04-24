@@ -6,7 +6,7 @@ use std::path::Path;
 
 use ahash::HashMapExt;
 use anyhow::bail;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -36,10 +36,9 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, Block, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType,
-    ProgramIr,
+    BackendBuiltin, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
 };
-use crate::kmem::{Dlist, Handle, List, MSlice};
+use crate::kmem::{Handle, List, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
@@ -2084,11 +2083,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
                 Ok(())
             }
-            Inst::Phi { t, incomings: _ } => {
+            Inst::Phi { t, incomings } => {
                 // On this first pass, we do not evaluate the incomings, because we want to wait
                 // until all instructions are mapped
                 let phi_ty = self.pt_canon_type(t);
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
+
+                for incoming in self.k1.ir.mem.getn(incomings) {
+                    let value = self.resolve_value(inst_mappings, incoming.value)?;
+                    let block = self.get_llvm_block(incoming.from)?;
+                    phi.add_incoming(&[(&value, block)])
+                }
+
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
             }
@@ -2889,21 +2895,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             );
         }
 
-        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
-        debug!(
-            "codegen_function_body ir\n{}",
-            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
-        );
         self.set_debug_location_from_span(function_span);
-        match ir_unit.function_builtin_kind {
-            Some(builtin_kind) => {
-                let _terminator_instr =
-                    self.codegen_builtin_function_body(builtin_kind, function_id)?;
-            }
-            None => {
-                self.codegen_unit_body(inst_mappings, ir_unit.blocks)?;
-            }
-        };
+        self.codegen_unit_body(inst_mappings, function_id)?;
         self.debug.pop_scope();
 
         Ok(())
@@ -2912,8 +2905,27 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_unit_body(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        blocks: Dlist<Block, ProgramIr>,
+        function_id: FunctionId,
     ) -> K1Result<()> {
+        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        eprintln!(
+            "codegen_unit_body ir\n{}",
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+        );
+        match ir_unit.function_builtin_kind {
+            Some(builtin_kind) => {
+                let _terminator_instr =
+                    self.codegen_builtin_function_body(builtin_kind, function_id)?;
+                return Ok(());
+            }
+            None => {}
+        };
+
+        ir::cfg_simplify(self.k1, IrUnitId::Function(function_id));
+
+        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        let blocks = ir_unit.blocks;
+
         let mut block_mapping = FxHashMap::new();
         let llvm_function = self.get_current_function().function_value;
         for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
@@ -2935,32 +2947,62 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
-        for (block, _) in self.k1.ir.mem.dlist_iter_handles(blocks) {
-            self.codegen_block(inst_mappings, block)?;
+        let blocks_rpo = self.compute_cfg_order(blocks.first);
+        eprintln!(
+            "rpo order: {:?}",
+            blocks_rpo.iter().map(|b| format!("b{}", b.raw_index())).collect_vec()
+        );
+        for block in &blocks_rpo {
+            self.codegen_block(inst_mappings, *block)?;
         }
 
         // Fulfill phis later, since they're uniquely out-of-order
         // Is that true? Could for example simple add or store reference an inst from another
         // block? allocas are hoisted... so, yeah, but phis can't be
-        for block in self.k1.ir.mem.dlist_iter(blocks) {
-            for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
-                if let Inst::Phi { incomings, .. } = self.k1.ir.instrs.get(*inst) {
-                    let phi_inst = inst_mappings.get(&inst).unwrap();
-                    debug_assert!(
-                        phi_inst.as_instruction_value().unwrap().get_opcode()
-                            == InstructionOpcode::Phi
-                    );
-                    let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
+        // for block in self.k1.ir.mem.dlist_iter(blocks) {
+        //     for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
+        //         if let Inst::Phi { incomings, .. } = self.k1.ir.instrs.get(*inst) {
+        //             let phi_inst = inst_mappings.get(&inst).unwrap();
+        //             debug_assert!(
+        //                 phi_inst.as_instruction_value().unwrap().get_opcode()
+        //                     == InstructionOpcode::Phi
+        //             );
+        //             let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
 
-                    for incoming in self.k1.ir.mem.getn(*incomings) {
-                        let value = self.resolve_value(inst_mappings, incoming.value)?;
-                        let block = self.get_llvm_block(incoming.from)?;
-                        phi.add_incoming(&[(&value, block)])
-                    }
-                }
-            }
-        }
+        //             for incoming in self.k1.ir.mem.getn(*incomings) {
+        //                 let value = self.resolve_value(inst_mappings, incoming.value)?;
+        //                 let block = self.get_llvm_block(incoming.from)?;
+        //                 phi.add_incoming(&[(&value, block)])
+        //             }
+        //         }
+        //     }
+        // }
         Ok(())
+    }
+
+    fn compute_cfg_order(&mut self, entry: BlockId) -> Vec<BlockId> {
+        // nocommit allocs
+        let mut seen = FxHashSet::default();
+        let mut post = Vec::new();
+
+        fn dfs(ir: &ProgramIr, b: BlockId, seen: &mut FxHashSet<BlockId>, post: &mut Vec<BlockId>) {
+            if !seen.insert(b) {
+                return;
+            }
+
+            let successors = ir.mem.get(b).data.succs;
+            for succ in ir.mem.dlist_iter(successors) {
+                dfs(ir, *succ, seen, post);
+            }
+
+            post.push(b); // postorder: after successors
+        }
+
+        dfs(&self.k1.ir, entry, &mut seen, &mut post);
+
+        post.reverse(); // reverse → RPO
+
+        post
     }
 
     fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
