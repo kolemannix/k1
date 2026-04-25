@@ -1,3 +1,6 @@
 [profile.profiling]
 inherits = "release"
 debug = true
+debug-assertions = false
+overflow-checks = false
+opt-level = 3

@@ -73,6 +73,8 @@ pub struct ProgramIr {
     opt_buf_order: Vec<IrUnitId>,
     opt_buf_visited: FxHashSet<IrUnitId>,
     opt_buf_callees: Vec<FunctionId>,
+    opt_buf_cfg_compute_work_stack: Vec<BlockId>,
+    opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
 }
 type IrStr = MStr<ProgramIr>;
 
@@ -106,6 +108,8 @@ impl ProgramIr {
             opt_buf_order: vec![],
             opt_buf_visited: FxHashSet::new(),
             opt_buf_callees: vec![],
+            opt_buf_cfg_compute_work_stack: vec![],
+            opt_buf_cfg_compute_visited: FxHashSet::new(),
         }
     }
 
@@ -255,7 +259,7 @@ pub struct PhiCase {
     pub value: Value,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Inst(InstId),
     /// `Global` is always a storage location, regardless
@@ -274,9 +278,6 @@ pub enum Value {
         t: PhysicalType,
         index: u32,
     },
-    // FnRetSlot {
-    //     t: PhysicalType,
-    // },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
@@ -318,7 +319,6 @@ pub struct IrCall {
 /// This would allow for a universal wire-format for k1 data and we could say that "nothing is platform-specific"* in terms of data layout which would be great
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
-//task(ir): Get inst down to 32 bytes
 #[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
@@ -833,14 +833,15 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
     };
     let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
 
+    // nocommit finalize needs to insert the thing and call cfg compute and validate
     *b.k1.ir.functions.get_mut(function_id) = Some(unit);
+    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
+    validate_unit(b.k1, unit_id)?;
 
     if is_debug {
         let s = unit_to_string(b.k1, unit_id, true);
         eprintln!("{s}");
     }
-
-    validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_ir_nanos += elapsed as i64;
@@ -879,11 +880,13 @@ pub fn compile_top_level_expr(
     let entry_block = b.push_block("expr_toplevel");
     b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
-    let compiled_expr =
-        finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
-    b.k1.ir.exprs.insert(expr, compiled_expr);
-
     let unit_id = IrUnitId::Expr(expr);
+    let compiled_expr =
+        finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, None);
+
+    // nocommit
+    b.k1.ir.exprs.insert(expr, compiled_expr);
+    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
     validate_unit(k1, unit_id)?;
 
     if is_debug {
@@ -910,7 +913,7 @@ fn finalize_unit(
             .dlist_iter(b.blocks)
             .map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32)
             .sum();
-    iropt::cfg_compute(&mut b.k1.ir, b.blocks);
+
     let unit = IrUnit {
         result_type_id,
         unit_id,
@@ -951,6 +954,8 @@ pub struct Builder<'k1> {
 
     blocks: Dlist<Block, ProgramIr>,
     fn_type: PhysicalFunctionType,
+
+    returned_alloca: Option<InstId>,
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
@@ -966,6 +971,7 @@ impl<'k1> Builder<'k1> {
             blocks: Dlist::empty(),
             fn_type: PhysicalFunctionType::nil(),
 
+            returned_alloca: None,
             last_alloca_index: None,
             cur_block: Handle::nil(),
             cur_span: SpanId::NONE,
@@ -2255,11 +2261,19 @@ fn compile_expr(
             // nocommit: This is flawed in the case where there are multiple returns; only this one
             // will actually return the 'returned' alloca that we make, which is malformed.
             let dst = match typed_return.returned_variable {
-                None if return_pt.is_agg() => {
-                    let rvo_storage =
-                        b.push_alloca_ext(return_pt, "rvo storage", IrDebugInfo::default(), true);
-                    Some(rvo_storage.as_value())
-                }
+                None if return_pt.is_agg() => match b.returned_alloca {
+                    Some(inst_id) => Some(inst_id.as_value()),
+                    None => {
+                        let rvo_storage = b.push_alloca_ext(
+                            return_pt,
+                            "rvo storage",
+                            IrDebugInfo::default(),
+                            true,
+                        );
+                        b.returned_alloca = Some(rvo_storage);
+                        Some(rvo_storage.as_value())
+                    }
+                },
                 _ => None,
             };
             let value = compile_expr(b, dst, typed_return.value)?;
@@ -2888,7 +2902,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Unreachable => (),
-                Inst::Phi { incomings, t } => {
+                Inst::Phi { incomings, .. } => {
                     for incoming in ir.mem.getn(incomings) {
                         let Ok(_value_type) =
                             get_value_kind(ir, &k1.types, incoming.value).expect_value()
@@ -2896,11 +2910,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                             errors.push(format!("i{inst_id}: phi type not a value kind"));
                             continue;
                         };
-                        // if value_type != phi_type {
-                        //     errors.push(format!("i{inst_id}: phi incoming value wrong type: {}"))
-                        // }
+                        // nocommit: When we inline a phi, rewrite it to a value.
                         if incoming.from == block_id {
-                            errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
+                            // errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
                         } else if !ir
                             .mem
                             .dlist_iter_handles(unit.blocks)
@@ -3039,6 +3051,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
 }
 
 mod iropt;
+pub use iropt::cfg_compute_unit;
 pub use iropt::cfg_simplify;
 pub use iropt::optimize_unit;
 
@@ -3115,7 +3128,7 @@ pub fn display_unit(
             write!(w, " from {}:{}", &source.filename, line.line_number())?;
         }
     };
-    writeln!(w, " (inst count={})", unit.inst_count)?;
+    writeln!(w, " (inst count={}, cfg_valid={})", unit.inst_count, unit.cfg_valid)?;
     display_blocks(w, k1, unit.blocks, unit.cfg_valid, show_source)?;
     Ok(())
 }

@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 use std::path::Path;
 
-use ahash::HashMapExt;
+use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
 use fxhash::{FxHashMap, FxHashSet};
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -24,7 +24,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue,
+    GlobalValue, InstructionValue, IntValue, PointerValue,
     StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
@@ -304,6 +304,13 @@ pub struct Cg<'ctx, 'k1> {
     mem: kmem::Mem<CgPerm>,
 
     current_insert_function: FunctionId,
+
+    buffers: CgBuffers,
+}
+
+struct CgBuffers {
+    cfg_seen: FxHashSet<BlockId>,
+    cfg_blocks_rpo: Vec<BlockId>,
 }
 
 struct DebugContext<'ctx> {
@@ -540,6 +547,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             mem: kmem::Mem::make(),
 
             current_insert_function: FunctionId::PENDING,
+
+            buffers: CgBuffers {
+                cfg_seen: FxHashSet::new(),
+                cfg_blocks_rpo: Vec::with_capacity(16),
+            },
         }
     }
 
@@ -1371,7 +1383,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match self.get_current_function().blocks.get(&block_id) {
             Some(bb) => Ok(*bb),
             None => {
-                failf!(self.debug.current_span(), "Failed to get block: {}", block_id.raw_index())
+                failf!(self.debug.current_span(), "Failed to get block: b{}", block_id.raw_index())
             }
         }
     }
@@ -2084,18 +2096,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Phi { t, incomings } => {
-                // On this first pass, we do not evaluate the incomings, because we want to wait
-                // until all instructions are mapped
-                let phi_ty = self.pt_canon_type(t);
-                let phi = self.builder.build_phi(phi_ty, "").unwrap();
-
-                for incoming in self.k1.ir.mem.getn(incomings) {
+                // nocommit: Our ir still spits out bad phis with one incoming that points to their own block 
+                // We just need to rewrite them into values
+                if incomings.len() == 1 {
+                    let incoming = self.k1.ir.mem.get_nth(incomings, 0);
                     let value = self.resolve_value(inst_mappings, incoming.value)?;
-                    let block = self.get_llvm_block(incoming.from)?;
-                    phi.add_incoming(&[(&value, block)])
-                }
+                    inst_mappings.insert(inst_id, value);
+                } else {
+                    let phi_ty = self.pt_canon_type(t);
+                    let phi = self.builder.build_phi(phi_ty, "").unwrap();
 
-                inst_mappings.insert(inst_id, phi.as_basic_value());
+                    for incoming in self.k1.ir.mem.getn(incomings) {
+                        let value = self.resolve_value(inst_mappings, incoming.value)?;
+                        let block = self.get_llvm_block(incoming.from)?;
+                        phi.add_incoming(&[(&value, block)])
+                    }
+
+                    inst_mappings.insert(inst_id, phi.as_basic_value());
+                }
                 Ok(())
             }
             Inst::Ret { v, .. } => {
@@ -2908,7 +2926,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_id: FunctionId,
     ) -> K1Result<()> {
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
-        eprintln!(
+        debug!(
             "codegen_unit_body ir\n{}",
             ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
         );
@@ -2928,6 +2946,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut block_mapping = FxHashMap::new();
         let llvm_function = self.get_current_function().function_value;
+
         for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
             let name = block_node.data.name;
             let b = self.ctx.append_basic_block(llvm_function, name);
@@ -2947,62 +2966,57 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
-        let blocks_rpo = self.compute_cfg_order(blocks.first);
-        eprintln!(
-            "rpo order: {:?}",
-            blocks_rpo.iter().map(|b| format!("b{}", b.raw_index())).collect_vec()
-        );
+        let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
+        let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
+        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
         for block in &blocks_rpo {
             self.codegen_block(inst_mappings, *block)?;
         }
+        {
+            blocks_rpo.clear();
+            seen.clear();
+            self.buffers.cfg_seen = seen;
+            self.buffers.cfg_blocks_rpo = blocks_rpo;
+        }
 
-        // Fulfill phis later, since they're uniquely out-of-order
-        // Is that true? Could for example simple add or store reference an inst from another
-        // block? allocas are hoisted... so, yeah, but phis can't be
-        // for block in self.k1.ir.mem.dlist_iter(blocks) {
-        //     for inst in self.k1.ir.mem.dlist_iter(block.instrs) {
-        //         if let Inst::Phi { incomings, .. } = self.k1.ir.instrs.get(*inst) {
-        //             let phi_inst = inst_mappings.get(&inst).unwrap();
-        //             debug_assert!(
-        //                 phi_inst.as_instruction_value().unwrap().get_opcode()
-        //                     == InstructionOpcode::Phi
-        //             );
-        //             let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
-
-        //             for incoming in self.k1.ir.mem.getn(*incomings) {
-        //                 let value = self.resolve_value(inst_mappings, incoming.value)?;
-        //                 let block = self.get_llvm_block(incoming.from)?;
-        //                 phi.add_incoming(&[(&value, block)])
-        //             }
-        //         }
-        //     }
-        // }
+        if !llvm_function.verify(true) {
+            self.write_failure_file();
+            return failf!(
+                self.k1.get_function_span(function_id),
+                "Function {} failed validation; failed module file is written",
+                self.k1.function_id_to_string(function_id, false),
+            );
+        }
         Ok(())
     }
 
-    fn compute_cfg_order(&mut self, entry: BlockId) -> Vec<BlockId> {
-        // nocommit allocs
-        let mut seen = FxHashSet::default();
-        let mut post = Vec::new();
-
-        fn dfs(ir: &ProgramIr, b: BlockId, seen: &mut FxHashSet<BlockId>, post: &mut Vec<BlockId>) {
+    fn compute_cfg_order(
+        &mut self,
+        entry: BlockId,
+        result: &mut Vec<BlockId>,
+        seen: &mut FxHashSet<BlockId>,
+    ) {
+        fn dfs(
+            ir: &ProgramIr,
+            b: BlockId,
+            seen: &mut FxHashSet<BlockId>,
+            result: &mut Vec<BlockId>,
+        ) {
             if !seen.insert(b) {
                 return;
             }
 
             let successors = ir.mem.get(b).data.succs;
             for succ in ir.mem.dlist_iter(successors) {
-                dfs(ir, *succ, seen, post);
+                dfs(ir, *succ, seen, result);
             }
 
-            post.push(b); // postorder: after successors
+            result.push(b); // postorder: after successors
         }
 
-        dfs(&self.k1.ir, entry, &mut seen, &mut post);
+        dfs(&self.k1.ir, entry, seen, result);
 
-        post.reverse(); // reverse → RPO
-
-        post
+        result.reverse(); // reverse → RPO
     }
 
     fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
@@ -3513,6 +3527,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         machine
     }
 
+    fn verify_module(&self) -> anyhow::Result<()> {
+        self.llvm_module.verify().map_err(|err| {
+            self.write_failure_file();
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+        })
+    }
+
+    fn write_failure_file(&self) {
+        let llvm_text = self.emit_llvm_ir_text();
+        let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
+            .expect("Failed to create .ll file");
+        std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
+    }
+
     pub fn optimize_verify(&mut self, optimize: bool) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
 
@@ -3521,13 +3549,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         } else {
             self.llvm_module.strip_debug_info();
         }
-        self.llvm_module.verify().map_err(|err| {
-            let llvm_text = self.emit_llvm_ir_text();
-            let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
-                .expect("Failed to create .ll file");
-            std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
-        })?;
+
+        self.verify_module()?;
 
         if optimize {
             self.llvm_module

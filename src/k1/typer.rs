@@ -1709,7 +1709,6 @@ pub struct TypedGlobal {
     pub type_id: TypeId,
     pub span: SpanId,
     pub is_constant: bool,
-    pub is_referencing: bool,
     pub is_tls: bool,
     pub is_exported: bool,
     pub is_external: bool,
@@ -3199,7 +3198,7 @@ impl TypedProgram {
                     Ok(None) => None,
                     Err(msg) => return failf!(type_param.span, "{}", msg),
                 };
-            let mut ability_constraint_signatures = smallvec![];
+            let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
             let mut predicate_functions = self.mem.new_list(0);
             for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
                 match parsed_constraint {
@@ -5583,7 +5582,7 @@ impl TypedProgram {
 
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         self.compile_all_pending_ir(expr_span)?;
-        // ir::optimize_unit(self, IrUnitId::Expr(expr));
+        ir::optimize_unit(self, IrUnitId::Expr(expr));
         if is_debug {
             eprintln!(
                 "executing optimized unit.\n{}",
@@ -5716,17 +5715,7 @@ impl TypedProgram {
         let global_span = parsed_global.span;
         let type_id = self.eval_type_expr(parsed_global.type_expr, scope_id)?;
 
-        let is_referencing = false;
         let value_expr_id = parsed_global.value_expr;
-        let is_mutable = is_mutable
-            || (if is_referencing {
-                let Some(reference_type) = self.types.get(type_id).as_reference() else {
-                    return failf!(global_span, "Global references must have a reference type");
-                };
-                reference_type.mutable
-            } else {
-                false
-            });
 
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
@@ -5743,7 +5732,6 @@ impl TypedProgram {
             parsed_expr: value_expr_id,
             type_id,
             span: global_span,
-            is_referencing,
             is_constant: !is_mutable,
             is_tls: parsed_global.is_thread_local,
             is_exported,

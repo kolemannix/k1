@@ -940,7 +940,7 @@ pub struct BuiltinTypes {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarType {
     U8 = 1,
     U16 = 2,
@@ -1034,7 +1034,7 @@ impl PhysicalTypeResult {
 }
 
 #[repr(transparent)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub struct PhysicalType(u32);
 
 impl std::fmt::Debug for PhysicalType {
@@ -1987,9 +1987,7 @@ impl TypePool {
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
             | Type::InferenceHole(_)
-            | Type::Unresolved(_) => {
-                PhysicalTypeResult::No
-            },
+            | Type::Unresolved(_) => PhysicalTypeResult::No,
         }
     }
 
