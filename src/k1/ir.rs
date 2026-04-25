@@ -75,6 +75,9 @@ pub struct ProgramIr {
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_cfg_compute_work_stack: Vec<BlockId>,
     opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
+    opt_buf_inline_self_rewrites: iropt::RewriteMappings,
+    opt_buf_inline_inlined_rewrites: iropt::RewriteMappings,
+    opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings,
 }
 type IrStr = MStr<ProgramIr>;
 
@@ -110,6 +113,9 @@ impl ProgramIr {
             opt_buf_callees: vec![],
             opt_buf_cfg_compute_work_stack: vec![],
             opt_buf_cfg_compute_visited: FxHashSet::new(),
+            opt_buf_inline_self_rewrites: iropt::RewriteMappings::default(),
+            opt_buf_inline_inlined_rewrites: iropt::RewriteMappings::default(),
+            opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings::default(),
         }
     }
 
@@ -161,6 +167,7 @@ pub struct IrUnit {
     pub fn_type: PhysicalFunctionType,
     // The number of instructions in this unit
     pub inst_count: u32,
+    pub last_alloca_index: Option<u32>,
 
     pub blocks: Dlist<Block, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
@@ -831,12 +838,7 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             _ => None,
         },
     };
-    let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
-
-    // nocommit finalize needs to insert the thing and call cfg compute and validate
-    *b.k1.ir.functions.get_mut(function_id) = Some(unit);
-    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
-    validate_unit(b.k1, unit_id)?;
+    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind)?;
 
     if is_debug {
         let s = unit_to_string(b.k1, unit_id, true);
@@ -881,13 +883,7 @@ pub fn compile_top_level_expr(
     b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
     let unit_id = IrUnitId::Expr(expr);
-    let compiled_expr =
-        finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, None);
-
-    // nocommit
-    b.k1.ir.exprs.insert(expr, compiled_expr);
-    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
-    validate_unit(k1, unit_id)?;
+    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, None)?;
 
     if is_debug {
         let s = unit_to_string(k1, unit_id, true);
@@ -906,7 +902,7 @@ fn finalize_unit(
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
-) -> IrUnit {
+) -> K1Result<()> {
     let inst_count =
         b.k1.ir
             .mem
@@ -919,15 +915,28 @@ fn finalize_unit(
         unit_id,
         fn_type,
         inst_count,
+        last_alloca_index: b.last_alloca_index,
         blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
         cfg_valid: true,
     };
+    match unit_id {
+        IrUnitId::Function(function_id) => {
+            *b.k1.ir.functions.get_mut(function_id) = Some(unit);
+        }
+        IrUnitId::Expr(expr) => {
+            b.k1.ir.exprs.insert(expr, unit);
+        }
+    }
+
+    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
+    validate_unit(b.k1, unit_id)?;
+
     b.k1.ir.b_variables.clear();
     b.k1.ir.b_loops.clear();
-    unit
+    Ok(())
 }
 
 struct BuilderVariable {
@@ -2258,8 +2267,6 @@ fn compile_expr(
         TypedExpr::Return(typed_return) => {
             debug_assert!(dst.is_none());
             let return_pt = b.fn_type.return_type;
-            // nocommit: This is flawed in the case where there are multiple returns; only this one
-            // will actually return the 'returned' alloca that we make, which is malformed.
             let dst = match typed_return.returned_variable {
                 None if return_pt.is_agg() => match b.returned_alloca {
                     Some(inst_id) => Some(inst_id.as_value()),
@@ -2829,6 +2836,10 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     // eprintln!("validate_unit: {}", unit_name_to_string(k1, unit_id));
     // eprintln!("blocks.first: {}", unit.blocks.first.raw_index());
     // eprintln!("blocks.last: {}", unit.blocks.first.raw_index());
+    let mut my_blocks = FxHashSet::new();
+    for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
+        my_blocks.insert(block_id);
+    }
     for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
         for inst_node in ir.mem.dlist_iter_nodes(block.data.instrs) {
             let inst_id = inst_node.data;
@@ -2890,15 +2901,21 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::Call { .. } => (),
                 Inst::Jump(block) => {
-                    if !ir.mem.dlist_iter(unit.blocks).any(|b| b.identical(&ir.mem.get(block).data))
-                    {
+                    if !my_blocks.contains(&block) {
                         errors.push(format!("i{inst_id}: jump to non-existent block"))
                     }
                 }
-                Inst::JumpIf { cond, .. } => {
+                Inst::JumpIf { cond, cons, alt } => {
                     let cond_type = get_value_kind(ir, &k1.types, cond);
                     if !cond_type.is_value() {
                         errors.push(format!("i{inst_id}: jumpif cond is not a value"))
+                    }
+
+                    if !my_blocks.contains(&cons) {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
+                    }
+                    if !my_blocks.contains(&alt) {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
                     }
                 }
                 Inst::Unreachable => (),

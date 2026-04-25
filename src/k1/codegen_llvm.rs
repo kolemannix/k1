@@ -610,7 +610,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Some(v) => self.builder.build_return(Some(&v)).unwrap(),
         };
 
-        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
+        info!("codegen phase 'llvm' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 

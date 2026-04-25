@@ -22,6 +22,7 @@ mod stack_tests {
                 abi_mode: AbiMode::Internal,
             },
             inst_count: 0,
+            last_alloca_index: None,
             blocks: Dlist::empty(),
             is_debug: false,
             function_builtin_kind: None,
