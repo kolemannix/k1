@@ -1144,12 +1144,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
             }
             Inst::Phi { t: _, incomings } => {
                 let mut value: core::mem::MaybeUninit<IrValue> = core::mem::MaybeUninit::uninit();
-                'case: for (index, case) in k1.ir.mem.getn(incomings).iter().enumerate() {
-                    // nocommit: Hack for broken phis emitted by ir inlining currently
-                    if index == 0 {
-                        value = core::mem::MaybeUninit::new(case.value)
-                    };
-
+                'case: for case in k1.ir.mem.getn(incomings).iter() {
                     if case.from == prev_b {
                         value = core::mem::MaybeUninit::new(case.value);
                         break 'case;

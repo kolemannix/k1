@@ -565,6 +565,13 @@ pub enum Inst {
         value: Value,
     },
 }
+
+impl Inst {
+    fn is_phi(&self) -> bool {
+        matches!(self, Inst::Phi { .. })
+    }
+}
+
 static_assert_size!(Inst, 32);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2927,14 +2934,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                             errors.push(format!("i{inst_id}: phi type not a value kind"));
                             continue;
                         };
-                        // nocommit: When we inline a phi, rewrite it to a value.
                         if incoming.from == block_id {
-                            // errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
-                        } else if !ir
-                            .mem
-                            .dlist_iter_handles(unit.blocks)
-                            .any(|(b, _)| b == incoming.from)
-                        {
+                            errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
+                        } else if !my_blocks.contains(&incoming.from) {
                             errors.push(format!("i{inst_id}: phi incoming block does not exist"))
                         }
                     }

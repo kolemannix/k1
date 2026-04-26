@@ -345,10 +345,10 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         b.k1.ir.opt_buf_inline_self_rewrites = self_rewrites;
         b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
 
-        // eprintln!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
-        // if let Err(e) = validate_unit(b.k1, self_unit_id) {
-        //     k1.report(e)
-        // };
+        debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
+        if let Err(e) = validate_unit(b.k1, self_unit_id) {
+            k1.report(e)
+        };
     }
 }
 
@@ -489,9 +489,6 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
                 }
             }
 
-            // Note: this can produce degenerate phis (1 incoming)
-            //       but that's not considered invalid; the problem comes once
-            //       we inline those!
             *incomings = ir.mem.list_to_handle(new_incomings);
         }
         Inst::Ret { v, .. } => {
@@ -704,30 +701,6 @@ pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
             }
             _ => {}
         }
-        // for (_inst_handle, inst_node) in ir.mem.dlist_iter_handles(instrs) {
-        //     match ir.instrs.get(inst_node.data) {
-        //         Inst::Jump(block) => {
-        //             ir.mem.dlist_push(succs, *block);
-        //             let mut dst_block = ir.mem.get_raw_ref(*block);
-        //             ir.mem.dlist_push(&mut dst_block.data.preds, block_id);
-        //             work_stack.push(*block);
-        //         }
-        //         Inst::JumpIf { cons, alt, .. } => {
-        //             ir.mem.dlist_push(succs, *cons);
-        //             let mut cons_block = ir.mem.get_raw_ref(*cons);
-        //             ir.mem.dlist_push(&mut cons_block.data.preds, block_id);
-        //
-        //             ir.mem.dlist_push(succs, *alt);
-        //             let mut alt_block = ir.mem.get_raw_ref(*alt);
-        //             ir.mem.dlist_push(&mut alt_block.data.preds, block_id);
-        //
-        //             work_stack.push(*cons);
-        //             work_stack.push(*alt);
-        //         }
-        //         _ => {}
-        //         _ => {}
-        //     }
-        // }
     }
     visited.clear();
     ir.opt_buf_cfg_compute_work_stack = work_stack;
@@ -751,44 +724,78 @@ pub fn cfg_simplify(k1: &mut TypedProgram, unit_id: IrUnitId) {
 
 fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
     // eprintln!("cfg_simplify on {}", blocks_to_string(k1, *blocks, true, false));
+
+    // Unreachable elimination first
+    let mut remove = k1.tmp.new_list(0);
+    let ir = &mut k1.ir;
+    for (block_id, node) in ir.mem.dlist_iter_handles(*blocks) {
+        let is_entry = node.prev.is_nil();
+
+        // Dead case
+        if !is_entry && node.data.preds.is_empty() {
+            debug!("dead b{}", block_id.raw_index());
+            remove.push_grow(&mut k1.tmp, block_id);
+        }
+    }
+
+    for (block_id, _) in ir.mem.dlist_iter_handles(*blocks) {
+        remove_phi_incomings(ir, block_id, &remove)
+    }
+
+    for block_id in remove.as_slice() {
+        debug!("removing b{}", block_id.raw_index());
+        ir.mem.dlist_remove(blocks, *block_id);
+    }
+
+    // Now, more interesting simplifications
+    // - Merge successor into self
+    // - Trampoline removal
+
     while do_pass(k1, blocks) {}
 
     fn do_pass(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> bool {
-        debug!("simplify pass");
         let ir = &mut k1.ir;
         let mut noop = true;
-        let mut remove = k1.tmp.new_list(0);
         let mut rewrites = std::mem::take(&mut ir.opt_buf_cfg_simpl_rewrites);
+
         for (block_id, node) in ir.mem.dlist_iter_handles(*blocks) {
-            let is_entry = node.prev.is_nil();
-
-            // Dead case
-            if !is_entry && node.data.preds.is_empty() {
-                noop = false;
-                debug!("dead b{}", block_id.raw_index());
-                remove.push_grow(&mut k1.tmp, block_id);
-                break;
-            }
-
             // Trampoline case
             if let Some(pred) = ir.mem.dlist_get_singleton(node.data.preds) {
                 if let Some(succ) = ir.mem.dlist_get_singleton(node.data.succs) {
+                    // nocommit: we should be able to unleash the trampoline case
+                    // Somehow still needed; I don't get it
                     let succ_has_phi = ir
                         .mem
                         .dlist_iter(ir.mem.get(succ).data.instrs)
-                        .any(|inst_id| matches!(ir.instrs.get(*inst_id), Inst::Phi { .. }));
+                        .any(|inst_id| ir.instrs.get(*inst_id).is_phi());
                     if !succ_has_phi {
                         if let Some(inst_id) = ir.mem.dlist_get_singleton(node.data.instrs) {
                             if let Inst::Jump(jmp_block_id) = ir.instrs.get(inst_id) {
                                 debug_assert!(*jmp_block_id == succ);
                                 debug!("trampoline b{}", block_id.raw_index());
-                                remove.push_grow(&mut k1.tmp, block_id);
 
-                                // Jumps to me become jumps to my only succ
-                                rewrites.block_enters.insert(block_id, succ);
-                                // Incomings from me become incomings from my pred
-                                rewrites.block_exits.insert(block_id, pred);
+                                // Edit the jump in pred
+                                let pred_instrs = ir.mem.get(pred).data.instrs;
+                                let pred_last_inst_id = ir.mem.get(pred_instrs.last).data;
+                                match ir.instrs.get_mut(pred_last_inst_id) {
+                                    Inst::Jump(old_jump_id) => {
+                                        debug_assert_eq!(*old_jump_id, block_id);
+                                        *old_jump_id = succ;
+                                    }
+                                    Inst::JumpIf { cons, alt, .. } => {
+                                        if *cons == block_id {
+                                            *cons = succ;
+                                        } else if *alt == block_id {
+                                            *alt = succ;
+                                        } else {
+                                            panic!("trampoline didnt find jump to block_id")
+                                        }
+                                    }
+                                    _ => panic!("trampoline expected terminator"),
+                                }
 
+                                rewrite_phi_incoming(ir, succ, block_id, pred);
+                                ir.mem.dlist_remove(blocks, block_id);
                                 noop = false;
                                 break;
                             };
@@ -806,53 +813,104 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                 if succ_node.data.preds.is_singleton() {
                     let pred_node_cfg = ir.mem.get(succ_node.data.preds.first);
                     if pred_node_cfg.data == block_id {
-                        debug!(
-                            "merge b{} into b{}",
-                            succ_block_id.raw_index(),
-                            block_id.raw_index()
-                        );
+                        debug!("merge case");
                         // Merge block_id with its successor, because we dominate it and we have no
                         // other successors
-                        rewrites.block_exits.insert(succ_block_id, block_id);
+
                         // Remove the jump from block_id to succ
                         let mut block_node = ir.mem.get_raw_ref(block_id);
                         let popped_jump =
                             ir.mem.dlist_pop_last(&mut block_node.data.instrs).unwrap();
                         debug_assert!(matches!(ir.instrs.get(popped_jump.data), Inst::Jump { .. }));
+
                         // Move all instructions from succ to block_id
+                        // If we're inlining the last incoming of a phi, kill the phi
                         for (_inst_handle, inst_node) in
                             ir.mem.dlist_iter_handles(succ_node.data.instrs)
                         {
+                            let mut skip = false;
                             if let Inst::Phi { incomings, .. } = ir.instrs.get(inst_node.data) {
                                 if incomings.len() == 1 {
                                     let only_case = ir.mem.get_nth(*incomings, 0);
+                                    debug_assert_eq!(only_case.from, block_id);
                                     rewrites.values.insert(inst_node.data, only_case.value);
+                                    debug!("block_merge: skipping single phi i{}", inst_node.data);
+                                    skip = true;
+                                } else {
+                                    debug!("block_merge: keeping multi phi i{}", inst_node.data);
                                 }
                             }
-                            ir.mem.dlist_push(&mut block_node.data.instrs, inst_node.data);
+
+                            if !skip {
+                                ir.mem.dlist_push(&mut block_node.data.instrs, inst_node.data);
+                            }
                         }
+
+                        // Let's just clean up now
+                        // Remove succ
+                        // Rewrite succs succ's phis
+                        for (_, succ_cfg_node) in ir.mem.dlist_iter_handles(succ_node.data.succs) {
+                            rewrite_phi_incoming(ir, succ_cfg_node.data, succ_block_id, block_id)
+                        }
+                        ir.mem.dlist_remove(blocks, succ_block_id);
+
+                        if !rewrites.values.is_empty() {
+                            for (block_id, _) in ir.mem.dlist_iter_handles(*blocks) {
+                                rewrite_in_block(ir, block_id, &mut rewrites)
+                            }
+                        }
+
                         noop = false;
                         break;
                     }
                 }
             }
         }
-        for block_id in remove.as_slice() {
-            debug!("removing b{}", block_id.raw_index());
-            rewrites.block_deletes.insert(*block_id);
-            ir.mem.dlist_remove(blocks, *block_id);
-        }
 
         if !noop {
-            //rewrites.eprint();
-            for (block_id, _) in ir.mem.dlist_iter_handles(*blocks) {
-                rewrite_in_block(ir, block_id, &mut rewrites)
-            }
             cfg_compute(ir, *blocks);
         }
         rewrites.clear();
-        ir.opt_buf_cfg_simpl_rewrites = rewrites;
+        k1.ir.opt_buf_cfg_simpl_rewrites = rewrites;
         !noop
     }
     debug!("cfg_simplify end\n{}", blocks_to_string(k1, *blocks, true, false));
+}
+
+fn rewrite_phi_incoming(ir: &mut ProgramIr, phi_block_id: BlockId, from: BlockId, to: BlockId) {
+    let instrs = ir.mem.get(phi_block_id).data.instrs;
+    let first_instr = ir.mem.get(instrs.first);
+    let Inst::Phi { incomings, .. } = ir.instrs.get_mut(first_instr.data) else {
+        return;
+    };
+    if let Some(_incoming) = ir.mem.getn(*incomings).iter().find(|i| i.from == from) {
+        let mut new_incomings = ir.mem.new_list(incomings.len());
+        for phi_case in ir.mem.getn(*incomings) {
+            if phi_case.from == from {
+                new_incomings.push(PhiCase { from: to, value: phi_case.value })
+            } else {
+                new_incomings.push(*phi_case)
+            }
+        }
+        *incomings = ir.mem.list_to_handle(new_incomings);
+    }
+}
+
+fn remove_phi_incomings(ir: &mut ProgramIr, phi_block_id: BlockId, dead_block_ids: &[BlockId]) {
+    let instrs = ir.mem.get(phi_block_id).data.instrs;
+    let first_instr = ir.mem.get(instrs.first);
+    let Inst::Phi { incomings, .. } = ir.instrs.get_mut(first_instr.data) else {
+        return;
+    };
+    if let Some(_incoming) =
+        ir.mem.getn(*incomings).iter().find(|i| dead_block_ids.contains(&i.from))
+    {
+        let mut new_incomings = ir.mem.new_list(incomings.len());
+        for phi_case in ir.mem.getn(*incomings) {
+            if !dead_block_ids.contains(&phi_case.from) {
+                new_incomings.push(*phi_case)
+            }
+        }
+        *incomings = ir.mem.list_to_handle(new_incomings);
+    }
 }

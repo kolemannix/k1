@@ -24,8 +24,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionValue, IntValue, PointerValue,
-    StructValue, ValueKind,
+    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
@@ -2096,24 +2095,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Phi { t, incomings } => {
-                // nocommit: Our ir still spits out bad phis with one incoming that points to their own block 
-                // We just need to rewrite them into values
-                if incomings.len() == 1 {
-                    let incoming = self.k1.ir.mem.get_nth(incomings, 0);
+                let phi_ty = self.pt_canon_type(t);
+                let phi = self.builder.build_phi(phi_ty, "").unwrap();
+
+                for incoming in self.k1.ir.mem.getn(incomings) {
                     let value = self.resolve_value(inst_mappings, incoming.value)?;
-                    inst_mappings.insert(inst_id, value);
-                } else {
-                    let phi_ty = self.pt_canon_type(t);
-                    let phi = self.builder.build_phi(phi_ty, "").unwrap();
-
-                    for incoming in self.k1.ir.mem.getn(incomings) {
-                        let value = self.resolve_value(inst_mappings, incoming.value)?;
-                        let block = self.get_llvm_block(incoming.from)?;
-                        phi.add_incoming(&[(&value, block)])
-                    }
-
-                    inst_mappings.insert(inst_id, phi.as_basic_value());
+                    let block = self.get_llvm_block(incoming.from)?;
+                    phi.add_incoming(&[(&value, block)])
                 }
+
+                inst_mappings.insert(inst_id, phi.as_basic_value());
+                // }
                 Ok(())
             }
             Inst::Ret { v, .. } => {
@@ -2940,6 +2932,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         ir::cfg_simplify(self.k1, IrUnitId::Function(function_id));
+        debug!(
+            "codegen_unit_body ir simplified\n{}",
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+        );
 
         let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
         let blocks = ir_unit.blocks;

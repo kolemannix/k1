@@ -139,6 +139,16 @@ impl<T, Tag> Iterator for DlistIter<T, Tag> {
 pub struct Handle<T, Tag>(Option<NonZeroU32>, PhantomData<T>, PhantomData<Tag>);
 static_assert_size!(Handle<u128, ()>, 4);
 
+impl<T, Tag> std::fmt::Debug for Handle<T, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = std::any::type_name::<T>();
+        match self.0 {
+            None => write!(f, "Handle<{ty}>(nil)"),
+            Some(offset) => write!(f, "Handle<{ty}>({})", offset.get()),
+        }
+    }
+}
+
 impl<T, Tag> PartialEq for Handle<T, Tag> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
@@ -1278,6 +1288,10 @@ impl<T, Tag> List<T, Tag> {
 
     fn end_ptr(&self) -> *mut u8 {
         unsafe { (self.buf as *mut u8).add(self.buf.len() * size_of::<T>()) }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
     }
 
     fn push_unchecked(&mut self, val: T) {
