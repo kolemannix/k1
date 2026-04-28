@@ -252,8 +252,8 @@ fn run(_args: span[string]): result[i32, string] {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/readLine(2048).try; 
     switch uci/parseCommand(cmd) {
-      .err(msg) -> eprintln("[debug] {msg}"),
-      .ok(cmd) -> {
+      :err(msg) -> eprintln("[debug] {msg}"),
+      :ok(cmd) -> {
         let response = handleCommand(cmd);
         // If a command produces output, it goes to stdout with a newline added
         if response is :some(r) { println(r) };

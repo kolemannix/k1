@@ -17,7 +17,7 @@ fn testBasics(): int {
   assert(not c.isSome());
 
   use types/type-id;
-  assert(type-id[PointMaybeY.y:some] == type-id[int]);
+  assert(type-id[PointMaybeY.y.some] == type-id[int]);
 
   0
 }

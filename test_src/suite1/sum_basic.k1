@@ -1,22 +1,22 @@
 ns sum_basic;
 
-deftype Maybe = either A, B(char), C(string)
+deftype Maybe = either a, b(char), c(string)
 fn sumPayload() {
-  let a: Maybe = .A;
-  let b: Maybe = .B('x');
-  let c: Maybe = .C("hello, sums");
-  if a is .A {} else crash("");
-  assert(a is .A);
+  let a: Maybe = :a;
+  let b: Maybe = :b('x');
+  let c: Maybe = :c("hello, sums");
+  if a is :a {} else crash("");
+  assert(a is :a);
 
-  if b is .B(x) {
+  if b is :b(x) {
     assert(x == 'x');
   } else crash("");
-  assert(b is .B(_));
-  assert(b is .B('x'));
+  assert(b is :b(_));
+  assert(b is :b('x'));
   assert(b.asB().! == 'x');
 
-  if c is .C("hello, sums") {} else crash("");
-  assert(c is .C(_));
+  if c is :c("hello, sums") {} else crash("");
+  assert(c is :c(_));
   assert(c.asC().! == "hello, sums");
 
 }
@@ -28,15 +28,15 @@ ns MyResult {
   }
   fn show[T: print, E: print](self: MyResult[T, E]): string {
     switch self {
-      .ok(v) -> { "Ok: {v}\n" },
-      .err(e) -> { "Error: {e}\n" }
+      :ok(v) -> { "Ok: {v}\n" },
+      :err(e) -> { "Error: {e}\n" }
     }
   }
 }
 
 fn genericSum() {
-    let x1: MyResult[int, string] = .ok(-3);
-    let x2: MyResult[int, string] = .err("Some error message");
+    let x1: MyResult[int, string] = :ok(-3);
+    let x2: MyResult[int, string] = :err("Some error message");
 
     let x1Ok = x1.asOk();
 
@@ -58,9 +58,9 @@ fn genericSum() {
 
 deftype E = either(u8) A, B, C(int)
 fn tags() {
-  let a: E = .A;
-  let b: E = .B;
-  let c: E = .C(0);
+  let a: E = :A;
+  let b: E = :B;
+  let c: E = :C(0);
   assertEquals(a.tag, 0);
   assertEquals(b.tag, 1);
   assertEquals(c.tag, 2);

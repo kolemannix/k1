@@ -5,9 +5,9 @@ deftype alias ABC = either A, B, C
 impl print for ABC {
   fn printTo[w: writer](self: ABC, w: w) {
     switch self {
-      .A -> w.write-char('A'),
-      .B -> w.write-char('B'),
-      .C -> w.write-char('C')
+      :A -> w.write-char('A'),
+      :B -> w.write-char('B'),
+      :C -> w.write-char('C')
     }
   }
 }
@@ -15,9 +15,9 @@ impl print for ABC {
 impl equals for ABC {
   fn equals(self: ABC, other: ABC): bool {
     switch { fst: self, snd: other } {
-      { fst: .A, snd: .A } -> true,
-      { fst: .B, snd: .B } -> true,
-      { fst: .C, snd: .C } -> true,
+      { fst: :A, snd: :A } -> true,
+      { fst: :B, snd: :B } -> true,
+      { fst: :C, snd: :C } -> true,
       _ -> false
     }
   }
@@ -25,17 +25,17 @@ impl equals for ABC {
 
 fn bindingIfStruct(v: { x: int, y: int }): ABC {
   if v is { x: xx, y: yy } and xx == 1 {
-    .A
+    :A
   } else {
-    .B
+    :B
   }
 }
 
 fn switchStruct(v: { x: int, y: int }): ABC {
   switch v {
-    { x: 11 } -> .A,
-    { x: xx, y: yy } if xx == 1 or yy == 2 -> .B,
-    _ -> .C
+    { x: 11 } -> :A,
+    { x: xx, y: yy } if xx == 1 or yy == 2 -> :B,
+    _ -> :C
   }
 }
 
@@ -113,12 +113,12 @@ fn test() {
   let yourOpt = some(false);
   if myOpt is :some(x) and x == 42 {} else assert(false);
 
-  assertEquals(bindingIfStruct({ x: 1, y: 2 }), .A);
-  assertEquals(bindingIfStruct({ x: 2, y: 2 }), .B);
+  assertEquals(bindingIfStruct({ x: 1, y: 2 }), :A);
+  assertEquals(bindingIfStruct({ x: 2, y: 2 }), :B);
 
-  assertEquals(switchStruct({ x: 11, y: 0 }), .A);
-  assertEquals(switchStruct({ x: 1, y: 3 }), .B);
-  assertEquals(switchStruct({ x: 0, y: 2 }), .B);
+  assertEquals(switchStruct({ x: 11, y: 0 }), :A);
+  assertEquals(switchStruct({ x: 1, y: 3 }), :B);
+  assertEquals(switchStruct({ x: 0, y: 2 }), :B);
 
   if myOpt is :some(42) and yourOpt is :some(f) and 3 == 3 and not false {
     assert(f == false)

@@ -160,7 +160,7 @@ ns list {
   }
 
   fn firstRef[T](self: *mut list[T]): ?(*mut T) {
-    if self:nonempty() {
+    if self.nonEmpty() {
       :some(self.getRef(0))
     } else {
       :none
@@ -168,17 +168,17 @@ ns list {
   }
 
   fn first[T](self: list[T]): ?T {
-    if self:nonempty() :some(self.get(0)) 
+    if self.nonEmpty() :some(self.get(0)) 
     else :none
   }
 
   fn lastRef[T](self: *mut list[T]): ?(*mut T) {
-    if self:nonempty() :some(self.getRef(self.len - 1))
+    if self.nonEmpty() :some(self.getRef(self.len - 1))
     else :none
   }
 
   fn last[T](self: list[T]): ?T {
-    if self:nonempty() :some(self.get(self.len - 1))
+    if self.nonEmpty() :some(self.get(self.len - 1))
     else :none
   }
 

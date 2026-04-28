@@ -21,7 +21,7 @@ fn getArrayInfo[T](): { elementName: string, fiveSize: size, tenSize: size } {
 // Generic function with Array parameter type to test substitution
 fn describeArray[T](): string {
   let schema = type-schema(type-id[array[T, 3]]);
-  require schema is .array({ element-type-id, size }) else {
+  require schema is :array({ element-type-id, size }) else {
     return("Failed to get Array schema")
   };
   let actualElementName = type-name(element-type-id);
@@ -37,14 +37,14 @@ fn test() {
 
   // Test 2: Array type schemas
   let i32ArraySchema = type-schema(type-id[array[i32, 10]]());
-  require i32ArraySchema is .array({ element-type-id, size }) else {
+  require i32ArraySchema is :array({ element-type-id, size }) else {
     crash("Expected Array schema for array[i32, 10]")
   };
   assertEquals(type-name(element-type-id), "i32");
   assertEquals(size, :some(10));
 
   let stringArraySchema = type-schema(type-id[array[string, 7]]());
-  require stringArraySchema is .array({ element-type-id, size }) else {
+  require stringArraySchema is :array({ element-type-id, size }) else {
     crash("Expected Array schema for array[string, 7]")
   };
   assertEquals(type-name(element-type-id), "string");

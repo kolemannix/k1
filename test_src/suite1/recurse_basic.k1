@@ -1,27 +1,27 @@
 ns recurse_basic {
-  deftype Node = { node: *Node }
-  deftype ENode = either Leaf, Node(*ENode)
+  deftype node = { node: *node }
+  deftype tree = either leaf, node(*tree)
 
-  fn make(n: size): *Node {
+  fn make(n: size): *node {
     //println("make {n}");
-    if n <= 0 ptr/null.r[Node] else mem/new({ node: make(n - 1) })
+    if n <= 0 ptr/null.r[node] else mem/new({ node: make(n - 1) })
    }
 
-  fn count(n: *Node): size {
+  fn count(n: *node): size {
     //println("count");
     if n.as[ptr].is-null() 0 else 1 + count(n.node)
   }
 
-  fn emake(n: size): ENode {
+  fn emake(n: size): tree {
     //println("emake {n}");
-    if n == 0 .Leaf else .Node(mem/new(emake(n - 1)))
+    if n == 0 :leaf else :node(mem/new(emake(n - 1)))
   }
 
-  fn ecount(en: ENode): size {
+  fn ecount(en: tree): size {
     //println("ecount");
     switch en {
-      .Leaf -> 0,
-      .Node(child) -> 1 + ecount(child.*)
+      :leaf -> 0,
+      :node(child) -> 1 + ecount(child.*)
     }
   }
 

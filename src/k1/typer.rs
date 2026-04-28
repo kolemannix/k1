@@ -58,7 +58,7 @@ use crate::parse::{
     ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedSlice,
     ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
     ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
     StructValueFieldKind,
 };
 use crate::vpool::VPool;
@@ -1602,6 +1602,7 @@ impl Display for MessageLevel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
     None,
+    ParseError,
     TypeError,
     Malformed,
     Internal,
@@ -3496,7 +3497,8 @@ impl TypedProgram {
                     }
                 };
 
-                let has_payloads = self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
+                let has_payloads =
+                    self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
                 if has_payloads {
                     let mut variants = self.types.mem.new_list(variant_count as u32);
                     for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
@@ -6905,16 +6907,6 @@ impl TypedProgram {
         // Special case: Sum Constructor
         let span = field_access.span;
         let base_span = self.ast.exprs.get_span(field_access.base);
-        if let Some(sum_result) = self.handle_sum_or_enum_constructor(
-            Some(field_access.base),
-            field_access.field_name,
-            None,
-            field_access.type_args,
-            ctx,
-            span,
-        )? {
-            return Ok(sum_result);
-        }
 
         if !field_access.type_args.is_empty() {
             // Treat it like a call; foo.<field_name>[u32]
@@ -7533,58 +7525,7 @@ impl TypedProgram {
             }
             ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
-            ParsedExpr::Variant(anon_ctor) => {
-                let span = anon_ctor.span;
-                let expected_type = ctx.expected_type_id.ok_or_else(|| {
-                    make_error(
-                        "Could not infer sum type from context; try supplying the name or providing a type ascription",
-                        anon_ctor.span,
-                    )
-                })?;
-                let is_sum = match self.types.get(expected_type) {
-                    Type::Sum(_s) => Ok(true),
-                    Type::Enum(_e) => Ok(false),
-                    _ => failf!(
-                        anon_ctor.span,
-                        "Could not infer the sum type for '.' shorthand; expected type was a {} type: {}",
-                        self.type_kind_to_string(expected_type),
-                        self.type_id_to_string(expected_type)
-                    ),
-                }?;
-                if is_sum {
-                    let sum_ctx = ctx.with_expected_type(Some(expected_type));
-                    let Some(result) = self.handle_sum_or_enum_constructor(
-                        None,
-                        anon_ctor.variant_name,
-                        anon_ctor.payload,
-                        MSlice::empty(),
-                        sum_ctx,
-                        span,
-                    )?
-                    else {
-                        self.ice_span(span, "handle_sum_constructor should never return Ok(None) when called in anonymous mode")
-                    };
-                    Ok(result)
-                } else {
-                    let Type::Enum(e) = self.types.get(expected_type) else { panic!() };
-                    let Some((value_index, _)) =
-                        self.types.enum_value_by_name(e.member_values, anon_ctor.variant_name)
-                    else {
-                        return failf!(
-                            anon_ctor.span,
-                            "Enum {} does not have a member named {}",
-                            self.type_id_to_string(expected_type),
-                            self.ast.idents.get_name(anon_ctor.variant_name)
-                        );
-                    };
-                    let expr_id = self.exprs.add(
-                        TypedExpr::Enum(EnumConstructor { value_index: value_index as u32 }),
-                        expected_type,
-                        anon_ctor.span,
-                    );
-                    Ok(expr_id)
-                }
-            }
+            ParsedExpr::Variant(parsed_variant) => self.eval_variant(parsed_variant.clone(), ctx),
             ParsedExpr::Is(is_expr) => {
                 let is_expr = *is_expr;
                 // If the 'is' is attached to an if/else, that is handled by if/else
@@ -11104,17 +11045,6 @@ impl TypedProgram {
 
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = first_arg {
-            if let Some(sum_constr) = self.handle_sum_or_enum_constructor(
-                Some(base_arg.value),
-                fn_name,
-                second_arg.map(|param| param.value),
-                call.type_args,
-                ctx,
-                call.span,
-            )? {
-                return Ok(CallResolution::Other(sum_constr));
-            }
-
             if fn_name == self.ast.idents.b.toRef || fn_name == self.ast.idents.b.toDyn {
                 // TODO: this isn't algebraically sound since you can _only_ use toRef and toDyn
                 //       if you literally name the function on the lhs of the dot; you can't store
@@ -11839,182 +11769,147 @@ impl TypedProgram {
         Ok(Some(self.synth_if_else(consequent_type_id, condition, consequent, alternate, span)))
     }
 
-    fn handle_sum_or_enum_constructor(
+    fn eval_variant(
         &mut self,
-        base_expr: Option<ParsedExprId>,
-        provided_name: Ident,
-        payload_parsed_expr: Option<ParsedExprId>,
-        type_args: ParsedSlice<NamedTypeArg>,
+        parsed_variant: ParsedVariant,
         ctx: EvalExprContext,
-        span: SpanId,
-    ) -> K1Result<Option<TypedExprId>> {
-        let base_type_id = match base_expr {
-            Some(base_expr) => {
-                // the construct we are parsing is a.b(<maybe p>)
-                let ParsedExpr::Variable(v) = self.ast.exprs.get(base_expr) else {
-                    return Ok(None);
-                };
-
-                // Local variables with the same name as an sum take precedence
-                if v.name.path.is_empty() {
-                    if let Some(_local_var) = self.scopes.find_variable(ctx.scope_id, v.name.name) {
-                        return Ok(None);
-                    }
-                }
-
-                let Some((base_type_in_scope, _)) = self.scopes.find_type_namespaced(
+    ) -> K1Result<TypedExprId> {
+        let span = parsed_variant.span;
+        let provided_type = match &parsed_variant.type_name {
+            Some(qident) => {
+                let Some((type_id, _)) = self.scopes.find_type_namespaced(
                     ctx.scope_id,
-                    &v.name,
+                    qident,
                     &self.namespaces,
                     &self.ast.idents,
                 )?
                 else {
-                    return Ok(None);
+                    return failf!(
+                        qident.span,
+                        "No type {} is in scope",
+                        self.qident_to_string(qident)
+                    );
                 };
-                match self.types.get(base_type_in_scope) {
-                    Type::Sum(_s) => base_type_in_scope,
-                    Type::Enum(_e) => base_type_in_scope,
-                    Type::Generic(g) => {
-                        let Some(_inner_sum) = self.types.get(g.inner).as_sum() else {
-                            return Ok(None);
-                        };
-                        base_type_in_scope
-                    }
-                    _ => return Ok(None),
-                }
+                type_id
             }
-            None => {
-                // the construct we are parsing is .b(<maybe p>)
-
-                // This case can just fail if the expected type is not a sum
-                let expected_type = ctx.expected_type_id.ok_or_else(|| {
-                    make_error(
-                        "Could not infer sum or enum type from context; try supplying the name or providing a type ascription",
+            None => match ctx.expected_type_id {
+                None => {
+                    return failf!(
                         span,
-                    )
-                })?;
-                match self.types.get(expected_type) {
-                    Type::Sum(_) => match self.types.get_instance_info(expected_type) {
-                        None => expected_type,
-                        Some(instance_info) => instance_info.generic_parent,
-                    },
-                    Type::Enum(_e) => expected_type,
-                    _ => {
-                        return failf!(
-                            span,
-                            "Could not infer expected sum type for '.' shorthand; expected type was a {} type: {}",
-                            self.type_kind_to_string(expected_type),
-                            self.type_id_to_string(expected_type)
-                        );
-                    }
+                        "Could not infer sum type from context; try supplying the name or providing a type ascription"
+                    );
                 }
-            }
+                Some(type_id) => type_id,
+            },
         };
-        let base_sum_or_generic_sum = self.types.get(base_type_id);
+        match self.types.get(provided_type) {
+            Type::Sum(_s) => Ok(()),
+            Type::Generic(g) => match self.types.get(g.inner).as_sum() {
+                None => {
+                    return failf!(
+                        span,
+                        "Expected a sum type; but this is a different generic: {}",
+                        self.type_id_to_string(provided_type)
+                    );
+                }
+                Some(_s) => Ok(()),
+            },
+            Type::Enum(_e) => Ok(()),
+            _ => failf!(
+                parsed_variant.span,
+                "Not a sum or enum type: {}",
+                self.type_id_to_string(provided_type)
+            ),
+        }?;
+
+        let base_sum_or_generic_sum = self.types.get(provided_type);
+        let variant_name = parsed_variant.variant_name;
         match base_sum_or_generic_sum {
             Type::Enum(e) => {
                 let Some((matching_value_index, _matching_value)) =
-                    self.types.enum_value_by_name(e.member_values, provided_name)
+                    self.types.enum_value_by_name(e.member_values, variant_name)
                 else {
-                    // nocommit: We're paying dearly for this syntactic ambiguity between
-                    // local_struct.field and enum_in_scope.member,
-                    // and sum_in_scope.variant(), and local_struct.method()
-                    //
-                    // I wonder if the dot isn't quite right for sum/enum construction.
-                    // Maybe a slash is better
-                    // Something wholly different, colon for tagging!
-                    if base_expr.is_none() {
-                        return failf!(
-                            span,
-                            "No value {} on type {}",
-                            self.ident_str(provided_name),
-                            self.type_id_to_string(base_type_id)
-                        );
-                    } else {
-                        return Ok(None);
-                    }
+                    return failf!(
+                        span,
+                        "No member {} on type {}",
+                        self.ident_str(variant_name),
+                        self.type_id_to_string(provided_type)
+                    );
                 };
                 let enum_expr = self.exprs.add(
                     TypedExpr::Enum(EnumConstructor { value_index: matching_value_index as u32 }),
-                    base_type_id,
+                    provided_type,
                     span,
                 );
-                Ok(Some(enum_expr))
+                Ok(enum_expr)
             }
             Type::Sum(e) => {
-                if let Some(_variant) = self.types.sum_variant_by_name(e.variants, provided_name) {
+                if let Some(_variant) = self.types.sum_variant_by_name(e.variants, variant_name) {
                     let sum_constructor = self.eval_sum_constructor(
-                        base_type_id,
-                        provided_name,
-                        payload_parsed_expr,
+                        provided_type,
+                        variant_name,
+                        parsed_variant.payload,
                         ctx,
                         span,
                     )?;
-                    Ok(Some(sum_constructor))
+                    Ok(sum_constructor)
                 } else {
-                    if base_expr.is_none() {
-                        failf!(
-                            span,
-                            "No variant {} on type {}",
-                            self.ident_str(provided_name),
-                            self.type_id_to_string(base_type_id)
-                        )
-                    } else {
-                        Ok(None)
-                    }
+                    failf!(
+                        span,
+                        "No variant {} on type {}",
+                        self.ident_str(variant_name),
+                        self.type_id_to_string(provided_type)
+                    )
                 }
             }
             Type::Generic(g) => {
-                let Some(inner_sum) = self.types.get(g.inner).as_sum() else { return Ok(None) };
+                let Some(inner_sum) = self.types.get(g.inner).as_sum() else {
+                    self.ice_span(span, "checked to be sum")
+                };
                 let Some(generic_variant) =
-                    self.types.sum_variant_by_name(inner_sum.variants, provided_name)
+                    self.types.sum_variant_by_name(inner_sum.variants, variant_name)
                 else {
-                    if base_expr.is_none() {
-                        return failf!(
-                            span,
-                            "No variant {} on type {}",
-                            self.ident_str(provided_name),
-                            self.type_id_to_string(g.inner)
-                        );
-                    } else {
-                        return Ok(None);
-                    }
+                    return failf!(
+                        span,
+                        "No variant {} on type {}",
+                        self.ident_str(variant_name),
+                        self.type_id_to_string(g.inner)
+                    );
                 };
                 let g_params = g.params;
 
-                let payload_if_needed = match generic_variant.payload {
-                    Some(generic_payload_type_id) => match payload_parsed_expr {
-                        None => {
-                            return failf!(
-                                span,
-                                "Variant {} requires a payload",
-                                self.ident_str(generic_variant.name)
-                            );
-                        }
-                        Some(payload_parsed_expr) => {
-                            Some((generic_payload_type_id, payload_parsed_expr))
-                        }
-                    },
-                    None => match payload_parsed_expr {
-                        None => None,
-                        Some(_payload_expr) => {
-                            return failf!(
-                                span,
-                                "Variant {} does not take a payload",
-                                self.ident_str(generic_variant.name)
-                            );
-                        }
-                    },
+                let payload_if_needed = match (generic_variant.payload, parsed_variant.payload) {
+                    (Some(generic_payload_type_id), None) => {
+                        return failf!(
+                            span,
+                            "Variant {} requires a payload",
+                            self.ident_str(generic_variant.name)
+                        );
+                    }
+                    (Some(generic_payload_type_id), Some(payload_parsed_expr)) => {
+                        Some((generic_payload_type_id, payload_parsed_expr))
+                    }
+                    (None, None) => None,
+                    (None, Some(_payload_expr)) => {
+                        return failf!(
+                            span,
+                            "Variant {} does not take a payload",
+                            self.ident_str(generic_variant.name)
+                        );
+                    }
                 };
 
-                let solved_or_passed_type_params: NamedTypeSlice = if type_args.is_empty() {
+                let solved_or_passed_type_params: NamedTypeSlice = if parsed_variant
+                    .type_args
+                    .is_empty()
+                {
                     match payload_if_needed {
                         None => {
                             match ctx.expected_type_id.map(|t| (t, self.types.get_instance_info(t)))
                             {
                                 Some((expected_type, Some(spec_info))) => {
                                     // We're expecting a specific instance of a generic sum
-                                    if spec_info.generic_parent == base_type_id {
+                                    if spec_info.generic_parent == provided_type {
                                         // Solved params
                                         let solved_params_iter = self
                                             .mem
@@ -12032,7 +11927,7 @@ impl TypedProgram {
                                         return failf!(
                                             span,
                                             "Cannot infer a type for {}; expected mismatching generic type {}",
-                                            self.name_of_type(base_type_id),
+                                            self.name_of_type(provided_type),
                                             self.type_id_to_string(expected_type)
                                         );
                                     }
@@ -12041,7 +11936,7 @@ impl TypedProgram {
                                     return failf!(
                                         span,
                                         "Cannot infer a type for {}",
-                                        self.name_of_type(base_type_id)
+                                        self.name_of_type(provided_type)
                                     );
                                 }
                             }
@@ -12077,8 +11972,11 @@ impl TypedProgram {
                     }
                 } else {
                     let mut passed_params: List<NameAndType, _> = self.mem.new_list(g_params.len());
-                    for (generic_param, passed_type_arg) in
-                        self.mem.getn(g_params).iter().zip(self.ast.mem.getn(type_args))
+                    for (generic_param, passed_type_arg) in self
+                        .mem
+                        .getn(g_params)
+                        .iter()
+                        .zip(self.ast.mem.getn(parsed_variant.type_args))
                     {
                         let Some(passed_type_expr) = passed_type_arg.type_expr else {
                             return failf!(span, "Wildcard type _ is not yet supported here");
@@ -12095,15 +11993,15 @@ impl TypedProgram {
                         .iter()
                         .map(|type_param| type_param.type_id),
                 );
-                let concrete_type = self.instantiate_generic_type(base_type_id, passed_type_ids);
+                let concrete_type = self.instantiate_generic_type(provided_type, passed_type_ids);
                 let sum_constr = self.eval_sum_constructor(
                     concrete_type,
-                    provided_name,
-                    payload_parsed_expr,
+                    variant_name,
+                    parsed_variant.payload,
                     ctx,
                     span,
                 )?;
-                Ok(Some(sum_constr))
+                Ok(sum_constr)
             }
             _ => self.ice_span(span, "should be a Sum, Enum, or Generic"),
         }

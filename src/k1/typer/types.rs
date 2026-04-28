@@ -235,7 +235,7 @@ pub struct TypedSumVariant {
     pub tag_value: TypedIntValue,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct SumType {
     pub variants: MSlice<TypedSumVariant, TypePool>,
     pub tag_type: IntegerType,

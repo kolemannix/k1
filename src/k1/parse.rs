@@ -3568,7 +3568,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         span,
                     }))))
                 } else {
-                    eprintln!("naked anon variant at {}", self.peek().kind);
                     let span = self.extend_token_span(first, second);
                     Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
                         type_name: None,
@@ -3805,7 +3804,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         if let Some(expression_id) = resulting_expression {
             if self.peek().kind == K::Colon {
                 if self.tokens.peek_n(1).is_whitespace_preceded() {
-                    eprintln!("its a type hint");
                     self.advance();
                     let type_hint = self.expect_type_expression()?;
                     self.ast.exprs.set_type_hint(expression_id, type_hint);

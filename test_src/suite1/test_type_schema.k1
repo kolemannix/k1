@@ -11,7 +11,7 @@ ns type_schema {
 
   fn printStructShape[T](): string {
     let id = type-id[T];
-    require get-type-schema[T] is .struct({ fields }) else { return("") };
+    require get-type-schema[T] is :struct({ fields }) else { return("") };
     let* sb = core/StringBuilder/new();
     let name = type-name(id);
     sb.write-string("Struct {name} {{\n");
@@ -28,30 +28,30 @@ ns type_schema {
 
   fn test() {
 
-    assert(get-type-schema[u8]   is .int(.u8));
-    assert(get-type-schema[u16]  is .int(.u16));
-    assert(get-type-schema[u32]  is .int(.u32));
-    assert(get-type-schema[u64]  is .int(.u64));
-    assert(get-type-schema[i8]   is .int(.i8));
-    assert(get-type-schema[i16]  is .int(.i16));
-    assert(get-type-schema[i32]  is .int(.i32));
-    assert(get-type-schema[i64]  is .int(.i64));
+    assert(get-type-schema[u8]   is :int(:u8));
+    assert(get-type-schema[u16]  is :int(:u16));
+    assert(get-type-schema[u32]  is :int(:u32));
+    assert(get-type-schema[u64]  is :int(:u64));
+    assert(get-type-schema[i8]   is :int(:i8));
+    assert(get-type-schema[i16]  is :int(:i16));
+    assert(get-type-schema[i32]  is :int(:i32));
+    assert(get-type-schema[i64]  is :int(:i64));
     let pointByteSchema = get-type-schema[Point3[u8]];
-    require pointByteSchema is .struct({ fields }) else crash("");
+    require pointByteSchema is :struct({ fields }) else crash("");
     assertEquals(fields.len(), 3);
     require get-type-schema[*i32]
-      is .reference({ mutable: false, inner-type-id })
+      is :reference({ mutable: false, inner-type-id })
       and inner-type-id == type-id[i32] else crash("");
-    assert(get-type-schema[*mut i32] is .reference({ mutable: true }));
+    assert(get-type-schema[*mut i32] is :reference({ mutable: true }));
     assertEquals(
       get-type-schema[**bool].asReference().!.inner-type-id,
       type-id[*bool]
     );
 
-    assert(get-type-schema[either Yes] is .enum(_));
+    assert(get-type-schema[either Yes] is :enum(_));
 
     require get-type-schema[either Yes, No, MaybeSo(string)]
-      is .either({ variants })
+      is :either({ variants })
       and variants.len() == 3
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
@@ -62,12 +62,12 @@ ns type_schema {
       else crash("");
 
     require get-type-schema[(either Yes(int).Yes)]
-      is .int(.i64)
+      is :int(:i64)
       else crash("");
 
-    assert(get-type-schema[array[i32, 10]] is .array(_));
+    assert(get-type-schema[array[i32, 10]] is :array(_));
     require get-type-schema[array[string, 5]]
-      is .array({ element-type-id, size })
+      is :array({ element-type-id, size })
       and element-type-id == type-id[string]
       and size == :some(5)
       else crash("");
@@ -76,14 +76,14 @@ ns type_schema {
 
     let isZeroPtr: *fn(int) -> bool = isZero.toRef();
     require get-type-schema[typeOf(isZeroPtr)]
-      is .function-pointer({ function-type-id }) else crash("");
+      is :function-pointer({ function-type-id }) else crash("");
 
     require type-schema(function-type-id)
-      is .function({ params, return-type-id }) else crash("");
+      is :function({ params, return-type-id }) else crash("");
 
-    assert(type-schema(return-type-id) is .bool);
+    assert(type-schema(return-type-id) is :bool);
     assertEquals(params.get(0).name, "x");
-    assert(type-schema(params.get(0).type-id) is .int(_));
+    assert(type-schema(params.get(0).type-id) is :int(_));
 
     {}
   }

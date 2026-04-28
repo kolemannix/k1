@@ -10,18 +10,18 @@ fn matchBool(b: bool): string {
 deftype TriState = either Yes, No, Failure({ reason: string })
 fn matchTristateOpt(t: ?TriState): string {
   switch t {
-    :some(.Yes) -> "yes",
-    :some(.No) -> "no",
-    :some(.Failure(s)) -> "failure: {s.reason}",
+    :some(:Yes) -> "yes",
+    :some(:No) -> "no",
+    :some(:Failure(s)) -> "failure: {s.reason}",
     :none -> "none"
   }
 }
 
 fn failedWithBaz(t: TriState): bool {
   switch t {
-    .Yes -> false,
-    .No -> false,
-    .Failure(s) -> s.reason == "baz"
+    :Yes -> false,
+    :No -> false,
+    :Failure(s) -> s.reason == "baz"
   }
 }
 
@@ -52,16 +52,16 @@ fn main(): i32 {
   assertEquals(matchOptBool(:some(false)), "false");
   assertEquals(matchOptBool(:none), "None");
 
-  let yes: TriState = .Yes;
+  let yes: TriState = :Yes;
   assertEquals(matchTristateOpt(:some(yes)), "yes");
-  assertEquals(matchTristateOpt(:some(.Yes)), "yes");
-  assertEquals(matchTristateOpt(:some(.Failure({ reason: "because" }))), "failure: because");
+  assertEquals(matchTristateOpt(:some(:Yes)), "yes");
+  assertEquals(matchTristateOpt(:some(:Failure({ reason: "because" }))), "failure: because");
 
   assert(not bothTrue({ a: true, b: false }));
   assert(bothTrue({ a: true, b: true }));
 
-  assert(failedWithBaz(.Failure({ reason: "baz" })));
-  assert(not failedWithBaz(.No));
+  assert(failedWithBaz(:Failure({ reason: "baz" })));
+  assert(not failedWithBaz(:No));
 
   switch some(42) {
     :some(x) if x == 42 -> {},
@@ -69,13 +69,13 @@ fn main(): i32 {
   };
 
   // matching understands 'never'
-  let foo: result[int, { asdf: never }] = .ok(42);
+  let foo: result[int, { asdf: never }] = :ok(42);
 
-  require foo is .ok(i);
+  require foo is :ok(i);
 
   assertEquals(i, 42);
   switch foo {
-    .ok(i) -> assertEquals(i, 42),
+    :ok(i) -> assertEquals(i, 42),
   };
 
   0

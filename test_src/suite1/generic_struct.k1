@@ -50,7 +50,7 @@ fn test() {
   assert(unboxIt(nested) == 42);
 
   takesPolyAuPair({ t: some(42), u: opt:some(true) });
-  takesPolyAuPair({ t: some(42), u: :some(true) });
+  takesPolyAuPair({ t: some(42), u: some(true) });
   takesPolyAuPair({ t: some(42), u: some(true) });
 
   takesPolyAuPair[int, _]({ t: some(42), u: some(true) });

@@ -148,7 +148,7 @@ ns mem {
 
   }
 
-  fn new[T](t: T): *mut T { alloc-mode.current.new(t) }
+  fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
 
   let mutable tls arena: arena = zeroed()
 

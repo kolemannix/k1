@@ -4,7 +4,7 @@ fn bufferEmpty() {
   let empty = buffer/empty[int]();
   assert(empty.len == 0);
   assert(empty.isEmpty());
-  assert(not empty:nonempty());
+  assert(not empty.nonEmpty());
   assert(empty.first() == :none);
   assert(empty.last() == :none);
 }
@@ -13,7 +13,7 @@ fn bufferFilled() {
   let buf = buffer/filled[i8](5, 42);
   assert(buf.len == 5);
   assert(not buf.isEmpty());
-  assert(buf:nonempty());
+  assert(buf.nonEmpty());
 
   let i = 0;
   while i < 5 {

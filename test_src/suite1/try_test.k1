@@ -6,8 +6,8 @@ deftype Foo = {
   a: bool
 }
 
-fn canFailInt(): result[int, Error] { .ok(42) }
-fn canFailBool(): result[bool, Error] { .ok(false) }
+fn canFailInt(): result[int, Error] { :ok(42) }
+fn canFailBool(): result[bool, Error] { :ok(false) }
 
 impl try[t = int, e = Error] for Foo {
   fn error(_e: e): self   { { a: false } }
@@ -19,9 +19,9 @@ impl try[t = int, e = Error] for Foo {
 }
 
 fn fails(): result[bool, Error] {
-  let value: result[int, Error] = .err("woops");
+  let value: result[int, Error] = :err("woops");
   let i = value.try;
-  .ok(i % 2 == 0)
+  :ok(i % 2 == 0)
 }
 
 fn run(): result[i32, Error] {
@@ -32,12 +32,12 @@ fn run(): result[i32, Error] {
 
   let c = fn(-> result[bool, Error]) {
     let i = fails().try;
-    .ok(not i)
+    :ok(not i)
   };
   let res = c();
-  assert(res is .err("woops"));
+  assert(res is :err("woops"));
 
-  .ok(0)
+  :ok(0)
 }
 
 fn test() {

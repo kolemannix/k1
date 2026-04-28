@@ -1317,6 +1317,7 @@ impl<T, Tag> List<T, Tag> {
         }
     }
 
+    #[track_caller]
     fn grow(&mut self, mem: &mut Mem<Tag>) -> Self
     where
         T: Copy + Sized,

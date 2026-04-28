@@ -41,7 +41,7 @@ use types/type-schema
 
 fn _writeJsonFromSchema(code: *mut StringBuilder, name: string, type-id: u64) {
   switch type-schema(type-id) {
-    .struct(s) -> {
+    :struct(s) -> {
       code.line(p"w.write-char('{');");
       for f in s.fields {
 
@@ -61,11 +61,11 @@ w.write-string("\"{f.name}\":");
       };
       code.line(`w.write-char('}');`);
     },
-    .bool -> {
+    :bool -> {
       code.line(`w.write-string(if {name} "true": string else "false");`)
     },
-    .int(_) -> code.line(`{name}.printTo(w);`),
-    .either(_) -> {
+    :int(_) -> code.line(`{name}.printTo(w);`),
+    :either(_) -> {
       let tName = types/type-name(type-id);
       crash("Cannot yet create a JSON writer for either: {tName}")
     },

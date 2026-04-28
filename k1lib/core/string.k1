@@ -65,11 +65,11 @@ ns string {
   fn nonEmpty(self: string): bool { self.len() != 0 }
 
   fn first(self: string): ?char {
-    if self:nonempty() :some(self.get(0)) else :none
+    if self.nonEmpty() :some(self.get(0)) else :none
   }
 
   fn last(self: string): ?char {
-    if self:nonempty() :some(self.get(self.len() - 1)) else :none
+    if self.nonEmpty() :some(self.get(self.len() - 1)) else :none
   }
 
   fn indexOf(self: string, c: char): i64 {
