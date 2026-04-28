@@ -41,14 +41,14 @@ fn test() {
     crash("Expected Array schema for array[i32, 10]")
   };
   assertEquals(type-name(element-type-id), "i32");
-  assertEquals(size, .some(10));
+  assertEquals(size, :some(10));
 
   let stringArraySchema = type-schema(type-id[array[string, 7]]());
   require stringArraySchema is .array({ element-type-id, size }) else {
     crash("Expected Array schema for array[string, 7]")
   };
   assertEquals(type-name(element-type-id), "string");
-  assertEquals(size, .some(7));
+  assertEquals(size, :some(7));
 
   // Test 3: Layout and size information
   // u8 arrays: 1 byte per element, 1-byte aligned

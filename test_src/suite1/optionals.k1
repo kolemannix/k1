@@ -3,21 +3,21 @@ ns optionals;
 deftype PointMaybeY = { x: int, y: ?int }
 
 fn testBasics(): int {
-  let p: ?PointMaybeY = .some({ x: 1, y: .some(2) });
+  let p: ?PointMaybeY = :some({ x: 1, y: :some(2) });
   assert(p.!.x == 1);
   assert(p.!.y.! == 2);
 
-  let b = .some(true): ?bool;
-  if b is .some(x) {
+  let b = :some(true): ?bool;
+  if b is :some(x) {
     assert(x);
   };
 
   assert(opt/isSome[bool](b));
-  let c: ?int = .none;
+  let c: ?int = :none;
   assert(not c.isSome());
 
   use types/type-id;
-  assert(type-id[PointMaybeY.y.some] == type-id[int]);
+  assert(type-id[PointMaybeY.y:some] == type-id[int]);
 
   0
 }
@@ -25,23 +25,23 @@ fn testBasics(): int {
 deftype WeirdPoint = { x: ?int, y: int }
 
 fn testComplex(): int {
-  let my_point: WeirdPoint = { x: .some(42), y: 0 };
-  if my_point.x is .some(my_x) {
+  let my_point: WeirdPoint = { x: :some(42), y: 0 };
+  if my_point.x is :some(my_x) {
     assert(my_x == 42);
   } else {
     assert(false);
   };
 
-  let my_arr: list[?WeirdPoint] = [.some({ x: .some(42), y: 3}), .none];
-  if my_arr.get(0) is .some(a) {
+  let my_arr: list[?WeirdPoint] = [:some({ x: :some(42), y: 3}), :none];
+  if my_arr.get(0) is :some(a) {
     assert(a.y == 3);
   };
 
   0
 }
 
-fn noNum(): ?int { .none }
-fn someNum(): ?int { .some(100) }
+fn noNum(): ?int { :none }
+fn someNum(): ?int { :some(100) }
 
 fn optElseOperator() {
   let result = noNum() ? 42;

@@ -43,7 +43,7 @@ fn genericSum() {
     // This tests type inference for sums
     assert(MyResult/myGet(x1) == -3);
     assert(x1.myGet() == -3);
-    assert(x1Ok == .some(-3));
+    assert(x1Ok == :some(-3));
 
     // shows that we can talk about the payload type
     let _: MyResult[int, string].ok = 42;

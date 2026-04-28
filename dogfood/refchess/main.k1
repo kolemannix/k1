@@ -256,7 +256,7 @@ fn run(_args: span[string]): result[i32, string] {
       .ok(cmd) -> {
         let response = handleCommand(cmd);
         // If a command produces output, it goes to stdout with a newline added
-        if response is .some(r) { println(r) };
+        if response is :some(r) { println(r) };
       }
     }
   };

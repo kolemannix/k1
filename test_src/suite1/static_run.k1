@@ -94,7 +94,7 @@ fn test() {
 
   let enum1 = #static {
     let x = some(42);
-    let y = if x is .some(x) x else crash("");
+    let y = if x is :some(x) x else crash("");
     y
   };
   assertEquals[int](enum1, 42);

@@ -26,15 +26,15 @@ ns IntRangeIterator {
 impl iterator[item = int] for IntRangeIterator {
   fn peek(self: *self): ?int {
      if self.position() >= self.range.end {
-       .none
+       :none
      } else {
        let current = self.current();
-       .some(current)
+       :some(current)
      }
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     let remaining = self.range.end - self.position();
-    { at-least: remaining, at-most: .some(remaining) }
+    { at-least: remaining, at-most: :some(remaining) }
   }
   fn advance-by(self: *mut self, n: size) {
     self.stepBy(n);

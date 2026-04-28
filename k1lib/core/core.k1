@@ -17,16 +17,16 @@ ns iter {
 
   fn find[T, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, pred: some fn T -> bool): ?T {
     for iterable {
-      if pred(it) return(.some(it))
+      if pred(it) return(:some(it))
     };
-    .none
+    :none
   }
 
   fn position[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): ?size {
     for iterable {
-      if it == needle return(.some(itIndex))
+      if it == needle return(:some(itIndex))
     };
-    .none
+    :none
   }
 
   fn contains[T: equals, Iter: iterator[item = T], I: iterable[item = T, i = Iter]](iterable: I, needle: T): bool {
@@ -55,7 +55,7 @@ fn identity[T](value: T): T { value }
 
 fn printIt[T: print](value: T) {
   if k1/is-static and compiler/capture-prints {
-    k1/emit-compiler-message(compiler/location(), .info, value.show())
+    k1/emit-compiler-message(compiler/location(), :info, value.show())
   } else {
     value.printTo(io/stdout);
     io/stdout.write-char('\n')
@@ -65,7 +65,7 @@ fn printIt[T: print](value: T) {
 fn print(s: string) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and compiler/capture-prints {
-    k1/emit-compiler-message(compiler/location(), .info, s)
+    k1/emit-compiler-message(compiler/location(), :info, s)
   } else {
     io/stdout.write-string(s)
   };
@@ -80,7 +80,7 @@ fn println(s: string) {
 
 fn eprint(s: string) {
   if k1/is-static and compiler/capture-prints {
-    k1/emit-compiler-message(compiler/location(), .warn, s)
+    k1/emit-compiler-message(compiler/location(), :warn, s)
   } else {
     io/stderr.write-string(s)
   };
@@ -130,9 +130,9 @@ ns sys {
   #if k1/os-macos extern("arc4random_uniform") fn arc4random_uniform(upperBound: u32): u32
 
   fn random(upperBound: u32): u32 {
-    #if k1/os is .macos arc4random_uniform(upperBound)
-    else if k1/os is .linux crash("linux 'random' unimpl")
-    else if k1/os is .wasm crash("wasm 'random' unimpl")
+    #if k1/os is :macos arc4random_uniform(upperBound)
+    else if k1/os is :linux crash("linux 'random' unimpl")
+    else if k1/os is :wasm crash("wasm 'random' unimpl")
     else crash("unreachable os")
   }
 
@@ -150,14 +150,14 @@ ns sys {
     let bytesRead: i64 = posix/read(0, buffer.data.as[ptr], buffer.len.as[c-sizet]);
 
     if bytesRead < 0 {
-      return(.err("Failed to read line"));
+      return(:err("Failed to read line"));
     };
 
     let length: size = bytesRead - 1;
     &buffer.len* <- length;
 
     let result = string/wrapByteBuffer(buffer);
-    .ok(result)
+    :ok(result)
   }
 
 }
@@ -165,7 +165,7 @@ ns sys {
 ns files {
 
   fn readToString(context alloc: mem/alloc-mode)(path: string): string {
-    let filenameCString = path.toCString(context .arena)();
+    let filenameCString = path.toCString(context :arena)();
 
     let file = libc/files/fopen(filenameCString.ptr, "r\0".toCString().ptr);
     if file.is-null() {
@@ -226,8 +226,8 @@ ns char {
   }
 
   fn toAsciiDigit(self: char): ?u8 {
-    if self.isAsciiDigit() { .some(self.as[u8] - '0'.as[u8]) } 
-    else .none
+    if self.isAsciiDigit() { :some(self.as[u8] - '0'.as[u8]) } 
+    else :none
   }
 
   fn isAsciiLower(self: char): bool {
@@ -373,58 +373,58 @@ impl print for int {
 }
 
 impl[S, F: print] try[t = S, e = F] for result[S, F] {
-  fn error(e: e): self { .err(e) }
-  fn value(t: t): self    { .ok(t) }
+  fn error(e: e): self { :err(e) }
+  fn value(t: t): self    { :ok(t) }
 
-  fn is-ok(self: self): bool { self is .ok(_) }
+  fn is-ok(self: self): bool { self is :ok(_) }
   fn get-value(self: self): t  {
     switch self {
-      .ok(s) -> s,
-      .err(e) -> crash("get-value() on .err: {e}")
+      :ok(s) -> s,
+      :err(e) -> crash("get-value() on :err: {e}")
     }
   }
   fn get-error(self: self): e {
     switch self {
-      .ok(_) -> crash("get-error() on .ok"),
-      .err(e) -> e
+      :ok(_) -> crash("get-error() on :ok"),
+      :err(e) -> e
     }
   }
 }
 
 impl[S, F] try[t = S, e = F] for result[S, F] {
-  fn error(e: e): self { .err(e) }
-  fn value(t: t): self    { .ok(t) }
+  fn error(e: e): self { :err(e) }
+  fn value(t: t): self    { :ok(t) }
 
-  fn is-ok(self: self): bool { self is .ok(_) }
+  fn is-ok(self: self): bool { self is :ok(_) }
   fn get-value(self: self): t  {
     switch self {
-      .ok(s) -> s,
-      .err(e) -> crash("get-value() on .err")
+      :ok(s) -> s,
+      :err(e) -> crash("get-value() on :err")
     }
   }
   fn get-error(self: self): e {
     switch self {
-      .ok(_) -> crash("get-error() on .ok"),
-      .err(e) -> e
+      :ok(_) -> crash("get-error() on :ok"),
+      :err(e) -> e
     }
   }
 }
 
 impl comparable for i64 {
   fn compare(self: i64, other: i64): ordering {
-    if self == other .equal else if self > other .greater else .less
+    if self == other :equal else if self > other :greater else :less
   }
 }
 
 impl comparable for u64 {
   fn compare(self: u64, other: u64): ordering {
-    if self == other .equal else if self > other .greater else .less
+    if self == other :equal else if self > other :greater else :less
   }
 }
 
 impl comparable for u8 {
   fn compare(self: u8, other: u8): ordering {
-    if self == other .equal else if self > other .greater else .less
+    if self == other :equal else if self > other :greater else :less
   }
 }
 
@@ -522,13 +522,13 @@ ns f64 {
     let out: f64 = uninit;
     let result = ffc/parse_double(s.len(), s.dataPtr(), &out);
     if not ffc/result_is_ok(result) {
-      .err("Could not parse '{s}' as f64")
+      :err("Could not parse '{s}' as f64")
     } else {
       let len = result.ptr.diff(s.dataPtr());
       if require-total and len != s.len() {
-        .err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
+        :err("Parsed an f64 but there was stuff at the end: {len} vs {s.len()}")
       } else {
-        .ok({ value: out, len })
+        :ok({ value: out, len })
       }
     }
   }

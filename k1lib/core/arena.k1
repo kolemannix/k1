@@ -59,7 +59,7 @@ ns arena {
     let dataStart = self.cur-addr.aligned(align);
     let newEnd = dataStart.add-bytes(size);
     if newEnd.as[usize] > self.max-addr.as[usize] {
-      mem/pushMode(.system-heap);
+      mem/pushMode(:system-heap);
       crash("arena is out of space to allocate {size} bytes. newEnd: {newEnd} > {self.max-addr}")
     };
 
@@ -95,7 +95,7 @@ ns arena {
   }
 
   fn pushList[T](self: *mut arena, cap: size): list[T] {
-    list/withCapacityIn(context .custom-arena(self))(cap)
+    list/withCapacityIn(context :custom-arena(self))(cap)
   }
 
 }

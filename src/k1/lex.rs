@@ -118,7 +118,7 @@ impl<'toks> TokenIter<'toks> {
     }
 
     #[inline]
-    fn peek_n(&self, n: i64) -> Token {
+    pub fn peek_n(&self, n: i64) -> Token {
         let pos = self.cursor as i64 + n;
         self.tokens.get(pos as usize).copied().unwrap_or(EOF_TOKEN)
     }

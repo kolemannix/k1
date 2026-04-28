@@ -56,7 +56,7 @@ ns type_schema {
       and variants.get(0).name == "Yes"
       and variants.get(1).name == "No"
       and variants.get(2).name == "MaybeSo"
-      and variants.get(2).payload is .some({ type-id, offset })
+      and variants.get(2).payload is :some({ type-id, offset })
       and type-id == type-id[string]
       and offset == 8
       else crash("");
@@ -69,7 +69,7 @@ ns type_schema {
     require get-type-schema[array[string, 5]]
       is .array({ element-type-id, size })
       and element-type-id == type-id[string]
-      and size == .some(5)
+      and size == :some(5)
       else crash("");
 
     assertEquals(printStructShape[Point3[u8]], p"Struct Point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}");

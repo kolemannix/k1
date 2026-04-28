@@ -147,9 +147,9 @@ fn iterator(): int {
   assert(i.next().! == 3);
   assert(i.next().isNone());
   let* i2 = l.iterator();
-  assert(i2.nth(2) == .some(3));
+  assert(i2.nth(2) == :some(3));
   let* i3 = l.iterator();
-  assert(i3.nth(10) == .none);
+  assert(i3.nth(10) == :none);
   0
 }
 

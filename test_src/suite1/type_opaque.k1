@@ -17,7 +17,7 @@ fn test() {
   assert(user_id.toInt() == 11);
 
   let errorResult = testCompile(user_id: int);
-  assert(errorResult is .some(_));
+  assert(errorResult is :some(_));
   let errorResult2 = testCompile(11: UserId);
-  assert(errorResult2 is .some(_));
+  assert(errorResult2 is :some(_));
 }

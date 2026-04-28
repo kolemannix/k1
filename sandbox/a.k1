@@ -1,29 +1,6 @@
-// #debug fn add(a: int, b: int): int {
-//   println("inline add");
-//   if a == 10 return(-1);
-//   a + b
-// }
-// #debug fn add2(a: int, b: int): int {
-//   a + b
-// }
-
 fn main(): i32 {
-// b76096 match_end
-//  i2216 = phi i64 [(b75872 arm_cons: i2228)]                           ; match phi
-//  i2237 = store to i2213, i64 i2216                                    ; deliver match result value
-//  i2238 = load i64 from i2213                                          ; fulfill variable usage
-//  i2239 = ret i64 i2238                                               
-// END
-
-  let enum1: int = #static #debug {
-    let x = some(42);
-    let y = if x is .some(x) x else crash("");
-    y
-  };
-  printIt(enum1);
-  // printIt(add(5, 2));
-  // printIt(add(10, 2));
+  let x: opt[int] = :some(42);
   0
 }
 
-#static main()
+// #static main()

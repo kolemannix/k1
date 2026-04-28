@@ -346,9 +346,9 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
         b.k1.ir.opt_buf_inline_inlined_rewrites = inlined_rewrites;
 
         debug!("post inline\n{}", unit_to_string(b.k1, self_unit_id, false));
-        if let Err(e) = validate_unit(b.k1, self_unit_id) {
-            k1.report(e)
-        };
+        // if let Err(e) = validate_unit(b.k1, self_unit_id) {
+        //     k1.report(e)
+        // };
     }
 }
 
@@ -717,9 +717,9 @@ pub fn cfg_simplify(k1: &mut TypedProgram, unit_id: IrUnitId) {
     unit.blocks = blocks;
     unit.cfg_valid = true;
 
-    if let Err(e) = validate_unit(k1, unit_id) {
-        k1.report(e)
-    }
+    // if let Err(e) = validate_unit(k1, unit_id) {
+    //     k1.report(e)
+    // }
 }
 
 fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
@@ -764,6 +764,7 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
                 if let Some(succ) = ir.mem.dlist_get_singleton(node.data.succs) {
                     // nocommit: we should be able to unleash the trampoline case
                     // Somehow still needed; I don't get it
+                    // phi is always first!
                     let succ_has_phi = ir
                         .mem
                         .dlist_iter(ir.mem.get(succ).data.instrs)

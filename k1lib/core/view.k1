@@ -83,31 +83,31 @@ ns span {
 
   fn firstRef[T](self: span[T]): ?*T {
     if not self.isEmpty() {
-      .some(self.getRef(0))
+      :some(self.getRef(0))
     } else {
-      .none
+      :none
     }
   }
 
   fn first[T](self: span[T]): ?T {
     switch self.firstRef() {
-      .none -> .none,
-      .some(firstRef) -> .some(firstRef.*)
+      :none -> :none,
+      :some(firstRef) -> :some(firstRef.*)
     }
   }
 
   fn lastRef[T](self: span[T]): ?*T {
     if not self.isEmpty() {
-      .some(self.getRef(self.len() - 1))
+      :some(self.getRef(self.len() - 1))
     } else {
-      .none
+      :none
     }
   }
 
   fn last[T](self: span[T]): ?T {
     switch self.lastRef() {
-      .none -> .none,
-      .some(lastRef) -> .some(lastRef.*)
+      :none -> :none,
+      :some(lastRef) -> :some(lastRef.*)
     }
   }
 
@@ -177,31 +177,31 @@ impl[T: equals] equals for span[T] {
 //
 //  fn firstRef[T](self: view[T]): ?*T {
 //    if not self.isEmpty() {
-//      .some(self.getRef(0))
+//      :some(self.getRef(0))
 //    } else {
-//      .none
+//      :none
 //    }
 //  }
 //
 //  fn first[T](self: view[T]): ?T {
 //    switch self.firstRef() {
-//      .none -> .none,
-//      .some(firstRef) -> .some(firstRef.*)
+//      :none -> :none,
+//      :some(firstRef) -> :some(firstRef.*)
 //    }
 //  }
 //
 //  fn lastRef[T](self: view[T]): ?*T {
 //    if not self.isEmpty() {
-//      .some(self.getRef(self.len() - 1))
+//      :some(self.getRef(self.len() - 1))
 //    } else {
-//      .none
+//      :none
 //    }
 //  }
 //
 //  fn last[T](self: view[T]): ?T {
 //    switch self.lastRef() {
-//      .none -> .none,
-//      .some(lastRef) -> .some(lastRef.*)
+//      :none -> :none,
+//      :some(lastRef) -> :some(lastRef.*)
 //    }
 //  }
 //

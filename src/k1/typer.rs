@@ -3465,8 +3465,8 @@ impl TypedProgram {
 
                 let tag_type = match sum.tag_type {
                     None => {
-                        const U8_MAX_VARIANTS: usize = u8::MAX as usize + 1;
-                        const MAX_VARIANTS: usize = u16::MAX as usize + 1;
+                        const U8_MAX_VARIANTS: u32 = u8::MAX as u32 + 1;
+                        const MAX_VARIANTS: u32 = u16::MAX as u32 + 1;
                         let min_viable = match variant_count {
                             c if c <= U8_MAX_VARIANTS => IntegerType::U8,
                             c if c <= MAX_VARIANTS => IntegerType::U16,
@@ -3496,10 +3496,10 @@ impl TypedProgram {
                     }
                 };
 
-                let has_payloads = sum.variants.iter().any(|v| v.payload.is_some());
+                let has_payloads = self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
                 if has_payloads {
                     let mut variants = self.types.mem.new_list(variant_count as u32);
-                    for (index, v) in sum.variants.iter().enumerate() {
+                    for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let payload_type_id = match &v.payload {
                             None => None,
                             Some(payload_type_expr) => {
@@ -3543,7 +3543,7 @@ impl TypedProgram {
                     Ok(sum_type_id)
                 } else {
                     let mut member_values = self.types.mem.new_list(variant_count as u32);
-                    for (index, v) in sum.variants.iter().enumerate() {
+                    for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let tag_value = match tag_type {
                             IntegerType::U8 => TypedIntValue::U8(index as u8),
                             IntegerType::U16 => TypedIntValue::U16(index as u16),
@@ -7533,7 +7533,7 @@ impl TypedProgram {
             }
             ParsedExpr::Call(fn_call) => self.eval_function_call(&fn_call.clone(), None, ctx, None),
             ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
-            ParsedExpr::AnonConstructor(anon_ctor) => {
+            ParsedExpr::Variant(anon_ctor) => {
                 let span = anon_ctor.span;
                 let expected_type = ctx.expected_type_id.ok_or_else(|| {
                     make_error(

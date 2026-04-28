@@ -2,44 +2,44 @@
 // All rights reserved.
 
 ns opt {
-  fn isSome[T](self: ?T): bool { self is .some(_) }
-  fn isNone[T](self: ?T): bool { self is .none }
+  fn isSome[T](self: ?T): bool { self is :some(_) }
+  fn isNone[T](self: ?T): bool { self is :none }
 
   fn get[T](context locn: compiler/source-location)(self: ?T): T {
-    if self is .some(t) t else {
+    if self is :some(t) t else {
       crash("opt.get on None")
     }
   }
 
   fn contains[T: equals](self: ?T, t: T): bool {
     switch self {
-      .none -> false,
-      .some(v) -> v == t
+      :none -> false,
+      :some(v) -> v == t
     }
   }
 
   // I'm leaving this separate function here 
   // because at one point it exercised a really weird compiler bug
   fn equals[T](a: opt[T], b: opt[T]): bool where T: equals {
-    if a is .some(at) {
-      if b is .some(bt) at == bt else false
+    if a is :some(at) {
+      if b is :some(bt) at == bt else false
     } else {
-      b is .none
+      b is :none
     }
   }
 
   fn map[T, U](self: opt[T], f: some fn T -> U): opt[U] {
     switch self {
-      .none -> .none,
-      .some(t) -> .some(f(t))
+      :none -> :none,
+      :some(t) -> :some(f(t))
     }
   }
 
 }
 
 // Convenience constructors in the global scope for opt instances
-fn none[T](): opt[T] { opt.none[T] }
-fn some[T](value: T): opt[T] { opt.some[T](value) }
+fn none[T](): opt[T] { opt:none[T] }
+fn some[T](value: T): opt[T] { opt:some[T](value) }
 
 
 impl[T: equals] equals for opt[T] {
@@ -51,14 +51,14 @@ impl[T: equals] equals for opt[T] {
 }
 
 impl[A] try[t = A, e = empty] for opt[A] {
-  fn error(_e: empty): opt[t] { .none }
-  fn value(t: t): opt[t] { opt.some(t) }
+  fn error(_e: empty): opt[t] { :none }
+  fn value(t: t): opt[t] { opt:some(t) }
 
-  fn is-ok(self: opt[t]): bool { self is .some(_) }
+  fn is-ok(self: opt[t]): bool { self is :some(_) }
   fn get-error(self: opt[t]): empty {
     switch self {
-      .none -> {},
-      .some(_) -> crash("getError on opt.some")
+      :none -> {},
+      :some(_) -> crash("getError on opt:some")
     }
   }
   fn get-value(self: opt[t]): t { self.get() }
@@ -66,6 +66,6 @@ impl[A] try[t = A, e = empty] for opt[A] {
 
 impl[t: print] print for opt[t] {
   fn printTo[w: writer](self: opt[t], w: w) {
-    if self is .some(v) w.write-string("Some({v})") else w.write-string("None")
+    if self is :some(v) w.write-string("Some({v})") else w.write-string("None")
   }
 }

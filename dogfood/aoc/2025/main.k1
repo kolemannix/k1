@@ -25,7 +25,7 @@ fn day1(input: string) {
     let magnitudeStr = it.drop(1);
     let isZero = pos == 0;
     let _lastPos = pos;
-    require string/parseBase10(magnitudeStr) is .some(magnitude) else { return() };
+    require string/parseBase10(magnitudeStr) is :some(magnitude) else { return() };
 
     let change = if negative { magnitude.as[int] * -1 } else magnitude.as[int];
 
@@ -53,7 +53,7 @@ fn brute(input: string) {
   for commands {
     let negative = it.get(0) == 'L';
     let magnitudeStr = it.drop(1);
-    require string/parseBase10(magnitudeStr) is .some(magnitude) else { return() };
+    require string/parseBase10(magnitudeStr) is :some(magnitude) else { return() };
     let m = magnitude.as[int];
     while m > 0 {
       if negative { pos := pos - 1 } else { pos := pos + 1 };

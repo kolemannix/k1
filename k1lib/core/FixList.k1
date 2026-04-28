@@ -38,9 +38,9 @@ ns fixlist {
     if used < self.cap() {
       self.data*.set(used, value);
       self.used* <- used.as[u32] + 1;
-      .ok({})
+      :ok({})
     } else {
-      .err({})
+      :err({})
     }
   }
 
@@ -50,16 +50,16 @@ ns fixlist {
       let dstSlice = self.data*.as-buffer().slice(start = self.len(), end = needed);
       buffer/copyFrom(src = values.innerBuffer(), dst = dstSlice);
       self.used* <- needed.as[u32];
-      .ok({})
+      :ok({})
     } else {
-      .err({})
-      //.err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
+      :err({})
+      //:err("{typename} cannot fulfill pushN. {needed} (needed) > {self.capacity()}")
     }
   }
 
   fn pushN[T, N: static size](self: *mut fixlist[T, N], values: span[T]): empty {
     let result = self.tryPushN[T, N](values);
-    if result is .err(_) crash("fixlist out of space")
+    if result is :err(_) crash("fixlist out of space")
   }
 
   fn asBuffer[T, N: static size](self: *mut fixlist[T, N]): buffer[T] {
@@ -92,11 +92,11 @@ ns fixlist {
 
   fn pop[T, N: static size](self: *mut fixlist[T, N]): ?T {
     switch self.last() {
-       .some(t) -> {
+       :some(t) -> {
          self.used* <- self.used - 1;
-         .some(t)
+         :some(t)
        },
-       .none -> .none
+       :none -> :none
     }
   }
 

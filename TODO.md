@@ -28,7 +28,7 @@ Simple but missing
 - [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] good backtraces (https://claude.ai/share/245cf54a-22cc-4fb1-8f17-3fd6b2c42812)
 - [x] support ability constraints on generics
-- [ ] support explicit type args in AnonEnumConstructor syntax 
+- [x] support explicit type args in AnonEnumConstructor syntax 
 - [ ] Allow scoped namespace defns; `namespace <ident>/<ident>/<ident> {}`, great for metaprogramming to inject stuff
       currently you could easily just `ns <ident> { ns <ident> { ns <ident> _stuff_ } } }`
 - [x] META test: Can we build ArrayOfStructs using current metaprogramming?!

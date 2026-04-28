@@ -30,7 +30,7 @@ fn parseCommand(cmd: string): result[Command, string] {
     _ -> {
       if cmd.startsWith("perft ") {
          let parsedDepth = cmd.drop(6).toInt();
-         if parsedDepth is .some(depth) { .ok(.Perft({ depth: depth.as[u32] })) }
+         if parsedDepth is :some(depth) { .ok(.Perft({ depth: depth.as[u32] })) }
          else .err("Invalid perft command: {cmd}")
       } else if cmd.startsWith("position ") {
         // "position" command sets up a position to analyze:

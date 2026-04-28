@@ -57,8 +57,8 @@ fn test() {
   assert(ss.b == 2);
   assert(ss.c == 21);
 
-  assertEquals(some(false), .some(false));
-  assertEquals(some(true), .some(true));
+  assertEquals(some(false), :some(false));
+  assertEquals(some(true), :some(true));
 
   {}
 }

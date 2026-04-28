@@ -103,10 +103,10 @@ ns QueryResult {
     let row-c = row.as[core/c-int];
     let col-c = column.as[core/c-int];
     if pg/is-null(self.raw, row-c, col-c) != 0 {
-      return(.none)
+      return(:none)
     };
     let c-value = pg/get-value(self.raw, row-c, col-c);
-    .some(c-string-or-default(c-value, ""))
+    :some(c-string-or-default(c-value, ""))
   }
 }
 
@@ -132,8 +132,8 @@ fn print-result-table(result: QueryResult) {
     while col < cols {
       if col > 0 { print("\t") };
       switch result.value(row, col) {
-        .none -> print("NULL"),
-        .some(value) -> print(value)
+        :none -> print("NULL"),
+        :some(value) -> print(value)
       };
       col := col + 1;
     };
