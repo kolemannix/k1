@@ -22,7 +22,7 @@ fn testConstraints() {
   assertEquals(types/type-id[typeOf(x).A], types/type-id[int]);
   assertEquals(
     testCompile({ inner: some(4) }: ConstrainedBox[int, ?bool]),
-    .some("Provided type B := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool")
+    :some("Provided type B := opt[bool] does implement required ability try, but the implementation parameter t is wrong: Expected type was i64 but the actual implementation uses bool")
   );
   {}
 }
@@ -32,7 +32,7 @@ fn test() {
   b.value;
   let c: Box[bool] = { value: true };
   let c2: Box[bool] = { value: false };
-  let c3: Box[?bool] = { value: .some(false) };
+  let c3: Box[?bool] = { value: :some(false) };
   let c4: Box[*bool] = { value: core/mem/new(false) };
   assertEquals(b.value, 0);
   assertEquals(c.value, true);
@@ -49,8 +49,8 @@ fn test() {
   let nested: Box[Box[Box[int]]] = { value: { value: { value: 42 } } };
   assert(unboxIt(nested) == 42);
 
-  takesPolyAuPair({ t: some(42), u: opt.some(true) });
-  takesPolyAuPair({ t: some(42), u: .some(true) });
+  takesPolyAuPair({ t: some(42), u: opt:some(true) });
+  takesPolyAuPair({ t: some(42), u: some(true) });
   takesPolyAuPair({ t: some(42), u: some(true) });
 
   takesPolyAuPair[int, _]({ t: some(42), u: some(true) });
@@ -59,11 +59,11 @@ fn test() {
 
   assert(
     testCompile(takesPolyAuPair[ptr, _]({ t: some(42), u: some(true) }))
-    is .some(_)
+    is :some(_)
   );
   assert(
     testCompile(takesPolyAuPair[_, ptr]({ t: some(42), u: some(true) }))
-    is .some(_)
+    is :some(_)
   );
 
   testConstraints();

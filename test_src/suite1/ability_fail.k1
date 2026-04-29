@@ -6,9 +6,9 @@ ability num {
 deftype Tool = either True, False, Iono
 
 fn test() {
-  let p: Tool = .True;
+  let p: Tool = :True;
   let result = testCompile(p.num());
-  assertEquals(result, .some(
+  assertEquals(result, :some(
 `Call to num/num with self := Tool does not work
 No matching implementations found
 Function type: fn('self) -> i32`

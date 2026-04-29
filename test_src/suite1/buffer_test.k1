@@ -5,8 +5,8 @@ fn bufferEmpty() {
   assert(empty.len == 0);
   assert(empty.isEmpty());
   assert(not empty.nonEmpty());
-  assert(empty.first() == .none);
-  assert(empty.last() == .none);
+  assert(empty.first() == :none);
+  assert(empty.last() == :none);
 }
 
 fn bufferFilled() {
@@ -39,8 +39,8 @@ fn bufferFirstLast() {
   buf.set(1, 20);
   buf.set(2, 30);
 
-  assert(buf.first() == .some(10));
-  assert(buf.last() == .some(30));
+  assert(buf.first() == :some(10));
+  assert(buf.last() == :some(30));
 }
 
 fn bufferSlice() {

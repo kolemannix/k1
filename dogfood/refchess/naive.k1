@@ -7,19 +7,19 @@ deftype SquareState = either
 ns SquareState {
   fn charSymbol(self: SquareState): char {
     switch self {
-       .Blank  -> '-',
-       .WPawn   -> 'P',
-       .WKnight -> 'N',
-       .WBishop -> 'B',
-       .WRook   -> 'R',
-       .WQueen  -> 'Q',
-       .WKing   -> 'K',
-       .BPawn   -> 'p',
-       .BKnight -> 'n',
-       .BBishop -> 'b',
-       .BRook   -> 'r',
-       .BQueen  -> 'q',
-       .BKing   -> 'k',
+       :Blank  -> '-',
+       :WPawn   -> 'P',
+       :WKnight -> 'N',
+       :WBishop -> 'B',
+       :WRook   -> 'R',
+       :WQueen  -> 'Q',
+       :WKing   -> 'K',
+       :BPawn   -> 'p',
+       :BKnight -> 'n',
+       :BBishop -> 'b',
+       :BRook   -> 'r',
+       :BQueen  -> 'q',
+       :BKing   -> 'k',
     };
   }
 }
@@ -78,25 +78,25 @@ fn dump(board: list[SquareState]) {
 }
 
 fn startPos(): list[SquareState] {
-  let* board = list/filled[SquareState](64, .Blank);
-  board.set(0, .WRook);
-  board.set(1, .WKnight);
-  board.set(2, .WBishop);
-  board.set(3, .WQueen);
-  board.set(4, .WKing);
-  board.set(5, .WBishop);
-  board.set(6, .WKnight);
-  board.set(7, .WRook);
-  { let i = 0; while i < 8 { board.set(i + 8, .WPawn); i := i + 1 } };
+  let* board = list/filled[SquareState](64, :Blank);
+  board.set(0, :WRook);
+  board.set(1, :WKnight);
+  board.set(2, :WBishop);
+  board.set(3, :WQueen);
+  board.set(4, :WKing);
+  board.set(5, :WBishop);
+  board.set(6, :WKnight);
+  board.set(7, :WRook);
+  { let i = 0; while i < 8 { board.set(i + 8, :WPawn); i := i + 1 } };
 
-  { let i = 0; while i < 8 { board.set(i + 48, .BPawn); i := i + 1 } };
-  board.set(56, .BRook);
-  board.set(57, .BKnight);
-  board.set(58, .BBishop);
-  board.set(59, .BQueen);
-  board.set(60, .BKing);
-  board.set(61, .BBishop);
-  board.set(62, .BKnight);
-  board.set(63, .BRook);
+  { let i = 0; while i < 8 { board.set(i + 48, :BPawn); i := i + 1 } };
+  board.set(56, :BRook);
+  board.set(57, :BKnight);
+  board.set(58, :BBishop);
+  board.set(59, :BQueen);
+  board.set(60, :BKing);
+  board.set(61, :BBishop);
+  board.set(62, :BKnight);
+  board.set(63, :BRook);
   board
 }

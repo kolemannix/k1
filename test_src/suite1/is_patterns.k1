@@ -26,9 +26,9 @@ fn test() {
   assert(f is 3.14);
   assert(not (f is 2.71));
 
-  let opt: ?int = .some(42);
-  assert(opt is .some(_));
-  assert(not (opt is .none));
+  let opt: ?int = :some(42);
+  assert(opt is :some(_));
+  assert(not (opt is :none));
 
 
   let foo = { x: 1, y: "asdf" };
@@ -56,12 +56,12 @@ fn test() {
   };
 
   // Record pattern where inner has condition statements
-  let bar = { x: .some(1): ?int };
-  if bar is { x: .some(x) } {
+  let bar = { x: :some(1): ?int };
+  if bar is { x: :some(x) } {
     assert(x == 1);
   };
 
   // Optionals
-  let opt: ?{ x: i64 } = .some({ x: 1 });
-  if opt is .some({ x: 2 }) {} else assert(true);
+  let opt: ?{ x: i64 } = :some({ x: 1 });
+  if opt is :some({ x: 2 }) {} else assert(true);
 }

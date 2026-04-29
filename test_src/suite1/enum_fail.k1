@@ -3,9 +3,9 @@ ns inner;
 deftype E = either A(int) , B , C
 
 fn test() {
-  let result = testCompile(.A(true): E);
+  let result = testCompile(:A(true): E);
   assertEquals(
     result,
-    .some("Variant payload type mismatch: Expected i64 but got bool")
+    :some("Variant payload type mismatch: Expected i64 but got bool")
   );
 }

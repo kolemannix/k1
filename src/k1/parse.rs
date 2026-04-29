@@ -4,7 +4,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::io::IsTerminal;
 
-use crate::kmem::{self, MHandle, MSL2, MSS2, MSlice, MSpillList};
+use crate::kmem::{self, Handle, MSL2, MSS2, MSlice, MSpillList};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::{SliceHandle, VPool};
 use crate::{
@@ -587,12 +587,6 @@ pub struct ParsedVariable {
     pub name: QIdent,
 }
 
-impl Display for ParsedVariable {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("var#{}", self.name.name))
-    }
-}
-
 #[derive(Clone)]
 pub struct FieldAccess {
     pub base: ParsedExprId,
@@ -630,20 +624,16 @@ pub struct ParsedStruct {
 }
 impl_copy_if_small!(16, ParsedStruct);
 
-#[derive(Debug, Clone)]
-pub struct AnonSumConstructor {
+#[derive(Clone)]
+pub struct ParsedVariant {
+    pub type_name: Option<QIdent>,
     pub variant_name: Ident,
+    pub type_args: ParsedSlice<NamedTypeArg>,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParsedSumConstructor {
-    pub variant_name: Ident,
-    pub span: SpanId,
-}
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedIsExpr {
     pub target_expression: ParsedExprId,
     pub pattern: ParsedPatternId,
@@ -814,10 +804,10 @@ pub enum ParsedExpr {
     /// ```
     For(ForExpr),
     /// ```md
-    /// .<ident>
-    /// .<ident>(<expr>)
+    /// :<ident>
+    /// :<ident>(<expr>)
     /// ```
-    AnonConstructor(AnonSumConstructor),
+    Variant(ParsedVariant),
     /// ```md
     /// <expr> is <pat>
     /// ```
@@ -867,7 +857,7 @@ impl ParsedExpr {
             Self::Struct(struc) => struc.span,
             Self::ListLiteral(list_expr) => list_expr.span,
             Self::For(for_expr) => for_expr.span,
-            Self::AnonConstructor(tag_expr) => tag_expr.span,
+            Self::Variant(tag_expr) => tag_expr.span,
             Self::Is(is_expr) => is_expr.span,
             Self::Match(match_expr) => match_expr.span,
             Self::Cast(as_cast) => as_cast.span,
@@ -1093,16 +1083,16 @@ pub struct ParsedArrayType {
 }
 impl_copy_if_small!(12, ParsedArrayType);
 
-#[derive(Debug, Clone)]
-pub struct ParsedSumVariant {
+#[derive(Clone, Copy)]
+pub struct ParsedSumTypeVariant {
     pub tag_name: Ident,
     pub payload: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedSumType {
-    pub variants: Vec<ParsedSumVariant>,
+    pub variants: ParsedSlice<ParsedSumTypeVariant>,
     pub tag_type: Option<ParsedTypeExprId>,
     pub span: SpanId,
 }
@@ -1608,7 +1598,7 @@ impl Sources {
 }
 
 pub(crate) type ParsedSlice<T> = MSlice<T, ParsedProgram>;
-pub(crate) type ParsedHandle<T> = MHandle<T, ParsedProgram>;
+pub(crate) type ParsedHandle<T> = Handle<T, ParsedProgram>;
 
 #[derive(Clone, Copy)]
 pub enum SemanticTokenKind {
@@ -2430,15 +2420,15 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let pattern = ParsedStructPattern { fields, span };
             let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
-        } else if first.kind == K::Dot || (first.kind == K::Ident && second.kind == K::Dot) {
+        } else if first.kind == K::Colon || (first.kind == K::Ident && second.kind == K::Colon) {
             let sum_name = if first.kind == K::Ident {
-                // Eats the Dot
+                // Eats the Colon
                 self.advance();
                 let sum_name = self.intern_ident_token(first);
-                self.expect_kind(K::Dot)?;
+                self.expect_kind(K::Colon)?;
                 Some(sum_name)
             } else {
-                // Eats the Dot
+                // Eats the Colon
                 self.advance();
                 None
             };
@@ -3075,7 +3065,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 None
             };
-        let mut variants = Vec::new();
+        let mut variants = self.ast.mem.new_list(4);
         let mut first = true;
         loop {
             // Expect comma
@@ -3106,13 +3096,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 None => tag.span,
                 Some(expr) => self.ast.type_exprs.get(expr).get_span(),
             };
-            variants.push(ParsedSumVariant { tag_name, payload: payload_expression, span });
+            variants.push_grow(
+                &mut self.ast.mem,
+                ParsedSumTypeVariant { tag_name, payload: payload_expression, span },
+            );
             first = false;
         }
         let last_variant_span =
             variants.last().ok_or_else(|| error_expected("At least one variant", keyword))?.span;
         let span = self.extend_span(keyword.span, last_variant_span);
-        Ok(ParsedSumType { variants, tag_type: explicit_tag_type_expr, span })
+        Ok(ParsedSumType {
+            variants: self.ast.mem.list_to_handle(variants),
+            tag_type: explicit_tag_type_expr,
+            span,
+        })
     }
 
     fn expect_fn_arg(&mut self, is_explicit_context: bool) -> ParseResult<ParsedCallArg> {
@@ -3273,9 +3270,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         };
         if self.peek().kind == K::Colon {
-            self.advance();
-            let type_hint = self.expect_type_expression()?;
-            self.ast.exprs.set_type_hint(with_postfix, type_hint);
+            if self.tokens.peek_n(1).is_whitespace_preceded() {
+                self.advance();
+                let type_hint = self.expect_type_expression()?;
+                self.ast.exprs.set_type_hint(with_postfix, type_hint);
+            }
         }
         Ok(Some(with_postfix))
     }
@@ -3545,33 +3544,35 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_span(first.span, self.get_expression_span(expr));
                 Ok(Some(self.add_expression(ParsedExpr::UnaryOp(UnaryOp { expr, op_kind, span }))))
             }
-            K::Dot => {
+            K::Colon => {
                 self.advance();
                 self.expect_kind(K::Ident)?;
-                // <dot> <ident> for example .red
-
-                // if self.token_chars(second).chars().next().unwrap().is_uppercase() {
-                //     return Err(error("Variant names must be lowercase", second));
-                // }
+                // :none
+                // :some(42)
+                // :some[int](42)
 
                 let variant_name = self.intern_ident_token(second);
 
+                let type_args = self.parse_bracketed_type_args()?.0;
+
                 if third.kind == K::OpenParen {
-                    // Sum Constructor
                     self.advance();
                     let payload = self.expect_expression()?;
                     let close_paren = self.expect_kind(K::CloseParen)?;
                     let span = self.extend_token_span(first, close_paren);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(AnonSumConstructor {
+                    Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
+                        type_name: None,
                         variant_name,
+                        type_args,
                         payload: Some(payload),
                         span,
                     }))))
                 } else {
-                    // Tag Literal
                     let span = self.extend_token_span(first, second);
-                    Ok(Some(self.add_expression(ParsedExpr::AnonConstructor(AnonSumConstructor {
+                    Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
+                        type_name: None,
                         variant_name,
+                        type_args,
                         payload: None,
                         span,
                     }))))
@@ -3664,9 +3665,33 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     Ok(Some(literal_id))
                 } else if first.kind == K::Ident {
                     let namespaced_ident = self.expect_namespaced_ident()?;
-                    let second = self.tokens.peek();
-                    // FnCall OR a QualifiedAbilityCall
-                    if second.kind == K::At
+                    let (second, third) = self.tokens.peek_two();
+                    if second.kind == K::Colon
+                        && !second.is_whitespace_preceded()
+                        && !third.is_whitespace_preceded()
+                    {
+                        self.advance();
+                        let (_, variant_name) = self.expect_ident()?;
+                        let type_args = self.parse_bracketed_type_args()?.0;
+                        let payload = if self.maybe_consume(K::OpenParen).is_some() {
+                            let p = self.expect_expression()?;
+                            self.expect_kind(K::CloseParen)?;
+                            Some(p)
+                        } else {
+                            None
+                        };
+
+                        let span = self.extend_to_here(first.span);
+                        let variant_expr =
+                            self.add_expression(ParsedExpr::Variant(ParsedVariant {
+                                type_name: Some(namespaced_ident),
+                                variant_name,
+                                type_args,
+                                payload,
+                                span,
+                            }));
+                        Ok(Some(variant_expr))
+                    } else if second.kind == K::At
                         || second.kind == K::OpenBracket
                         || second.kind == K::OpenParen
                     {
@@ -3778,9 +3803,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }?;
         if let Some(expression_id) = resulting_expression {
             if self.peek().kind == K::Colon {
-                self.advance();
-                let type_hint = self.expect_type_expression()?;
-                self.ast.exprs.set_type_hint(expression_id, type_hint);
+                if self.tokens.peek_n(1).is_whitespace_preceded() {
+                    self.advance();
+                    let type_hint = self.expect_type_expression()?;
+                    self.ast.exprs.set_type_hint(expression_id, type_hint);
+                }
             }
             self.ast.exprs.get_metadata_mut(expression_id).is_debug = compiler_debug;
         }
@@ -4756,6 +4783,10 @@ impl ParsedProgram {
         buffer
     }
 
+    pub fn display_ident(&self, w: &mut impl Write, ident: Ident) -> std::fmt::Result {
+        w.write_str(self.idents.get_name(ident))
+    }
+
     pub fn display_expr_id(&self, w: &mut impl Write, expr: ParsedExprId) -> std::fmt::Result {
         match self.exprs.get(expr) {
             ParsedExpr::Builtin(_span) => w.write_str("builtin"),
@@ -4790,19 +4821,18 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedExpr::Call(call) => {
-                w.write_str(self.idents.get_name(call.name.name))?;
+                self.display_ident(w, call.name.name)?;
                 w.write_str("(...)")?;
                 Ok(())
             }
             ParsedExpr::Variable(var) => {
-                w.write_str("var#")?;
-                w.write_str(self.idents.get_name(var.name.name))?;
+                self.display_qident(w, &var.name)?;
                 Ok(())
             }
             ParsedExpr::FieldAccess(acc) => {
                 self.display_expr_id(w, acc.base)?;
                 w.write_str(".")?;
-                w.write_str(self.idents.get_name(acc.field_name))?;
+                self.display_ident(w, acc.field_name)?;
                 Ok(())
             }
             ParsedExpr::Block(block) => w.write_fmt(format_args!("{:?}", block)),
@@ -4821,7 +4851,7 @@ impl ParsedProgram {
             ParsedExpr::Struct(struc) => {
                 w.write_str("struct({")?;
                 for (is_last, f) in self.mem.iter_with_is_last(struc.fields) {
-                    w.write_str(self.idents.get_name(f.name))?;
+                    self.display_ident(w, f.name)?;
                     match f.value {
                         StructValueFieldKind::VarShorthand => {}
                         StructValueFieldKind::Expr(expr) => {
@@ -4841,10 +4871,23 @@ impl ParsedProgram {
             }
             ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
             ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
-            ParsedExpr::AnonConstructor(anon_sum) => {
-                w.write_char('.')?;
-                w.write_str(self.idents.get_name(anon_sum.variant_name))?;
-                if let Some(payload) = anon_sum.payload.as_ref() {
+            ParsedExpr::Variant(v) => {
+                if let Some(type_name) = &v.type_name {
+                    self.display_qident(w, type_name)?;
+                }
+                w.write_char(':')?;
+                self.display_ident(w, v.variant_name)?;
+                if !v.type_args.is_empty() {
+                    w.write_str("[")?;
+                    for (index, ta) in self.mem.getn(v.type_args).iter().enumerate() {
+                        if index > 0 {
+                            w.write_str(", ")?;
+                        }
+                        self.display_type_arg(w, *ta)?;
+                    }
+                    w.write_str("]")?;
+                }
+                if let Some(payload) = v.payload.as_ref() {
                     w.write_str("(")?;
                     self.display_expr_id(w, *payload)?;
                     w.write_str(")")?;
@@ -4891,7 +4934,7 @@ impl ParsedProgram {
             ParsedExpr::Lambda(lambda) => {
                 w.write_char('\\')?;
                 for (index, arg) in self.mem.getn(lambda.arguments).iter().enumerate() {
-                    w.write_str(self.idents.get_name(arg.binding))?;
+                    self.display_ident(w, arg.binding)?;
                     if let Some(ty) = arg.ty {
                         w.write_str(": ")?;
                         self.display_type_expr_id(ty, w)?;
@@ -4949,16 +4992,26 @@ impl ParsedProgram {
         }
     }
 
+    fn display_type_arg(&self, w: &mut impl Write, type_arg: NamedTypeArg) -> std::fmt::Result {
+        if let Some(name) = type_arg.name {
+            self.display_ident(w, name)?;
+            w.write_str(" = ")?;
+        }
+        match type_arg.type_expr {
+            None => w.write_str("_"),
+            Some(type_expr) => self.display_type_expr_id(type_expr, w),
+        }?;
+        Ok(())
+    }
+
     fn display_qident(&self, w: &mut impl Write, ns_id: &QIdent) -> std::fmt::Result {
         if !ns_id.path.is_empty() {
-            for (index, ns) in self.idents.slices.get_slice(ns_id.path).iter().enumerate() {
-                w.write_str(self.idents.get_name(*ns))?;
-                if index < ns_id.path.len() - 1 {
-                    w.write_str("/")?;
-                }
+            for ns in self.idents.slices.get_slice(ns_id.path).iter() {
+                self.display_ident(w, *ns)?;
+                w.write_str("/")?;
             }
         }
-        w.write_str(self.idents.get_name(ns_id.name))
+        self.display_ident(w, ns_id.name)
     }
 
     fn display_ability_expr(
@@ -5015,7 +5068,7 @@ impl ParsedProgram {
             ParsedTypeExpr::Struct(struct_type) => {
                 w.write_str("{ ")?;
                 for field in struct_type.fields.iter() {
-                    w.write_str(self.idents.get_name(field.name))?;
+                    self.display_ident(w, field.name)?;
                     w.write_str(": ")?;
                     self.display_type_expr_id(ty_expr_id, w)?;
                     w.write_str(", ")?;
@@ -5049,8 +5102,8 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Sum(e) => {
                 w.write_str("either ")?;
-                for variant in &e.variants {
-                    w.write_str(self.idents.get_name(variant.tag_name))?;
+                for variant in self.mem.getn(e.variants) {
+                    self.display_ident(w, variant.tag_name)?;
                     if let Some(payload) = &variant.payload {
                         w.write_str("(")?;
                         self.display_type_expr_id(*payload, w)?;
@@ -5062,7 +5115,7 @@ impl ParsedProgram {
             ParsedTypeExpr::DotMemberAccess(acc) => {
                 self.display_type_expr_id(acc.base, w)?;
                 w.write_char('.')?;
-                w.write_str(self.idents.get_name(acc.member_name))
+                self.display_ident(w, acc.member_name)
             }
             ParsedTypeExpr::Builtin(_builtin) => w.write_str("builtin"),
             ParsedTypeExpr::Function(fun) => {
@@ -5221,7 +5274,7 @@ pub fn parse_standalone(program_name: String, content: String) -> ParsedProgram 
 }
 
 #[cfg(test)]
-pub fn test_parse_module(name: String, source: String) -> ParseResult<ParsedProgram> {
+pub fn test_parse_input(name: String, source: String) -> ParseResult<ParsedProgram> {
     let ast = parse_standalone(name, source);
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);

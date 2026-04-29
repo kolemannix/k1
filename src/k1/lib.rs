@@ -3,6 +3,7 @@
 
 use smallvec::SmallVec;
 
+mod rawref;
 pub mod ir;
 pub mod codegen_llvm;
 pub mod compiler;

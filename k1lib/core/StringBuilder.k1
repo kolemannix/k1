@@ -12,8 +12,8 @@ ns StringBuilder {
 
   fn buildTmp(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context .current)()),
-      .Spilled(l)* -> string/fromBytes(l.as-span())
+      :Inline(f)* -> string/fromBytes(f.as-span().clonedIn(context :current)()),
+      :Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }
 
@@ -25,8 +25,8 @@ ns StringBuilder {
 
   fn build(self: *StringBuilder): string {
     switch self.list* {
-      .Inline(f)* -> string/fromBytes(f.as-span().cloned()),
-      .Spilled(l)* -> string/fromBytes(l.as-span())
+      :Inline(f)* -> string/fromBytes(f.as-span().cloned()),
+      :Spilled(l)* -> string/fromBytes(l.as-span())
     }
   }
 }

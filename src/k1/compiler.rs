@@ -235,6 +235,7 @@ pub struct CompilerConfig {
     pub target: Target,
     pub debug: bool,
     pub out_dir: PathBuf,
+    pub optimize: bool,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -358,35 +359,36 @@ pub fn compile_program(
         target,
         debug: args.debug,
         out_dir,
+        optimize: args.optimize,
     };
 
-    let mut p = TypedProgram::new(module_name.clone(), config);
+    let mut k1 = TypedProgram::new(module_name.clone(), config);
 
-    if let Err(e) = p.add_module(&corelib_dir, false) {
-        write_program_dump(&p);
+    if let Err(e) = k1.add_module(&corelib_dir, false) {
+        write_program_dump(&k1);
         eprintln!("{}", e);
-        return Err(CompileProgramError::TyperFailure(Box::new(p)));
+        return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
 
     if use_std {
-        if let Err(e) = p.add_module(&stdlib_dir, false) {
-            write_program_dump(&p);
+        if let Err(e) = k1.add_module(&stdlib_dir, false) {
+            write_program_dump(&k1);
             eprintln!("{}", e);
-            return Err(CompileProgramError::TyperFailure(Box::new(p)));
+            return Err(CompileProgramError::TyperFailure(Box::new(k1)));
         }
     }
 
-    if let Err(e) = p.add_module(&src_path, true) {
-        write_program_dump(&p);
+    if let Err(e) = k1.add_module(&src_path, true) {
+        write_program_dump(&k1);
         eprintln!("{}", e);
-        return Err(CompileProgramError::TyperFailure(Box::new(p)));
+        return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
     let total_elapsed_ns = start_time.elapsed().as_nanos();
-    let warning_count = p.messages.iter().filter(|e| e.level == MessageLevel::Warn).count();
+    let warning_count = k1.messages.iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
         eprintln!("Completed with {} warnings", warning_count);
     }
-    p.print_timing_info(
+    k1.print_timing_info(
         &src_path.to_string_lossy(),
         total_elapsed_ns as u64,
         &mut std::io::stderr(),
@@ -419,21 +421,21 @@ pub fn compile_program(
     }
 
     if args.dump_module {
-        write_program_dump(&p);
+        write_program_dump(&k1);
     }
 
-    Ok(p)
+    Ok(k1)
 }
 
 pub fn write_executable(
     k1: &TypedProgram,
     module_name: &Path,
     extra_options: &[String],
-    optimize: bool,
 ) -> Result<()> {
     let target = k1.config.target;
     let debug = k1.config.debug;
     let out_dir = &k1.config.out_dir;
+    let optimize = k1.config.optimize;
     let clang_time = std::time::Instant::now();
 
     let mut build_cmd = std::process::Command::new("cc");
@@ -547,8 +549,9 @@ pub fn codegen_module<'ctx, 'module>(
         anyhow::bail!(e)
     }
 
-    // Sometimes its really nice to inspect optimized IR instead of assembly!
-    let optimize_ir = false;
+    eprintln!("iropt: {}ms", codegen.k1.timing.total_iropt_nanos / 1_000_000);
+
+    let optimize_ir = args.optimize;
     if let Err(e) = codegen.optimize_verify(optimize_ir) {
         eprintln!("Codegen error: {}", e);
         anyhow::bail!(e)
@@ -568,7 +571,7 @@ pub fn codegen_module<'ctx, 'module>(
     }
 
     if do_write_executable {
-        write_executable(codegen.k1, &module_name_path, &args.clang_options, args.optimize)?;
+        write_executable(codegen.k1, &module_name_path, &args.clang_options)?;
     }
 
     if args.llvm_counts {

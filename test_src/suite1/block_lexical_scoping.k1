@@ -6,7 +6,7 @@ fn test() {
     assert(_foo == 100);
   });
   assert(
-    result is .some(msg) 
+    result is :some(msg) 
     and msg.startsWith("Error in parameter 'value' in call to 'assert'\nVariable '_foo' is not defined")
   )
 }

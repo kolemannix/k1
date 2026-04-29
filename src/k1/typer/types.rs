@@ -235,7 +235,7 @@ pub struct TypedSumVariant {
     pub tag_value: TypedIntValue,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct SumType {
     pub variants: MSlice<TypedSumVariant, TypePool>,
     pub tag_type: IntegerType,
@@ -940,7 +940,7 @@ pub struct BuiltinTypes {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarType {
     U8 = 1,
     U16 = 2,
@@ -1034,7 +1034,7 @@ impl PhysicalTypeResult {
 }
 
 #[repr(transparent)]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub struct PhysicalType(u32);
 
 impl std::fmt::Debug for PhysicalType {
@@ -1080,6 +1080,10 @@ impl PhysicalType {
 
     pub const fn is_agg(self) -> bool {
         self.0 >= Self::MIN_AGG_ID
+    }
+
+    pub const fn is_scalar(self) -> bool {
+        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Pointer as u32
     }
 
     pub const fn is_int(self) -> bool {
@@ -1819,7 +1823,6 @@ impl TypePool {
         }
     }
 
-    // nocommit: Log everywhere we actually return 'No', see if we can just make that an error
     pub fn compile_physical_type(
         &mut self,
         static_values: &StaticValuePool,
@@ -1914,7 +1917,7 @@ impl TypePool {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
                             PhysicalTypeResult::Never => {
                                 // We simply skip this variant!
-                                eprintln!("I am skipping this sum variant")
+                                debug!("I am skipping this sum variant")
                             }
                             PhysicalTypeResult::Yes(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });
@@ -2103,11 +2106,15 @@ impl TypePool {
         }
     }
 
-    pub fn get_layout(&mut self, static_values: &StaticValuePool, type_id: TypeId) -> Layout {
+    pub fn get_layout(
+        &mut self,
+        static_values: &StaticValuePool,
+        type_id: TypeId,
+    ) -> Option<Layout> {
         match self.get_physical_type(static_values, type_id) {
-            PhysicalTypeResult::No => Layout::ZERO_SIZED,
-            PhysicalTypeResult::Never => Layout::ZERO_SIZED,
-            PhysicalTypeResult::Yes(pt) => self.get_pt_layout(pt),
+            PhysicalTypeResult::No => None,
+            PhysicalTypeResult::Never => None,
+            PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }
     }
 

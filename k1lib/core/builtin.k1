@@ -96,14 +96,14 @@ ns types {
   ns int-kind {
     fn bit-width(self: int-kind): size {
       switch self {
-        .u8  -> 8,
-        .u16 -> 16,
-        .u32 -> 32,
-        .u64 -> 64,
-        .i8  -> 8,
-        .i16 -> 16,
-        .i32 -> 32,
-        .i64 -> 64,
+        :u8  -> 8,
+        :u16 -> 16,
+        :u32 -> 32,
+        :u64 -> 64,
+        :i8  -> 8,
+        :i16 -> 16,
+        :i32 -> 32,
+        :i64 -> 64,
       }
     }
   }
@@ -175,8 +175,8 @@ ns types {
   fn assert-wrapper-type[wrapper, inner]() {
     let schemaA = types/get-type-schema[wrapper];
     let bTypeId = types/type-id[inner];
-    require schemaA is .struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
-    require fields.first() is .some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
+    require schemaA is :struct({ fields }) else { crash("is-wrapper-type: Wrapper must be a struct") };
+    require fields.first() is :some(field) and fields.len() == 1 else crash("Wrapper must have one field, got {fields.len()}");
     let equal = field.type-id == bTypeId;
     if not equal { crash("Expected {types/get-type-name[inner]} but got {types/type-name(field.type-id)}") };
   }
@@ -380,7 +380,7 @@ ability try[impl t, impl e] {
 ability iterator[impl item] {
   fn next(self: *mut self): ?item {
     let p = self.peek();
-    if p is .some(_) { self.advance-by(1) };
+    if p is :some(_) { self.advance-by(1) };
     p
   }
   fn peek(self: *self): ?item
@@ -520,8 +520,8 @@ ns k1 {
 
   deftype os = either linux, macos, wasm
   let os: os = builtin
-  let os-macos: bool = os is .macos
-  let os-posix: bool = os is .macos or os is .linux
+  let os-macos: bool = os is :macos
+  let os-posix: bool = os is :macos or os is :linux
 
   let multithreading: bool = builtin
 
@@ -774,7 +774,7 @@ fn crash(context locn: compiler/source-location)(msg: string): never {
     );
     sys/exit(1)
   } else if k1/is-static {
-    k1/emit-compiler-message(locn, .error, msg);
+    k1/emit-compiler-message(locn, :error, msg);
     sys/exit(111)
   } else {
     sys/printBacktrace();

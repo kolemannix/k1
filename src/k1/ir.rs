@@ -7,7 +7,7 @@
 /// But I currently think there's going to be a lot of value
 /// in having our own. It'll be easier to write an interpreter for
 /// and will help make adding other backends far, far easier
-use crate::kmem::{MHandle, MList};
+use crate::kmem::{DlNode, Dlist, Handle, List, NodeHandle};
 use crate::parse::{self, Ident, NumericWidth};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
@@ -49,6 +49,7 @@ pub struct IrDebugInfo {
 }
 
 nz_u32_id!(IrCallId);
+type IrHandle<T> = Handle<T, ProgramIr>;
 pub struct ProgramIr {
     pub mem: kmem::Mem<ProgramIr>,
     pub instrs: VPool<Inst, InstId>,
@@ -64,10 +65,19 @@ pub struct ProgramIr {
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
 
     // Builder data
-    b_blocks: Vec<Block>,
     b_variables: Vec<BuilderVariable>,
     b_loops: FxHashMap<ScopeId, LoopInfo>,
-    pub b_units_pending_compile: Vec<FunctionId>,
+    pub units_pending_compile: Vec<FunctionId>,
+
+    opt_buf_stack: Vec<iropt::OptVisit>,
+    opt_buf_order: Vec<IrUnitId>,
+    opt_buf_visited: FxHashSet<IrUnitId>,
+    opt_buf_callees: Vec<FunctionId>,
+    opt_buf_cfg_compute_work_stack: Vec<BlockId>,
+    opt_buf_cfg_compute_visited: FxHashSet<BlockId>,
+    opt_buf_inline_self_rewrites: iropt::RewriteMappings,
+    opt_buf_inline_inlined_rewrites: iropt::RewriteMappings,
+    opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings,
 }
 type IrStr = MStr<ProgramIr>;
 
@@ -93,28 +103,61 @@ impl ProgramIr {
             phys_fn_type_cache: FxHashMap::new(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
-            b_blocks: Vec::with_capacity(256),
             b_variables: Vec::with_capacity(256),
             b_loops: FxHashMap::default(),
-            b_units_pending_compile: vec![],
+            units_pending_compile: vec![],
+
+            opt_buf_stack: vec![],
+            opt_buf_order: vec![],
+            opt_buf_visited: FxHashSet::new(),
+            opt_buf_callees: vec![],
+            opt_buf_cfg_compute_work_stack: vec![],
+            opt_buf_cfg_compute_visited: FxHashSet::new(),
+            opt_buf_inline_self_rewrites: iropt::RewriteMappings::default(),
+            opt_buf_inline_inlined_rewrites: iropt::RewriteMappings::default(),
+            opt_buf_cfg_simpl_rewrites: iropt::RewriteMappings::default(),
         }
     }
 
     fn word_sized_int(&self) -> ScalarType {
         ScalarType::U64
     }
+
+    pub fn add_inst(
+        &mut self,
+        inst: Inst,
+        comment: IrStr,
+        debug_info: IrDebugInfo,
+        span: SpanId,
+    ) -> InstId {
+        let id = self.instrs.add(inst);
+        self.sources.add_expected_id(span, id);
+        self.comments.add_expected_id(comment, id);
+        self.debug_info.add_expected_id(debug_info, id);
+        id
+    }
 }
 
-#[derive(Clone)]
-pub struct Block {
-    pub name: IrStr,
-    pub instrs: Vec<InstId>,
-}
+pub type IrList<T> = Dlist<T, ProgramIr>;
 
 #[derive(Clone, Copy)]
-pub struct CompiledBlock {
-    pub name: IrStr,
-    pub instrs: MSlice<InstId, ProgramIr>,
+pub struct Block {
+    pub name: &'static str,
+    pub instrs: IrList<InstId>,
+
+    pub preds: IrList<BlockId>,
+    pub succs: IrList<BlockId>,
+}
+
+impl Block {
+    pub fn empty(name: &'static str) -> Block {
+        Block { name, instrs: IrList::empty(), preds: IrList::empty(), succs: IrList::empty() }
+    }
+    pub fn identical(&self, other: &Block) -> bool {
+        self.name == other.name
+            && self.instrs.first == other.instrs.first
+            && self.instrs.last == other.instrs.last
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -122,18 +165,16 @@ pub struct IrUnit {
     pub result_type_id: TypeId,
     pub unit_id: IrUnitId,
     pub fn_type: PhysicalFunctionType,
-    // The offset of the first instruction id
-    // used by this compiled unit.
-    // Subtract this to get sane indices for dense storage
-    pub inst_offset: u32,
-    // The number of instructions in this unit; used to reserve N 'registers' in our register buffer
+    // The number of instructions in this unit
     pub inst_count: u32,
+    pub last_alloca_index: Option<u32>,
 
-    pub blocks: MSlice<CompiledBlock, ProgramIr>,
+    pub blocks: Dlist<Block, ProgramIr>,
     pub function_builtin_kind: Option<BackendBuiltin>,
     pub is_debug: bool,
 
     pub inline_done: bool,
+    pub cfg_valid: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -220,12 +261,12 @@ impl IrCallee {
 }
 
 #[derive(Clone, Copy)]
-pub struct CameFromCase {
+pub struct PhiCase {
     pub from: BlockId,
     pub value: Value,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Inst(InstId),
     /// `Global` is always a storage location, regardless
@@ -244,9 +285,6 @@ pub enum Value {
         t: PhysicalType,
         index: u32,
     },
-    // FnRetSlot {
-    //     t: PhysicalType,
-    // },
 
     // Large 'immediates' just get encoded as their own instruction
     // We have space for u32, so we use it
@@ -270,6 +308,7 @@ impl Value {
 
 #[derive(Clone, Copy)]
 pub struct IrCall {
+    /// This is the logical return type, no ABI or sret shenanigans
     pub ret_type: PhysicalType,
     pub callee: IrCallee,
     pub args: MSlice<Value, ProgramIr>,
@@ -287,7 +326,6 @@ pub struct IrCall {
 /// This would allow for a universal wire-format for k1 data and we could say that "nothing is platform-specific"* in terms of data layout which would be great
 ///
 /// *Function call conventions vary by the major platforms though so that is still something that will of course be platform-dependent.
-//task(ir): Get inst down to 32 bytes
 #[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
@@ -333,7 +371,7 @@ pub enum Inst {
     /// the most and best information needed by the 'backend' for generating
     /// ideal code for the return value's placement
     Call {
-        id: IrCallId,
+        call_id: IrCallId,
     },
 
     // Control Flow
@@ -345,9 +383,9 @@ pub enum Inst {
     },
     Unreachable,
     // goto considered harmful, but came-from is friend (phi node)
-    CameFrom {
+    Phi {
         t: PhysicalType,
-        incomings: MSlice<CameFromCase, ProgramIr>,
+        incomings: MSlice<PhiCase, ProgramIr>,
     },
     Ret {
         v: Value,
@@ -527,6 +565,13 @@ pub enum Inst {
         value: Value,
     },
 }
+
+impl Inst {
+    fn is_phi(&self) -> bool {
+        matches!(self, Inst::Phi { .. })
+    }
+}
+
 static_assert_size!(Inst, 32);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -609,11 +654,11 @@ pub fn get_inst_kind(ir: &ProgramIr, types: &TypePool, inst_id: InstId) -> InstK
         Inst::Copy { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
-        Inst::Call { id } => InstKind::Value(ir.calls.get(id).ret_type),
+        Inst::Call { call_id: id } => InstKind::Value(ir.calls.get(id).ret_type),
         Inst::Jump(_) => InstKind::Terminator,
         Inst::JumpIf { .. } => InstKind::Terminator,
         Inst::Unreachable => InstKind::Terminator,
-        Inst::CameFrom { t, .. } => InstKind::Value(t),
+        Inst::Phi { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
         Inst::BoolNegate { .. } => InstKind::BOOL,
         Inst::BitNot { v } => get_value_kind(ir, types, v),
@@ -778,11 +823,11 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             BuilderVariable { id: param.variable_id, value, storage_pt: t, indirect: false };
         b.k1.ir.b_variables.push(builder_variable);
     }
-    // debug_assert_eq!(b.k1.ir.b_variables.len() as u32, fn_phys_type.params.len());
 
     let f = b.k1.get_function(function_id);
     if let Some(body_block) = f.body_block {
-        b.push_block("entry");
+        let entry_block = b.push_block("entry");
+        b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
         match f.linkage {
@@ -800,16 +845,12 @@ pub fn compile_function(k1: &mut TypedProgram, function_id: FunctionId) -> K1Res
             _ => None,
         },
     };
-    let unit = finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind);
-
-    *b.k1.ir.functions.get_mut(function_id) = Some(unit);
+    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, builtin_kind)?;
 
     if is_debug {
-        let s = compiled_unit_to_string(b.k1, unit_id, true);
+        let s = unit_to_string(b.k1, unit_id, true);
         eprintln!("{s}");
     }
-
-    validate_unit(k1, unit_id)?;
 
     let elapsed = k1.timing.elapsed_nanos(start);
     k1.timing.total_ir_nanos += elapsed as i64;
@@ -845,17 +886,14 @@ pub fn compile_top_level_expr(
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
-    b.push_block("expr_");
+    let entry_block = b.push_block("expr_toplevel");
+    b.goto_block(entry_block);
     let _result = compile_expr(&mut b, None, expr)?;
-    let compiled_expr =
-        finalize_unit(&mut b, return_type_id, IrUnitId::Expr(expr), phys_fn_type, is_debug, None);
-    b.k1.ir.exprs.insert(expr, compiled_expr);
-
     let unit_id = IrUnitId::Expr(expr);
-    validate_unit(k1, unit_id)?;
+    finalize_unit(&mut b, return_type_id, unit_id, phys_fn_type, is_debug, None)?;
 
     if is_debug {
-        let s = compiled_unit_to_string(k1, unit_id, true);
+        let s = unit_to_string(k1, unit_id, true);
         eprintln!("{s}");
     }
 
@@ -871,23 +909,41 @@ fn finalize_unit(
     fn_type: PhysicalFunctionType,
     is_debug: bool,
     builtin_kind: Option<BackendBuiltin>,
-) -> IrUnit {
-    let inst_count = (b.k1.ir.instrs.len() as u32 + 1) - b.inst_offset;
-    let compiled_blocks = b.bake_blocks();
-    //b.k1.ir.mem.print_usage("after bake");
+) -> K1Result<()> {
+    let inst_count =
+        b.k1.ir
+            .mem
+            .dlist_iter(b.blocks)
+            .map(|block| b.k1.ir.mem.dlist_compute_len(block.instrs) as u32)
+            .sum();
+
     let unit = IrUnit {
         result_type_id,
         unit_id,
         fn_type,
-        inst_offset: b.inst_offset,
         inst_count,
-        blocks: compiled_blocks,
+        last_alloca_index: b.last_alloca_index,
+        blocks: b.blocks,
         function_builtin_kind: builtin_kind,
         is_debug,
         inline_done: false,
+        cfg_valid: true,
     };
-    b.reset_compilation_unit();
-    unit
+    match unit_id {
+        IrUnitId::Function(function_id) => {
+            *b.k1.ir.functions.get_mut(function_id) = Some(unit);
+        }
+        IrUnitId::Expr(expr) => {
+            b.k1.ir.exprs.insert(expr, unit);
+        }
+    }
+
+    iropt::cfg_compute_unit(&mut b.k1.ir, unit_id);
+    validate_unit(b.k1, unit_id)?;
+
+    b.k1.ir.b_variables.clear();
+    b.k1.ir.b_loops.clear();
+    Ok(())
 }
 
 struct BuilderVariable {
@@ -903,85 +959,45 @@ struct LoopInfo {
     end_block: BlockId,
 }
 
-// nocommit
-type BlockId = u32;
+pub type BlockId = NodeHandle<Block, ProgramIr>;
+pub type InstNode = DlNode<InstId, ProgramIr>;
+// Splits block_node at inst into pre and post, leaving `inst` as the last item in pre.
+pub type BlockNode = DlNode<Block, ProgramIr>;
 
 pub struct Builder<'k1> {
     // Dependencies
     k1: &'k1 mut TypedProgram,
 
+    blocks: Dlist<Block, ProgramIr>,
     fn_type: PhysicalFunctionType,
-    inst_offset: u32,
-    block_count: u32,
+
+    returned_alloca: Option<InstId>,
     last_alloca_index: Option<u32>,
     cur_block: BlockId,
     cur_span: SpanId,
-    // Where we put the hoisted allocas
+    // entry_span is the span assigned to the hoisted allocas
     entry_span: SpanId,
 }
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram) -> Self {
-        let inst_offset = k1.ir.instrs.len() as u32 + 1;
         Self {
-            inst_offset,
             k1,
 
+            blocks: Dlist::empty(),
             fn_type: PhysicalFunctionType::nil(),
-            block_count: 0,
+
+            returned_alloca: None,
             last_alloca_index: None,
-            cur_block: 0,
+            cur_block: Handle::nil(),
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
         }
     }
 
-    fn reset_compilation_unit(&mut self) {
-        for b in &mut self.k1.ir.b_blocks[0..self.block_count as usize] {
-            b.instrs.clear();
-        }
-        self.block_count = 0;
-        self.fn_type = PhysicalFunctionType::nil();
-        self.k1.ir.b_variables.clear();
-        self.last_alloca_index = None;
-        self.cur_span = SpanId::NONE;
-        self.entry_span = SpanId::NONE;
-        self.k1.ir.b_loops.clear();
-    }
-
-    fn bake_blocks(&mut self) -> MSlice<CompiledBlock, ProgramIr> {
-        let mut blocks = self.k1.ir.mem.new_list(self.block_count);
-        for b in Builder::builder_blocks_iter(self.block_count, &self.k1.ir.b_blocks) {
-            let instrs = self.k1.ir.mem.pushn(&b.instrs);
-            if instrs.is_empty() {
-                debug!("baking an empty basic block; wonder where it came from?");
-            }
-            let b = CompiledBlock { name: b.name, instrs };
-            blocks.push(b)
-        }
-        self.k1.ir.mem.list_to_handle(blocks)
-    }
-
-    fn builder_blocks_iter(block_count: u32, b_blocks: &[Block]) -> impl Iterator<Item = &Block> {
-        b_blocks[0..block_count as usize].iter()
-    }
-
     fn make_inst(&mut self, inst: Inst, comment: IrStr, debug_info: IrDebugInfo) -> InstId {
         let span = self.cur_span;
-        self.make_inst_ext(inst, comment, debug_info, span)
-    }
-    fn make_inst_ext(
-        &mut self,
-        inst: Inst,
-        comment: IrStr,
-        debug_info: IrDebugInfo,
-        span: SpanId,
-    ) -> InstId {
-        let id = self.k1.ir.instrs.add(inst);
-        self.k1.ir.sources.add_expected_id(span, id);
-        self.k1.ir.comments.add_expected_id(comment, id);
-        self.k1.ir.debug_info.add_expected_id(debug_info, id);
-        id
+        self.k1.ir.add_inst(inst, comment, debug_info, span)
     }
 
     fn push_alloca(&mut self, pt: PhysicalType, comment: impl Into<IrStr>) -> InstId {
@@ -1001,13 +1017,14 @@ impl<'k1> Builder<'k1> {
             Some(i) => i as usize + 1,
         };
         let alloca_span = self.entry_span;
-        let inst_id = self.make_inst_ext(
+        let inst_id = self.k1.ir.add_inst(
             Inst::Alloca { t: pt, vm_layout: layout, returned },
             comment.into(),
             debug_info,
             alloca_span,
         );
-        self.k1.ir.b_blocks[0].instrs.insert(index, inst_id);
+        let mut first_block = self.k1.ir.mem.get_raw_ref(self.blocks.first);
+        self.k1.ir.mem.dlist_insert(&mut first_block.data.instrs, index, inst_id);
         self.last_alloca_index = Some(index as u32);
         inst_id
     }
@@ -1020,10 +1037,31 @@ impl<'k1> Builder<'k1> {
         get_value_kind(&self.k1.ir, &self.k1.types, value)
     }
 
+    #[allow(unused)]
+    fn insert_inst_before(&mut self, inst_node: NodeHandle<InstId, ProgramIr>, inst_id: InstId) {
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_insert_before(&mut blocks.data.instrs, inst_node, inst_id);
+    }
+
+    #[allow(unused)]
+    fn insert_inst_after(&mut self, inst_node: NodeHandle<InstId, ProgramIr>, inst_id: InstId) {
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_insert_after(&mut blocks.data.instrs, inst_node, inst_id);
+    }
+
+    fn push_inst_front(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
+        let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
+
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_push_front(&mut blocks.data.instrs, id);
+        id
+    }
+
     fn push_inst(&mut self, inst: Inst, comment: impl Into<IrStr>) -> InstId {
         let id = self.make_inst(inst, comment.into(), IrDebugInfo::default());
 
-        self.k1.ir.b_blocks[self.cur_block as usize].instrs.push(id);
+        let blocks = self.k1.ir.mem.get_raw_ref(self.cur_block).as_mut();
+        self.k1.ir.mem.dlist_push(&mut blocks.data.instrs, id);
         id
     }
 
@@ -1130,31 +1168,17 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_block(&mut self, name: impl Into<IrStr>) -> BlockId {
-        let id = self.block_count;
-        // Recycle builder blocks
-        match self.k1.ir.b_blocks.get_mut(self.block_count as usize) {
-            Some(recycled) => {
-                self.block_count += 1;
-                recycled.name = name.into();
-            }
-            None => {
-                self.block_count += 1;
-                self.k1
-                    .ir
-                    .b_blocks
-                    .push(Block { name: name.into(), instrs: Vec::with_capacity(256) });
-            }
-        }
-
-        id as BlockId
+    fn push_block(&mut self, name: &'static str) -> BlockId {
+        let node = self.k1.ir.mem.dlist_push(&mut self.blocks, Block::empty(name));
+        node
     }
 
     #[track_caller]
     fn goto_block(&mut self, block_id: BlockId) {
-        match self.k1.ir.b_blocks.get(block_id as usize) {
-            None => panic!("goto_block on non-existent block: {}", block_id),
-            Some(_) => self.cur_block = block_id,
+        self.cur_block = block_id;
+        #[cfg(debug_assertions)]
+        {
+            self.k1.ir.mem.get(block_id);
         }
     }
 
@@ -1228,6 +1252,45 @@ impl<'k1> Builder<'k1> {
             let t = self.get_physical_type(return_type_id);
             (t, false)
         }
+    }
+
+    fn get_instr_block(&self, inst_id: InstId) -> IrHandle<BlockNode> {
+        self.k1
+            .ir
+            .mem
+            .dlist_iter_handles(self.blocks)
+            .find(|(_h, b)| self.k1.ir.mem.dlist_iter(b.data.instrs).any(|i| *i == inst_id))
+            .unwrap()
+            .0
+    }
+
+    fn _locate_inst(&self, inst_id: InstId) -> (BlockId, Handle<InstNode, ProgramIr>, usize) {
+        for (block_handle, block) in self.k1.ir.mem.dlist_iter_handles(self.blocks) {
+            for (index, (inst_handle, inst)) in
+                self.k1.ir.mem.dlist_iter_handles(block.data.instrs).enumerate()
+            {
+                if inst.data == inst_id {
+                    return (block_handle, inst_handle, index);
+                }
+            }
+        }
+        panic!("inst {} not found", inst_id.as_u32())
+    }
+
+    fn split_block_at_inst(
+        &mut self,
+        block_node: BlockId,
+        inst_node: IrHandle<InstNode>,
+    ) -> Handle<BlockNode, ProgramIr> {
+        let mut block_ref = self.k1.ir.mem.get_raw_ref(block_node);
+        let name = block_ref.data.name;
+        let after_insts = self.k1.ir.mem.dlist_split_at_node(&mut block_ref.data.instrs, inst_node);
+        let after_block = self.k1.ir.mem.dlist_insert_after(
+            &mut self.blocks,
+            block_node,
+            Block { name, instrs: after_insts, preds: Dlist::empty(), succs: Dlist::empty() },
+        );
+        after_block
     }
 }
 
@@ -1425,9 +1488,9 @@ pub enum BuiltinHandler {
 pub fn builtin_handler(intrinsic_op: Builtin) -> BuiltinHandler {
     use BuiltinHandler as H;
     match intrinsic_op {
-        Builtin::SizeOf => H::Typer,
-        Builtin::SizeOfStride => H::Typer,
-        Builtin::AlignOf => H::Typer,
+        Builtin::TypeSize => H::Typer,
+        Builtin::TypeStride => H::Typer,
+        Builtin::TypeAlign => H::Typer,
         Builtin::CompilerSourceLocation => H::Typer,
         Builtin::GetStaticValue => H::Typer,
         Builtin::StaticTypeToValue => H::Typer,
@@ -1658,7 +1721,7 @@ fn compile_expr(
                                             dst: None,
                                         };
                                         let call_id = b.k1.ir.calls.add(memset_call);
-                                        b.push_inst(Inst::Call { id: call_id }, "zeroed memset");
+                                        b.push_inst(Inst::Call { call_id }, "zeroed memset");
                                         Ok(dst)
                                     }
                                     PhysicalTypeEnum::Scalar(st) => {
@@ -1883,8 +1946,8 @@ fn compile_expr(
             if let Some(function_id) = callee.known_function_id() {
                 match b.k1.ir.functions.get(function_id) {
                     None => {
-                        if !b.k1.ir.b_units_pending_compile.contains(&function_id) {
-                            b.k1.ir.b_units_pending_compile.push(function_id);
+                        if !b.k1.ir.units_pending_compile.contains(&function_id) {
+                            b.k1.ir.units_pending_compile.push(function_id);
                         }
                     }
                     Some(_unit) => {}
@@ -1926,7 +1989,7 @@ fn compile_expr(
                 args: args_handle,
                 dst,
             });
-            let call_inst = Inst::Call { id: call_id };
+            let call_inst = Inst::Call { call_id };
             let call_inst_id = b.push_inst_anon(call_inst);
             let value_for_call = {
                 if callee_fn_type.diverges {
@@ -1959,27 +2022,8 @@ fn compile_expr(
             b.push_inst_anon(Inst::Unreachable);
 
             let match_end_block = b.push_block("match_end");
-            b.goto_block(match_end_block);
-            let result_inst_kind = b.type_to_inst_kind(match_result_type);
-            let (result_came_from, is_empty) = match result_inst_kind {
-                InstKind::Value(pt) => {
-                    if pt.is_empty() {
-                        (None, true)
-                    } else {
-                        let came_from_inst = b.push_inst(
-                            Inst::CameFrom { t: pt, incomings: MSlice::empty() },
-                            "match phi",
-                        );
-                        (Some(came_from_inst), false)
-                    }
-                }
-                InstKind::Void => {
-                    return failf!(b.cur_span, "come from void");
-                }
-                InstKind::Terminator => (None, false),
-            };
 
-            let mut incomings: MList<CameFromCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
+            let mut incomings: List<PhiCase, _> = b.k1.ir.mem.new_list(match_expr.arms.len());
             for ((index, arm), (arm_block, arm_cons_block)) in
                 b.k1.mem.getn(match_expr.arms).iter().enumerate().zip(arm_blocks.iter())
             {
@@ -2010,36 +2054,41 @@ fn compile_expr(
 
                 if !cons_diverges {
                     let current_block = b.cur_block;
-                    incomings.push(CameFromCase { from: current_block, value: result });
+                    incomings.push(PhiCase { from: current_block, value: result });
                     b.push_jump(match_end_block, "");
                 }
             }
+
             b.goto_block(match_end_block);
-            match result_came_from {
-                None => {
-                    if is_empty {
+            let result_inst_kind = b.type_to_inst_kind(match_result_type);
+            match result_inst_kind {
+                InstKind::Value(pt) => {
+                    if pt.is_empty() {
                         Ok(Value::Empty)
                     } else {
-                        // match is divergent
-                        let inst = b.push_inst(Inst::Unreachable, "divergent match");
-                        Ok(inst.as_value())
+                        let value = if incomings.len() == 1 {
+                            let phi_case = incomings[0];
+                            phi_case.value
+                        } else {
+                            let incomings_handle = b.k1.ir.mem.list_to_handle(incomings);
+                            let phi_inst = b.push_inst(
+                                Inst::Phi { t: pt, incomings: incomings_handle },
+                                "match phi",
+                            );
+                            phi_inst.as_value()
+                        };
+                        // Interesting thought: If dst is Some, we could just do stores to it instead of phi.
+                        let fulfilled = store_rich_if_dst(b, dst, pt, value, "fulfill match dst");
+                        Ok(fulfilled)
                     }
                 }
-                Some(came_from) => {
-                    let real_incomings = b.k1.ir.mem.list_to_handle(incomings);
-                    let Inst::CameFrom { incomings: i, .. } = b.k1.ir.instrs.get_mut(came_from)
-                    else {
-                        unreachable!()
-                    };
-                    *i = real_incomings;
-                    let pt_id = b.get_physical_type(match_result_type);
-                    Ok(store_rich_if_dst(
-                        b,
-                        dst,
-                        pt_id,
-                        came_from.as_value(),
-                        "deliver match result value",
-                    ))
+                InstKind::Void => {
+                    failf!(b.cur_span, "match result void")
+                }
+                InstKind::Terminator => {
+                    // match is divergent
+                    let inst = b.push_inst(Inst::Unreachable, "divergent match");
+                    Ok(inst.as_value())
                 }
             }
         }
@@ -2226,17 +2275,28 @@ fn compile_expr(
             debug_assert!(dst.is_none());
             let return_pt = b.fn_type.return_type;
             let dst = match typed_return.returned_variable {
-                None if return_pt.is_agg() => {
-                    let rvo_storage =
-                        b.push_alloca_ext(return_pt, "rvo storage", IrDebugInfo::default(), true);
-                    Some(rvo_storage.as_value())
-                }
+                None if return_pt.is_agg() => match b.returned_alloca {
+                    Some(inst_id) => Some(inst_id.as_value()),
+                    None => {
+                        let rvo_storage = b.push_alloca_ext(
+                            return_pt,
+                            "rvo storage",
+                            IrDebugInfo::default(),
+                            true,
+                        );
+                        b.returned_alloca = Some(rvo_storage);
+                        Some(rvo_storage.as_value())
+                    }
+                },
                 _ => None,
             };
             let value = compile_expr(b, dst, typed_return.value)?;
             let is_agg_return = b.fn_type.return_type.is_agg();
+
+            // kills a dependency on an empty value
+            let returned_value = if return_pt.is_empty() { Value::Empty } else { value };
             let ret = b.push_inst(
-                Inst::Ret { v: value, agg: is_agg_return },
+                Inst::Ret { v: returned_value, agg: is_agg_return },
                 if is_agg_return { "return aggregate at address" } else { "" },
             );
             Ok(ret.as_value())
@@ -2246,14 +2306,14 @@ fn compile_expr(
             let l = b.k1.types.lambda_types.get(lambda_type_id);
             let function_id = l.function_id;
             let env_struct = l.environment_struct;
-            b.k1.ir.b_units_pending_compile.push(function_id);
+            b.k1.ir.units_pending_compile.push(function_id);
             compile_expr(b, dst, env_struct)
         }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = b.get_physical_type(POINTER_TYPE_ID);
             let stored = store_rich_if_dst(b, dst, ptr_pt, fp, "deliver fn pointer");
-            b.k1.ir.b_units_pending_compile.push(fpe.function_id);
+            b.k1.ir.units_pending_compile.push(fpe.function_id);
             Ok(stored)
         }
         TypedExpr::PendingCapture(_) => b_ice!(b, "ir on PendingCapture"),
@@ -2697,14 +2757,19 @@ fn compile_matching_condition(
         b.push_jump(cons_block, "empty condition");
         return Ok(());
     }
-    for inst in b.k1.mem.getn(mc.instrs).iter() {
+    for (index, inst) in b.k1.mem.getn(mc.instrs).iter().enumerate() {
+        let is_last = index == mc.instrs.len() as usize - 1;
         match inst {
             MatchingConditionInstr::Binding { let_stmt, .. } => {
                 compile_stmt(b, None, *let_stmt)?;
+                if is_last {
+                    b.push_jump(cons_block, "matching cond binding fallthrough to cons");
+                }
             }
             MatchingConditionInstr::Cond { value } => {
                 let cond_value: Value = compile_expr(b, None, *value)?;
-                let continue_block = b.push_block("matching_cond_continue");
+                let continue_block =
+                    if is_last { cons_block } else { b.push_block("matching_cond_continue") };
 
                 // If the matching condition was typechecked as 'infallible', we don't have a fail
                 // block, and we just jump to continue.
@@ -2719,7 +2784,6 @@ fn compile_matching_condition(
             }
         }
     }
-    b.push_jump(cons_block, "matching cond fallthrough cons");
     Ok(())
 }
 
@@ -2750,6 +2814,16 @@ pub fn get_compiled_unit(ir: &ProgramIr, unit: IrUnitId) -> Option<IrUnit> {
     }
 }
 
+pub fn get_compiled_unit_mut(ir: &mut ProgramIr, unit: IrUnitId) -> Option<&mut IrUnit> {
+    match unit {
+        IrUnitId::Function(function_id) => match ir.functions.get_mut(function_id) {
+            Some(func) => Some(func),
+            _ => None,
+        },
+        IrUnitId::Expr(typed_expr_id) => ir.exprs.get_mut(&typed_expr_id),
+    }
+}
+
 pub fn get_unit_span(k1: &TypedProgram, unit: IrUnitId) -> SpanId {
     match unit {
         IrUnitId::Function(function_id) => k1.get_function_span(function_id),
@@ -2766,16 +2840,24 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     let Some(unit) = get_compiled_unit(&k1.ir, unit_id) else {
         return failf!(span, "Not compiled");
     };
-    for (block_index, block) in ir.mem.getn(unit.blocks).iter().enumerate() {
-        for (index, inst_id) in ir.mem.getn(block.instrs).iter().enumerate() {
-            let is_last = index as u32 == block.instrs.len() - 1;
-            let inst = ir.instrs.get(*inst_id);
-            let inst_kind = get_inst_kind(ir, &k1.types, *inst_id);
+    // eprintln!("validate_unit: {}", unit_name_to_string(k1, unit_id));
+    // eprintln!("blocks.first: {}", unit.blocks.first.raw_index());
+    // eprintln!("blocks.last: {}", unit.blocks.first.raw_index());
+    let mut my_blocks = FxHashSet::new();
+    for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
+        my_blocks.insert(block_id);
+    }
+    for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
+        for inst_node in ir.mem.dlist_iter_nodes(block.data.instrs) {
+            let inst_id = inst_node.data;
+            let is_last = inst_node.is_last();
+            let inst = ir.instrs.get(inst_id);
+            let inst_kind = get_inst_kind(ir, &k1.types, inst_id);
             if !is_last && inst_kind.is_terminator() {
-                errors.push(format!("b{block_index}: stray terminator"))
+                errors.push(format!("b{}: stray terminator", block_id.raw_index()))
             };
             if is_last && !inst_kind.is_terminator() {
-                errors.push(format!("b{block_index}: unterminated"))
+                errors.push(format!("b{}: unterminated", block_id.raw_index()))
             }
 
             match *inst {
@@ -2784,7 +2866,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::Store { dst, .. } => {
                     let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
-                        errors.push(format!("store dst v{} is not a ptr", *inst_id))
+                        errors.push(format!("store dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::Load { src, .. } => {
@@ -2800,7 +2882,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                     let dst_type = get_value_kind(ir, &k1.types, dst);
                     if !dst_type.is_storage() {
-                        errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", *inst_id))
+                        errors.push(format!("i{inst_id}: copy dst v{} is not a ptr", inst_id))
                     }
                 }
                 Inst::StructOffset { base, .. } => {
@@ -2826,18 +2908,39 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::Call { .. } => (),
                 Inst::Jump(block) => {
-                    if block >= unit.blocks.len() {
-                        errors.push(format!("i{inst_id}: jump to non-existent block b{}", block))
+                    if !my_blocks.contains(&block) {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
                     }
                 }
-                Inst::JumpIf { cond, .. } => {
+                Inst::JumpIf { cond, cons, alt } => {
                     let cond_type = get_value_kind(ir, &k1.types, cond);
                     if !cond_type.is_value() {
                         errors.push(format!("i{inst_id}: jumpif cond is not a value"))
                     }
+
+                    if !my_blocks.contains(&cons) {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
+                    }
+                    if !my_blocks.contains(&alt) {
+                        errors.push(format!("i{inst_id}: jump to non-existent block"))
+                    }
                 }
                 Inst::Unreachable => (),
-                Inst::CameFrom { .. } => (),
+                Inst::Phi { incomings, .. } => {
+                    for incoming in ir.mem.getn(incomings) {
+                        let Ok(_value_type) =
+                            get_value_kind(ir, &k1.types, incoming.value).expect_value()
+                        else {
+                            errors.push(format!("i{inst_id}: phi type not a value kind"));
+                            continue;
+                        };
+                        if incoming.from == block_id {
+                            errors.push(format!("i{inst_id}: phi incoming block cannot be self"))
+                        } else if !my_blocks.contains(&incoming.from) {
+                            errors.push(format!("i{inst_id}: phi incoming block does not exist"))
+                        }
+                    }
+                }
                 Inst::Ret { v, .. } => {
                     let ret_val_type = get_value_kind(ir, &k1.types, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
@@ -2955,7 +3058,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
             span,
             message: format!(
                 "IR Unit failed validation\n{}\n{}",
-                compiled_unit_to_string(k1, unit_id, true),
+                unit_to_string(k1, unit_id, true),
                 error_string
             ),
             level: MessageLevel::Error,
@@ -2966,129 +3069,14 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     }
 }
 
-////////////////////////////// Optimize //////////////////////////////
-
-pub fn optimize_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
-    let Some(_unit) = get_compiled_unit(&k1.ir, unit_id) else {
-        return;
-    };
-    k1.compile_all_pending_ir(SpanId::NONE).unwrap(); // nocommit
-
-    enum Visit {
-        Enter(IrUnitId),
-        Leave(IrUnitId),
-    }
-    let mut stack = vec![Visit::Enter(unit_id)];
-    let mut order: Vec<IrUnitId> = Vec::new();
-    let mut visited = FxHashSet::new();
-
-    while let Some(visit) = stack.pop() {
-        match visit {
-            Visit::Enter(unit_id) => {
-                if !visited.insert(unit_id) {
-                    continue;
-                }
-                stack.push(Visit::Leave(unit_id)); // come back after children
-                // nocommit allocation churn
-                for callee_id in collect_direct_unoptimized_callees(k1, unit_id) {
-                    stack.push(Visit::Enter(IrUnitId::Function(callee_id)));
-                }
-            }
-            Visit::Leave(unit_id) => {
-                order.push(unit_id); // true post-order
-            }
-        }
-    }
-
-    for unit_id in order.iter() {
-        eprintln!("Optimizing {}", unit_name_to_string(k1, *unit_id));
-        inline_calls_in_unit(k1, *unit_id)
-    }
-}
-
-fn collect_direct_unoptimized_callees(k1: &TypedProgram, unit_id: IrUnitId) -> Vec<FunctionId> {
-    let mut callees = vec![];
-    let unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
-    for block in k1.ir.mem.getn(unit.blocks) {
-        for inst_id in k1.ir.mem.getn(block.instrs) {
-            let inst = k1.ir.instrs.get(*inst_id);
-            if let Inst::Call { id: call_id } = inst {
-                // Inline calls
-                let call = k1.ir.calls.get(*call_id);
-                match call.callee {
-                    IrCallee::Direct(function_id) => {
-                        let callee_unit =
-                            get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-                        if !callee_unit.inline_done {
-                            callees.push(function_id)
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    callees
-}
-
-fn inline_calls_in_unit(k1: &mut TypedProgram, unit_id: IrUnitId) {
-    eprintln!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
-    while do_pass(k1, unit_id) {}
-
-    fn do_pass(k1: &mut TypedProgram, unit_id: IrUnitId) -> bool {
-        let self_unit = get_compiled_unit(&k1.ir, unit_id).unwrap();
-        for block in k1.ir.mem.getn(self_unit.blocks) {
-            for inst_id in k1.ir.mem.getn(block.instrs) {
-                let inst = k1.ir.instrs.get(*inst_id);
-                if let Inst::Call { id: call_id } = inst {
-                    // Inline calls
-                    let call = *k1.ir.calls.get(*call_id);
-                    match call.callee {
-                        IrCallee::Direct(function_id) => {
-                            let callee_unit =
-                                get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-
-                            if callee_unit.inst_count < 20 {
-                                inline_call(k1, self_unit, *inst_id, call);
-                                // We want to just start the iteration completely over
-                                // at this point, since we've mutated the unit, and stop when
-                                // we find nothing to inline
-                                return true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    fn inline_call(k1: &mut TypedProgram, self_unit: IrUnit, inst_id: InstId, call: IrCall) {
-        eprintln!("Inlining call i{}", inst_id.as_u32());
-        let mut new_blocks = k1.ir.mem.new_list(self_unit.blocks.len());
-        new_blocks.extend(k1.ir.mem.getn(self_unit.blocks));
-        let IrCallee::Direct(callee_fn_id) = call.callee else { panic!() };
-        let callee_unit = k1.ir.functions.get(callee_fn_id).unwrap();
-
-        // Allocas must be hoisted
-        let callee_entry = k1.ir.mem.get_nth(callee_unit.blocks, 0);
-        for prelude_inst in k1.ir.mem.getn(callee_entry.instrs) {
-            if let Inst::Alloca { .. } = k1.ir.instrs.get(*prelude_inst) {
-
-            }
-        }
-        // eval each param (already done)
-        // All parameter references must be replaced by the parameter values
-        // - Downstream block references (phis or jumps) must be updated to be the final block
-        // of the inlined function
-
-    }
-}
+mod iropt;
+pub use iropt::cfg_compute_unit;
+pub use iropt::cfg_simplify;
+pub use iropt::optimize_unit;
 
 ////////////////////////////// Display //////////////////////////////
 
-pub fn compiled_unit_to_string(k1: &TypedProgram, unit: IrUnitId, show_source: bool) -> String {
+pub fn unit_to_string(k1: &TypedProgram, unit: IrUnitId, show_source: bool) -> String {
     let mut s = String::new();
     let unit = get_compiled_unit(&k1.ir, unit).unwrap();
     display_unit(&mut s, k1, &unit, show_source).unwrap();
@@ -3159,12 +3147,33 @@ pub fn display_unit(
             write!(w, " from {}:{}", &source.filename, line.line_number())?;
         }
     };
-    writeln!(w, " (offset={}, inst count={})", unit.inst_offset, unit.inst_count)?;
-    for (index, _block) in k1.ir.mem.getn(unit.blocks).iter().enumerate() {
-        let id = index as BlockId;
-        display_block(w, k1, &k1.ir, unit, id, show_source)?;
+    writeln!(w, " (inst count={}, cfg_valid={})", unit.inst_count, unit.cfg_valid)?;
+    display_blocks(w, k1, unit.blocks, unit.cfg_valid, show_source)?;
+    Ok(())
+}
+
+pub fn display_blocks(
+    w: &mut impl Write,
+    k1: &TypedProgram,
+    blocks: Dlist<Block, ProgramIr>,
+    cfg_valid: bool,
+    show_source: bool,
+) -> std::fmt::Result {
+    for (block, _) in k1.ir.mem.dlist_iter_handles(blocks) {
+        display_block(w, k1, block, cfg_valid, show_source)?;
     }
     Ok(())
+}
+
+pub fn blocks_to_string(
+    k1: &TypedProgram,
+    blocks: Dlist<Block, ProgramIr>,
+    cfg_valid: bool,
+    show_source: bool,
+) -> String {
+    let mut s = String::new();
+    display_blocks(&mut s, k1, blocks, cfg_valid, show_source).unwrap();
+    s
 }
 
 pub fn display_compiled_expr(
@@ -3196,18 +3205,30 @@ pub fn inst_to_index(inst_id: InstId, offset: u32) -> u32 {
 pub fn display_block(
     w: &mut impl Write,
     k1: &TypedProgram,
-    ir: &ProgramIr,
-    unit: &IrUnit,
     block_id: BlockId,
+    cfg_valid: bool,
     show_source: bool,
 ) -> std::fmt::Result {
-    let block = ir.mem.get_nth(unit.blocks, block_id as usize);
-    write!(w, "b{} ", block_id)?;
-    if !block.name.is_empty() {
-        w.write_str(block.name.as_ref())?;
+    let ir = &k1.ir;
+    let block = ir.mem.get(block_id).data;
+    write!(w, "b{} {}", block_id.raw_index(), block.name)?;
+    if cfg_valid {
+        let preds_string =
+            ir.mem.dlist_iter(block.preds).map(|pred| format!("b{}", pred.raw_index())).join(", ");
+        let succs_string =
+            ir.mem.dlist_iter(block.succs).map(|pred| format!("b{}", pred.raw_index())).join(", ");
+        write!(w, "  preds: [{}], succs: [{}]", preds_string, succs_string)?;
     }
     writeln!(w)?;
-    for inst_id in ir.mem.getn(block.instrs).iter() {
+    for inst_id in ir.mem.dlist_iter(block.instrs) {
+        write!(w, " i{:3} = ", *inst_id)?;
+        let inst_str = inst_to_string(k1, *inst_id);
+        write!(w, "{:60}", inst_str)?;
+        let comment = ir.comments.get(*inst_id);
+        if !comment.is_empty() {
+            write!(w, "; {}", comment)?;
+        }
+
         if show_source {
             let span_id = *ir.sources.get(*inst_id);
             let lines = k1.ast.get_span_content(span_id);
@@ -3215,14 +3236,7 @@ pub fn display_block(
             let (_, line) = k1.get_span_location(span_id);
             let first_line = lines.lines().next().unwrap_or("");
             let column = the_span.start + 1 - line.start_char;
-            write!(w, "|  {first_line:80}| L{:3}:{} |", line.line_number(), column)?;
-        }
-
-        write!(w, " i{:3} = ", *inst_id)?;
-        display_inst(w, k1, ir, *inst_id)?;
-        let comment = ir.comments.get(*inst_id);
-        if !comment.is_empty() {
-            write!(w, " ; {}", comment)?;
+            write!(w, "| {first_line:60}|{:3}:{}|", line.line_number(), column)?;
         }
         writeln!(w)?;
     }
@@ -3232,17 +3246,12 @@ pub fn display_block(
 
 pub fn inst_to_string(k1: &TypedProgram, inst_id: InstId) -> String {
     let mut s = String::new();
-    display_inst(&mut s, k1, &k1.ir, inst_id).unwrap();
+    display_inst(&mut s, k1, inst_id).unwrap();
     s
 }
 
-pub fn display_inst(
-    w: &mut impl Write,
-    k1: &TypedProgram,
-    ir: &ProgramIr,
-    inst_id: InstId,
-) -> std::fmt::Result {
-    match *ir.instrs.get(inst_id) {
+pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> std::fmt::Result {
+    match *k1.ir.instrs.get(inst_id) {
         Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
@@ -3278,8 +3287,8 @@ pub fn display_inst(
             k1.types.display_pt(w, element_t)?;
             write!(w, " {}[{}]", base, element_index)?;
         }
-        Inst::Call { id } => {
-            let call = ir.calls.get(id);
+        Inst::Call { call_id: id } => {
+            let call = k1.ir.calls.get(id);
             write!(w, "call ")?;
             if let Some(dst) = call.dst {
                 w.write_str("into ")?;
@@ -3308,7 +3317,7 @@ pub fn display_inst(
                 }
             };
             w.write_str("(")?;
-            for (index, arg) in ir.mem.getn(call.args).iter().enumerate() {
+            for (index, arg) in k1.ir.mem.getn(call.args).iter().enumerate() {
                 write!(w, "{}", *arg)?;
                 let last = index == call.args.len() as usize - 1;
                 if !last {
@@ -3318,23 +3327,37 @@ pub fn display_inst(
             w.write_str(")")?;
         }
         Inst::Jump(block_id) => {
-            write!(w, "jmp b{}", block_id)?;
+            write!(w, "jmp b{} {}", block_id.raw_index(), k1.ir.mem.get(block_id).data.name)?;
         }
         Inst::JumpIf { cond, cons, alt } => {
-            write!(w, "jmpif {}, b{}, b{}", cond, cons, alt)?;
+            write!(
+                w,
+                "jmpif {}, b{} {}, b{} {}",
+                cond,
+                cons.raw_index(),
+                k1.ir.mem.get(cons).data.name,
+                alt.raw_index(),
+                k1.ir.mem.get(alt).data.name
+            )?;
         }
         Inst::Unreachable => {
             write!(w, "unreachable")?;
         }
-        Inst::CameFrom { t, incomings } => {
-            write!(w, "comefrom ")?;
+        Inst::Phi { t, incomings } => {
+            write!(w, "phi ")?;
             k1.types.display_pt(w, t)?;
             write!(w, " [")?;
-            for (i, incoming) in ir.mem.getn(incomings).iter().enumerate() {
+            for (i, incoming) in k1.ir.mem.getn(incomings).iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
-                write!(w, "(b{}: {})", incoming.from, incoming.value)?;
+                write!(
+                    w,
+                    "(b{} {}: {})",
+                    incoming.from.raw_index(),
+                    k1.ir.mem.get(incoming.from).data.name,
+                    incoming.value
+                )?;
             }
             write!(w, "]")?;
         }
@@ -3343,7 +3366,7 @@ pub fn display_inst(
             if agg {
                 w.write_str("agg ")?;
             }
-            display_inst_kind(w, &k1.types, get_value_kind(ir, &k1.types, v))?;
+            display_inst_kind(w, &k1.types, get_value_kind(&k1.ir, &k1.types, v))?;
             write!(w, " {}", v)?;
         }
         Inst::BoolNegate { v } => {

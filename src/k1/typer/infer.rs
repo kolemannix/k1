@@ -226,9 +226,9 @@ impl TypedProgram {
             );
         }
 
-        let mut solutions: MList<NameAndType, _> = self_.mem.new_list(must_solve_params.len());
+        let mut solutions: List<NameAndType, _> = self_.mem.new_list(must_solve_params.len());
         let mut unsolved_params: SV8<NameAndType> = smallvec![];
-        let mut all_solutions: MList<NameAndType, _> =
+        let mut all_solutions: List<NameAndType, _> =
             self_.mem.new_list(all_type_params.len() as u32);
 
         // TODO: enrich this error, probably do the same thing we're doing below for unsolved
@@ -442,7 +442,7 @@ impl TypedProgram {
             && self.ast.mem.getn(passed_type_args).iter().all(|nt| nt.type_expr.is_some());
         debug!("all_passed={all_params_were_passed}");
         let solved_type_params = if all_params_were_passed {
-            let mut evaled_params: MList<NameAndType, _> = self.mem.new_list(type_params.len());
+            let mut evaled_params: List<NameAndType, _> = self.mem.new_list(type_params.len());
             for (type_param, type_arg) in
                 self.mem.getn(type_params).iter().zip(self.ast.mem.getn(passed_type_args).iter())
             {
@@ -583,7 +583,7 @@ impl TypedProgram {
             return Ok((MSlice::empty(), smallvec![]));
         }
 
-        let mut fnlike_type_args: MList<NameAndType, _> =
+        let mut fnlike_type_args: List<NameAndType, _> =
             self.mem.new_list(original_function_sig.function_type_params.len());
         let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
         let subst_pairs: SV8<_> = self

@@ -4,5 +4,5 @@ fn test() {
   let loc = core/compiler/location();
   assert(loc.filename == "lib_compiler_test.k1");
   assert(loc.line == 4);
-  assert(testCompile(2 + "asdf") is .some(_));
+  assert(testCompile(2 + "asdf") is :some(_));
 }

@@ -17,7 +17,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
 
     code.var("parts", parts.as-span());
     switch schema {
-      .string -> {
+      :string -> {
         if parts.len != 1 {
           crash("Got 1 format argument (a string) but format string has {parts.len}")
         };
@@ -25,7 +25,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
         code.line("parts.get(0).printTo(w);");
         code.line("w.write-string(args);");
       },
-      .struct({fields}) -> {
+      :struct({fields}) -> {
         if parts.len != fields.len() {
           crash("Mismatching format arg count")
         };

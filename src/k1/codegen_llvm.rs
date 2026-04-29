@@ -4,9 +4,9 @@
 use std::num::NonZeroU32;
 use std::path::Path;
 
-use ahash::HashMapExt;
+use ahash::{HashMapExt, HashSetExt};
 use anyhow::bail;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -24,8 +24,7 @@ use inkwell::types::{
 };
 use inkwell::values::{
     ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue,
-    GlobalValue, InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue,
-    StructValue, ValueKind,
+    GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode};
 use itertools::Itertools;
@@ -36,10 +35,9 @@ use log::{debug, info, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, IrUnitId, CompiledBlock, Inst, InstId, IrCallee, PhysicalFunctionType,
-    ProgramIr,
+    BackendBuiltin, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
 };
-use crate::kmem::{MHandle, MList, MSlice};
+use crate::kmem::{Handle, List, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, Ident, StringId};
 use crate::typer::types::{
@@ -135,7 +133,7 @@ struct CgArrayType<'ctx> {
     count: u32,
     array_type: ArrayType<'ctx>,
     #[allow(unused)]
-    element_type: MHandle<CgType<'ctx>, CgPerm>,
+    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -271,6 +269,7 @@ impl<'ctx> BuiltinTypes<'ctx> {
 pub struct CgFunction<'ctx> {
     pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
+    pub blocks: FxHashMap<BlockId, BasicBlock<'ctx>>,
     /// These are canonical, not ABI-mapped, and also logical, as in,
     /// sret is excluded, so the first item is the first param the function actually takes
     pub param_values: Vec<BasicValueEnum<'ctx>>,
@@ -304,6 +303,13 @@ pub struct Cg<'ctx, 'k1> {
     mem: kmem::Mem<CgPerm>,
 
     current_insert_function: FunctionId,
+
+    buffers: CgBuffers,
+}
+
+struct CgBuffers {
+    cfg_seen: FxHashSet<BlockId>,
+    cfg_blocks_rpo: Vec<BlockId>,
 }
 
 struct DebugContext<'ctx> {
@@ -540,6 +546,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             mem: kmem::Mem::make(),
 
             current_insert_function: FunctionId::PENDING,
+
+            buffers: CgBuffers {
+                cfg_seen: FxHashSet::new(),
+                cfg_blocks_rpo: Vec::with_capacity(16),
+            },
         }
     }
 
@@ -567,8 +578,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let Some(main_function_id) = self.k1.get_main_function_id() else {
             return failf!(SpanId::NONE, "Program {} has no main function", self.k1.program_name());
         };
-        ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+
         let function_value = self.declare_llvm_function(main_function_id)?;
+        self.k1.compile_all_pending_ir(SpanId::NONE).unwrap();
+        if self.k1.config.optimize {
+            ir::optimize_unit(self.k1, IrUnitId::Function(main_function_id));
+        }
 
         let mut inst_mappings = FxHashMap::with_capacity(512);
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
@@ -594,7 +609,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Some(v) => self.builder.build_return(Some(&v)).unwrap(),
         };
 
-        info!("codegen phase 'ir' took {}ms", start.elapsed().as_millis());
+        info!("codegen phase 'llvm' took {}ms", start.elapsed().as_millis());
         Ok(())
     }
 
@@ -628,7 +643,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 false => LlvmLinkage::Private,
                 true => LlvmLinkage::External,
             };
-            let layout = self.k1.get_layout(global.type_id);
+            let layout = self.k1.get_layout(global.type_id).unwrap();
             self.make_global_from_value(
                 initializer_basic_value,
                 layout.align,
@@ -666,10 +681,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         locn
     }
-    fn set_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
-        let locn = self.get_debug_location_from_span(span);
-        self.builder.set_current_debug_location(locn);
-        locn
+    fn set_debug_location_from_span(&self, span: SpanId) {
+        if span != SpanId::NONE {
+            let locn = self.get_debug_location_from_span(span);
+            self.builder.set_current_debug_location(locn);
+        }
     }
 
     #[allow(unused)]
@@ -1008,15 +1024,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let param_count = param_types.len();
 
         // The logical parameters closest to K1 model
-        let mut param_llvm_types: MList<CgType<'ctx>, _> = self.mem.new_list(param_count);
+        let mut param_llvm_types: List<CgType<'ctx>, _> = self.mem.new_list(param_count);
         // Foreach k1 param above, describe how to map it to LLVM params
-        let mut param_abi_mappings: MList<AbiParamMapping, _> = self.mem.new_list(param_count);
+        let mut param_abi_mappings: List<AbiParamMapping, _> = self.mem.new_list(param_count);
 
         // The physical LLVM params; the ones the function will have.
         // For now this is 1:1 in count with the logical params, as I choose to pass the int pairs
         // in a struct, but it need not be; that is, 1 k1 param could result in n llvm params,
         // where n could even be 0 for a ZST or uninhabited type
-        let mut function_final_params: MList<BasicMetadataTypeEnum<'ctx>, _> =
+        let mut function_final_params: List<BasicMetadataTypeEnum<'ctx>, _> =
             self.mem.new_list(param_count + is_sret as u32);
 
         if is_sret {
@@ -1361,12 +1377,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         codegened_function
     }
 
-    fn get_block_id(&self, block_id: u32) -> K1Result<BasicBlock<'ctx>> {
-        // We skip the 'prelude' block
-        let real_index = block_id as usize + 1;
-        match self.get_current_function().function_value.get_basic_block_iter().nth(real_index) {
-            Some(bb) => Ok(bb),
-            None => failf!(self.debug.current_span(), "Failed to get nth block: {real_index}"),
+    fn get_llvm_block(&self, block_id: BlockId) -> K1Result<BasicBlock<'ctx>> {
+        // We skip our 'prelude' block which exists only in the llvm ir
+        match self.get_current_function().blocks.get(&block_id) {
+            Some(bb) => Ok(*bb),
+            None => {
+                failf!(self.debug.current_span(), "Failed to get block: b{}", block_id.raw_index())
+            }
         }
     }
 
@@ -1483,7 +1500,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
 
-        let mut args: MList<BasicMetadataValueEnum<'ctx>, _> =
+        let mut args: List<BasicMetadataValueEnum<'ctx>, _> =
             self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
 
         let sret_dst = if cg_fn_type.is_sret {
@@ -1846,12 +1863,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_block(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        block_id: u32,
-        block: &ir::CompiledBlock,
+        block_id: BlockId,
     ) -> K1Result<BasicBlock<'ctx>> {
-        let llvm_block = self.get_block_id(block_id)?;
+        let block = self.k1.ir.mem.get(block_id);
+        let llvm_block = self.get_llvm_block(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.ir.mem.getn(block.instrs) {
+        for inst in self.k1.ir.mem.dlist_iter(block.data.instrs) {
             self.codegen_inst(inst_mappings, *inst)?;
         }
         Ok(llvm_block)
@@ -1869,7 +1886,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => {
                     failf!(
                         self.debug.current_span(),
-                        "Whiffed inst id lookup: {} {}",
+                        "codegen llvm has no value for this instruction: i{} {}",
                         inst_id.as_u32(),
                         ir::inst_to_string(self.k1, inst_id)
                     )
@@ -1935,7 +1952,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let ir = &self.k1.ir;
         let span = *ir.sources.get(inst_id);
         self.set_debug_location_from_span(span);
-        //eprintln!("codegen_inst {} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
+        // eprintln!("codegen_inst i{} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
         let inst = *ir.instrs.get(inst_id);
         match inst {
             Inst::Data(data_inst) => {
@@ -2049,7 +2066,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, gep.into());
                 Ok(())
             }
-            Inst::Call { id } => {
+            Inst::Call { call_id: id } => {
                 if let Some(return_value) = self.codegen_function_call(inst_mappings, id, span)? {
                     inst_mappings.insert(inst_id, return_value);
                 } else {
@@ -2058,15 +2075,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Jump(block_id) => {
-                let dst_block = self.get_block_id(block_id)?;
+                let dst_block = self.get_llvm_block(block_id)?;
                 let _jump = self.builder.build_unconditional_branch(dst_block).unwrap();
                 Ok(())
             }
             Inst::JumpIf { cond, cons, alt } => {
                 let cond_value = self.resolve_value(inst_mappings, cond)?;
                 let cond_value_i1 = self.bool_to_i1(cond_value.into_int_value(), "");
-                let then_block = self.get_block_id(cons)?;
-                let else_block = self.get_block_id(alt)?;
+                let then_block = self.get_llvm_block(cons)?;
+                let else_block = self.get_llvm_block(alt)?;
                 let _branch = self
                     .builder
                     .build_conditional_branch(cond_value_i1, then_block, else_block)
@@ -2077,12 +2094,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
                 Ok(())
             }
-            Inst::CameFrom { t, incomings: _ } => {
-                // On this first pass, we do not evaluate the incomings, because we want to wait
-                // until all instructions are mapped
+            Inst::Phi { t, incomings } => {
                 let phi_ty = self.pt_canon_type(t);
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
+
+                for incoming in self.k1.ir.mem.getn(incomings) {
+                    let value = self.resolve_value(inst_mappings, incoming.value)?;
+                    let block = self.get_llvm_block(incoming.from)?;
+                    phi.add_incoming(&[(&value, block)])
+                }
+
                 inst_mappings.insert(inst_id, phi.as_basic_value());
+                // }
                 Ok(())
             }
             Inst::Ret { v, .. } => {
@@ -2589,6 +2612,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 param_values: Vec::with_capacity(llvm_function_type.param_k1_types.len() as usize),
                 function_type: llvm_function_type,
                 function_value,
+                blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
                 instruction_count: 0,
@@ -2811,7 +2835,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> K1Result<()> {
-        // eprintln!("codegen_function_body {}", self.k1.function_id_to_string(function_id, true));
+        debug!("codegen_function_body {}", self.k1.function_id_to_string(function_id, false));
         self.current_insert_function = function_id;
         let typed_function = self.k1.get_function(function_id);
 
@@ -2881,25 +2905,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             );
         }
 
-        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
         self.set_debug_location_from_span(function_span);
-        match ir_unit.function_builtin_kind {
-            Some(builtin_kind) => {
-                let _terminator_instr =
-                    self.codegen_builtin_function_body(builtin_kind, function_id)?;
-            }
-            None => {
-                //eprintln!(
-                //    "llvm codegen unit\n{}",
-                //    ir::compiled_unit_to_string(
-                //        self.k1,
-                //        CompilableUnitId::Function(function_id),
-                //        true
-                //    )
-                //);
-                self.codegen_unit_body(inst_mappings, ir_unit.blocks)?;
-            }
-        };
+        self.codegen_unit_body(inst_mappings, function_id)?;
         self.debug.pop_scope();
 
         Ok(())
@@ -2908,49 +2915,104 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_unit_body(
         &mut self,
         inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
-        blocks: MSlice<CompiledBlock, ProgramIr>,
+        function_id: FunctionId,
     ) -> K1Result<()> {
-        let fv = self.get_current_function().function_value;
-        for block in self.k1.ir.mem.getn_lt(blocks) {
-            self.ctx.append_basic_block(fv, block.name.as_str());
+        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        debug!(
+            "codegen_unit_body ir\n{}",
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+        );
+        match ir_unit.function_builtin_kind {
+            Some(builtin_kind) => {
+                let _terminator_instr =
+                    self.codegen_builtin_function_body(builtin_kind, function_id)?;
+                return Ok(());
+            }
+            None => {}
+        };
+
+        ir::cfg_simplify(self.k1, IrUnitId::Function(function_id));
+        debug!(
+            "codegen_unit_body ir simplified\n{}",
+            ir::unit_to_string(self.k1, IrUnitId::Function(function_id), true)
+        );
+
+        let ir_unit = self.k1.ir.functions.get(function_id).unwrap();
+        let blocks = ir_unit.blocks;
+
+        let mut block_mapping = FxHashMap::new();
+        let llvm_function = self.get_current_function().function_value;
+
+        for (block, block_node) in self.k1.ir.mem.dlist_iter_handles(blocks) {
+            let name = block_node.data.name;
+            let b = self.ctx.append_basic_block(llvm_function, name);
+            block_mapping.insert(block, b);
+        }
+        self.get_current_function_mut().blocks = block_mapping;
+
+        {
+            // Jump from prelude to entry block
+            let debug_locn = self.builder.get_current_debug_location().unwrap();
+            self.builder.unset_current_debug_location();
+
+            let entry = self.get_llvm_block(blocks.first)?;
+            self.builder.build_unconditional_branch(entry).unwrap();
+
+            self.builder.set_current_debug_location(debug_locn);
         }
 
         inst_mappings.clear();
-        for (index, block) in self.k1.ir.mem.getn(blocks).iter().enumerate() {
-            if index == 0 {
-                let debug_locn = self.builder.get_current_debug_location().unwrap();
-                self.builder.unset_current_debug_location();
-
-                let entry = self.get_block_id(0)?;
-                self.builder.build_unconditional_branch(entry).unwrap();
-
-                self.builder.set_current_debug_location(debug_locn);
-            }
-            self.codegen_block(inst_mappings, index as u32, block)?;
+        let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
+        let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
+        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
+        for block in &blocks_rpo {
+            self.codegen_block(inst_mappings, *block)?;
+        }
+        {
+            blocks_rpo.clear();
+            seen.clear();
+            self.buffers.cfg_seen = seen;
+            self.buffers.cfg_blocks_rpo = blocks_rpo;
         }
 
-        // Fulfill phis later, since they're uniquely out-of-order
-        // Is that true? Could for example simple add or store reference an inst from another
-        // block? allocas are hoisted... so, yeah, but phis can't be
-        for block in self.k1.ir.mem.getn(blocks) {
-            for inst in self.k1.ir.mem.getn(block.instrs) {
-                if let Inst::CameFrom { incomings, .. } = self.k1.ir.instrs.get(*inst) {
-                    let phi_inst = inst_mappings.get(inst).unwrap();
-                    debug_assert!(
-                        phi_inst.as_instruction_value().unwrap().get_opcode()
-                            == InstructionOpcode::Phi
-                    );
-                    let phi = unsafe { PhiValue::new(phi_inst.as_value_ref()) };
-
-                    for incoming in self.k1.ir.mem.getn(*incomings) {
-                        let value = self.resolve_value(inst_mappings, incoming.value)?;
-                        let block = self.get_block_id(incoming.from)?;
-                        phi.add_incoming(&[(&value, block)])
-                    }
-                }
-            }
+        if !llvm_function.verify(true) {
+            self.write_failure_file();
+            return failf!(
+                self.k1.get_function_span(function_id),
+                "Function {} failed validation; failed module file is written",
+                self.k1.function_id_to_string(function_id, false),
+            );
         }
         Ok(())
+    }
+
+    fn compute_cfg_order(
+        &mut self,
+        entry: BlockId,
+        result: &mut Vec<BlockId>,
+        seen: &mut FxHashSet<BlockId>,
+    ) {
+        fn dfs(
+            ir: &ProgramIr,
+            b: BlockId,
+            seen: &mut FxHashSet<BlockId>,
+            result: &mut Vec<BlockId>,
+        ) {
+            if !seen.insert(b) {
+                return;
+            }
+
+            let successors = ir.mem.get(b).data.succs;
+            for succ in ir.mem.dlist_iter(successors) {
+                dfs(ir, *succ, seen, result);
+            }
+
+            result.push(b); // postorder: after successors
+        }
+
+        dfs(&self.k1.ir, entry, seen, result);
+
+        result.reverse(); // reverse → RPO
     }
 
     fn _count_function_instructions(function_value: FunctionValue<'ctx>) -> usize {
@@ -3056,7 +3118,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 debug_assert_eq!(
                     self.layout_per_llvm(&struct_value.get_type()).size,
-                    self.k1.get_layout(s_type_id).size,
+                    self.k1.get_layout(s_type_id).unwrap().size,
                     "Checking Size of: {}",
                     struct_value
                 );
@@ -3133,7 +3195,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 match cont.kind {
                     StaticContainerKind::Span => {
-                        let element_type_layout = self.k1.get_layout(element_type);
+                        let element_type_layout = self.k1.get_layout(element_type).unwrap();
                         let data_global = self.make_global_from_value(
                             array_value.as_basic_value_enum(),
                             element_type_layout.align,
@@ -3173,7 +3235,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32);
 
         // let element_backend_type = self.codegen_type(element_type)?;
-        let element_layout = self.k1.get_layout(element_type);
+        let element_layout = self.k1.get_layout(element_type).unwrap();
 
         for elem in elements.iter() {
             let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
@@ -3201,7 +3263,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let direct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
         let type_id = self.k1.static_values.get(static_value_id).get_type();
-        let layout = self.k1.get_layout(type_id);
+        let layout = self.k1.get_layout(type_id).unwrap();
         let global = self.make_global_from_value(
             direct_value,
             layout.align,
@@ -3461,6 +3523,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         machine
     }
 
+    fn verify_module(&self) -> anyhow::Result<()> {
+        self.llvm_module.verify().map_err(|err| {
+            self.write_failure_file();
+            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
+        })
+    }
+
+    fn write_failure_file(&self) {
+        let llvm_text = self.emit_llvm_ir_text();
+        let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
+            .expect("Failed to create .ll file");
+        std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
+    }
+
     pub fn optimize_verify(&mut self, optimize: bool) -> anyhow::Result<()> {
         let start = std::time::Instant::now();
 
@@ -3469,13 +3545,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         } else {
             self.llvm_module.strip_debug_info();
         }
-        self.llvm_module.verify().map_err(|err| {
-            let llvm_text = self.emit_llvm_ir_text();
-            let mut f = std::fs::File::create(format!("{}_fail.ll", self.name()))
-                .expect("Failed to create .ll file");
-            std::io::Write::write_all(&mut f, llvm_text.as_bytes()).unwrap();
-            anyhow::anyhow!("Module '{}' failed validation: {}", self.name(), err.to_string_lossy())
-        })?;
+
+        self.verify_module()?;
 
         if optimize {
             self.llvm_module

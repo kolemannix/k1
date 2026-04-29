@@ -6,38 +6,38 @@ deftype contrived[A, B] = either stuff({ a: A, b: B }), empty
 
 fn test() {
 
-  let _: state = state.zilch;
+  let _: state = state:zilch;
 
-  enum_construction/state.on({});
-  enum_construction/state.off({});
+  enum_construction/state:on({});
+  enum_construction/state:off({});
 
-  let _: enum_construction/state = enum_construction/state.off({});
-  let _: enum_construction/state = enum_construction/state.on({});
+  let _: enum_construction/state = enum_construction/state:off({});
+  let _: enum_construction/state = enum_construction/state:on({});
 
-  state-hard.on(.some(42));
+  state-hard:on(:some(42));
 
-  let _: state-hard = state-hard.on(.some(42));
-  let _: state-hard = state-hard.on(.none);
+  let _: state-hard = state-hard:on(:some(42));
+  let _: state-hard = state-hard:on(:none);
 
-  let _: opt[bool] = .some(true);
+  let _: opt[bool] = :some(true);
 
-  let bc = _root/core/opt.some[bool](true);
-  assert(bc is .some(true));
+  let bc = _root/core/opt:some[bool](true);
+  assert(bc is :some(true));
 
-  let bc2 = _root/core/opt.some(42);
-  assert(bc2 is .some(42));
+  let bc2 = _root/core/opt:some(42);
+  assert(bc2 is :some(42));
 
-  let _: opt[bool] = opt.none;
-  let _: opt[bool] = .none;
-  let _: opt[bool] = opt.none;
+  let _: opt[bool] = opt:none;
+  let _: opt[bool] = :none;
+  let _: opt[bool] = opt:none;
 
-  let _: opt[i32] = opt.none[i32];
-  let _: opt[i32] = opt.none[i32];
-  let _: opt[i32] = opt.none;
+  let _: opt[i32] = opt:none[i32];
+  let _: opt[i32] = opt:none[i32];
+  let _: opt[i32] = opt:none;
 
-  contrived.stuff({ a: 42, b: "hello"});
+  contrived:stuff({ a: 42, b: "hello"});
 
-  opt.none[int];
+  opt:none[int];
 
   {}
 }

@@ -112,8 +112,8 @@ ns list {
 
   fn getOpt[T](self: list[T], index: size): ?T {
     if index >= self.len {
-      .none
-    } else .some(self.buffer.get(index))
+      :none
+    } else :some(self.buffer.get(index))
   }
 
   fn _grow[T](context mode: alloc-mode)(self: *mut list[T]) {
@@ -142,7 +142,7 @@ ns list {
   }
 
   fn push[T](self: *mut list[T], elem: T) {
-    self.pushIn[T](context .current)(elem)
+    self.pushIn[T](context :current)(elem)
   }
 
   fn slice[T](self: list[T], start: size, end: size): buffer[T] {
@@ -161,25 +161,25 @@ ns list {
 
   fn firstRef[T](self: *mut list[T]): ?(*mut T) {
     if self.nonEmpty() {
-      .some(self.getRef(0))
+      :some(self.getRef(0))
     } else {
-      .none
+      :none
     }
   }
 
   fn first[T](self: list[T]): ?T {
-    if self.nonEmpty() .some(self.get(0)) 
-    else .none
+    if self.nonEmpty() :some(self.get(0)) 
+    else :none
   }
 
   fn lastRef[T](self: *mut list[T]): ?(*mut T) {
-    if self.nonEmpty() .some(self.getRef(self.len - 1))
-    else .none
+    if self.nonEmpty() :some(self.getRef(self.len - 1))
+    else :none
   }
 
   fn last[T](self: list[T]): ?T {
-    if self.nonEmpty() .some(self.get(self.len - 1))
-    else .none
+    if self.nonEmpty() :some(self.get(self.len - 1))
+    else :none
   }
 
   fn clear[T](self: *mut list[T]) {
@@ -206,7 +206,7 @@ ns list {
   }
 
   fn appendBuffer[T](self: *mut list[T], other: buffer[T]) {
-    self.reserve(.current, self.len + other.len);
+    self.reserve(:current, self.len + other.len);
     let dst = self.innerBuffer().slice(start = self.len, end = self.len + other.len);
     buffer/copyFrom(src = other, dst = dst);
     self.len* <- self.len + other.len;
@@ -240,9 +240,9 @@ ns list {
   
     for item in input.* {
       switch item.compare(pivot) {
-        .less    -> left.push(item),
-        .equal   -> equal.push(item),
-        .greater -> right.push(item)
+        :less    -> left.push(item),
+        :equal   -> equal.push(item),
+        :greater -> right.push(item)
       }
     };
   

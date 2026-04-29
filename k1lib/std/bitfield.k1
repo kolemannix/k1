@@ -19,7 +19,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   let baseTypeId: u64 = types/type-id[Base]();
   let baseSchema = types/type-schema(baseTypeId);
   let baseName = types/type-name(baseTypeId);
-  require baseSchema is .int(intKind) else { crash("Base should be an int; got {baseName}") };
+  require baseSchema is :int(intKind) else { crash("Base should be an int; got {baseName}") };
   let totalBits = intKind.bit-width();
 
   // This is just a regular StringBuilder that gets some extra methods since we've

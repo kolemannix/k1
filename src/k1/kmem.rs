@@ -24,7 +24,7 @@
 /// a passion in general so this POD approach can actually cook
 use smallvec::SmallVec;
 
-use crate::{static_assert_size, typer::dump::DepDisplay};
+use crate::{rawref::RawRef, static_assert_size, typer::dump::DepDisplay};
 macro_rules! fuckit {
     ($($t:tt)*) => {
         unsafe { $($t)* }
@@ -50,39 +50,125 @@ pub struct Mem<Tag = ()> {
     _marker: PhantomData<Tag>,
 }
 
-#[derive(Clone, Copy)]
-pub struct MdlNode<T, Tag> {
-    data: T,
-    prev: MHandle<MdlNode<T, Tag>, Tag>,
-    next: MHandle<MdlNode<T, Tag>, Tag>,
+pub struct DlNode<T, Tag> {
+    pub data: T,
+    pub prev: Handle<DlNode<T, Tag>, Tag>,
+    pub next: Handle<DlNode<T, Tag>, Tag>,
+}
+pub type NodeHandle<T, Tag> = Handle<DlNode<T, Tag>, Tag>;
+
+impl<T, Tag> DlNode<T, Tag> {
+    pub fn singleton(data: T) -> Self {
+        DlNode { data, prev: Handle::nil(), next: Handle::nil() }
+    }
+
+    pub fn is_first(&self) -> bool {
+        self.prev.is_nil()
+    }
+
+    pub fn is_last(&self) -> bool {
+        self.next.is_nil()
+    }
+
+    pub fn prev(&self) -> Option<Handle<DlNode<T, Tag>, Tag>> {
+        if self.prev.is_nil() { None } else { Some(self.prev) }
+    }
+
+    pub fn next(&self) -> Option<Handle<DlNode<T, Tag>, Tag>> {
+        if self.next.is_nil() { None } else { Some(self.next) }
+    }
 }
 
-#[derive(Clone, Copy)]
-pub struct MdlList<T, Tag> {
-    first: MHandle<MdlNode<T, Tag>, Tag>,
-    last: MHandle<MdlNode<T, Tag>, Tag>,
+impl<T, Tag> Copy for DlNode<T, Tag> where T: Copy {}
+impl<T, Tag> Clone for DlNode<T, Tag>
+where
+    T: Copy,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-impl<T, Tag> MdlList<T, Tag> {
-    fn empty() -> Self {
-        MdlList { first: MHandle::nil(), last: MHandle::nil() }
+pub struct Dlist<T, Tag> {
+    pub first: Handle<DlNode<T, Tag>, Tag>,
+    pub last: Handle<DlNode<T, Tag>, Tag>,
+}
+
+impl<T, Tag> Dlist<T, Tag> {
+    pub fn empty() -> Self {
+        Dlist { first: Handle::nil(), last: Handle::nil() }
+    }
+
+    pub fn is_singleton(&self) -> bool {
+        !self.first.is_nil() && self.first == self.last
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.first.is_nil()
+    }
+}
+
+impl<T, Tag> Copy for Dlist<T, Tag> {}
+impl<T, Tag> Clone for Dlist<T, Tag> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+pub struct DlistIter<T, Tag> {
+    mem: RawRef<Mem<Tag>>,
+    next: Handle<DlNode<T, Tag>, Tag>,
+}
+
+impl<T, Tag> Iterator for DlistIter<T, Tag> {
+    type Item = RawRef<DlNode<T, Tag>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next.is_nil() {
+            None
+        } else {
+            let node_ref = self.mem.get_raw_ref(self.next);
+            self.next = node_ref.next;
+            Some(node_ref)
+        }
     }
 }
 
 // We use NonZeroU32 so that the handles are niched, allowing for use
 // for no size cost in types like Option and Result
-pub struct MHandle<T, Tag>(Option<NonZeroU32>, PhantomData<T>, PhantomData<Tag>);
-static_assert_size!(MHandle<u128, ()>, 4);
+pub struct Handle<T, Tag>(Option<NonZeroU32>, PhantomData<T>, PhantomData<Tag>);
+static_assert_size!(Handle<u128, ()>, 4);
 
-impl<T, Tag> PartialEq for MHandle<T, Tag> {
+impl<T, Tag> std::fmt::Debug for Handle<T, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = std::any::type_name::<T>();
+        match self.0 {
+            None => write!(f, "Handle<{ty}>(nil)"),
+            Some(offset) => write!(f, "Handle<{ty}>({})", offset.get()),
+        }
+    }
+}
+
+impl<T, Tag> PartialEq for Handle<T, Tag> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
+impl<T, Tag> Eq for Handle<T, Tag> {}
 
-impl<T, Tag> MHandle<T, Tag> {
+impl<T, Tag> std::hash::Hash for Handle<T, Tag> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<T, Tag> Handle<T, Tag> {
     pub fn nil() -> Self {
-        MHandle(None, PhantomData, PhantomData)
+        Handle(None, PhantomData, PhantomData)
+    }
+
+    pub fn raw_index(&self) -> u32 {
+        self.0.map(|n| n.get()).unwrap_or(0)
     }
 
     pub fn is_nil(&self) -> bool {
@@ -90,15 +176,15 @@ impl<T, Tag> MHandle<T, Tag> {
     }
 }
 
-impl<T, Tag> Copy for MHandle<T, Tag> {}
-impl<T, Tag> Clone for MHandle<T, Tag> {
+impl<T, Tag> Copy for Handle<T, Tag> {}
+impl<T, Tag> Clone for Handle<T, Tag> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
 /// A handle to a slice of Ts inside a `Mem` pool with tag type `Tag`
-/// me'slice <tips fedora>
+/// muh'slice <tips fedora>
 pub struct MSlice<T, Tag = ()> {
     offset: NonZeroU32,
     count: u32,
@@ -301,7 +387,11 @@ impl<Tag> Mem<Tag> {
     }
 
     fn ptr_to_offset<T: ?Sized>(&self, ptr: *const T) -> NonZeroU32 {
-        let base = self.base_ptr().addr();
+        Self::ptr_to_offset_fn(self.base_ptr(), ptr)
+    }
+
+    fn ptr_to_offset_fn<T: ?Sized>(base_ptr: *const u8, ptr: *const T) -> NonZeroU32 {
+        let base = base_ptr.addr();
         let p = ptr.addr();
         let diff = p - base;
         if diff > u32::MAX as usize {
@@ -317,16 +407,16 @@ impl<Tag> Mem<Tag> {
         unsafe { self.base_ptr().add(offset.get() as usize) as *mut T }
     }
 
-    fn pack_handle<T>(&self, ptr: *const T) -> MHandle<T, Tag> {
+    fn pack_handle<T>(&self, ptr: *const T) -> Handle<T, Tag> {
         let offset = self.ptr_to_offset(ptr);
-        MHandle(Some(offset), PhantomData, PhantomData)
+        Handle(Some(offset), PhantomData, PhantomData)
     }
 
-    fn unpack_handle<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
+    fn unpack_handle<T>(&self, handle: Handle<T, Tag>) -> *mut T {
         self.offset_to_ptr::<T>(handle.0.unwrap())
     }
 
-    pub fn list_to_handle<T>(&self, list: MList<T, Tag>) -> MSlice<T, Tag> {
+    pub fn list_to_handle<T>(&self, list: List<T, Tag>) -> MSlice<T, Tag> {
         let offset = self.ptr_to_offset(list.buf.cast_const());
         MSlice::make(offset, list.len() as u32)
     }
@@ -376,7 +466,7 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn push_h<T>(&mut self, t: T) -> MHandle<T, Tag> {
+    pub fn push_h<T>(&mut self, t: T) -> Handle<T, Tag> {
         let t_ptr = self.push(t) as *const T;
         self.pack_handle(t_ptr)
     }
@@ -483,11 +573,11 @@ impl<Tag> Mem<Tag> {
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
-    pub fn new_list<T>(&mut self, len: u32) -> MList<T, Tag> {
+    pub fn new_list<T>(&mut self, len: u32) -> List<T, Tag> {
         let dst = self.push_slice_uninit(len as usize);
 
         let raw_slice: *mut [T] = core::ptr::slice_from_raw_parts_mut(dst, len as usize);
-        MList { buf: raw_slice, len: 0, _tag: PhantomData }
+        List { buf: raw_slice, len: 0, _tag: PhantomData }
     }
 
     pub fn push_str(&mut self, s: impl AsRef<str>) -> MStr<Tag> {
@@ -550,7 +640,7 @@ impl<Tag> Mem<Tag> {
         MStr::from_parts(base, len as usize)
     }
 
-    pub fn get_raw<T>(&self, handle: MHandle<T, Tag>) -> *mut T {
+    fn get_raw_ptr<T>(&self, handle: Handle<T, Tag>) -> *mut T {
         let ptr = self.unpack_handle(handle);
         if cfg!(feature = "dbg") {
             if size_of::<T>() != 0 {
@@ -560,12 +650,17 @@ impl<Tag> Mem<Tag> {
         ptr
     }
 
-    pub fn get<T>(&self, handle: MHandle<T, Tag>) -> &T {
-        unsafe { &*self.get_raw(handle) }
+    pub fn get<T>(&self, handle: Handle<T, Tag>) -> &T {
+        unsafe { &*self.get_raw_ptr(handle) }
     }
 
-    pub fn get_mut<T>(&mut self, handle: MHandle<T, Tag>) -> &mut T {
-        unsafe { &mut *self.get_raw(handle) }
+    #[allow(clippy::mut_from_ref)]
+    pub fn get_mut<T>(&self, handle: Handle<T, Tag>) -> &mut T {
+        unsafe { &mut *self.get_raw_ptr(handle) }
+    }
+
+    pub fn get_raw_ref<T>(&self, handle: Handle<T, Tag>) -> RawRef<T> {
+        RawRef::from_ptr(self.get_raw_ptr(handle))
     }
 
     pub fn get_slice_raw<T>(&self, handle: MSlice<T, Tag>) -> (*const T, usize) {
@@ -681,13 +776,17 @@ impl<Tag> Mem<Tag> {
 }
 //////////////// Doubly Linked List Impl
 
-impl<Tag> Mem<Tag> {
-    pub fn dlist_new<T>(&mut self) -> MdlList<T, Tag> {
-        MdlList::empty()
+impl<Tag: 'static> Mem<Tag> {
+    pub fn dlist_new<T: 'static>(&mut self) -> Dlist<T, Tag> {
+        Dlist::empty()
     }
 
-    pub fn dlist_push<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
-        let node = self.push_h(MdlNode { data, prev: list.last, next: MHandle::nil() });
+    pub fn dlist_push<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        data: T,
+    ) -> Handle<DlNode<T, Tag>, Tag> {
+        let node = self.push_h(DlNode { data, prev: list.last, next: Handle::nil() });
         if list.last.is_nil() {
             // List is empty, so new node is also the first node
             list.first = node;
@@ -696,20 +795,26 @@ impl<Tag> Mem<Tag> {
             self.get_mut(list.last).next = node;
             list.last = node;
         }
+        node
     }
 
-    pub fn dlist_push_front<T>(&mut self, list: &mut MdlList<T, Tag>, data: T) {
-        let new_node = self.push_h(MdlNode { data, prev: MHandle::nil(), next: list.first });
+    pub fn dlist_push_front<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        data: T,
+    ) -> Handle<DlNode<T, Tag>, Tag> {
+        let node = self.push_h(DlNode { data, prev: Handle::nil(), next: list.first });
         if list.first.is_nil() {
-            list.first = new_node;
-            list.last = new_node;
+            list.first = node;
+            list.last = node;
         } else {
-            self.get_mut(list.first).prev = new_node;
-            list.first = new_node;
+            self.get_mut(list.first).prev = node;
+            list.first = node;
         }
+        node
     }
 
-    pub fn dlist_insert<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize, data: T) {
+    pub fn dlist_insert<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, index: usize, data: T) {
         // Find the node currently at `index`.
         // If `index == len`, this will end up as nil(), meaning "insert at end".
         let mut next = list.first;
@@ -721,7 +826,7 @@ impl<Tag> Mem<Tag> {
         }
 
         let prev = if next.is_nil() { list.last } else { self.get(next).prev };
-        let node = self.push_h(MdlNode { data, prev, next });
+        let node = self.push_h(DlNode { data, prev, next });
 
         if prev.is_nil() {
             list.first = node;
@@ -736,21 +841,72 @@ impl<Tag> Mem<Tag> {
         }
     }
 
-    pub fn dlist_try_remove<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize) -> bool {
+    pub fn dlist_insert_after<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+        data: T,
+    ) -> Handle<DlNode<T, Tag>, Tag> {
+        self.dlist_debug_assert_mine(*list, node);
+        let mut node_node = self.get_raw_ref(node);
+        let next = node_node.next;
+        let new_node = self.push_h(DlNode { data, prev: node, next });
+
+        node_node.next = new_node;
+
+        if next.is_nil() {
+            list.last = new_node;
+        } else {
+            self.get_mut(next).prev = new_node;
+        }
+        new_node
+    }
+
+    pub fn dlist_insert_before<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+        data: T,
+    ) -> Handle<DlNode<T, Tag>, Tag> {
+        self.dlist_debug_assert_mine(*list, node);
+        let mut node_node = self.get_raw_ref(node);
+        let prev = node_node.prev;
+        let new_node = self.push_h(DlNode { data, prev, next: node });
+
+        node_node.prev = new_node;
+
+        if prev.is_nil() {
+            list.first = new_node;
+        } else {
+            self.get_mut(prev).next = new_node;
+        }
+        new_node
+    }
+
+    pub fn dlist_remove_index<T: 'static>(&mut self, list: &mut Dlist<T, Tag>, index: usize) {
         let mut cur = list.first;
         for _ in 0..index {
             if cur.is_nil() {
-                return false;
+                panic!("Index out of bounds for dlist_remove_index");
             }
             cur = self.get(cur).next;
         }
 
         if cur.is_nil() {
-            return false;
+            panic!("Index out of bounds for dlist_remove_index");
         }
 
-        let prev = self.get(cur).prev;
-        let next = self.get(cur).next;
+        self.dlist_remove(list, cur);
+    }
+
+    pub fn dlist_remove<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: Handle<DlNode<T, Tag>, Tag>,
+    ) {
+        self.dlist_debug_assert_mine(*list, node);
+        let prev = self.get(node).prev;
+        let next = self.get(node).next;
 
         if prev.is_nil() {
             list.first = next;
@@ -763,30 +919,144 @@ impl<Tag> Mem<Tag> {
         } else {
             self.get_mut(next).prev = prev;
         }
-
-        true
     }
 
-    pub fn dlist_remove<T>(&mut self, list: &mut MdlList<T, Tag>, index: usize) {
-        if !self.dlist_try_remove(list, index) {
-            panic!("Index {index} out of bounds for dlist_remove");
+    pub fn dlist_pop_first<T: Copy>(&mut self, list: &mut Dlist<T, Tag>) -> Option<DlNode<T, Tag>> {
+        let first = list.first;
+        if first.is_nil() {
+            return None;
         }
+
+        let node = *self.get(first);
+        let next = node.next;
+
+        if next.is_nil() {
+            // This was the only node in the list.
+            list.first = Handle::nil();
+            list.last = Handle::nil();
+        } else {
+            self.get_mut(next).prev = Handle::nil();
+            list.first = next;
+        }
+
+        Some(node)
     }
 
-    pub fn dlist_iter<'a, T: 'a>(&'a self, list: MdlList<T, Tag>) -> impl Iterator<Item = &'a T> {
-        let mut current = list.first;
-        std::iter::from_fn(move || {
-            if current.is_nil() {
-                None
-            } else {
-                let node = self.get(current);
-                current = node.next;
-                Some(&node.data)
+    pub fn dlist_pop_last<T: Copy>(&mut self, list: &mut Dlist<T, Tag>) -> Option<DlNode<T, Tag>> {
+        let last = list.last;
+        if last.is_nil() {
+            return None;
+        }
+
+        let node = *self.get(last);
+        let prev = node.prev;
+
+        if prev.is_nil() {
+            // This was the only node in the list.
+            list.first = Handle::nil();
+            list.last = Handle::nil();
+        } else {
+            self.get_mut(prev).next = Handle::nil();
+            list.last = prev;
+        }
+
+        Some(node)
+    }
+
+    pub fn dlist_split_at_index<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        index: usize,
+    ) -> Dlist<T, Tag> {
+        let mut cur = list.first;
+        for _ in 0..index {
+            if cur.is_nil() {
+                return Dlist::empty();
             }
+            cur = self.get(cur).next;
+        }
+
+        if cur.is_nil() {
+            return Dlist::empty();
+        }
+
+        self.dlist_split_at_node(list, cur)
+    }
+
+    pub fn dlist_split_at_node<T: 'static>(
+        &mut self,
+        list: &mut Dlist<T, Tag>,
+        node: Handle<DlNode<T, Tag>, Tag>,
+    ) -> Dlist<T, Tag> {
+        self.dlist_debug_assert_mine(*list, node);
+        if node.is_nil() {
+            panic!("Cannot split at nil node");
+        }
+
+        let right = Dlist { first: node, last: list.last };
+        let prev = self.get(node).prev;
+
+        if prev.is_nil() {
+            *list = Dlist::empty();
+        } else {
+            self.get_mut(prev).next = Handle::nil();
+            self.get_mut(node).prev = Handle::nil();
+            list.last = prev;
+        }
+
+        right
+    }
+
+    pub fn dlist_iter_nodes_from<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        from_node: NodeHandle<T, Tag>,
+    ) -> DlistIter<T, Tag> {
+        if !list.is_empty() {
+            self.dlist_debug_assert_mine(list, from_node);
+        }
+        DlistIter { mem: RawRef::from_ref(self), next: from_node }
+    }
+
+    pub fn dlist_iter_nodes<T: 'static>(&self, list: Dlist<T, Tag>) -> DlistIter<T, Tag> {
+        DlistIter { mem: RawRef::from_ref(self), next: list.first }
+    }
+
+    pub fn dlist_iter_handles<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+    ) -> impl Iterator<Item = (NodeHandle<T, Tag>, RawRef<DlNode<T, Tag>>)> + 'static {
+        self.dlist_iter_handles_from(list, list.first)
+    }
+
+    pub fn dlist_iter_handles_from<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+    ) -> impl Iterator<Item = (NodeHandle<T, Tag>, RawRef<DlNode<T, Tag>>)> + 'static {
+        let base_ptr = self.base_ptr();
+        self.dlist_iter_nodes_from(list, node).map(move |node| {
+            let offset = Self::ptr_to_offset_fn(base_ptr, node.as_ptr().cast_const());
+            (Handle(Some(offset), PhantomData, PhantomData), node)
         })
     }
 
-    pub fn dlist_nth<T>(&self, list: MdlList<T, Tag>, n: usize) -> Option<&T> {
+    pub fn dlist_iter<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+    ) -> impl Iterator<Item = RawRef<T>> + 'static {
+        self.dlist_iter_nodes(list).map(|node| node.map(|n| &n.data))
+    }
+
+    pub fn dlist_get_singleton<T: 'static + Copy>(&self, list: Dlist<T, Tag>) -> Option<T> {
+        if list.is_singleton() { Some(self.get(list.first).data) } else { None }
+    }
+
+    pub fn dlist_nth_opt<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        n: usize,
+    ) -> Option<NodeHandle<T, Tag>> {
         let mut current = list.first;
         for _ in 0..n {
             if current.is_nil() {
@@ -794,19 +1064,75 @@ impl<Tag> Mem<Tag> {
             }
             current = self.get(current).next;
         }
-        if current.is_nil() { None } else { Some(&self.get(current).data) }
+        if current.is_nil() { None } else { Some(current) }
     }
 
-    pub fn dlist_compute_len<T>(&self, list: MdlList<T, Tag>) -> usize {
+    pub fn dlist_nth_data_opt<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        n: usize,
+    ) -> Option<RawRef<T>> {
+        let mut current = list.first;
+        for _ in 0..n {
+            if current.is_nil() {
+                return None;
+            }
+            current = self.get(current).next;
+        }
+        if current.is_nil() {
+            None
+        } else {
+            let node = self.get_mut(current);
+            Some(RawRef::from_mut(&mut node.data))
+        }
+    }
+
+    pub fn dlist_nth<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> NodeHandle<T, Tag> {
+        self.dlist_nth_opt(list, n).expect("Index out of bounds in dlist_nth")
+    }
+
+    pub fn dlist_nth_data<T: 'static>(&self, list: Dlist<T, Tag>, n: usize) -> RawRef<T> {
+        self.dlist_nth_data_opt(list, n).expect("Index out of bounds in dlist_nth_mut")
+    }
+
+    pub fn dlist_compute_len<T: 'static>(&self, list: Dlist<T, Tag>) -> usize {
         self.dlist_iter(list).count()
     }
 
-    pub fn dlist_assert_valid<T>(&self, list: MdlList<T, Tag>) {
+    ///////////////////// Dlist checks
+
+    pub fn dlist_debug_assert_mine<T: 'static>(
+        &self,
+        list: Dlist<T, Tag>,
+        node: NodeHandle<T, Tag>,
+    ) {
+        #[cfg(debug_assertions)]
+        {
+            if node.is_nil() {
+                panic!("nil node is not mine");
+            }
+
+            let iter = DlistIter { mem: RawRef::from_ref(self), next: list.first };
+            for n in iter {
+                let h = self.pack_handle(n.as_ptr());
+                if h == node {
+                    return;
+                }
+            }
+            panic!("Node handle does not belong to this list");
+        }
+    }
+
+    pub fn dlist_assert_valid<T: 'static>(&self, list: Dlist<T, Tag>) {
         // Empty/non-empty consistency
         assert!(
             list.first.is_nil() == list.last.is_nil(),
             "dlist invariant violated: first and last must both be nil or both be non-nil"
         );
+
+        if list.first.is_nil() {
+            return;
+        };
 
         // Endpoints must be properly terminated.
         assert!(
@@ -820,7 +1146,7 @@ impl<Tag> Mem<Tag> {
 
         // Walk forward and check prev/next consistency.
         let mut forward_len = 0;
-        let mut prev = MHandle::nil();
+        let mut prev = Handle::nil();
         let mut cur = list.first;
 
         while !cur.is_nil() {
@@ -850,7 +1176,7 @@ impl<Tag> Mem<Tag> {
 
         // Walk backward and check prev/next consistency.
         let mut backward_len = 0;
-        let mut next = MHandle::nil();
+        let mut next = Handle::nil();
         let mut cur = list.last;
 
         while !cur.is_nil() {
@@ -941,13 +1267,13 @@ impl<Tag> Mem<Tag> {
 
 /// A fixed-size Vec-like collection pointing into a Mem's data
 /// Can behave like an auto-growing list if the `_grow` variants are used
-pub struct MList<T, Tag = ()> {
+pub struct List<T, Tag = ()> {
     buf: *mut [T],
     len: usize,
     _tag: PhantomData<Tag>,
 }
 
-impl<T, Tag> MList<T, Tag> {
+impl<T, Tag> List<T, Tag> {
     pub fn len(&self) -> usize {
         self.len
     }
@@ -962,6 +1288,10 @@ impl<T, Tag> MList<T, Tag> {
 
     fn end_ptr(&self) -> *mut u8 {
         unsafe { (self.buf as *mut u8).add(self.buf.len() * size_of::<T>()) }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
     }
 
     fn push_unchecked(&mut self, val: T) {
@@ -987,6 +1317,7 @@ impl<T, Tag> MList<T, Tag> {
         }
     }
 
+    #[track_caller]
     fn grow(&mut self, mem: &mut Mem<Tag>) -> Self
     where
         T: Copy + Sized,
@@ -1011,7 +1342,7 @@ impl<T, Tag> MList<T, Tag> {
             let additional_ts = new_cap as usize - self.cap();
             mem.push_slice_uninit_prealigned::<T>(additional_ts);
             let new_buf = core::ptr::slice_from_raw_parts_mut(self.buf as *mut T, new_cap as usize);
-            let new_me = MList { buf: new_buf, len: self.len, _tag: PhantomData };
+            let new_me = List { buf: new_buf, len: self.len, _tag: PhantomData };
             debug_assert_eq!(new_me.end_ptr().addr(), mem.cursor().addr());
             new_me
         } else {
@@ -1141,47 +1472,47 @@ impl<T, Tag> MList<T, Tag> {
     }
 }
 
-impl<T, Tag> std::ops::Index<usize> for MList<T, Tag> {
+impl<T, Tag> std::ops::Index<usize> for List<T, Tag> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T, Tag> std::ops::Index<std::ops::Range<usize>> for MList<T, Tag> {
+impl<T, Tag> std::ops::Index<std::ops::Range<usize>> for List<T, Tag> {
     type Output = [T];
     fn index(&self, index: std::ops::Range<usize>) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T, Tag> std::ops::Index<std::ops::RangeInclusive<usize>> for MList<T, Tag> {
+impl<T, Tag> std::ops::Index<std::ops::RangeInclusive<usize>> for List<T, Tag> {
     type Output = [T];
     fn index(&self, index: std::ops::RangeInclusive<usize>) -> &Self::Output {
         &self.as_slice()[index]
     }
 }
 
-impl<T, Tag> std::ops::IndexMut<usize> for MList<T, Tag> {
+impl<T, Tag> std::ops::IndexMut<usize> for List<T, Tag> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.as_slice_mut()[index]
     }
 }
 
-impl<T, Tag> std::ops::IndexMut<std::ops::Range<usize>> for MList<T, Tag> {
+impl<T, Tag> std::ops::IndexMut<std::ops::Range<usize>> for List<T, Tag> {
     fn index_mut(&mut self, index: std::ops::Range<usize>) -> &mut Self::Output {
         &mut self.as_slice_mut()[index]
     }
 }
 
-impl<T, Tag> Deref for MList<T, Tag> {
+impl<T, Tag> Deref for List<T, Tag> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         self.as_slice()
     }
 }
 
-impl<T, Tag> DerefMut for MList<T, Tag> {
+impl<T, Tag> DerefMut for List<T, Tag> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_slice_mut()
     }
@@ -1213,7 +1544,7 @@ static_assert_size!(MSL8<i32>, 4 + 4 + (8 * 4));
 
 union MSpillListStorage<T: Copy, Tag, const N: usize> {
     inline: [MaybeUninit<T>; N],
-    spill: ManuallyDrop<MList<T, Tag>>,
+    spill: ManuallyDrop<List<T, Tag>>,
 }
 
 impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
@@ -1272,7 +1603,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
         debug_assert!(self.is_spilled());
 
         unsafe {
-            let list: &mut MList<T, Tag> = &mut self.storage.spill;
+            let list: &mut List<T, Tag> = &mut self.storage.spill;
             list.push_grow(mem, val);
         }
         self.set_len((len as u32) + 1);
@@ -1286,7 +1617,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
         if self.is_spilled() {
             // SAFETY: spilled variant is active when spilled bit is set.
             unsafe {
-                let list: &MList<T, Tag> = &self.storage.spill;
+                let list: &List<T, Tag> = &self.storage.spill;
                 list.as_slice()
             }
         } else {
@@ -1339,7 +1670,7 @@ impl<T: Copy, Tag, const N: usize> MSpillList<T, N, Tag> {
 
         if self.is_spilled() {
             // SAFETY: spilled variant active. We consume self, so we can move the list out.
-            let list: MList<T, Tag> = unsafe { ManuallyDrop::into_inner(self.storage.spill) };
+            let list: List<T, Tag> = unsafe { ManuallyDrop::into_inner(self.storage.spill) };
             mem.list_to_handle(list)
         } else {
             if len == 0 {

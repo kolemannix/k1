@@ -2,7 +2,7 @@ use core/arena
 
 let MODULE_INFO: k1/module-manifest = zeroed().with({
   multithreading: true,
-  kind: .executable,
+  kind: :executable,
 })
 
 let mutable tls myvar: i32 = 0

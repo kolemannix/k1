@@ -52,35 +52,35 @@ ns mem {
   ns alloc-mode {
 
     fn supportsRealloc(self: alloc-mode): bool { switch self {
-      .current -> crash("unreachable"),
-      .system-heap or .custom-heap(_) -> true,
-      .arena or .custom-arena(_) -> false,
-      .gc -> false
+      :current -> crash("unreachable"),
+      :system-heap or :custom-heap(_) -> true,
+      :arena or :custom-arena(_) -> false,
+      :gc -> false
     } }
 
     fn requiresFree(self: alloc-mode): bool { switch self {
-      .current -> crash("unreachable"),
-      .system-heap -> true,
-      .custom-heap(_) -> true,
-      .arena -> false,
-      .custom-arena(_) -> false,
-      .gc -> false
+      :current -> crash("unreachable"),
+      :system-heap -> true,
+      :custom-heap(_) -> true,
+      :arena -> false,
+      :custom-arena(_) -> false,
+      :gc -> false
     } }
 
     fn kindName(self: alloc-mode): string { switch self {
-      .current -> "current",
-      .system-heap -> "system",
-      .custom-heap(_) -> "custom",
-      .arena -> "arena",
-      .custom-arena(_) -> "custom_bump",
-      .gc -> "gc"
+      :current -> "current",
+      :system-heap -> "system",
+      :custom-heap(_) -> "custom",
+      :arena -> "arena",
+      :custom-arena(_) -> "custom_bump",
+      :gc -> "gc"
     } }
 
     fn resolve(self: alloc-mode): alloc-mode {
       switch self {
-        .current -> {
+        :current -> {
           let mode = mem/current();
-          if mode is .current { crash("currentalloc-mode.kind is current; this will never resolve") };
+          if mode is :current { crash("currentalloc-mode.kind is current; this will never resolve") };
           mode
         },
         _ -> self,
@@ -89,19 +89,19 @@ ns mem {
 
     fn alloc(self: alloc-mode, size: size, align: size): ptr {
       switch self.resolve() {
-        .current -> { crash("unreachable") },
-        .system-heap -> mem/alloc-zeroed(size, align),
-        .custom-heap(alloc) -> {
+        :current -> { crash("unreachable") },
+        :system-heap -> mem/alloc-zeroed(size, align),
+        :custom-heap(alloc) -> {
           let zalloc = alloc.*.zalloc;
           zalloc(size, align)
         },
-        .custom-arena(bump) -> {
+        :custom-arena(bump) -> {
           bump.pushLayout(size, align)
         },
-        .arena -> {
+        :arena -> {
           mem/arena().pushLayout(size, align)
         },
-        .gc -> {
+        :gc -> {
           crash("gc is unimplemented; plan to support w/ bdwgc")
         }
       }
@@ -109,29 +109,29 @@ ns mem {
 
     fn realloc(self: alloc-mode, oldPtr: ptr, oldSize: size, align: size, newSize: size): ptr {
       switch self.resolve() {
-        .current -> { crash("unreachable") },
-        .system-heap -> mem/realloc(oldPtr, oldSize, align, newSize),
-        .custom-heap(alloc) -> {
+        :current -> { crash("unreachable") },
+        :system-heap -> mem/realloc(oldPtr, oldSize, align, newSize),
+        :custom-heap(alloc) -> {
           let reallocFn = alloc.*.realloc;
           reallocFn(oldPtr, oldSize, align, newSize)
         },
-        .custom-arena(bump) -> crash("UnsupportedOperation: Bump realloc"),
-        .arena -> crash("UnsupportedOperation:.arena realloc"),
-        .gc -> crash("UnsupportedOperation: gc realloc")
+        :custom-arena(bump) -> crash("UnsupportedOperation: Bump realloc"),
+        :arena -> crash("UnsupportedOperation: arena realloc"),
+        :gc -> crash("UnsupportedOperation: gc realloc")
       }
     }
 
     fn free(self: alloc-mode, ptr: ptr, size: size, align: size) {
       switch self.resolve() {
-        .current -> { crash("unreachable") },
-        .system-heap -> mem/free(ptr, size, align),
-        .custom-heap(alloc) -> {
+        :current -> { crash("unreachable") },
+        :system-heap -> mem/free(ptr, size, align),
+        :custom-heap(alloc) -> {
           let freeFn = alloc.*.free;
           freeFn(ptr, size, align)
         },
-        .custom-arena(bump) -> crash("UnsupportedOperation: free"),
-        .arena -> crash("UnsupportedOperation: free"),
-        .gc -> crash("UnsupportedOperation: free")
+        :custom-arena(bump) -> crash("UnsupportedOperation: free"),
+        :arena -> crash("UnsupportedOperation: free"),
+        :gc -> crash("UnsupportedOperation: free")
       }
     }
 
@@ -148,14 +148,14 @@ ns mem {
 
   }
 
-  fn new[T](t: T): *mut T { alloc-mode.current.new(t) }
+  fn new[T](t: T): *mut T { alloc-mode:current.new(t) }
 
   let mutable tls arena: arena = zeroed()
 
   deftype alias ALLOC_STACK_MAX = 128
   let mutable tls allocStack: fixlist[alloc-mode, ALLOC_STACK_MAX] = { 
     let s = zeroed[fixlist[alloc-mode, ALLOC_STACK_MAX]];
-    s.push(.arena);
+    s.push(:arena);
     s
   }
 

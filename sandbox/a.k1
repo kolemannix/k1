@@ -1,11 +1,6 @@
-#debug fn add(a: int, b: int): int {
-  println("inline add");
-  if a == 10 return(-1);
-  a + b
-}
-#debug fn main(): i32 {
-  add(5, 2 + 2);
+fn main(): i32 {
+  let x: opt[int] = :some(42);
   0
 }
 
-#static main()
+// #static main()

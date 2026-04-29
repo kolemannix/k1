@@ -12,7 +12,7 @@ fn part1(input: string) {
     lo := bank.get(1);
     let rest = bank.drop(1);
     let* iter = rest.iterator();
-    while iter.next() is .some(c) {
+    while iter.next() is :some(c) {
       let last = iter.isDone();
       if not last {
         // Consider new hi

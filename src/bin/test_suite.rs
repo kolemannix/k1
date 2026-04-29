@@ -15,7 +15,7 @@ use colored::Colorize;
 use inkwell::context::Context;
 use k1::{
     compiler::{self, Command, CompileProgramError},
-    typer::MessageLevel,
+    typer::{ErrorKind, K1Message, MessageLevel},
 };
 use std::os::unix::prelude::ExitStatusExt;
 
@@ -121,9 +121,18 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P, interpret: bool) -> Result<
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
         Err(CompileProgramError::TyperFailure(module)) => {
-            let Some(err) = module.messages.iter().find(|e| e.level == MessageLevel::Error)
-            else {
+            let Some(err) = module.messages.iter().find(|e| e.level == MessageLevel::Error) else {
                 if let Some(parse_error) = module.ast.errors.first() {
+                    module.write_error(
+                        &mut std::io::stderr(),
+                        &K1Message {
+                            message: parse_error.message().to_string(),
+                            span: parse_error.span(),
+                            error_kind: ErrorKind::ParseError,
+                            level: MessageLevel::Error,
+                        },
+                        false,
+                    ).unwrap();
                     bail!("{filename}: Failed parsing: {}", parse_error)
                 } else {
                     bail!("{filename}: Failed but had no errors")

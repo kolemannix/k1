@@ -79,7 +79,7 @@ ns buffer {
   }
 
   fn filled[T](size: size, value: T): buffer[T] {
-    buffer/filledIn[T](context .current)(size, value)
+    buffer/filledIn[T](context :current)(size, value)
   }
 
   fn _allocateIn[T](context alloc: mem/alloc-mode)(count: size): buffer[T] {
@@ -94,7 +94,7 @@ ns buffer {
   }
 
   fn _allocate[T](count: size): buffer[T] {
-    _allocateIn[T](context .current)(count)
+    _allocateIn[T](context :current)(count)
   }
 
   ////////////////////////
@@ -124,7 +124,7 @@ ns buffer {
   }
 
   fn _enlargedClone[T](self: buffer[T], newCount: size): buffer[T] {
-    _enlargedCloneIn[T](context .current)(self, newCount)
+    _enlargedCloneIn[T](context :current)(self, newCount)
   }
 
   fn copyFrom[T](src: buffer[T], dst: buffer[T]) {
@@ -223,31 +223,31 @@ ns buffer {
 
   fn firstRef[T](self: buffer[T]): ?(*mut T) {
     if not self.isEmpty() {
-      .some(self.getRef(0))
+      :some(self.getRef(0))
     } else {
-      .none
+      :none
     }
   }
 
   fn first[T](self: buffer[T]): ?T {
     switch self.firstRef() {
-      .none -> .none,
-      .some(firstRef) -> .some(firstRef.*)
+      :none -> :none,
+      :some(firstRef) -> :some(firstRef.*)
     }
   }
 
   fn lastRef[T](self: buffer[T]): ?(*mut T) {
     if not self.isEmpty() {
-      .some(self.getRef(self.len - 1))
+      :some(self.getRef(self.len - 1))
     } else {
-      .none
+      :none
     }
   }
 
   fn last[T](self: buffer[T]): ?T {
     switch self.lastRef() {
-      .none -> .none,
-      .some(lastRef) -> .some(lastRef.*)
+      :none -> :none,
+      :some(lastRef) -> :some(lastRef.*)
     }
   }
 
@@ -318,12 +318,12 @@ impl[T] iterator[item = T] for BufferIterator[T] {
   fn peek(self: *BufferIterator[T]): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.get(self.pos);
-      .some(item)
-    } else .none
+      :some(item)
+    } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
     let rem = self.buf.len - self.pos;
-    { at-least: rem, at-most: some(rem) }
+    { at-least: rem, at-most: :some(rem) }
   }
   fn advance-by(self: *mut self, n: size): empty {
     self.pos* <- self.pos + n
@@ -368,8 +368,8 @@ impl[T] iterator[item = *mut T] for BufferRefIterator[T] {
   fn peek(self: *BufferRefIterator[T]): ?item {
     if self.pos < self.buf.len {
       let item = self.buf.getRef(self.pos);
-      .some(item)
-    } else .none
+      :some(item)
+    } else :none
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } { 
     let rem = self.buf.len - self.pos;

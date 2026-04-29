@@ -40,15 +40,15 @@ fn connect(context alloc: mem/alloc-mode)(conninfo: string): result[Connection, 
   let conninfo-c = conninfo.toCString();
   let conn = pg/connectdb(conninfo-c.ptr);
   if conn.is-null() {
-    return(.err("PQconnectdb returned null"))
+    return(:err("PQconnectdb returned null"))
   };
 
   if pg/status(conn) == pg/CONNECTION_OK {
-    .ok({ raw: conn })
+    :ok({ raw: conn })
   } else {
     let err = c-string-or-default(pg/error-message(conn), "failed to connect");
     pg/finish(conn);
-    .err(err)
+    :err(err)
   }
 }
 
@@ -64,16 +64,16 @@ ns Connection {
     let query-c = query.toCString();
     let raw-result = pg/exec(self.raw, query-c.ptr);
     if raw-result.is-null() {
-      return(.err("PQexec returned null"))
+      return(:err("PQexec returned null"))
     };
 
     let status = pg/result-status(raw-result);
     if status == pg/PGRES_COMMAND_OK or status == pg/PGRES_TUPLES_OK {
-      .ok({ raw: raw-result })
+      :ok({ raw: raw-result })
     } else {
       let err = c-string-or-default(pg/result-error-message(raw-result), "query failed");
       pg/clear(raw-result);
-      .err(err)
+      :err(err)
     }
   }
 }
@@ -103,10 +103,10 @@ ns QueryResult {
     let row-c = row.as[core/c-int];
     let col-c = column.as[core/c-int];
     if pg/is-null(self.raw, row-c, col-c) != 0 {
-      return(.none)
+      return(:none)
     };
     let c-value = pg/get-value(self.raw, row-c, col-c);
-    .some(c-string-or-default(c-value, ""))
+    :some(c-string-or-default(c-value, ""))
   }
 }
 
@@ -132,8 +132,8 @@ fn print-result-table(result: QueryResult) {
     while col < cols {
       if col > 0 { print("\t") };
       switch result.value(row, col) {
-        .none -> print("NULL"),
-        .some(value) -> print(value)
+        :none -> print("NULL"),
+        :some(value) -> print(value)
       };
       col := col + 1;
     };
@@ -168,8 +168,8 @@ fn main(argc: u32, argv: ptr): i32 {
   };
 
   let conn = switch connect(conninfo) {
-    .ok(conn) -> conn,
-    .err(msg) -> {
+    :ok(conn) -> conn,
+    :err(msg) -> {
       eprintln("connect failed: {msg}");
       return(1)
     }
@@ -177,8 +177,8 @@ fn main(argc: u32, argv: ptr): i32 {
   defer conn.close();
 
   let query-result = switch conn.exec(query) {
-    .ok(result) -> result,
-    .err(msg) -> {
+    :ok(result) -> result,
+    :err(msg) -> {
       eprintln("query failed: {msg}");
       return(1)
     }

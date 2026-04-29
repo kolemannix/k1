@@ -104,7 +104,7 @@ ns GameState {
     let bKings   = 0b0001000000000000000000000000000000000000000000000000000000000000: Bitboard;
     { wPawns, wKnights, wBishops, wRooks, wQueens, wKings, 
       bPawns, bKnights, bBishops, bRooks, bQueens, bKings, 
-      castleRights: 0b00000011, enPassantFile: -1, turn: .White }
+      castleRights: 0b00000011, enPassantFile: -1, turn: :White }
   }
 
   fn printGrid(self: GameState) {
@@ -214,19 +214,19 @@ fn cmdNewGame() {
 
 fn handleCommand(context eng: Engine)(command: uci/Command): ?string {
   switch command {
-    .Uci -> some(cmdInfo()),
-    .Go(s) -> some(cmdGo(s)),
-    .IsReady -> some(cmdIsReady()),
-    .NewGame -> { cmdNewGame(); none() },
-    .Quit -> {
+    :Uci -> some(cmdInfo()),
+    :Go(s) -> some(cmdGo(s)),
+    :IsReady -> some(cmdIsReady()),
+    :NewGame -> { cmdNewGame(); none() },
+    :Quit -> {
       eprintln("Quitting");
       sys/exit(0)
     },
-    .Position(s) -> {
+    :Position(s) -> {
       debugLog("Setting position: {s}");
       none()
     },
-    .Perft({ depth }) -> {
+    :Perft({ depth }) -> {
       debugLog("Handling perft depth {depth}");
       eng.game.genMoves();
       none()
@@ -252,11 +252,11 @@ fn run(_args: span[string]): result[i32, string] {
     // TODO(dogfood): easy mapError before try
     let cmd = sys/readLine(2048).try; 
     switch uci/parseCommand(cmd) {
-      .err(msg) -> eprintln("[debug] {msg}"),
-      .ok(cmd) -> {
+      :err(msg) -> eprintln("[debug] {msg}"),
+      :ok(cmd) -> {
         let response = handleCommand(cmd);
         // If a command produces output, it goes to stdout with a newline added
-        if response is .some(r) { println(r) };
+        if response is :some(r) { println(r) };
       }
     }
   };

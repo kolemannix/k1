@@ -1,8 +1,8 @@
 let MODULE_INFO: k1/module-manifest = {
-  kind: .executable,
+  kind: :executable,
   deps: [],
   multithreading: false,
-  libs: [{ name: "foo", link-type: .static }],
+  libs: [{ name: "foo", link-type: :static }],
   link-args: [],
 }
 

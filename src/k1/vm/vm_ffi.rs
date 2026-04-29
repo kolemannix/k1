@@ -17,7 +17,6 @@ pub(super) fn handle_ffi_call(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     frame_index: u32,
-    inst_offset: u32,
     return_pt: PhysicalType,
     args: MSlice<ir::Value, ProgramIr>,
     lib_name: Option<Ident>,
@@ -34,7 +33,7 @@ pub(super) fn handle_ffi_call(
     for (arg_value, param) in
         k1.ir.mem.getn(args).iter().zip(k1.ir.mem.getn(function_params))
     {
-        let vm_value = vm::resolve_value(k1, vm, frame_index, inst_offset, *arg_value)?;
+        let vm_value = vm::resolve_value(k1, vm, frame_index, *arg_value)?;
 
         // If aggregate, you already have the pointer that libffi wants
         if param.pt.is_agg() {

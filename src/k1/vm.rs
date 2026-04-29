@@ -14,8 +14,9 @@ mod vm_ffi;
 mod vm_test;
 
 use crate::ir::{
-    self, IrCallee, IrUnitId, IrUnit, Inst, InstKind, Value as IrValue,
+    self, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, ProgramIr, Value as IrValue,
 };
+use crate::kmem::{DlNode, Handle};
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
@@ -298,14 +299,14 @@ impl Vm {
             render_debug_value(w, self, k1, param.pt, value).unwrap();
         }
         writeln!(w, "Locals").unwrap();
-        for block in k1.ir.mem.getn(unit.blocks) {
-            for inst_id in k1.ir.mem.getn(block.instrs) {
-                let inst_index = ir::inst_to_index(*inst_id, unit.inst_offset);
-                let local = self.stack.get_inst_value(frame.index, inst_index);
+        for block in k1.ir.mem.dlist_iter(unit.blocks) {
+            for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
+                // let inst_index = ir::inst_to_index(*inst_id, unit.inst_offset);
+                let local = self.stack.get_inst_value(frame.index, *inst_id);
                 let kind = ir::get_inst_kind(&k1.ir, &k1.types, *inst_id);
                 match kind {
                     InstKind::Value(physical_type) => {
-                        write!(w, "  i{}: ", inst_id).unwrap();
+                        write!(w, "  i{}: ", *inst_id).unwrap();
                         write!(w, " ").unwrap();
                         let type_to_use = match k1.ir.instrs.get(*inst_id) {
                             Inst::Alloca { t, .. } => *t,
@@ -570,18 +571,19 @@ pub fn execute_compiled_unit(
 ) -> K1Result<StaticValueId> {
     let start = k1.timing.clock.raw();
     vm.eval_span = span;
-    debug!("[vm] Executing Unit\n{}", ir::compiled_unit_to_string(k1, unit.unit_id, true));
+    debug!("[vm] Executing Unit\n{}", ir::unit_to_string(k1, unit.unit_id, true));
 
     let top_frame_index = 0;
 
     debug_assert!(vm.stack.frames.is_empty());
+    // Only the pt is used from the top ret info
     let top_ret_info = RetInfo {
         pt: unit.fn_type.return_type,
         frame_index: 0,
-        inst_index: 0,
+        // inst_index: 0,
+        call_inst_node: DlNode::singleton(InstId::PENDING),
         has_dst: false,
-        ip: 0,
-        block: 0,
+        block: Handle::nil(),
     };
 
     let logical_return_pt = unit.fn_type.return_type;
@@ -632,21 +634,20 @@ pub fn execute_compiled_unit(
     }
 }
 
+type InstNodeHandle = Handle<DlNode<InstId, ProgramIr>, ProgramIr>;
+
 fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Result<i32> {
-    let mut prev_b: u32 = 0;
-    let mut b: u32 = 0;
-    let mut ip: u32 = 0;
-    let mut blocks = original_unit.blocks;
-    let mut inst_offset = original_unit.inst_offset;
-    let mut instrs = k1.ir.mem.get_nth(original_unit.blocks, b as usize).instrs;
+    let mut prev_b: ir::BlockId = original_unit.blocks.first;
+    let mut b: ir::BlockId = original_unit.blocks.first;
+    let mut ip: InstNodeHandle = k1.ir.mem.get(original_unit.blocks.first).data.instrs.first;
 
     macro_rules! goto_unit {
-        ($gt_blocks: expr, $inst_offset: expr, $gt_block: expr, $gt_ip: expr) => {{
-            blocks = $gt_blocks;
+        ($gt_block: expr, $gt_ip: expr) => {{
             b = $gt_block;
-            instrs = k1.ir.mem.get_nth(blocks, b as usize).instrs;
-            inst_offset = $inst_offset;
-            ip = $gt_ip;
+            ip = match $gt_ip {
+                None => k1.ir.mem.get(b).data.instrs.first,
+                Some(inst_node) => inst_node,
+            };
         }};
     }
 
@@ -654,23 +655,25 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
         ($gt_block: expr) => {{
             prev_b = b;
             b = $gt_block;
-            instrs = k1.ir.mem.get_nth(blocks, b as usize).instrs;
-            ip = 0;
+            // instrs = k1.ir.mem.get_nth(blocks, b as usize).instrs;
+            ip = k1.ir.mem.get(b).data.instrs.first;
         }};
     }
 
     macro_rules! resolve_value {
         ($v:expr) => {
-            resolve_value(k1, vm, vm.stack.current_frame_index(), inst_offset, $v)?
+            resolve_value(k1, vm, vm.stack.current_frame_index(), $v)?
         };
     }
 
     //let mut line = String::new();
     let exit_code = 'exec: loop {
         // Fetch
-        let inst_id = *k1.ir.mem.get_nth(instrs, ip as usize);
+        let inst_node = *k1.ir.mem.get(ip);
+        let inst_id = inst_node.data;
         vm.eval_span = *k1.ir.sources.get(inst_id);
-        let inst_index = ir::inst_to_index(inst_id, inst_offset);
+        // let inst_index = ir::inst_to_index(inst_id, inst_offset);
+        // let inst_index = ip as u32;
         k1.timing.total_vm_instrs += 1;
 
         // if debugger {
@@ -700,15 +703,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     },
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, value);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, value);
+                ip = inst_node.next;
             }
             Inst::Alloca { t: _, vm_layout, returned: _ } => {
                 // TODO: optimize 'returned' allocas in vm
                 let ptr = vm.stack.push_layout_uninit(vm_layout);
 
-                vm.stack.set_cur_inst_value(inst_index, Value::ptr(ptr));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::ptr(ptr));
+                ip = inst_node.next
             }
             Inst::Store { dst, value, t } => {
                 let dst = resolve_value!(dst);
@@ -717,15 +720,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 store_scalar(t, dst.as_ptr(), vm_value);
 
                 // Store Produces no value, no need to set
-                ip += 1;
+                ip = inst_node.next;
             }
             Inst::Load { t, src } => {
                 let src_value = resolve_value!(src);
                 let src_ptr = src_value.as_ptr();
                 let loaded_value = load_scalar(t, src_ptr);
 
-                vm.stack.set_cur_inst_value(inst_index, loaded_value);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, loaded_value);
+                ip = inst_node.next;
             }
             Inst::Copy { dst, src, vm_size, .. } => {
                 let dst_value = resolve_value!(dst);
@@ -743,15 +746,15 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 }
 
                 memmove(src_ptr, dst_ptr, vm_size as usize);
-                ip += 1
+                ip = inst_node.next
             }
             Inst::StructOffset { base, vm_offset, .. } => {
                 let base_value = resolve_value!(base);
                 let base_ptr = base_value.as_ptr();
                 let field_ptr = unsafe { base_ptr.byte_add(vm_offset as usize) };
 
-                vm.stack.set_cur_inst_value(inst_index, Value::ptr(field_ptr));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::ptr(field_ptr));
+                ip = inst_node.next
             }
             Inst::ArrayOffset { element_t, base, element_index } => {
                 let base_value = resolve_value!(base);
@@ -763,10 +766,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 let element_ptr =
                     unsafe { base_ptr.byte_add(elem_layout.offset_at_index(index as usize)) };
 
-                vm.stack.set_cur_inst_value(inst_index, Value::ptr(element_ptr));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::ptr(element_ptr));
+                ip = inst_node.next
             }
-            Inst::Call { id } => {
+            Inst::Call { call_id: id } => {
                 let call = k1.ir.calls.get(id);
                 let ret_pt = call.ret_type;
                 let ret_layout = k1.types.get_pt_layout(ret_pt);
@@ -779,13 +782,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 let has_dst = match call.dst {
                     Some(dst) => {
                         let dst_addr = resolve_value!(dst);
-                        vm.stack.set_inst_value(caller_frame_index, inst_index, dst_addr);
+                        vm.stack.set_inst_value(caller_frame_index, inst_id, dst_addr);
                         true
                     }
                     None => {
                         if ret_pt.is_agg() {
                             let storage = Value::ptr(vm.stack.push_layout_uninit(ret_layout));
-                            vm.stack.set_inst_value(caller_frame_index, inst_index, storage);
+                            vm.stack.set_inst_value(caller_frame_index, inst_id, storage);
                             true
                         } else {
                             false
@@ -799,18 +802,18 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             k1,
                             vm,
                             caller_frame_index,
-                            inst_index,
+                            inst_id,
                             has_dst,
                             ret_pt,
                             $value,
                         );
-                        ip += 1;
+                        ip = inst_node.next;
                         continue 'exec;
                     }};
                     () => {{
                         // No one should read 'empty' memory or inst values
                         // so we don't have to set it
-                        ip += 1;
+                        ip = inst_node.next;
                         continue 'exec;
                     }};
                 }
@@ -821,7 +824,6 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             k1,
                             vm,
                             vm.stack.current_frame_index(),
-                            inst_offset,
                             ret_pt,
                             call_args,
                             library_name,
@@ -881,10 +883,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             ir::BackendBuiltin::Allocate | ir::BackendBuiltin::AllocateZeroed => {
                                 // intern fn allocZeroed(size: uword, align: uword): Pointer
                                 let zero = backend_builtin == ir::BackendBuiltin::AllocateZeroed;
-                                let size: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
-                                let align: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
+                                let size: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let align: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
                                 let Ok(layout) = std::alloc::Layout::from_size_align(
                                     size.0 as usize,
                                     align.0 as usize,
@@ -907,8 +907,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                                     resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let old_size: Value =
                                     resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
-                                let align: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                let align: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 let new_size: Value =
                                     resolve_value!(*k1.ir.mem.get_nth(call_args, 3));
                                 let layout = std::alloc::Layout::from_size_align(
@@ -928,12 +927,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             }
                             ir::BackendBuiltin::Free => {
                                 // intern fn free(ptr: Pointer, size: uword, align: uword): empty
-                                let ptr =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).as_ptr();
-                                let size = resolve_value!(*k1.ir.mem.get_nth(call_args, 1))
-                                    .as_usize();
-                                let align = resolve_value!(*k1.ir.mem.get_nth(call_args, 2))
-                                    .as_usize();
+                                let ptr = resolve_value!(*k1.ir.mem.get_nth(call_args, 0)).as_ptr();
+                                let size =
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1)).as_usize();
+                                let align =
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2)).as_usize();
 
                                 let layout = std::alloc::Layout::from_size_align(
                                     size as usize,
@@ -946,12 +944,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             }
                             ir::BackendBuiltin::MemCopy => {
                                 // intern fn copy( dst: Pointer, src: Pointer, count: uword): empty
-                                let dst: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
-                                let src: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
-                                let count: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                let dst: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let src: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
+                                let count: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
 
                                 memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
 
@@ -959,13 +954,10 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             }
                             ir::BackendBuiltin::MemSet => {
                                 //intern fn set(dst: Pointer, value: u8, count: uword): empty
-                                let dst: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let dst: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
                                 let value: u8 =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1)).bits()
-                                        as u8;
-                                let count: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1)).bits() as u8;
+                                let count: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 unsafe {
                                     std::ptr::write_bytes(dst.as_ptr(), value, count.as_usize())
                                 };
@@ -974,12 +966,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                             }
                             ir::BackendBuiltin::MemEquals => {
                                 //intern fn equals(p1: Pointer, p2: Pointer, size: uword): bool
-                                let p1: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
-                                let p2: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
-                                let size: Value =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                let p1: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let p2: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
+                                let size: Value = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
 
                                 let p1_ptr = p1.as_ptr();
                                 let p2_ptr = p2.as_ptr();
@@ -1009,12 +998,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                                 //    msg: string
                                 //  ): unit
                                 // todo!()
-                                let location_arg =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
-                                let level_arg =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
-                                let message_arg =
-                                    resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
+                                let location_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 0));
+                                let level_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 1));
+                                let message_arg = resolve_value!(*k1.ir.mem.get_nth(call_args, 2));
                                 let location = unsafe {
                                     (location_arg.as_ptr() as *const k1_types::K1SourceLocation)
                                         .read()
@@ -1059,19 +1045,16 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         }
                     }
                 };
-                let Some(compiled_function) = k1.ir.functions.get(dispatch_function_id)
-                else {
+                let Some(compiled_function) = k1.ir.functions.get(dispatch_function_id) else {
                     return failf!(
                         vm.eval_span,
                         "Call to uncompiled function: {}. ({} are pending)",
                         k1.function_id_to_string(dispatch_function_id, false),
-                        k1.ir.b_units_pending_compile.len()
+                        k1.ir.units_pending_compile.len()
                     );
                 };
                 let caller_frame_index = vm.stack.current_frame_index();
-                let caller_inst_offset = inst_offset;
                 let called_blocks = compiled_function.blocks;
-                let called_inst_offset = compiled_function.inst_offset;
                 let new_frame_index = caller_frame_index + 1;
 
                 // - Push a stack frame
@@ -1081,9 +1064,11 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     RetInfo {
                         pt: ret_pt,
                         frame_index: caller_frame_index,
-                        inst_index,
+                        // inst_index,
+                        call_inst_node: inst_node,
                         has_dst,
-                        ip: ip + 1,
+                        // ip: inst_node.next,
+                        // ip: ip + 1,
                         block: b,
                     },
                 );
@@ -1095,8 +1080,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
 
                 // Point the param registers at the function's arguments
                 for (index, arg) in k1.ir.mem.getn(call_args).iter().enumerate() {
-                    let vm_value =
-                        resolve_value(k1, vm, caller_frame_index, caller_inst_offset, *arg)?;
+                    let vm_value = resolve_value(k1, vm, caller_frame_index, *arg)?;
                     vm.stack.set_param_value(new_frame_index, index as u32, vm_value);
 
                     //let arg_pt =
@@ -1105,7 +1089,7 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 }
 
                 // - Set 'pc' (which is blocks + b + i)
-                goto_unit!(called_blocks, called_inst_offset, 0, 0);
+                goto_unit!(called_blocks.first, None);
             }
             Inst::Ret { v, agg: _ } => {
                 let cur_frame = vm.stack.current_frame();
@@ -1123,14 +1107,14 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                         k1,
                         vm,
                         ret_info.frame_index,
-                        ret_info.inst_index,
+                        //ret_info.inst_index,
+                        ret_info.call_inst_node.data,
                         ret_info.has_dst,
                         ret_info.pt,
                         returned_value,
                     );
                     let _popped = vm.stack.pop_frame();
-                    let current = vm.stack.current_frame_opt().unwrap();
-                    goto_unit!(current.blocks, current.inst_offset, ret_info.block, ret_info.ip);
+                    goto_unit!(ret_info.block, Some(ret_info.call_inst_node.next));
                 } else {
                     // Shove the return value in a special place
                     if !ret_info.pt.is_empty() {
@@ -1158,10 +1142,9 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
             Inst::Unreachable => {
                 return failf!(vm.eval_span, "Reached unreachable instruction");
             }
-            Inst::CameFrom { t: _, incomings } => {
-                debug_assert!(!incomings.is_empty());
+            Inst::Phi { t: _, incomings } => {
                 let mut value: core::mem::MaybeUninit<IrValue> = core::mem::MaybeUninit::uninit();
-                'case: for case in k1.ir.mem.getn(incomings) {
+                'case: for case in k1.ir.mem.getn(incomings).iter() {
                     if case.from == prev_b {
                         value = core::mem::MaybeUninit::new(case.value);
                         break 'case;
@@ -1170,13 +1153,13 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 let value = unsafe { value.assume_init() };
                 let vm_value = resolve_value!(value);
 
-                vm.stack.set_cur_inst_value(inst_index, vm_value);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, vm_value);
+                ip = inst_node.next;
             }
             Inst::BoolNegate { v } => {
                 let b = resolve_value!(v).as_bool();
-                vm.stack.set_cur_inst_value(inst_index, Value::bool(!b));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::bool(!b));
+                ip = inst_node.next
             }
             Inst::BitNot { v } => {
                 // We invert all bits, even the ones not in play for the width;
@@ -1185,22 +1168,22 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 let input = resolve_value!(v);
                 let result = !input.bits();
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::BitCast { v, to: _ } => {
                 let input = resolve_value!(v);
 
-                vm.stack.set_cur_inst_value(inst_index, input);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, input);
+                ip = inst_node.next
             }
             Inst::IntTrunc { v, to } => {
                 let input = resolve_value!(v);
 
                 let result = input.truncated(to.width());
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next
             }
             Inst::IntExtU { v, to: _ } => {
                 let input = resolve_value!(v);
@@ -1208,30 +1191,30 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 // IntExtU is a no-op
                 let result = input;
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next
             }
             Inst::IntExtS { v, from, to } => {
                 let input = resolve_value!(v);
 
                 let result = input.sign_extended(from.width(), to.width());
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next
             }
             Inst::FloatTrunc { v, to: _ } => {
                 let from: f64 = resolve_value!(v).as_f64();
                 let result = from as f32;
 
-                vm.stack.set_cur_inst_value(inst_index, Value::f32(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::f32(result));
+                ip = inst_node.next
             }
             Inst::FloatExt { v, to: _ } => {
                 let from: f32 = resolve_value!(v).as_f32();
                 let result = from as f64;
 
-                vm.stack.set_cur_inst_value(inst_index, Value::f64(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value::f64(result));
+                ip = inst_node.next
             }
             Inst::Float32ToIntUnsigned { v, to } => {
                 // This changes bits; not a no-op
@@ -1245,8 +1228,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next;
             }
             Inst::Float32ToIntSigned { v, to } => {
                 // This changes bits; not a no-op
@@ -1260,8 +1243,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next;
             }
             Inst::Float64ToIntUnsigned { v, to } => {
                 // This changes bits; not a no-op
@@ -1275,8 +1258,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next;
             }
             Inst::Float64ToIntSigned { v, to } => {
                 // This changes bits; not a no-op
@@ -1290,8 +1273,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next;
             }
             Inst::IntToFloatUnsigned { v, from, to } => {
                 let int_value = resolve_value!(v);
@@ -1331,8 +1314,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next
             }
             Inst::IntToFloatSigned { v, from, to } => {
                 let int_value = resolve_value!(v);
@@ -1372,44 +1355,44 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, result);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, result);
+                ip = inst_node.next
             }
             Inst::PtrToWord { v } => {
                 let v = resolve_value!(v);
 
-                vm.stack.set_cur_inst_value(inst_index, v);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, v);
+                ip = inst_node.next
             }
             Inst::WordToPtr { v } => {
                 let v = resolve_value!(v);
 
-                vm.stack.set_cur_inst_value(inst_index, v);
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, v);
+                ip = inst_node.next
             }
             Inst::IntAdd { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_add, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntSub { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_sub, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntMul { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
                 let rhs = resolve_value!(rhs).bits();
                 let result = casted_uop!(width, wrapping_mul, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntDivUnsigned { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1420,8 +1403,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Div;
                 let result = casted_uop!(width, div, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntDivSigned { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1432,8 +1415,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Div;
                 let result = casted_iop!(width, div, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntRemUnsigned { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1444,8 +1427,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Rem;
                 let result = casted_uop!(width, rem, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntRemSigned { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1456,8 +1439,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Rem;
                 let result = casted_iop!(width, rem, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::IntCmp { lhs, rhs, pred, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1503,8 +1486,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, Value(b as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(b as u64));
+                ip = inst_node.next
             }
             Inst::FloatAdd { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1512,8 +1495,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Add;
                 let result = casted_float_op!(width, add, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::FloatSub { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1521,8 +1504,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Sub;
                 let result = casted_float_op!(width, sub, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::FloatMul { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1530,8 +1513,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Mul;
                 let result = casted_float_op!(width, mul, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::FloatDiv { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1539,8 +1522,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Div;
                 let result = casted_float_op!(width, div, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::FloatRem { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1548,8 +1531,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Rem;
                 let result = casted_float_op!(width, rem, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result));
+                ip = inst_node.next
             }
             Inst::FloatCmp { lhs, rhs, pred, width } => {
                 let lhs = resolve_value!(lhs);
@@ -1567,8 +1550,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                     _ => unreachable!(),
                 };
 
-                vm.stack.set_cur_inst_value(inst_index, Value(b as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(b as u64));
+                ip = inst_node.next
             }
             Inst::BitAnd { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1576,8 +1559,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::BitAnd;
                 let result = casted_uop!(width, bitand, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BitOr { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1585,8 +1568,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::BitOr;
                 let result = casted_uop!(width, bitor, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BitXor { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1594,8 +1577,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::BitXor;
                 let result = casted_uop!(width, bitxor, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BitShiftLeft { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1603,8 +1586,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Shl;
                 let result = casted_uop!(width, shl, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1612,8 +1595,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Shr;
                 let result = casted_uop!(width, shr, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BitSignedShiftRight { lhs, rhs, width } => {
                 let lhs = resolve_value!(lhs).bits();
@@ -1621,8 +1604,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
                 use std::ops::Shr;
                 let result = casted_iop!(width, shr, lhs, rhs);
 
-                vm.stack.set_cur_inst_value(inst_index, Value(result as u64));
-                ip += 1
+                vm.stack.set_cur_inst_value(inst_id, Value(result as u64));
+                ip = inst_node.next
             }
             Inst::BakeStaticValue { type_id, value } => {
                 // intern fn bakeStaticValue[T](value: T): u64
@@ -1631,8 +1614,8 @@ fn exec_loop(k1: &mut TypedProgram, vm: &mut Vm, original_unit: IrUnit) -> K1Res
 
                 let value_id_u64 = value_id.as_u32() as u64;
 
-                vm.stack.set_cur_inst_value(inst_index, Value::u64(value_id_u64));
-                ip += 1;
+                vm.stack.set_cur_inst_value(inst_id, Value::u64(value_id_u64));
+                ip = inst_node.next;
             }
         }
     };
@@ -1644,13 +1627,11 @@ fn resolve_value(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     frame_index: u32,
-    inst_offset: u32,
     value: IrValue,
 ) -> K1Result<Value> {
     match value {
         IrValue::Inst(inst_id) => {
-            let inst_index = ir::inst_to_index(inst_id, inst_offset);
-            let v = vm.stack.get_inst_value(frame_index, inst_index);
+            let v = vm.stack.get_inst_value(frame_index, inst_id);
             Ok(v)
         }
         IrValue::StaticValue { t: _, id } => {
@@ -1696,6 +1677,10 @@ fn resolve_global(
     global_id: TypedGlobalId,
     t: PhysicalType,
 ) -> K1Result<Value> {
+    debug!(
+        "resolving global {}",
+        k1.ident_str(k1.variables.get(k1.globals.get(global_id).variable_id).name)
+    );
     // Globals in `ir` always represent an Address, or Storage, of the global, not the value
 
     // Case 1: It's a constant, already evaluated, stored in the global static space
@@ -1752,7 +1737,7 @@ fn fulfill_return(
     k1: &TypedProgram,
     vm: &mut Vm,
     call_frame_index: u32,
-    call_inst_index: u32,
+    call_inst_id: InstId,
     has_dst: bool,
     ret_type: PhysicalType,
     returned_value: Value,
@@ -1763,12 +1748,12 @@ fn fulfill_return(
     //
     // Otherwise, we just put the value in the call's inst slot
     if has_dst {
-        let addr = vm.stack.get_inst_value(call_frame_index, call_inst_index).as_ptr();
+        let addr = vm.stack.get_inst_value(call_frame_index, call_inst_id).as_ptr();
         //eprintln!("fulfill_return [{}] to {:?}, size: {}", frame_index, addr, ret_size);
         store_value(&k1.types, ret_type, addr, returned_value);
     } else {
         //eprintln!("fulfill_return [{}] to reg {}, size: {}", frame_index, inst_index, ret_size);
-        vm.stack.set_inst_value(call_frame_index, call_inst_index, returned_value)
+        vm.stack.set_inst_value(call_frame_index, call_inst_id, returned_value)
     }
 }
 
@@ -1805,7 +1790,7 @@ pub fn static_value_to_vm_value(
         }
         StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
         StaticValue::Struct(static_struct) => {
-            let layout = k1.get_layout(static_struct.type_id);
+            let layout = k1.get_layout(static_struct.type_id).unwrap();
             let struct_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, struct_base, static_value_id);
@@ -1813,7 +1798,7 @@ pub fn static_value_to_vm_value(
             Value::ptr(struct_base)
         }
         StaticValue::Sum(sum) => {
-            let layout = k1.get_layout(sum.sum_type_id);
+            let layout = k1.get_layout(sum.sum_type_id).unwrap();
             let sum_base = k1.vm_static_stack.push_layout_uninit(layout);
 
             store_static_value(k1, sum_base, static_value_id);
@@ -1826,7 +1811,7 @@ pub fn static_value_to_vm_value(
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
-            let layout = k1.get_layout(element_type);
+            let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = k1.vm_static_stack.push_layout_uninit(array_allocation_layout);
@@ -1863,7 +1848,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             store_value(&k1.types, string_pt, dst, value);
         }
         StaticValue::Zero(type_id) => {
-            let layout = k1.get_layout(*type_id);
+            let layout = k1.get_layout(*type_id).unwrap();
             unsafe { std::ptr::write_bytes(dst, 0, layout.size as usize) };
         }
         StaticValue::Struct(static_struct) => {
@@ -1900,7 +1885,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
-            let layout = k1.get_layout(element_type);
+            let layout = k1.get_layout(element_type).unwrap();
             let array_allocation_layout = layout.array_me(len);
 
             let array_base_ptr = match kind {
@@ -1932,7 +1917,7 @@ fn store_static_array_elements(
     elements: MSlice<StaticValueId, StaticValuePool>,
 ) {
     debug!("static_value_to_vm_value storing {} elements", elements.len());
-    let element_layout = k1.get_layout(element_type);
+    let element_layout = k1.get_layout(element_type).unwrap();
 
     for index in 0..elements.len() {
         let elem_value_id = k1.static_values.mem.get_nth(elements, index as usize);
@@ -1954,8 +1939,8 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let k1_string = k1_types::K1BufferLike { len: s.len(), data: s.as_ptr().cast_mut() };
     if cfg!(debug_assertions) {
         let char_span_type_id = k1.types.get_struct_field(STRING_TYPE_ID, 0).type_id;
-        let string_layout = k1.get_layout(STRING_TYPE_ID);
-        debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id));
+        let string_layout = k1.get_layout(STRING_TYPE_ID).unwrap();
+        debug_assert_eq!(string_layout, k1.get_layout(char_span_type_id).unwrap());
         debug_assert_eq!(size_of_val(&k1_string), string_layout.size as usize);
     }
 
@@ -2066,6 +2051,7 @@ pub fn load_value(t: PhysicalType, ptr: *const u8) -> Value {
 pub struct Stack {
     pub mem: crate::kmem::Mem<()>,
     frames: Vec<StackFrameRecord>,
+    inst_mappings: FxHashMap<u64, Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -2076,24 +2062,22 @@ pub struct RetInfo {
     /// We either directly write the value into the instruction register at (frame_index, inst_index)
     /// Or we perform a store to the address in that register. We use pt and size to help us know which
     frame_index: u32,
-    inst_index: u32,
+    // The call instruction. When we return, we should return to call_inst_node.next
+    call_inst_node: DlNode<InstId, ProgramIr>,
     /// There's a memory address stored in (frame_index, inst_index) that you need to write to
     /// Otherwise, just write the value
     has_dst: bool,
 
-    ip: u32,
-    block: u32,
+    // ip: InstNodeHandle,
+    block: ir::BlockId,
 }
 
 #[derive(Clone)]
 pub struct StackFrameRecord {
     index: u32,
     base_ptr: *mut u8,
-    inst_slice: *mut [Value],
     call_span: Option<SpanId>,
     param_count: u32,
-    blocks: MSlice<ir::CompiledBlock, ir::ProgramIr>,
-    inst_offset: u32,
     unit: IrUnitId,
     ret_info: RetInfo,
 }
@@ -2105,7 +2089,6 @@ impl StackFrameRecord {
         call_span: Option<SpanId>,
         owner: &IrUnit,
         ret_info: RetInfo,
-        inst_slice: *mut [Value],
     ) -> StackFrameRecord {
         // Frames must be 8-byte aligned
         debug_assert!((base_ptr as *const Value).is_aligned());
@@ -2113,12 +2096,9 @@ impl StackFrameRecord {
         StackFrameRecord {
             index,
             base_ptr,
-            inst_slice,
             call_span,
             unit: owner.unit_id,
             param_count: owner.fn_type.params.len(),
-            blocks: owner.blocks,
-            inst_offset: owner.inst_offset,
             ret_info,
         }
     }
@@ -2134,13 +2114,14 @@ impl Stack {
         let mut mem = kmem::Mem::make();
         let expected_values_needed = 10000;
         mem.will_need(expected_values_needed * std::mem::size_of::<Value>());
-        Self { mem, frames: Vec::with_capacity(512) }
+        Self { mem, frames: Vec::with_capacity(512), inst_mappings: FxHashMap::with_capacity(4096) }
     }
 
     pub fn reset(&mut self) {
         let zero = cfg!(debug_assertions);
         self.mem.reset(zero);
         self.frames.clear();
+        self.inst_mappings.clear();
     }
 
     pub fn cursor(&self) -> *mut u8 {
@@ -2151,25 +2132,27 @@ impl Stack {
     /// base_ptr: 0
     /// `param_count` Nx64-bit function param Values
     /// `inst_count`  Nx64-bit Values
+    /// ^ currently replaced by a HashMap since optimizations break our instid stream guarantee
     /// Allocas
-    fn push_new_frame(
-        &mut self,
-        call_span: Option<SpanId>,
-        owner: &IrUnit,
-        ret_info: RetInfo,
-    ) {
+    fn push_new_frame(&mut self, call_span: Option<SpanId>, owner: &IrUnit, ret_info: RetInfo) {
         let index = self.frames.len() as u32;
         self.mem.align_to_bytes(8);
         let base_ptr = self.cursor();
 
-        let param_count = owner.fn_type.params.len();
-        let inst_count = owner.inst_count;
-        let inst_base = unsafe { base_ptr.byte_add(param_count as usize * size_of::<Value>()) };
-        let inst_slice =
-            core::ptr::slice_from_raw_parts_mut(inst_base as *mut Value, inst_count as usize);
+        // eprintln!(
+        //     "inst_mappings fill factor: {} ({})",
+        //     self.inst_mappings.len() as f64 / self.inst_mappings.capacity() as f64, self.inst_mappings.len()
+        // );
 
-        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info, inst_slice);
-        self.mem.push_slice_uninit::<Value>(param_count as usize + inst_count as usize);
+        let param_count = owner.fn_type.params.len();
+        //let inst_count = owner.inst_count;
+        //let inst_base = unsafe { base_ptr.byte_add(param_count as usize * size_of::<Value>()) };
+        //let inst_slice =
+        //    core::ptr::slice_from_raw_parts_mut(inst_base as *mut Value, inst_count as usize);
+
+        // let inst_map = FxHashMap::new();
+        let frame = StackFrameRecord::make(index, base_ptr, call_span, owner, ret_info);
+        self.mem.push_slice_uninit::<Value>(param_count as usize);
         self.frames.push(frame);
     }
 
@@ -2203,6 +2186,7 @@ impl Stack {
         self.frames.last_mut().unwrap()
     }
 
+    #[allow(unused)]
     fn current_frame_opt(&self) -> Option<&StackFrameRecord> {
         self.frames.last()
     }
@@ -2210,11 +2194,6 @@ impl Stack {
     fn param_values_for_frame(&self, frame_index: u32) -> &mut [Value] {
         let f = &self.frames[frame_index as usize];
         f.param_slice()
-    }
-
-    fn inst_values_for_frame<'ret>(&self, frame_index: u32) -> &'ret mut [Value] {
-        let f = &self.frames[frame_index as usize];
-        unsafe { &mut *f.inst_slice }
     }
 
     fn get_param_value(&self, frame_index: u32, param_index: u32) -> Value {
@@ -2227,22 +2206,62 @@ impl Stack {
         vs[param_index as usize] = value;
     }
 
-    pub fn get_inst_value(&self, frame_index: u32, inst_index: u32) -> Value {
-        let inst_values = self.inst_values_for_frame(frame_index);
-        inst_values[inst_index as usize]
+    // Index-based inst value code
+    // fn inst_values_for_frame<'ret>(&self, frame_index: u32) -> &'ret mut [Value] {
+    //     let f = &self.frames[frame_index as usize];
+    //     unsafe { &mut *f.inst_slice }
+    // }
+    // pub fn get_inst_value(&self, frame_index: u32, inst_index: u32) -> Value {
+    //     let inst_values = self.frames[frame_index as usize];
+    //     inst_values[inst_index as usize]
+    // }
+
+    // pub fn set_inst_value(&mut self, frame_index: u32, inst_index: u32, value: Value) {
+    //     let inst_values = self.inst_values_for_frame(frame_index);
+    //     inst_values[inst_index as usize] = value;
+    // }
+
+    // pub fn set_cur_inst_value(&mut self, inst_index: u32, value: Value) {
+    //     self.set_inst_value(self.current_frame_index(), inst_index, value)
+    // }
+
+    // pub fn get_cur_inst_value(&self, inst_index: u32) -> Value {
+    //     self.get_inst_value(self.current_frame_index(), inst_index)
+    // }
+
+    #[inline(always)]
+    fn make_key(frame_index: u32, inst_id: InstId) -> u64 {
+        ((frame_index as u64) << 32) | (inst_id.as_u32() as u64)
     }
 
-    pub fn set_inst_value(&mut self, frame_index: u32, inst_index: u32, value: Value) {
-        let inst_values = self.inst_values_for_frame(frame_index);
-        inst_values[inst_index as usize] = value;
+    #[inline]
+    pub fn get_inst_value(&self, frame_index: u32, inst_id: InstId) -> Value {
+        match self.inst_mappings.get(&Self::make_key(frame_index, inst_id)) {
+            Some(value) => *value,
+            None => Value(0),
+        }
+        // let inst_values = &self.frames[frame_index as usize].inst_map;
+        // match inst_values.get(&inst_id) {
+        //     Some(value) => *value,
+        //     None => Value(0),
+        // }
     }
 
-    pub fn set_cur_inst_value(&mut self, inst_index: u32, value: Value) {
-        self.set_inst_value(self.current_frame_index(), inst_index, value)
+    #[inline]
+    pub fn set_inst_value(&mut self, frame_index: u32, inst_id: InstId, value: Value) {
+        self.inst_mappings.insert(Self::make_key(frame_index, inst_id), value);
+        // let inst_values = &mut self.frames[frame_index as usize].inst_map;
+        // inst_values.insert(inst_id, value);
     }
 
-    pub fn get_cur_inst_value(&self, inst_index: u32) -> Value {
-        self.get_inst_value(self.current_frame_index(), inst_index)
+    #[inline]
+    pub fn set_cur_inst_value(&mut self, inst_id: InstId, value: Value) {
+        self.set_inst_value(self.current_frame_index(), inst_id, value)
+    }
+
+    #[inline]
+    pub fn get_cur_inst_value(&self, inst_id: InstId) -> Value {
+        self.get_inst_value(self.current_frame_index(), inst_id)
     }
 
     #[inline]

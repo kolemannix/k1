@@ -10,7 +10,7 @@ path = "src/k1/lib.rs"
 
 [features]
 lsp = ["tokio", "tower-lsp", "tokio-util", "tracing", "tracing-appender", "tracing-subscriber"]
-gui = ["raylib"]
+# gui = ["raylib"]
 profile = ["pprof"]
 # Our project-specific debug mode, not the same thing as the compiler's!
 dbg = []
@@ -52,7 +52,7 @@ tracing-subscriber = { version = "0.3", optional = true }
 tracing-appender = { version = "0.2", optional = true }
 
 # raylib gui only deps
-raylib = { version = "5.0.1", optional = true}
+# raylib = { version = "5.0.1", optional = true}
 
 [[bin]]
 name = "test_suite"
@@ -66,11 +66,6 @@ path = "src/bin/compiler_main.rs"
 name = "lsp"
 path = "src/bin/lsp_main.rs"
 required-features = ["lsp"]
-
-[[bin]]
-name = "gui"
-path = "src/bin/gui_main.rs"
-required-features = ["raylib"]
 
 [[bin]]
 name = "repl"

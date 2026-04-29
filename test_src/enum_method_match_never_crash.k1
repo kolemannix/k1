@@ -4,17 +4,17 @@ ns enum_method_match_never {
   ns e {
     fn valueIfA(self: e): int {
       switch self {
-        .a(i) -> i,
-        .b -> crash("This is a B!"),
+        :a(i) -> i,
+        :b -> crash("This is a B!"),
       }
     }
   }
   
   
   fn isVariant() {
-    let x: either a(int), b(int), c = .a(42);
+    let x: either a(int), b(int), c = :a(42);
     assert(x.asB().isNone());
-    assert(not x is .c);
+    assert(not x is :c);
     assert(x.asA().isSome());
   }
 
@@ -24,10 +24,10 @@ fn main(): i32 {
     enum_method_match_never/isVariant();
 
     use enum_method_match_never/e;
-    let x = e.a(42);
-    let y = e.a(42);
+    let x = e:a(42);
+    let y = e:a(42);
     assert(x.valueIfA() == y.valueIfA());
-    assert((.b: e).valueIfA() == 0);
+    assert((:b: e).valueIfA() == 0);
     1
   }
 //exitcode: 1 This is a B!
