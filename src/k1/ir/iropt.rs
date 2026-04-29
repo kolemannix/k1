@@ -762,14 +762,9 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) {
             // Trampoline case
             if let Some(pred) = ir.mem.dlist_get_singleton(node.data.preds) {
                 if let Some(succ) = ir.mem.dlist_get_singleton(node.data.succs) {
-                    // nocommit: we should be able to unleash the trampoline case
-                    // Somehow still needed; I don't get it
-                    // phi is always first!
-                    let succ_has_phi = ir
-                        .mem
-                        .dlist_iter(ir.mem.get(succ).data.instrs)
-                        .any(|inst_id| ir.instrs.get(*inst_id).is_phi());
-                    if !succ_has_phi {
+                    let succ_terminator = ir.mem.get(ir.mem.get(succ).data.instrs.first).data;
+                    let succ_is_phi = ir.instrs.get(succ_terminator).is_phi();
+                    if !succ_is_phi {
                         if let Some(inst_id) = ir.mem.dlist_get_singleton(node.data.instrs) {
                             if let Inst::Jump(jmp_block_id) = ir.instrs.get(inst_id) {
                                 debug_assert!(*jmp_block_id == succ);
