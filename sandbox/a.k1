@@ -1,11 +1,4 @@
 fn main(): i32 {
-  a x ;
-  0
-}
-
-fn other(): i32 {
-  "asdfasdfads";
-  let x = 42;
-  let y = 41;
+  "hello, there";
   0
 }

@@ -1351,7 +1351,7 @@ impl<T, Tag> List<T, Tag> {
                 if self.len != 0 {
                     // eprintln!("{}", std::backtrace::Backtrace::capture());
                     eprintln!(
-                        "{}:{} Slow Growing from {} -> {}",
+                        "{}:{} mlist realloc from {} -> {}",
                         loc.file(),
                         loc.line(),
                         self.cap(),
