@@ -29,8 +29,5 @@ fn test() {
     crash("")
   };
 
-
-  // Infallible
-
   {}
 }
