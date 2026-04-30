@@ -40,7 +40,7 @@ fn testFormat() {
 //deftype Expr = either FmtString(Parts), Other(string)
 //macro fmt(writer: Expr, s: Expr, args: span[Expr]) {
 //fn fmt[w: writer, S: static FmtString, Args](writer: w, fmtString: S, args: Args) {
-//  let* sb = StringBuilder/new();
+//  let sb = StringBuilder/new();
 //  let argsCount = 
 //  for p in s.parts { 
 //    switch p {

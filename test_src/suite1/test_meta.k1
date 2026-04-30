@@ -25,7 +25,7 @@ use core/meta/CodeWriter
 fn simpleIncrement(): i32 {
   let x = 10;
   #meta {
-    let* code = StringBuilder/new();
+    let code = StringBuilder/new();
     for core/IntRange/upTo(5) {
       code.line("x := x + 1;");
     };
@@ -78,15 +78,15 @@ w.write-string("\"{f.name}\":");
 fn writeJson[T, w: writer](context w: w)(t: T) {
   #meta {
     let type-id = types/type-id[T]();
-    let* code = StringBuilder/new();
-    _writeJsonFromSchema(code, "t", type-id);
+    let code = StringBuilder/new();
+    _writeJsonFromSchema(&code, "t", type-id);
     code.build()
   }
 }
 
 fn toJson[T](t: T): string {
-  let* w = list/empty[char]();
-  writeJson(context w)(t);
+  let w = list/empty[char]();
+  writeJson(context &w)(t);
   let s = string/wrapList(w);
   s
 }

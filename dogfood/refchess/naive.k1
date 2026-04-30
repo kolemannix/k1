@@ -78,7 +78,7 @@ fn dump(board: list[SquareState]) {
 }
 
 fn startPos(): list[SquareState] {
-  let* board = list/filled[SquareState](64, :Blank);
+  let board = list/filled[SquareState](64, :Blank);
   board.set(0, :WRook);
   board.set(1, :WKnight);
   board.set(2, :WBishop);

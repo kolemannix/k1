@@ -1,7 +1,7 @@
 ns allocator_test;
 
 fn test() {
-  let* a = core/arena/default();
+  let a = core/arena/default();
 
   a.push(true);
   a.push({ x: 10, y: 10 });

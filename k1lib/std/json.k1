@@ -72,7 +72,7 @@ fn next-or(context p: *mut parser)(msg: string): result[char, string] {
 
 fn _parseString(context p: *mut parser)(): result[json, string] {
   if not p.expect('"') { return(:err("expected string")) };
-  let* sb = StringBuilder/new();
+  let sb = StringBuilder/new();
   loop {
     let c1 = next-or("Unterminated string").try;
     if c1 == '\\' {
@@ -102,7 +102,7 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
     return(:ok(:array([])))
   };
 
-  let* elements = list/empty[json]();
+  let elements = list/empty[json]();
 
   loop {
     // eprintln("parseArray len={elements.len()} {p.peek()}");
@@ -115,7 +115,7 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
       :none -> break(:err("Unexpected end of input in array")),
       :some(']') -> {
         p.advance();
-        break(:ok(:array(elements.*)))
+        break(:ok(:array(elements)))
       },
       :some(',') -> {
         p.advance();
@@ -134,7 +134,7 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
     return(:ok(:object([])))
   };
 
-  let* members = list/empty[{ key: string, value: json }]();
+  let members = list/empty[{ key: string, value: json }]();
 
   loop {
     // eprintln("parseObject len={members.len()} {p.remaining-input().take(10)}");
@@ -154,7 +154,7 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
       :none -> break(:err("Unexpected end of input in object")),
       :some('}') -> {
         p.advance();
-        break(:ok(:object(members.*)))
+        break(:ok(:object(members)))
       },
       :some(',') -> {
         p.advance();
@@ -194,7 +194,7 @@ fn _parseNextValue(context p: *mut parser)(): result[json, string] {
 }
 
 fn parse-from-string(input: string): result[json, string] {
-  let* p: *mut parser = { input, cursor: 0 };
+  let p: parser = { input, cursor: 0 };
   switch _parseNextValue(context p)() {
     :err(msg) -> :err("Failed at pos {p.cursor}: {msg}"),
     :ok(json) -> :ok(json)

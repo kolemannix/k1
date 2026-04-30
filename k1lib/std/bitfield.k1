@@ -24,7 +24,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
 
   // This is just a regular StringBuilder that gets some extra methods since we've
   // brought the meta/CodeWriter ability into scope
-  let* code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
+  let code = StringBuilder/new(); // The asterisk means we want a reference (a stack address)
 
   // This defines a named struct type with one field, which is a common newtype pattern
   code.line("deftype {type-name} = {{ bits: {baseName} }");
@@ -33,7 +33,8 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
   code.line("ns {type-name} {{");
 
   // This actually gets captured by the lambda below
-  let* bitIndex = 0;
+  let bitIndexVal = 0;
+  let bitIndex: *mut size = &bitIndexVal;
 
   // Let's analyze each member we were passed, and perform the actual bitfield layouting work once.
   // We'll make a list of an unnamed (anonymous) little struct type for our info we'll need later
@@ -116,7 +117,7 @@ fn define[Base](type-name: string, members: span[{ name: string, bits: size }]):
 
   code.line("}"); // End ns
 
-  let* printBody = StringBuilder/new();
+  let printBody = StringBuilder/new();
   for members {
     let info = memberInfo.get(itIndex);
     let getName = "get{info.nameCap}";

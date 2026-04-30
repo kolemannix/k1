@@ -5,7 +5,7 @@ use meta/CodeWriter
 //           and other things
 fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
   #meta(fmtString) {
-    let* code = StringBuilder/new();
+    let code = StringBuilder/new();
     let argsTypeId = types/type-id[Args];
     let schema = types/type-schema(argsTypeId);
     // This naive splitting doesn't work; we need to walk the format string
@@ -47,7 +47,7 @@ fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
 }
 
 fn fmtString[Fmt: static string, Args](fmtString: Fmt, args: Args): string {
-  let* result = core/StringBuilder/new();
-  fmt(result, fmtString, args);
+  let result = core/StringBuilder/new();
+  fmt(&result, fmtString, args);
   result.build()
 }

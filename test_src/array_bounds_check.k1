@@ -1,5 +1,5 @@
 fn main(): i32 {
-  let* array: *array[f32, 10] = mem/zeroed();
+  let array: array[f32, 10] = mem/zeroed();
   // Variable to bypass our very advanced static analysis
   let x = 44;
   array.get(x);

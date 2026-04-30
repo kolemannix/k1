@@ -3,7 +3,7 @@ ns hash_test;
 use std/HashMap
 
 fn testBasic() {
-  let* myMap = HashMap/new[int]();
+  let myMap = HashMap/new[int]();
   myMap.insert("a", 10);
   myMap.insert("b", 11);
   myMap.insert("c", 12);
@@ -20,7 +20,7 @@ fn testBasic() {
 }
 
 fn testResize(size: int) {
-  let* myMap = HashMap/new[int]();
+  let myMap = HashMap/new[int]();
   let i = 0;
   while i < size {
     myMap.insert(i.show(), i);

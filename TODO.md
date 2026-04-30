@@ -9,6 +9,7 @@
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
+- [ ] Finish removing let*
 
 More optimal final programs
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
