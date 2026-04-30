@@ -113,8 +113,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] static #for, special-case like IF. Can unroll the loop at comptime but the body is runtime
 - [x] VM "PermSpace" for caching converted static values in their VM representation
 - [x] Add StaticValue::Zero as an efficient special-case (generalization of the existing NullPointer, actually)
-- [ ] 'Type predicate': functions taking only a single type could be invoked with a nice syntax like `type.sizeOf`
-- [ ] 'Type predicate' functions as type bounds
+- [x] 'Type predicate' functions as type bounds
 - [ ] Collapse long runs of zero-only data into a single one in LLVM IR (e.g., mem/allocStack)
 
 ## Introduce Warnings
@@ -135,7 +134,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 - [x] Hover much better
 - [x] Hover no more markdown
 - [ ] Parse with recovery within same file
-- [ ] In lsp mode, parser should emit actual semantic tokens (currently we just use lexer tokens)
+- [x] In lsp mode, parser should emit actual semantic tokens (currently we just use lexer tokens)
 - [ ] Proper handling of 'trivia' (whitespace and comments)
 - [ ] Go-to
 - [ ] Completion

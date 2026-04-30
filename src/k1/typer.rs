@@ -2847,7 +2847,7 @@ impl TypedProgram {
             );
             match parse::lex_file_into_program(&mut self.ast, source, &mut token_buffer) {
                 Err(e) => {
-                    self.ast.push_error(e);
+                    self.ast.report_error(e);
                     // Keep going man! to the next file
                     continue;
                 }

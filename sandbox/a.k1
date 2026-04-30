@@ -1,6 +1,11 @@
 fn main(): i32 {
-  let x: opt[int] = :some(42);
+  a x ;
   0
 }
 
-// #static main()
+fn other(): i32 {
+  "asdfasdfads";
+  let x = 42;
+  let y = 41;
+  0
+}

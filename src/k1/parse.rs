@@ -13,6 +13,7 @@ use crate::{
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
 pub use idents::{Ident, IdentPool, IdentSlice, IdentSliceId, QIdent};
+use itertools::Itertools;
 use log::trace;
 use smallvec::{SmallVec, smallvec};
 use string_interner::Symbol;
@@ -1684,7 +1685,7 @@ impl ParsedProgram {
         }
     }
 
-    pub fn push_error(&mut self, e: ParseError) {
+    pub fn report_error(&mut self, e: ParseError) {
         print_error(self, &e);
         self.errors.push(e);
     }
@@ -2186,12 +2187,11 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         loop {
             match self.parse_definition(K::Eof) {
                 Ok(Some(def)) => {
-                    //new_definitions.push(def);
                     self.ast.namespaces.get_mut(self.module_namespace_id).definitions.push(def)
                 }
                 Err(err) => {
-                    self.ast.push_error(err);
-                    // For now, break on first parse error
+                    self.ast.report_error(err);
+                    // SOLDIER ON!!!
                     break;
                 }
                 Ok(None) => break,
@@ -2310,7 +2310,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                                 "params",
                                 &mut parameter_names,
                                 K::Comma,
-                                &[K::CloseParen],
+                                K::CloseParen,
                                 |p| {
                                     Parser::expect_ident_ext(p, false, false)
                                         .map(|(_token, ident)| ident)
@@ -2906,14 +2906,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else if first.kind == K::OpenBrace {
             self.advance();
             let mut fields = eco_vec![];
-            let (fields_span, _) = self.eat_delimited_ext(
+            self.eat_delimited_ext(
                 "Struct fields",
                 &mut fields,
                 K::Comma,
-                &[K::CloseBrace],
+                K::CloseBrace,
                 Parser::expect_struct_type_field,
             )?;
-            let span = self.extend_span(first.span, fields_span);
+            let span = self.extend_to_here(first.span);
             let struc = StructType { fields, span };
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Struct(struc))))
         } else if first.kind == K::QuestionMark {
@@ -3158,14 +3158,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.advance();
 
         let mut fields: SV8<_> = smallvec![];
-        let (fields_span, _) = self.eat_delimited_ext(
+        self.eat_delimited_ext(
             "Struct",
             &mut fields,
             K::Comma,
-            &[K::CloseBrace],
+            K::CloseBrace,
             Parser::expect_struct_field,
         )?;
-        let span = self.extend_span(first.span, fields_span);
+        let span = self.extend_to_here(first.span);
         Ok(Some(ParsedStruct { fields: self.ast.mem.pushn(&fields), span }))
     }
 
@@ -3368,11 +3368,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let mut type_args: SV8<NamedTypeArg> = smallvec![];
-        let (args_span, _terminator) = self.eat_delimited_ext(
+        self.eat_delimited_ext(
             "Type Arguments",
             &mut type_args,
             K::Comma,
-            &[K::CloseBracket],
+            K::CloseBracket,
             |p| {
                 let (one, two) = p.peek_two();
                 let name = if one.kind == K::Ident && two.kind == K::Equals {
@@ -3394,7 +3394,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             },
         )?;
         let slice = self.ast.mem.pushn(&type_args);
-        let span = self.extend_span(open_bracket.span, args_span);
+        let span = self.extend_to_here(open_bracket.span);
         Ok((slice, span))
     }
 
@@ -3589,10 +3589,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 if let Some(struct_value) = self.parse_struct_value()? {
                     Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
                 } else {
-                    match self.parse_block(ParsedBlockKind::LexicalBlock)? {
-                        None => Err(error_expected("block", self.peek())),
-                        Some(block) => Ok(Some(self.add_expression(ParsedExpr::Block(block)))),
-                    }
+                    let block = self.expect_block(ParsedBlockKind::LexicalBlock)?;
+                    Ok(Some(self.add_expression(ParsedExpr::Block(block))))
                 }
             }
             K::KeywordIf => {
@@ -3606,11 +3604,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // [a x 10]
                 self.advance();
                 let mut elements = eco_vec![];
-                let (_elements_span, _terminator) = self.eat_delimited_ext(
+                self.eat_delimited_ext(
                     "list elements",
                     &mut elements,
                     TokenKind::Comma,
-                    &[TokenKind::CloseBracket],
+                    TokenKind::CloseBracket,
                     Parser::expect_expression,
                 )?;
                 let span = self.extend_to_here(first.span);
@@ -3930,7 +3928,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 "Function context arguments",
                 &mut args,
                 K::Comma,
-                &[K::CloseParen],
+                K::CloseParen,
                 |p| p.expect_fn_arg(true),
             )?;
         };
@@ -3939,7 +3937,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &mut args,
             K::OpenParen,
             K::Comma,
-            &[K::CloseParen],
+            K::CloseParen,
             |p| p.expect_fn_arg(false),
         )?;
         let span = self.extend_span(first.span, args_span);
@@ -4087,7 +4085,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 "Function context parameters",
                 &mut params,
                 K::Comma,
-                &[K::CloseParen],
+                K::CloseParen,
                 |p| Parser::eat_fn_param(p, true),
             )?;
         };
@@ -4096,7 +4094,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &mut params,
             K::OpenParen,
             K::Comma,
-            &[K::CloseParen],
+            K::CloseParen,
             |p| Parser::eat_fn_param(p, false),
         )?;
         let span = self.extend_span(first.span, fn_params_span);
@@ -4109,7 +4107,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         destination: &mut impl CanPush<T>,
         opener: TokenKind,
         delim: TokenKind,
-        terminators: &[TokenKind],
+        terminator: TokenKind,
         parse: F,
     ) -> ParseResult<Option<SpanId>>
     where
@@ -4118,9 +4116,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let next = self.peek();
         if next.kind == opener {
             self.advance();
-            let (result_span, _) =
-                self.eat_delimited_ext(name, destination, delim, terminators, parse)?;
-            let span = self.extend_span(next.span, result_span);
+            self.eat_delimited_ext(name, destination, delim, terminator, parse)?;
+            let span = self.extend_to_here(next.span);
             Ok(Some(span))
         } else {
             Ok(None)
@@ -4133,13 +4130,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         destination: &mut impl CanPush<T>,
         opener: TokenKind,
         delim: TokenKind,
-        terminators: &'static [TokenKind],
+        terminator: TokenKind,
         parse: F,
     ) -> ParseResult<SpanId>
     where
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
-        match self.eat_delimited_if_opener(name, destination, opener, delim, terminators, parse) {
+        match self.eat_delimited_if_opener(name, destination, opener, delim, terminator, parse) {
             Ok(None) => Err(self.error_here(opener)),
             Ok(Some(res)) => Ok(res),
             Err(err) => Err(err),
@@ -4151,36 +4148,64 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         name: &str,
         destination: &mut impl CanPush<T>,
         delim: TokenKind,
-        terminators: &[TokenKind],
+        terminator: TokenKind,
         parse: F,
-    ) -> ParseResult<(SpanId, Token)>
+    ) -> ParseResult<()>
     where
         F: Fn(&mut Parser<'toks, 'module>) -> ParseResult<T>,
     {
-        let start_span = self.peek().span;
-
         loop {
-            let terminator = self.peek();
-            if terminators.contains(&terminator.kind) {
+            if terminator == self.peek().kind {
                 self.advance();
-                let span = self.ast.spans.extend(start_span, terminator.span);
-                break Ok((span, terminator));
+                return Ok(());
             }
-            let parsed = parse(self)?;
 
-            destination.push_it(parsed);
+            match parse(self) {
+                Err(e) => {
+                    self.ast.report_error(e);
+                    match self.scan_to_kind(&[delim, terminator])? {
+                        t if t.kind == delim => continue,
+                        t if t.kind == terminator => break Ok(()),
+                        _ => {
+                            break Err(
+                                self.error_here(format!("Missing terminator {}", terminator))
+                            );
+                        }
+                    }
+                }
+                Ok(elem) => {
+                    destination.push_it(elem);
+                }
+            }
 
-            let terminator = self.peek();
-            if terminators.contains(&terminator.kind) {
+            if terminator == self.peek().kind {
                 self.advance();
-                let span = self.ast.spans.extend(start_span, terminator.span);
-                break Ok((span, terminator));
+                return Ok(());
             }
             let found_delim = self.maybe_consume(delim);
             if found_delim.is_none() {
-                break Err(
-                    self.error_here(format!("Expected delimiter '{delim}' while parsing {name}"))
+                self.ast.report_error(
+                    self.error_here(format!("Expected '{delim}' in between each {name}")),
                 );
+                match self.scan_to_kind(&[delim, terminator])? {
+                    t if t.kind == delim => continue,
+                    t if t.kind == terminator => break Ok(()),
+                    _ => break Err(self.error_here(format!("Expected {} after all {name}", terminator))),
+                }
+            }
+        }
+    }
+
+    fn scan_to_kind(&mut self, kinds: &[TokenKind]) -> ParseResult<Token> {
+        loop {
+            let n = self.tokens.next();
+            if n.kind == K::Eof {
+                return Err(self.error_here(format!(
+                    "Reached EOF without finding {}",
+                    kinds.iter().map(|k| format!("{k}")).join(", ")
+                )));
+            } else if kinds.contains(&n.kind) {
+                return Ok(n);
             }
         }
     }
@@ -4254,17 +4279,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let Some(block_start) = self.maybe_consume(K::OpenBrace) else {
             return Ok(None);
         };
-        let parse_statement =
-            |p: &mut Parser| Parser::expect("statement", p.peek(), Parser::parse_statement(p));
         let mut stmts = eco_vec![];
-        let (statements_span, _) = self.eat_delimited_ext(
+        self.eat_delimited_ext(
             "Block statements",
             &mut stmts,
             K::Semicolon,
-            &[K::CloseBrace],
-            parse_statement,
+            K::CloseBrace,
+            Parser::expect_statement,
         )?;
-        let span = self.extend_span(block_start.span, statements_span);
+        let span = self.extend_to_here(block_start.span);
         Ok(Some(ParsedBlock { stmts, kind, span }))
     }
 
@@ -4357,11 +4380,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.add_semantic_token(func_name, SemanticTokenKind::Function);
         let mut type_params: SV8<ParsedTypeParam> = smallvec![];
         if self.maybe_consume(K::OpenBracket).is_some() {
-            let _ = self.eat_delimited_ext(
+            self.eat_delimited_ext(
                 "Function type parameters",
                 &mut type_params,
                 TokenKind::Comma,
-                &[TokenKind::CloseBracket],
+                TokenKind::CloseBracket,
                 |p| p.expect_type_param(),
             )?;
         }
@@ -4373,11 +4396,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let additional_type_constraints = if self.maybe_consume(K::KeywordWhere).is_some() {
             let mut additional_type_constraints = eco_vec![];
-            let _ = self.eat_delimited_ext(
+            self.eat_delimited_ext(
                 "Type variable constraints",
                 &mut additional_type_constraints,
                 K::Comma,
-                &[K::OpenBrace],
+                K::OpenBrace,
                 Parser::expect_named_type_constraint,
             )?;
             self.tokens.retreat(); // Un-eat the close sentinel
@@ -4541,7 +4564,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 "Ability Parameter",
                 &mut ability_params,
                 K::Comma,
-                &[K::CloseBracket],
+                K::CloseBracket,
                 expect_ability_type_param,
             )?;
         };
@@ -4585,7 +4608,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &mut arguments,
             K::OpenBracket,
             K::Comma,
-            &[K::CloseBracket],
+            K::CloseBracket,
             Parser::expect_ability_type_argument,
         )? {
             None => name.span,
@@ -4603,7 +4626,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             &mut generic_impl_params,
             K::OpenBracket,
             K::Comma,
-            &[K::CloseBracket],
+            K::CloseBracket,
             |p| p.expect_type_param(),
         )?;
         let ability = self.expect_ability_expr()?;
@@ -4661,7 +4684,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 "Type arguments",
                 &mut type_params,
                 K::Comma,
-                &[K::CloseBracket],
+                K::CloseBracket,
                 Parser::expect_type_param,
             )?;
         };
