@@ -335,10 +335,14 @@ pub fn compile_program(
     // Find the installation. env var overrides, otherwise release mode says co-located with the
     // binary. dev mode says cwd
     let k1_home_pathbuf = std::env::var("K1_HOME").map(PathBuf::from).unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
+        let current_exe = std::env::current_exe().unwrap();
+        let exe_parent = current_exe.parent().unwrap();
+        if exe_parent.ends_with("debug") {
+            // its a cargo run
             std::env::current_dir().unwrap()
         } else {
-            std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().to_path_buf()
+            // its in k1/bin, most likely
+            exe_parent.parent().unwrap().to_path_buf()
         }
     });
     let k1lib_dir_pathbuf = k1_home_pathbuf.join("k1lib");

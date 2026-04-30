@@ -437,8 +437,8 @@ impl LanguageServer for Backend {
         info!("textDocument/did_change: parsing file {}", &file_url);
         let ast = parse::parse_standalone(file_url.path().to_string(), new_content);
         let new_source = ast.sources.get_main();
-        // let (spans, tokens, lex_error) = lex::lex_standalone(&new_source.content);
         let mut parse_diagnostics = vec![];
+        info!("textDocument/did_change: parsed file {} with {} errors", &file_url, ast.errors.len());
         for error in &ast.errors {
             if let Some(range) = span_to_range(new_source, &ast.spans, error.span()) {
                 let diagnostic = Diagnostic {
@@ -682,7 +682,7 @@ impl LanguageServer for Backend {
             }
             spans_and_kinds.sort_by(|f1, f2| f1.0.start.cmp(&f2.0.start));
             for (span, token_type, bitflags) in spans_and_kinds {
-                info!("spans_and_kinds sorted {} {}", span.start, span.len);
+                // info!("spans_and_kinds sorted {} {}", span.start, span.len);
                 let length = span.len;
                 let Some(line) = source.get_line_for_span_start(span) else {
                     continue;
@@ -784,7 +784,7 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let file_appender = tracing_appender::rolling::daily(".", "k1_lsp.log");
-    tracing_subscriber::fmt().with_writer(file_appender).init();
+    tracing_subscriber::fmt().compact().with_ansi(false).with_writer(file_appender).init();
 
     let cwd = std::env::current_dir().unwrap();
     info!("K1 LSP. CWD: {}", cwd.to_string_lossy());

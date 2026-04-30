@@ -6,6 +6,8 @@ test:
 
 lsp:
   cargo build --features lsp --bin lsp
+  cp target/debug/lsp ~/.k1/bin/k1lsp
+  cp -r k1lib ~/.k1/k1lib
 
 lsprelease:
   cargo build --profile release --features lsp --bin lsp
