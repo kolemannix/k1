@@ -1,15 +1,19 @@
-"C with typeclasses and tagged unions"
+"C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [X] Specialization solution (when types are known by the function)
 -     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
 - [ ] Opaque type solution. Try using 1-member structs and make struct's "first field special"
-- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, unit])
+- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 - [ ] Finish removing let*
+- [ ] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
+- [ ] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
+- [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
+      We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
 
 More optimal final programs
 - [x] Represent payload-less `either` types as ints not structs (Actually might just add enum as separate thing from eithers)
@@ -60,12 +64,12 @@ Simple but missing
 - [x] Linux bundler, cross build, static llvm linking
 - [x] solve stdlib location
 - [x] Link in lld? ugh. For now, we link with system 'cc'
-- [ ] Publish a linux build
-- [ ] Publish a macos build
+- [x] Publish a linux build
+- [x] Publish a macos build
 
 ## Project: Optimize the IR a bit
-- [ ] Function inlining
-- [ ] Prune unreachable blocks
+- [x] Function inlining
+- [x] Prune unreachable blocks
 
 ## Project: di. Debug Info tidyups
 - [x] Fix random jumping to function header
@@ -290,7 +294,7 @@ It currently runs directly off the typed tree
 - [x] Improve LLVM opt pipeline https://www.reddit.com/r/Compilers/comments/1hqmd7x/recommended_llvm_passes/
       https://llvm.org/docs/NewPassManager.html#just-tell-me-how-to-run-the-default-optimization-pipeline-with-the-new-pass-manager
 - [x] Stacktraces on crash (using libunwind and a little C program to call it: `rt/unwind.c`)
-- [-] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
+- [x] Write a 'validateTypedModule' procedure. This need is lessened by the VM which in a way typechecks the TAST
       This is basically an interpreter; what we have now with the vm solves this problem a bit
       But not entirely because it only checks the code that runs!
 
@@ -348,7 +352,7 @@ It currently runs directly off the typed tree
 - [x] Replace 'unit' with an empty struct, encoded as `{}` at the type level and `{}` at the value level. This would remove a whole base type
       This simplification comes at the cost of making empty struct quite special, so I think it's a sidegrade. Won't do
       Edit: Did this much later, since 'special' just means true ZSTs
-- [ ] 'call' method syntax (Scala's 'apply' feature)
+- [x] 'call' method syntax (Scala's 'apply' feature)
 
 ## Ideas
 - [ ] 'join' types to form new enums/structs, statically. `switch {strict|dynamic} ...`? If dynamic, I'll build a sum or product based on the branches' types
@@ -379,21 +383,14 @@ It currently runs directly off the typed tree
 - [x] Parsing bug where first expr of block is namespaced with ::
 - [x] Parsing bug where `if rest.startsWith("one") .Some(1: u64)` parses as `if rest.startsWith("one").Some(1: u64)`
 - [x] ICE when assigning to struct member when struct is not a reference (self.module.types.get(field_access.base.get_type()).as_reference().is_some())
-- [ ] Require indirection for recursive types; and make them actually really work
+- [x] Require indirection for recursive types; and make them actually really work
 
 # Minor Fix (possible good bite-sized videos)
 - [x] Lexer cleanup > Am I crazy or is this just always tok_buf.len()?!?!?!
-- [ ] Binary op inference improvements
+- [x] Binary op inference improvements
   - assert(sizeOf[Text]() == 16 + 32); rhs should infer to u64
 - [x] Precedence of dereference (and i guess unary ops in general) should be higher
       Kinda fixed by removing all unary ops except 'not'
-
-# GUI checklist
-
-- [x] Get render loop working with access to module, ability to trigger compile, run
-- [ ] Render namespaces, use recursion over namespace for all functionality?
-- [ ] Search for a type?
-- [ ] One day allow updating or adding a single definition
 
 ### 2024 
 
@@ -619,11 +616,11 @@ It currently runs directly off the typed tree
 - [x] Some debug info in LLVM IR (source snippets or line numbers?)
 - [x] uint type
 - [x] Generic type inference
-- [ ] Type literals would be fun
+- [x] Type literals would be fun
 - [ ] Syntax Shed
   - [ ] Function syntax change? (foo = fn (a, b, c): int { }
   - [ ] from qualifier-focused to name -focused
-  - [ ] Parse trailing commas
+  - [x] Parse trailing commas
 
 - [-] For iteration (we will just hardcode the iterable types)
 
