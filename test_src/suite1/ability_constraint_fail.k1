@@ -1,7 +1,7 @@
 ns ability_constraint_fail;
 
 ability Num {
-  fn num(self: self): i32
+  fn num(self): i32
 }
 
 fn add[T](a: T, b: T): i32 where T: Num, T: show {

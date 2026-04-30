@@ -5,7 +5,7 @@ deftype alias Point = { x: int, y: int }
 deftype alias PointList = list[Point]
 
 ability ToPoint {
-  fn toPoint(self: self): Point
+  fn toPoint(self): Point
 }
 
 fn test() {

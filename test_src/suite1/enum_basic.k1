@@ -9,7 +9,7 @@ fn enumNoPayload() {
 
 deftype enum-abc = either(u8) a, b, c
 impl print for enum-abc {
-  fn printTo[w: writer](self: self, w: w) { switch self { 
+  fn printTo[w: writer](self, w) { switch self { 
     :a -> w.write-char('a'),
     :b -> w.write-char('b'),
     :c -> w.write-char('c'),

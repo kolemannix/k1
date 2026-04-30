@@ -335,13 +335,13 @@ impl[T] iterator[item = T] for BufferIterator[T] {
 }
 
 impl[T] iterable[item = T, i = BufferIterator[T]] for buffer[T] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     BufferIterator/fromBuffer(self)
   }
 }
 
 impl[T: print] print for buffer[T] {
-  fn printTo[w: writer](self: self, w: w): empty {
+  fn printTo[w: writer](self, w): empty {
     w.write-char('[');
     for self {
       it.printTo(w);
@@ -397,7 +397,7 @@ impl[T: equals] equals for buffer[T] {
 }
 
 impl[n: static size, t] iterable[item = t, i = BufferIterator[t]] for *array[t, n] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     BufferIterator/fromBuffer(
       self.as-span().innerBuffer()
     )
@@ -405,7 +405,7 @@ impl[n: static size, t] iterable[item = t, i = BufferIterator[t]] for *array[t, 
 }
 
 impl[n: static size, t] iterable[item = *mut t, i = BufferRefIterator[t]] for *mut array[t, n] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     BufferRefIterator/fromBuffer(
       self.as-span().innerBuffer()
     )

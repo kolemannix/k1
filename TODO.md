@@ -3,15 +3,15 @@
 - When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [X] Specialization solution (when types are known by the function)
 -     A kind of *pattern* that checks the type and binds a variable of that type! What other thing for a feature that needs to _check_ and _bind_ than a pattern?!
-- [ ] Opaque type solution. Try using 1-member structs and make struct's "first field special"
+- [ ] Opaque type solution. Try using 1-member structs and make struct's first field special
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
 - [ ] language level hot reload support. TWEAK_FLOAT(f) thing. Explore this and find out if language support really helps or if it can just be solved by library
 - [x] Destructuring, (in)fallible patterns
 - [x] Think about `never` in Sum variants: Is it a ZST? it makes the variant unreachable? result[T, never]
 - [ ] Define order of loaded files in dir; consider abandoning the dir discovery and using `include` model
 - [ ] Finish removing let*
-- [ ] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
-- [ ] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
+- [x] Improve named arg passing. Allow mixing named and unnamed as long as the order is correct. Its common to only need to name boolean params, for example
+- [x] Allow name/type elision shorthand in function signatures. Examples: (self: self, size: size, t: t) -> (self, size, t). Enabled by using lowercase for types and values
 - [ ] New struct literal syntax : `{ x: 1, y: 2 }` -> `{ .x = 1, .y = 2 }`. Why? clarity of meaning of "=", consistent meaning of '.', and parsing ambiguity resolution
       We still allow `{ .x, .y }` to mean `{ .x = x, .y = y }`
 
@@ -48,11 +48,11 @@ Simple but missing
 - [-] Limitation (ordering): ability impls have to be provided in dependency order, since their constraints can depend on each other. I think I have to do a
                              'skip and progress' style of pass for them to prevent that. It possibly not worth the complexity
 
-## [x] Writergate
-- [x] Allow using expr-interpolated strings directly into a writer
-- [x] Allow for named non-interpolated args into holes with a struct
-- [x] Return value binding, or named return values, for guaranteed RVO
-- [x] Uninit in struct fields - just don't store there
+## [ ] Constant-folding, SCCP
+
+## [ ] token stream based macros
+
+## [ ] higher level macros
 
 ## [ ] Context ability types
 - [ ] AbilitySignature as context variable kind in addition to Type (enables context Writer, context Mem *if it ends up an ability*)
@@ -70,6 +70,12 @@ Simple but missing
 ## Project: Optimize the IR a bit
 - [x] Function inlining
 - [x] Prune unreachable blocks
+
+## [x] Writergate
+- [x] Allow using expr-interpolated strings directly into a writer
+- [x] Allow for named non-interpolated args into holes with a struct
+- [x] Return value binding, or named return values, for guaranteed RVO
+- [x] Uninit in struct fields - just don't store there
 
 ## Project: di. Debug Info tidyups
 - [x] Fix random jumping to function header

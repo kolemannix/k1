@@ -77,7 +77,7 @@ ns spill-list {
 }
 
 impl[T, N: static size] print for spill-list[T, N] {
-  fn printTo[w: writer](self: self, w: w) {
+  fn printTo[w: writer](self, w) {
      switch self {
        :Inline(fix) -> {
          w.write-string("inline ");
@@ -91,10 +91,10 @@ impl[T, N: static size] print for spill-list[T, N] {
 }
 
 impl[N: static size] writer for *mut spill-list[u8, N] {
-  fn write-byte(self: self, b: u8) {
+  fn write-byte(self, b: u8) {
     self.push(b)
   }
-  fn write-bytes(self: self, b: span[u8]) {
+  fn write-bytes(self, b: span[u8]) {
     self.pushN(b)
   }
 }

@@ -132,13 +132,13 @@ ns span {
 }
 
 impl[T] iterable[item = T, i = BufferIterator[T]] for span[T] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     BufferIterator/fromBuffer(self.innerBuffer())
   }
 }
 
 impl[T: print] print for span[T] {
-  fn printTo[w: writer](self: self, w: w): empty {
+  fn printTo[w: writer](self, w): empty {
     w.write-char('[');
     for self {
       it.printTo(w);
@@ -160,14 +160,14 @@ impl[T: equals] equals for span[T] {
 // Eventually, we can create some abstractions like this to DRY up working
 // with these sequential containers
 //ability as-span {
-//  fn as-span[T](self: self): view[T]
+//  fn as-span[T](self): view[T]
 //}
 //
 //ability span-like {
-//  fn len[T](self: self): size
-//  fn getRef[T](self: self, index: size): *T
-//  fn get[T](self: self, index: size): T { self.getRef.* }
-//  fn slice[T](self: self, start: size, end: size): view[T]
+//  fn len[T](self): size
+//  fn getRef[T](self, index: size): *T
+//  fn get[T](self, index: size): T { self.getRef.* }
+//  fn slice[T](self, start: size, end: size): view[T]
 //  fn take[T](self: view[T], count: size): view[T] { self.slice(0,     count) }
 //  fn drop[T](self: view[T], count: size): view[T] { self.slice(count, self.len()) }
 //

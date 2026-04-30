@@ -11,7 +11,7 @@ ns mem {
     free:    *(fn(ptr, size, size) -> empty),
   }
 
-  fn virtualAlloc(size: size): ptr {
+  fn virtualAlloc(size): ptr {
     let rw = posix/PROT_READ | posix/PROT_WRITE;
     let privateAnon = posix/MAP_PRIVATE | posix/MAP_ANON;
     let addr = posix/mmap(
@@ -44,7 +44,7 @@ ns mem {
     gc
 
   impl print for alloc-mode {
-    fn printTo[w: writer](self: self, w: w) {
+    fn printTo[w: writer](self, w) {
       w.write-string(self.kindName())
     }
   }

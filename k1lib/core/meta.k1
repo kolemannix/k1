@@ -4,21 +4,21 @@
 ns meta {
 
   ability CodeWriter {
-    fn line(self: self, line: string) 
-    fn lines[Iter: iterator[item = string]](self: self, lines: Iter) {
+    fn line(self, line: string) 
+    fn lines[Iter: iterator[item = string]](self, lines: Iter) {
       for l in lines { self.line(l) }
     }
-    fn var[T](self: self, name: string, value: T) 
+    fn var[T](self, name: string, value: T) 
 
-    fn indent(self: self, n: size) {
+    fn indent(self, n: size) {
       self.repeat("  ", n);
     }
-    fn implPrint(self: self, type-name: string, body: string, indent: size) {
+    fn implPrint(self, type-name: string, body: string, indent: size) {
       self.indent(indent);
       self.line("impl print for {type-name} {{");
 
       self.indent(indent + 1);
-      self.line(p"fn printTo[w: writer](self: self, w: w) {");
+      self.line(p"fn printTo[w: writer](self, w) {");
       self.write-string(body);
       self.indent(indent + 1);
       self.line("}");
@@ -29,12 +29,12 @@ ns meta {
   }
   
   impl[w: writer] CodeWriter for w {
-    fn line(self: self, line: string) {
+    fn line(self, line: string) {
       self.write-string(line);
       self.write-string("\n");
     }
     
-    fn var[T](self: self, name: string, value: T) {
+    fn var[T](self, name: string, value: T) {
       let bakedVar = meta/bakedVariable[T](name, value);
       self.write-string(bakedVar)
     }

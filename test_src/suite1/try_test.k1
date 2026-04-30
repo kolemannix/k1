@@ -13,7 +13,7 @@ impl try[t = int, e = Error] for Foo {
   fn error(_e: e): self   { { a: false } }
   fn value(_t: t): self { { a: true  } }
 
-  fn is-ok(self: self): bool { self.a }
+  fn is-ok(self): bool { self.a }
   fn get-value(_self: self): t  { 3 }
   fn get-error(_self: self): e { "FooError" }
 }

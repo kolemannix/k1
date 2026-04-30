@@ -3,8 +3,8 @@ ns ability_default_fns;
 let mutable I32_SPEC_COUNTER: int = 0
 
 ability Increment {
-  fn inc(self: self): self
-  fn incTwice(self: self): self {
+  fn inc(self): self
+  fn incTwice(self): self {
     // Testing scope bindings
     let me: self = self;
     let again: self = me;
@@ -12,8 +12,8 @@ ability Increment {
   }
 }
 impl Increment for i32 {
-  fn inc(self: self): self { self + 1 }
-  fn incTwice(self: self): i32 {
+  fn inc(self): self { self + 1 }
+  fn incTwice(self): i32 {
     &I32_SPEC_COUNTER <- I32_SPEC_COUNTER + 1;
     // Testing scope bindings
     let me: self = self;
@@ -23,17 +23,17 @@ impl Increment for i32 {
 }
 
 impl Increment for u32 {
-  fn inc(self: self): self { self + 1 }
+  fn inc(self): self { self + 1 }
 }
 
 ability IncrFour {
-  fn incFour(self: self): self
-  fn incEight(self: self): self {
+  fn incFour(self): self
+  fn incEight(self): self {
     self.incFour().incFour()
   }
 }
 impl[T: Increment] IncrFour for T {
-  fn incFour(self: self): self {
+  fn incFour(self): self {
     self.incTwice().inc().inc()
   }
 }

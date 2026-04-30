@@ -32,10 +32,10 @@ ns StringBuilder {
 }
 
 impl writer for *mut StringBuilder {
-  fn write-byte(self: self, b: u8): empty {
+  fn write-byte(self, b: u8): empty {
     self.list*.push(b)
   }
-  fn write-bytes(self: self, b: span[u8]): empty {
+  fn write-bytes(self, b: span[u8]): empty {
     self.list*.pushN(b)
   }
 }

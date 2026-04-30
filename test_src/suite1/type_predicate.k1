@@ -19,7 +19,7 @@ fn is-int[t](): bool {
 deftype int-wrapper[T: pred is-int] = { value: T }
 
 ability to-scalar[out: pred is-scalar] {
-  fn to-scalar(self: self): out
+  fn to-scalar(self): out
 }
 
 impl to-scalar[out = int] for string {

@@ -83,7 +83,7 @@ fn listEquality(): int {
 // Begin sort stuff
 
 impl show for { rank: int, payload: string } {
-  fn show(self: self): string {
+  fn show(self): string {
     let rank = self.rank;
     let payload = self.payload;
     "Payload: {payload} (rank={rank})"
@@ -91,13 +91,13 @@ impl show for { rank: int, payload: string } {
 }
 
 impl comparable for { rank: int, payload: string } {
-  fn compare(self: self, other: self): ordering {
+  fn compare(self, other: self): ordering {
     self.rank.compare(other.rank)
   }
 }
 
 impl equals for { rank: int, payload: string } {
-  fn equals(self: self, other: self): bool {
+  fn equals(self, other: self): bool {
     self.rank == other.rank and self.payload == other.payload
   }
 }

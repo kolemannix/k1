@@ -1,20 +1,20 @@
 ns ability_01;
 
 ability Num {
-  fn num(self: self): i32
+  fn num(self): i32
 }
 
 deftype Point = { x: i32, y: i32 }
 
 impl Num for Point {
-  fn num(self: self): i32 {
+  fn num(self): i32 {
     self.x + self.y
   }
 }
 
 ability Codec {
   fn aConst(): u8
-  fn write(self: self): span[u8]
+  fn write(self): span[u8]
   fn read(buffer: span[u8]): self
 }
 
@@ -91,7 +91,7 @@ fn test() {
 // This is below 'main' so that
 // it tests for order-independence of the impls
 impl Num for i32 {
-  fn num(self: self): i32 {
+  fn num(self): i32 {
     self
   }
 }

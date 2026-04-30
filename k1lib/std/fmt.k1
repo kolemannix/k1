@@ -3,7 +3,7 @@ use meta/CodeWriter
 
 // TODO: need to flesh this out more with format specifiers
 //           and other things
-fn fmt[Fmt: static string, Args, w: writer](w: w, fmtString: Fmt, args: Args) {
+fn fmt[Fmt: static string, Args, w: writer](w, fmtString: Fmt, args: Args) {
   #meta(fmtString) {
     let code = StringBuilder/new();
     let argsTypeId = types/type-id[Args];

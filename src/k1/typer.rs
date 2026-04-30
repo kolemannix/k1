@@ -53,13 +53,13 @@ use crate::lex::{self, SpanId, Spans, TokenKind};
 use crate::parse::{
     self, BinaryOpKind, FileId, ForExpr, Ident, IdentSlice, InterpolatedStringPart, NamedTypeArg,
     NumericWidth, ParseError, ParsedAbilityExpr, ParsedAbilityId, ParsedAbilityImplId, ParsedBlock,
-    ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFunctionId,
-    ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList, ParsedLiteral,
-    ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedSlice,
-    ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraintExpr,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedUnaryOpKind, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, Sources, StringId, StructValueField,
-    StructValueFieldKind,
+    ParsedBlockKind, ParsedCall, ParsedCallArg, ParsedExpr, ParsedExprId, ParsedFnParamType,
+    ParsedFunctionId, ParsedGlobalId, ParsedHandle, ParsedId, ParsedIfExpr, ParsedList,
+    ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId, ParsedPattern, ParsedPatternId,
+    ParsedProgram, ParsedSlice, ParsedStaticBlockKind, ParsedStaticExpr, ParsedStmt, ParsedStmtId,
+    ParsedTypeConstraintExpr, ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId,
+    ParsedUnaryOpKind, ParsedUseId, ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent,
+    Sources, StringId, StructValueField, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -14495,8 +14495,14 @@ impl TypedProgram {
             .chain(self_.ast.mem.getn(ast_fn.params).iter())
             .enumerate()
         {
+            let type_expr = match fn_param.type_expr {
+                ParsedFnParamType::Shorthand => {
+                    self_.synth_parsed_type_app(fn_param.name, fn_param.span)
+                }
+                ParsedFnParamType::Expr(parsed_expr) => parsed_expr,
+            };
             let type_id = self_.eval_type_expr_ext(
-                fn_param.type_expr,
+                type_expr,
                 fn_scope_id,
                 EvalTypeExprContext {
                     is_direct_function_parameter: true,

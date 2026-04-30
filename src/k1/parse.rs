@@ -7,9 +7,7 @@ use std::io::IsTerminal;
 use crate::kmem::{self, Handle, MSL2, MSS2, MSlice, MSpillList};
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::{SliceHandle, VPool};
-use crate::{
-    SV4, SV8, impl_copy_if_reg, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size,
-};
+use crate::{SV4, SV8, impl_copy_if_small, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
 use ecow::{EcoVec, eco_vec};
 pub use idents::{Ident, IdentPool, IdentSlice, IdentSliceId, QIdent};
@@ -1285,14 +1283,19 @@ pub struct ParsedFunction {
 
 impl ParsedFunction {}
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+pub enum ParsedFnParamType {
+    Shorthand,
+    Expr(ParsedTypeExprId),
+}
+
+#[derive(Clone, Copy)]
 pub struct ParsedFnParam {
     pub name: Ident,
-    pub type_expr: ParsedTypeExprId,
+    pub type_expr: ParsedFnParamType,
     pub span: SpanId,
     pub modifiers: FnArgDefModifiers,
 }
-impl_copy_if_reg!(ParsedFnParam);
 
 #[derive(Debug, Clone, Copy)]
 pub struct FnArgDefModifiers(u8);
@@ -3368,31 +3371,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let mut type_args: SV8<NamedTypeArg> = smallvec![];
-        self.eat_delimited_ext(
-            "Type Arguments",
-            &mut type_args,
-            K::Comma,
-            K::CloseBracket,
-            |p| {
-                let (one, two) = p.peek_two();
-                let name = if one.kind == K::Ident && two.kind == K::Equals {
-                    let (_, name_ident) = p.expect_ident()?;
-                    p.expect_kind(K::Equals)?;
-                    Some(name_ident)
-                } else {
-                    None
-                };
-                let peeked = p.peek();
-                let type_expr = if peeked.kind == K::Ident && p.get_token_chars(peeked) == "_" {
-                    p.advance();
-                    None
-                } else {
-                    Some(p.expect_type_expression()?)
-                };
-                let span = p.extend_to_here(one.span);
-                Ok(NamedTypeArg { name, type_expr, span })
-            },
-        )?;
+        self.eat_delimited_ext("Type Arguments", &mut type_args, K::Comma, K::CloseBracket, |p| {
+            let (one, two) = p.peek_two();
+            let name = if one.kind == K::Ident && two.kind == K::Equals {
+                let (_, name_ident) = p.expect_ident()?;
+                p.expect_kind(K::Equals)?;
+                Some(name_ident)
+            } else {
+                None
+            };
+            let peeked = p.peek();
+            let type_expr = if peeked.kind == K::Ident && p.get_token_chars(peeked) == "_" {
+                p.advance();
+                None
+            } else {
+                Some(p.expect_type_expression()?)
+            };
+            let span = p.extend_to_here(one.span);
+            Ok(NamedTypeArg { name, type_expr, span })
+        })?;
         let slice = self.ast.mem.pushn(&type_args);
         let span = self.extend_to_here(open_bracket.span);
         Ok((slice, span))
@@ -4059,19 +4056,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(StoreStmt { lhs, rhs, span })
     }
 
-    fn eat_fn_param(&mut self, is_context: bool) -> ParseResult<ParsedFnParam> {
-        trace!("eat_fn_arg_def");
-        let name_token = self.expect_kind(K::Ident)?;
-        self.expect_kind(K::Colon)?;
-        let typ = Parser::expect("type_expression", self.peek(), self.parse_type_expression())?;
-        let span = self.extend_span(name_token.span, self.ast.type_exprs.get(typ).get_span());
+    fn expect_fn_param(&mut self, is_context: bool) -> ParseResult<ParsedFnParam> {
+        let (name_token, name) = self.expect_ident()?;
+        let type_expr = if self.maybe_consume(K::Colon).is_some() {
+            let type_expr = self.expect_type_expression()?;
+            ParsedFnParamType::Expr(type_expr)
+        } else {
+            ParsedFnParamType::Shorthand
+        };
+        let span = self.extend_to_here(name_token.span);
         let modifiers = FnArgDefModifiers::new(is_context);
-        Ok(ParsedFnParam {
-            name: self.intern_ident_token(name_token),
-            type_expr: typ,
-            span,
-            modifiers,
-        })
+        Ok(ParsedFnParam { name, type_expr, span, modifiers })
     }
 
     fn eat_fn_params(&mut self) -> ParseResult<(SV8<ParsedFnParam>, SpanId)> {
@@ -4086,7 +4081,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 &mut params,
                 K::Comma,
                 K::CloseParen,
-                |p| Parser::eat_fn_param(p, true),
+                |p| Parser::expect_fn_param(p, true),
             )?;
         };
         let fn_params_span = self.eat_delimited_expect_opener(
@@ -4095,7 +4090,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::OpenParen,
             K::Comma,
             K::CloseParen,
-            |p| Parser::eat_fn_param(p, false),
+            |p| Parser::expect_fn_param(p, false),
         )?;
         let span = self.extend_span(first.span, fn_params_span);
         Ok((params, span))
@@ -4190,7 +4185,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 match self.scan_to_kind(&[delim, terminator])? {
                     t if t.kind == delim => continue,
                     t if t.kind == terminator => break Ok(()),
-                    _ => break Err(self.error_here(format!("Expected {} after all {name}", terminator))),
+                    _ => {
+                        break Err(
+                            self.error_here(format!("Expected {} after all {name}", terminator))
+                        );
+                    }
                 }
             }
         }
@@ -4424,7 +4423,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let function_id = self.ast.add_function(ParsedFunction {
             name: func_name_id,
             type_params: type_params_handle,
-            // TODO(perf, efficient ast): Migrate params and context_params to a single SliceHandle
+            // FIXME(perf, efficient ast): Migrate params and context_params to a single SliceHandle
             params: params_handle,
             context_params: context_params_handle,
             ret_type,

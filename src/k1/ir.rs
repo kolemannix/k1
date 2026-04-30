@@ -2844,7 +2844,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     // eprintln!("blocks.first: {}", unit.blocks.first.raw_index());
     // eprintln!("blocks.last: {}", unit.blocks.first.raw_index());
     let mut my_blocks = FxHashSet::new();
-    for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {
+    for (block_id, _block) in ir.mem.dlist_iter_handles(unit.blocks) {
         my_blocks.insert(block_id);
     }
     for (block_id, block) in ir.mem.dlist_iter_handles(unit.blocks) {

@@ -4,11 +4,11 @@ ns ability_overload_ish;
 // and different signatures. The compiler should just
 // keep going and try to make each one work.
 ability Foo {
-  fn foo(self: self): i32
+  fn foo(self): i32
 }
 
 ability Frob {
-  fn foo(self: self, y: i32): i32
+  fn foo(self, y: i32): i32
 }
 
 impl Foo for i32 { 

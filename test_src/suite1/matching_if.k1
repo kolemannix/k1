@@ -3,7 +3,7 @@ ns matching_if;
 deftype alias ABC = either A, B, C
 
 impl print for ABC {
-  fn printTo[w: writer](self: ABC, w: w) {
+  fn printTo[w: writer](self: ABC, w) {
     switch self {
       :A -> w.write-char('A'),
       :B -> w.write-char('B'),

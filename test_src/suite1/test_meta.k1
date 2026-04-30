@@ -75,7 +75,7 @@ w.write-string("\"{f.name}\":");
   };
 }
 
-fn writeJson[T, w: writer](context w: w)(t: T) {
+fn writeJson[T, w: writer](context w)(t: T) {
   #meta {
     let type-id = types/type-id[T]();
     let code = StringBuilder/new();

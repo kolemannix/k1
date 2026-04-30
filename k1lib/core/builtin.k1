@@ -68,7 +68,7 @@ ns types {
 
   // Magically implemented for all enums
   ability enum[impl v] {
-    fn enum-value(self: self): v
+    fn enum-value(self): v
   }
 
   // Implement equals for all enums in userspace B-)
@@ -203,19 +203,19 @@ ns meta {
 
 // equals must have ability id 0
 ability equals {
-  fn equals(self: self, other: self): bool
+  fn equals(self, other: self): bool
 }
 
 // TODO(dogfood): Enhance with an `impl Error` type parameter
 // TODO(dogfood): Allow Error = never for infallible writes
 ability writer {
-  fn write-byte(self: self, value: u8)
-  fn write-bytes(self: self, bytes: span[byte])
+  fn write-byte(self, value: u8)
+  fn write-bytes(self, bytes: span[byte])
 
-  fn write-char(self: self, value: char) { self.write-byte(value.as[u8]) }
-  fn write-string(self: self, value: string) { self.write-bytes(value.span-bytes()) }
+  fn write-char(self, value: char) { self.write-byte(value.as[u8]) }
+  fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
-  fn repeat(self: self, value: string, n: size) {
+  fn repeat(self, value: string, n: size) {
     let i = 0;
     while i < n {
       self.write-string(value);
@@ -225,7 +225,7 @@ ability writer {
 }
 
 ability print {
-  fn printTo[w: writer](self: self, w: w)
+  fn printTo[w: writer](self, w)
 }
 
 // show must have ability id 4
@@ -236,24 +236,24 @@ ability print {
 //       I think it might be fine actually, the assumption is that it goes into the current
 //       default allocator
 ability show {
-  fn show(self: self): string
+  fn show(self): string
 }
 
 ability bitwise {
-  fn bit-not(self: self): self
-  fn bit-and(self: self, other: self): self
-  fn bit-or(self: self, other: self): self
-  fn xor(self: self, other: self): self
+  fn bit-not(self): self
+  fn bit-and(self, other: self): self
+  fn bit-or(self, other: self): self
+  fn xor(self, other: self): self
 
-  fn shift-left(self: self, count: u32): self
-  fn shift-right(self: self, count: u32): self
+  fn shift-left(self, count: u32): self
+  fn shift-right(self, count: u32): self
 }
 
-ability add { fn add(self: self, rhs: self): self }
-ability sub { fn sub(self: self, rhs: self): self }
-ability mul { fn mul(self: self, rhs: self): self }
-ability div { fn div(self: self, rhs: self): self }
-ability rem { fn rem(self: self, rhs: self): self }
+ability add { fn add(self, rhs: self): self }
+ability sub { fn sub(self, rhs: self): self }
+ability mul { fn mul(self, rhs: self): self }
+ability div { fn div(self, rhs: self): self }
+ability rem { fn rem(self, rhs: self): self }
 
 // This is a more simple notion of add
 // than Rust's std::ops::Add, generic over Rhs and Output.
@@ -262,109 +262,109 @@ ability rem { fn rem(self: self, rhs: self): self }
 // we could default Rhs and Output to self, and also somehow use
 // that information while inferring... then maybe. But I don't want
 // to achieve it by doing "try the call with every impl" for performance reasons
-impl add for u8  {   intern fn add(self: self, rhs: self): self }
-impl add for u16 {   intern fn add(self: self, rhs: self): self }
-impl add for u32 {   intern fn add(self: self, rhs: self): self }
-impl add for u64 {   intern fn add(self: self, rhs: self): self }
-impl add for i8  {   intern fn add(self: self, rhs: self): self }
-impl add for i16 {   intern fn add(self: self, rhs: self): self }
-impl add for i32 {   intern fn add(self: self, rhs: self): self }
-impl add for i64 {   intern fn add(self: self, rhs: self): self }
+impl add for u8  {   intern fn add(self, rhs: self): self }
+impl add for u16 {   intern fn add(self, rhs: self): self }
+impl add for u32 {   intern fn add(self, rhs: self): self }
+impl add for u64 {   intern fn add(self, rhs: self): self }
+impl add for i8  {   intern fn add(self, rhs: self): self }
+impl add for i16 {   intern fn add(self, rhs: self): self }
+impl add for i32 {   intern fn add(self, rhs: self): self }
+impl add for i64 {   intern fn add(self, rhs: self): self }
 
-impl sub for u8  {   intern fn sub(self: self, rhs: self): self }
-impl sub for u16 {   intern fn sub(self: self, rhs: self): self }
-impl sub for u32 {   intern fn sub(self: self, rhs: self): self }
-impl sub for u64 {   intern fn sub(self: self, rhs: self): self }
-impl sub for i8  {   intern fn sub(self: self, rhs: self): self }
-impl sub for i16 {   intern fn sub(self: self, rhs: self): self }
-impl sub for i32 {   intern fn sub(self: self, rhs: self): self }
-impl sub for i64 {   intern fn sub(self: self, rhs: self): self }
+impl sub for u8  {   intern fn sub(self, rhs: self): self }
+impl sub for u16 {   intern fn sub(self, rhs: self): self }
+impl sub for u32 {   intern fn sub(self, rhs: self): self }
+impl sub for u64 {   intern fn sub(self, rhs: self): self }
+impl sub for i8  {   intern fn sub(self, rhs: self): self }
+impl sub for i16 {   intern fn sub(self, rhs: self): self }
+impl sub for i32 {   intern fn sub(self, rhs: self): self }
+impl sub for i64 {   intern fn sub(self, rhs: self): self }
 
-impl mul for u8    { intern fn mul(self: self, rhs: self): self }
-impl mul for u16   { intern fn mul(self: self, rhs: self): self }
-impl mul for u32   { intern fn mul(self: self, rhs: self): self }
-impl mul for u64   { intern fn mul(self: self, rhs: self): self }
-impl mul for i8    { intern fn mul(self: self, rhs: self): self }
-impl mul for i16   { intern fn mul(self: self, rhs: self): self }
-impl mul for i32   { intern fn mul(self: self, rhs: self): self }
-impl mul for i64   { intern fn mul(self: self, rhs: self): self }
+impl mul for u8    { intern fn mul(self, rhs: self): self }
+impl mul for u16   { intern fn mul(self, rhs: self): self }
+impl mul for u32   { intern fn mul(self, rhs: self): self }
+impl mul for u64   { intern fn mul(self, rhs: self): self }
+impl mul for i8    { intern fn mul(self, rhs: self): self }
+impl mul for i16   { intern fn mul(self, rhs: self): self }
+impl mul for i32   { intern fn mul(self, rhs: self): self }
+impl mul for i64   { intern fn mul(self, rhs: self): self }
 
-impl div for u8    { intern fn div(self: self, rhs: self): self }
-impl div for u16   { intern fn div(self: self, rhs: self): self }
-impl div for u32   { intern fn div(self: self, rhs: self): self }
-impl div for u64   { intern fn div(self: self, rhs: self): self }
-impl div for i8    { intern fn div(self: self, rhs: self): self }
-impl div for i16   { intern fn div(self: self, rhs: self): self }
-impl div for i32   { intern fn div(self: self, rhs: self): self }
-impl div for i64   { intern fn div(self: self, rhs: self): self }
+impl div for u8    { intern fn div(self, rhs: self): self }
+impl div for u16   { intern fn div(self, rhs: self): self }
+impl div for u32   { intern fn div(self, rhs: self): self }
+impl div for u64   { intern fn div(self, rhs: self): self }
+impl div for i8    { intern fn div(self, rhs: self): self }
+impl div for i16   { intern fn div(self, rhs: self): self }
+impl div for i32   { intern fn div(self, rhs: self): self }
+impl div for i64   { intern fn div(self, rhs: self): self }
 
-impl rem for u8    { intern fn rem(self: self, rhs: self): self }
-impl rem for u16   { intern fn rem(self: self, rhs: self): self }
-impl rem for u32   { intern fn rem(self: self, rhs: self): self }
-impl rem for u64   { intern fn rem(self: self, rhs: self): self }
-impl rem for i8    { intern fn rem(self: self, rhs: self): self }
-impl rem for i16   { intern fn rem(self: self, rhs: self): self }
-impl rem for i32   { intern fn rem(self: self, rhs: self): self }
-impl rem for i64   { intern fn rem(self: self, rhs: self): self }
+impl rem for u8    { intern fn rem(self, rhs: self): self }
+impl rem for u16   { intern fn rem(self, rhs: self): self }
+impl rem for u32   { intern fn rem(self, rhs: self): self }
+impl rem for u64   { intern fn rem(self, rhs: self): self }
+impl rem for i8    { intern fn rem(self, rhs: self): self }
+impl rem for i16   { intern fn rem(self, rhs: self): self }
+impl rem for i32   { intern fn rem(self, rhs: self): self }
+impl rem for i64   { intern fn rem(self, rhs: self): self }
 
 ability scalar-cmp {
-  fn lt(self: self, other: self): bool
-  fn le(self: self, other: self): bool
-  fn gt(self: self, other: self): bool
-  fn ge(self: self, other: self): bool
+  fn lt(self, other: self): bool
+  fn le(self, other: self): bool
+  fn gt(self, other: self): bool
+  fn ge(self, other: self): bool
 }
 
 impl scalar-cmp for u8 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for u16 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for u32 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for u64 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for i8 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for i16 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for i32 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 impl scalar-cmp for i64 {
-  intern fn lt(self: self, other: self): bool
-  intern fn le(self: self, other: self): bool
-  intern fn gt(self: self, other: self): bool
-  intern fn ge(self: self, other: self): bool
+  intern fn lt(self, other: self): bool
+  intern fn le(self, other: self): bool
+  intern fn gt(self, other: self): bool
+  intern fn ge(self, other: self): bool
 }
 
 ability comparable {
-  fn compare(self: self, other: self): ordering
+  fn compare(self, other: self): ordering
 }
 
 ability try[impl t, impl e] {
@@ -372,9 +372,9 @@ ability try[impl t, impl e] {
   fn error(e: e): self
   fn value(t: t): self
 
-  fn is-ok(self: self): bool
-  fn get-error(self: self): e
-  fn get-value(self: self): t
+  fn is-ok(self): bool
+  fn get-error(self): e
+  fn get-value(self): t
 }
 
 ability iterator[impl item] {
@@ -392,7 +392,7 @@ ability iterator[impl item] {
 }
 
 ability iterable[impl item, impl i: iterator[item = item]] {
-  fn iterator(self: self): i
+  fn iterator(self): i
 }
 
 /////////////////////////////////
@@ -470,11 +470,11 @@ impl equals for string {
 }
 
 impl print for string {
-  fn printTo[w: writer](self: string, w: w) { w.write-string(self) }
+  fn printTo[w: writer](self: string, w) { w.write-string(self) }
 }
 
 impl print for {} {
-  fn printTo[w: writer](self: {}, w: w) { w.write-string("{{}") }
+  fn printTo[w: writer](self: {}, w) { w.write-string("{{}") }
 }
 
 

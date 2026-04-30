@@ -18,12 +18,12 @@ ns meta_defns;
 }
 
 #meta {
-  p"ability Named { fn getName(self: self): string }"
+  p"ability Named { fn getName(self): string }"
 }
 
 #meta {
   p`impl Named for Frob {
-    fn getName(self: self): string { if self.b "Bob" else "Joe" }
+    fn getName(self): string { if self.b "Bob" else "Joe" }
   }`
 }
 

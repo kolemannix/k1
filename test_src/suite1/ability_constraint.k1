@@ -1,7 +1,7 @@
 ns ability_constraint {
 
   ability Num {
-    fn num(self: self): i32
+    fn num(self): i32
   }
   
   fn add[T](a: T, b: T): i32 where T: Num, T: show {
@@ -11,7 +11,7 @@ ns ability_constraint {
   }
   
   impl Num for int {
-    fn num(self: self): i32 { self.as() }
+    fn num(self): i32 { self.as() }
   }
   
   fn test() {

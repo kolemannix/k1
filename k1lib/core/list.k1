@@ -317,13 +317,13 @@ ns list {
 }
 
 impl writer for *mut list[char] {
-  fn write-byte(self: self, value: u8) { self.push(value.as[char]) }
-  fn write-bytes(self: self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
+  fn write-byte(self, value: u8) { self.push(value.as[char]) }
+  fn write-bytes(self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
 }
 
 impl writer for *mut list[u8] {
-  fn write-byte(self: self, value: u8) { self.push(value) }
-  fn write-bytes(self: self, bytes: span[byte]) {
+  fn write-byte(self, value: u8) { self.push(value) }
+  fn write-bytes(self, bytes: span[byte]) {
     self.append-span(bytes)
   }
 }
@@ -343,7 +343,7 @@ impl[T: equals] equals for list[T] {
 }
 
 impl[T: print] print for list[T] {
-  fn printTo[w: writer](self: list[T], w: w) {
+  fn printTo[w: writer](self: list[T], w) {
     w.write-char('[');
     for self {
       it.printTo(w);
@@ -357,13 +357,13 @@ impl[T: print] print for list[T] {
 }
 
 impl[T] iterable[item = T, i = BufferIterator[T]] for list[T] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     self.asBuffer().iterator()
   }
 }
 
 impl[T] iterable[item = T, i = BufferIterator[T]] for *list[T] {
-  fn iterator(self: self): i {
+  fn iterator(self): i {
     self.*.iterator()
   }
 }

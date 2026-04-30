@@ -11,7 +11,7 @@ fn takesHelloer[T](t: T): MyString where T: SayHello {
 }
 
 ability SayHello {
-  fn hello(self: self): MyString {
+  fn hello(self): MyString {
     { s: "Hello" }
   }
 }

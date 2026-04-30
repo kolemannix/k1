@@ -18,7 +18,7 @@ ns ability_generic {
 
   deftype GenericPoint[T] = { x: T, y: T }
   ability GAdd[Rhs, impl Output] {
-    fn gadd(self: self, rhs: Rhs): Output
+    fn gadd(self, rhs: Rhs): Output
   }
   impl[T: GAdd[Rhs = T, Output = T] and show]
     GAdd[Rhs = GenericPoint[T], Output = GenericPoint[T]]
@@ -35,7 +35,7 @@ ns ability_generic {
   }
 
   ability From[F] { fn from(t: F): self }
-  ability To[To] { fn to(self: self): To }
+  ability To[To] { fn to(self): To }
 
   impl[T: show] To[To = string] for T {
     fn to(self: T): string { self.show() }
@@ -46,10 +46,10 @@ ns ability_generic {
   }
 
   impl To[To = string] for i32 {
-    fn to(self: self): string { show/show[i32](self) }
+    fn to(self): string { show/show[i32](self) }
   }
   impl To[To = string] for i64 {
-    fn to(self: self): string { show/show[i64](self) }
+    fn to(self): string { show/show[i64](self) }
   }
   impl To[To = char] for byte {
     fn to(self: byte): char { self.as() }
