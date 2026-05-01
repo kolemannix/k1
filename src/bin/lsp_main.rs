@@ -664,6 +664,7 @@ impl LanguageServer for Backend {
                     | k1::lex::TokenKind::BackSlash
                     | k1::lex::TokenKind::Hash
                     | k1::lex::TokenKind::At
+                    | k1::lex::TokenKind::Dollar
                     | k1::lex::TokenKind::Caret
                     | k1::lex::TokenKind::DoubleQuote
                     | k1::lex::TokenKind::SingleQuote

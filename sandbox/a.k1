@@ -1,4 +1,17 @@
+fn add[a](x: a, y: a): a { 
+  #meta "x + y"
+}
+
+$p"deftype MyFoo = { foo: int }"
+
+fn repeat(n: int, a: string): string {
+  let sb = StringBuilder/new();
+  for IntRange/upTo(n) { sb.write-string("{a};") };
+  sb.build()
+}
+
 fn main(): i32 {
-  "hello, there";
+  let x = 21;
+  $repeat(5, \println("hello {add(x, x)}"));
   0
 }

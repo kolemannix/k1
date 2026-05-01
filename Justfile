@@ -1,3 +1,6 @@
+a:
+  ./run.sh sandbox/a.k1
+
 ts1:
   ./run.sh test_src/suite1
 

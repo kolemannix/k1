@@ -3500,7 +3500,7 @@ impl TypedProgram {
                 let has_payloads =
                     self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
                 if has_payloads {
-                    let mut variants = self.types.mem.new_list(variant_count as u32);
+                    let mut variants = self.types.mem.new_list(variant_count);
                     for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let payload_type_id = match &v.payload {
                             None => None,
@@ -3544,7 +3544,7 @@ impl TypedProgram {
                     );
                     Ok(sum_type_id)
                 } else {
-                    let mut member_values = self.types.mem.new_list(variant_count as u32);
+                    let mut member_values = self.types.mem.new_list(variant_count);
                     for (index, v) in self.ast.mem.getn(sum.variants).iter().enumerate() {
                         let tag_value = match tag_type {
                             IntegerType::U8 => TypedIntValue::U8(index as u8),
@@ -7627,7 +7627,7 @@ impl TypedProgram {
             }
             ParsedExpr::Static(stat) => {
                 let stat = *stat;
-                match self.eval_static_expr_and_exec(expr_id, stat, ctx)? {
+                match self.eval_static_expr_and_exec(expr_id, stat, false, ctx)? {
                     StaticExecutionResult::TypedExpr(typed_expr) => Ok(typed_expr),
                     StaticExecutionResult::Definitions(_) => {
                         self.ice_span(stat.span, "Got static definitions from an expression")
@@ -7892,6 +7892,7 @@ impl TypedProgram {
         &mut self,
         _expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
+        is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
         let span = stat.span;
@@ -8004,7 +8005,7 @@ impl TypedProgram {
                 let emitted_string = self.ast.strings.get_string(*string_id);
 
                 if emitted_string.is_empty() {
-                    if stat.is_definition_level {
+                    if is_definition {
                         Ok(StaticExecutionResult::Definitions(eco_vec![]))
                     } else {
                         Ok(StaticExecutionResult::TypedExpr(self.synth_empty_struct(span)))
@@ -8027,7 +8028,7 @@ impl TypedProgram {
                         line.line_number(),
                     )
                     .unwrap();
-                    if !stat.is_definition_level {
+                    if !is_definition {
                         content.push_str("{\n");
                     }
                     // FIXME: generated_filename is not unique if we specialized on multiple types
@@ -8044,8 +8045,8 @@ impl TypedProgram {
                     );
 
                     content.push_str(emitted_string);
-                    if !stat.is_definition_level {
-                        content.push('}');
+                    if !is_definition {
+                        content.push_str("\n}");
                     }
                     debug!("Emitted raw content:\n---\n{content}\n---");
                     let generated_path = self.config.out_dir.join(&generated_filename);
@@ -8071,7 +8072,7 @@ impl TypedProgram {
                         )
                     }
 
-                    let parse_kind = if stat.is_definition_level {
+                    let parse_kind = if is_definition {
                         ParseAdHocKind::Definitions
                     } else {
                         ParseAdHocKind::Expr
@@ -11041,7 +11042,6 @@ impl TypedProgram {
 
         let args = self.ast.mem.getn(call.args);
         let first_arg = args.first().copied();
-        let second_arg = args.get(1).copied();
 
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = first_arg {
@@ -11879,7 +11879,7 @@ impl TypedProgram {
                 let g_params = g.params;
 
                 let payload_if_needed = match (generic_variant.payload, parsed_variant.payload) {
-                    (Some(generic_payload_type_id), None) => {
+                    (Some(_), None) => {
                         return failf!(
                             span,
                             "Variant {} requires a payload",
@@ -15472,7 +15472,6 @@ impl TypedProgram {
                 };
                 let s = *s;
                 let is_metaprogram = s.kind.is_metaprogram();
-                debug_assert!(s.is_definition_level);
                 // For value programs, we want to run them in the body phase
                 // so that they have access to as much code as possible
                 if !is_metaprogram {
@@ -15490,7 +15489,7 @@ impl TypedProgram {
                             flags: EvalExprFlags::empty(),
                         };
                         if let Err(e) =
-                            self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx)
+                            self.eval_static_expr_and_exec(static_expr_id, s, true, eval_expr_ctx)
                         {
                             self.report(e);
                         };
@@ -15972,8 +15971,6 @@ impl TypedProgram {
                     if !is_metaprogram {
                         continue;
                     }
-                    debug_assert!(s.is_definition_level);
-
                     let should_compile = self
                         .execute_static_condition(s.condition_if_definition, namespace_scope_id);
 
@@ -15986,7 +15983,7 @@ impl TypedProgram {
                     // parse it as definitions, then we load those definitions
                     // injecting them into the AST, as if they appeared right here.
                     // If it is a namespace, we ensure we handle it right now, as this is the phase that
-                    // they should be handled. Everything else will get handled naturally
+                    // namespaces should be declared. Everything else will get handled naturally
                     // as we iterate over the namespace's definitions in the future phases
                     let static_ctx = StaticExecContext {
                         is_metaprogram,
@@ -15999,15 +15996,19 @@ impl TypedProgram {
                         global_defn_name: None,
                         flags: EvalExprFlags::empty(),
                     };
-                    let newly_parsed_defns =
-                        match self.eval_static_expr_and_exec(static_expr_id, s, eval_expr_ctx) {
-                            Err(e) => {
-                                self.report(e);
-                                eco_vec![]
-                            }
-                            Ok(StaticExecutionResult::Definitions(defns)) => defns,
-                            Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
-                        };
+                    let newly_parsed_defns = match self.eval_static_expr_and_exec(
+                        static_expr_id,
+                        s,
+                        true,
+                        eval_expr_ctx,
+                    ) {
+                        Err(e) => {
+                            self.report(e);
+                            eco_vec![]
+                        }
+                        Ok(StaticExecutionResult::Definitions(defns)) => defns,
+                        Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
+                    };
                     // If any of the meta definitions are themselves namespaces,
                     // we need to run them now, in-loop, so that the program behaves
                     // exactly as if they had been literally written in place
@@ -16797,7 +16798,7 @@ impl TypedProgram {
         }
 
         let type_schema_type_id = self.types.builtins.types_type_schema.unwrap();
-        let type_schema = self.types.get(type_schema_type_id).expect_sum().clone();
+        let type_schema = *self.types.get(type_schema_type_id).expect_sum();
         let int_kind_type_id = self.types.builtins.types_int_kind.unwrap();
         let get_schema_variant = |self_: &TypedProgram, ident| {
             self_.types.sum_variant_by_name(type_schema.variants, ident).unwrap()

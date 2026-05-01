@@ -235,7 +235,7 @@ pub enum TokenKind {
     BackSlash,
     Hash,
     At,
-
+    Dollar,
     Caret,
 
     DoubleQuote,
@@ -343,6 +343,7 @@ impl TokenKind {
             K::BackSlash => "\\",
             K::Hash => "#",
             K::At => "@",
+            K::Dollar => "$",
             K::Caret => "^",
 
             K::Plus => "+",
@@ -391,64 +392,7 @@ impl TokenKind {
             K::Eof => "<EOF>",
         }
     }
-    pub fn from_char(c: char) -> Option<TokenKind> {
-        match c {
-            '(' => Some(K::OpenParen),
-            ')' => Some(K::CloseParen),
-            '[' => Some(K::OpenBracket),
-            ']' => Some(K::CloseBracket),
-            '{' => Some(K::OpenBrace),
-            '}' => Some(K::CloseBrace),
-            '<' => Some(K::LAngle),
-            '>' => Some(K::RAngle),
-            ':' => Some(K::Colon),
-            ';' => Some(K::Semicolon),
-            '=' => Some(K::Equals),
-            '.' => Some(K::Dot),
-            ',' => Some(K::Comma),
-            '"' => Some(K::DoubleQuote),
-            '\'' => Some(K::SingleQuote),
-            '+' => Some(K::Plus),
-            '-' => Some(K::Minus),
-            '*' => Some(K::Asterisk),
-            '/' => Some(K::Slash),
-            '!' => Some(K::Bang),
-            '?' => Some(K::QuestionMark),
-            '|' => Some(K::Pipe),
-            '&' => Some(K::Amp),
-            '%' => Some(K::Percent),
-            '\\' => Some(K::BackSlash),
-            '#' => Some(K::Hash),
-            '@' => Some(K::At),
-            '^' => Some(K::Caret),
-            _ => None,
-        }
-    }
 
-    pub fn compound_from_start_and_char(start: TokenKind, c: char) -> Option<TokenKind> {
-        match (start, c) {
-            (TokenKind::Equals, '=') => Some(K::EqualsEquals),
-            (TokenKind::Bang, '=') => Some(K::BangEquals),
-            (TokenKind::LAngle, '=') => Some(K::LessEqual),
-            (TokenKind::RAngle, '=') => Some(K::GreaterEqual),
-            (TokenKind::Colon, '=') => Some(K::ColonEquals),
-
-            (TokenKind::Slash, '/') => Some(TokenKind::LineComment),
-
-            (TokenKind::Pipe, '|') => Some(TokenKind::PipePipe),
-
-            // Thin Arrows
-            (TokenKind::LAngle, '-') => Some(K::LThinArrow),
-            (TokenKind::Minus, '>') => Some(K::RThinArrow),
-
-            // Shifts
-            (TokenKind::LAngle, '<') => Some(K::LAngleLAngle),
-            (TokenKind::RAngle, '>') => Some(K::RAngleRAngle),
-
-            (TokenKind::Amp, '&') => Some(K::AmpAmp),
-            _ => None,
-        }
-    }
     pub fn token_from_bytes(bytes: &[u8]) -> Option<TokenKind> {
         match bytes {
             b"fn" => Some(K::KeywordFn),
@@ -1113,6 +1057,7 @@ impl<'content, 'spans> Lexer<'content, 'spans> {
                             '\\' => return_single!(K::BackSlash),
                             '#' => return_single!(K::Hash),
                             '@' => return_single!(K::At),
+                            '$' => return_single!(K::Dollar),
                             '^' => return_single!(K::Caret),
                             ' ' | '\x09'..='\x0d' => {
                                 // simply eat whitespace

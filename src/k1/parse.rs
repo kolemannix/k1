@@ -717,7 +717,6 @@ impl ParsedStaticBlockKind {
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
-    pub is_definition_level: bool,
     pub condition_if_definition: Option<ParsedExprId>,
     pub parameter_names: SliceHandle<IdentSliceId>,
     pub span: SpanId,
@@ -2265,13 +2264,14 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
         let (maybe_hash, maybe_directive) = self.peek_two();
+        // nocommit: remove this syntax before all is done
         if maybe_hash.kind == K::Hash {
             // Leave `#debug` entirely alone
             if self.get_token_chars(maybe_directive) == "debug" {
                 Ok(None)
             } else {
                 self.advance();
-                match self.parse_static_expr(maybe_hash, maybe_directive, true, condition)? {
+                match self.parse_static_expr(maybe_hash, maybe_directive, condition)? {
                     Some(static_expr_id) => Ok(Some(static_expr_id)),
                     None => Err(error_expected(
                         "static definition (e.g. #static or #meta)",
@@ -2279,6 +2279,14 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                     )),
                 }
             }
+        } else if maybe_hash.kind == K::Dollar {
+            self.advance();
+            let expr_id = self.consume_static_expr(
+                maybe_hash,
+                condition,
+                ParsedStaticBlockKind::Metaprogram,
+            )?;
+            Ok(Some(expr_id))
         } else {
             Ok(None)
         }
@@ -2290,7 +2298,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         &mut self,
         hash_token: Token,
         maybe_directive: Token,
-        is_definition_level: bool,
         condition: Option<ParsedExprId>,
     ) -> ParseResult<Option<ParsedExprId>> {
         match maybe_directive.kind {
@@ -2305,40 +2312,39 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                         };
                         self.advance();
                         self.add_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
-                        let mut parameter_names: SV4<Ident> = smallvec![];
-                        if let Some(_open_token) =
-                            self.maybe_consume_next_no_whitespace(K::OpenParen)
-                        {
-                            self.eat_delimited_ext(
-                                "params",
-                                &mut parameter_names,
-                                K::Comma,
-                                K::CloseParen,
-                                |p| {
-                                    Parser::expect_ident_ext(p, false, false)
-                                        .map(|(_token, ident)| ident)
-                                },
-                            )?;
-                        }
-                        let parameter_names_handle =
-                            self.ast.idents.slices.add_slice_copy(&parameter_names);
-                        let base_expr = self.expect_expression()?;
-                        let expr_span = self.get_expression_span(base_expr);
-                        let span = self.extend_span(hash_token.span, expr_span);
-                        Ok(Some(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
-                            base_expr,
-                            kind,
-                            is_definition_level,
-                            condition_if_definition: condition,
-                            parameter_names: parameter_names_handle,
-                            span,
-                        }))))
+                        let e = self.consume_static_expr(hash_token, condition, kind)?;
+                        Ok(Some(e))
                     }
                     _ => Ok(None),
                 }
             }
             _ => Ok(None),
         }
+    }
+
+    fn consume_static_expr(
+        &mut self,
+        start_token: Token,
+        condition_if_definition: Option<ParsedExprId>,
+        kind: ParsedStaticBlockKind,
+    ) -> ParseResult<ParsedExprId> {
+        let mut parameter_names: SV4<Ident> = smallvec![];
+        if let Some(_open_token) = self.maybe_consume_next_no_whitespace(K::OpenParen) {
+            self.eat_delimited_ext("params", &mut parameter_names, K::Comma, K::CloseParen, |p| {
+                Parser::expect_ident_ext(p, false, false).map(|(_token, ident)| ident)
+            })?;
+        }
+        let parameter_names_handle = self.ast.idents.slices.add_slice_copy(&parameter_names);
+        let base_expr = self.expect_expression()?;
+        let expr_span = self.get_expression_span(base_expr);
+        let span = self.extend_span(start_token.span, expr_span);
+        Ok(self.add_expression(ParsedExpr::Static(ParsedStaticExpr {
+            base_expr,
+            kind,
+            condition_if_definition,
+            parameter_names: parameter_names_handle,
+            span,
+        })))
     }
 
     fn source(&self) -> &Source {
@@ -3449,7 +3455,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.expect_kind(K::CloseParen)?;
                 Ok(Some(expr))
             }
-            K::BackSlash => Ok(Some(self.expect_lambda()?)),
             K::KeywordFn => Ok(Some(self.expect_lambda()?)),
             K::KeywordWhile => {
                 let while_result = self.expect_while_loop()?;
@@ -3613,13 +3618,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.add_expression(ParsedExpr::ListLiteral(ParsedList { elements, span })),
                 ))
             }
+            K::Dollar => {
+                self.advance();
+                let expr_id =
+                    self.consume_static_expr(first, None, ParsedStaticBlockKind::Metaprogram)?;
+                Ok(Some(expr_id))
+            }
+            K::BackSlash => {
+                self.advance();
+                let parsed_stmt = self.expect_statement()?;
+                let stmt_span = self.ast.get_stmt_span(parsed_stmt);
+                let span = self.extend_span(first.span, stmt_span);
+                Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode { parsed_stmt, span }))))
+            }
             K::Hash => {
                 self.advance();
 
                 let maybe_directive = self.peek();
-                if let Some(static_expr) =
-                    self.parse_static_expr(first, maybe_directive, false, None)?
-                {
+                if let Some(static_expr) = self.parse_static_expr(first, maybe_directive, None)? {
                     Ok(Some(static_expr))
                 } else {
                     match maybe_directive.kind {
