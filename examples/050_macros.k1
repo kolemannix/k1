@@ -1,10 +1,10 @@
 // Certainly looks like a macro to me, cotton
 
-// The meta command, '$', runs its argument at compile-time and expects a string.
-// The returned string is compiled and inserted at the site of the meta command,
-// and the meta command is replaced by the returned code
+// The macro operator, '$', runs its argument at compile-time and expects a string.
+// The returned string is compiled and inserted at the site of the macro operator,
+// and the macro operator is replaced by the returned code
 
-// The meta command can be used wherever a <definition> is expected,
+// The macro operator can be used wherever a <definition> is expected,
 // and wherever an <expression> is expected
 
 // This function uses generics and invokes meta internally to produce
@@ -15,9 +15,9 @@ fn double[a](x: a, y: a): a {
   $ "x + x"
 }
 
-// Armed with the meta command, any function that returns a string could be considered
-// a macro. This one accepts two expressions as strings, and when invoked via #meta, will
-// behave a whole lot like a replacement macro a.la Rust macro_rules! or even C, although its
+// Armed with the macro operator, any function that returns a string could be considered
+// a macro. This one accepts two expressions as strings, and when invoked via $, will
+// behave a whole lot like a replacement macro a.la Rust's macro_rules! or even a C #define, although its
 // executing much later than a C macro would, of course
 fn addlazy(x: string, y: string): string { 
   "{x} + {y}"
@@ -34,7 +34,7 @@ fn main(): i32 {
 
   // In order to invoke addlazy properly, we need to pass it our code
   // as strings. It would suck to have to put them in double quotes like
-  // a regular string, and also send the wrong signal. The 'code' command,
+  // a regular string, and also send the wrong signal. The 'escape code' command,
   // invoked with backslash, is the solution for this.
   // Use \ <stmt> and the provided statement will be turned into a string
 
