@@ -8,7 +8,7 @@
 // separate module, but more convenient
 
 // Usage can even appear above the pre ns
-#meta pre/makePoint("MyMetaPoint")
+$pre/makePoint("MyMetaPoint")
 
 ns pre {
   let pi: f32 = 3.14
@@ -24,7 +24,7 @@ use core/meta/CodeWriter
 
 fn simpleIncrement(): i32 {
   let x = 10;
-  #meta {
+  ${
     let code = StringBuilder/new();
     for core/IntRange/upTo(5) {
       code.line("x := x + 1;");
@@ -76,7 +76,7 @@ w.write-string("\"{f.name}\":");
 }
 
 fn writeJson[T, w: writer](context w)(t: T) {
-  #meta {
+  ${
     let type-id = types/type-id[T]();
     let code = StringBuilder/new();
     _writeJsonFromSchema(&code, "t", type-id);

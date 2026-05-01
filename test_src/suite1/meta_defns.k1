@@ -1,11 +1,11 @@
 ns meta_defns;
 
-#meta "let n: u64 = 255"
-#meta "let x: u64 = 256"
+$ "let n: u64 = 255"
+$ "let x: u64 = 256"
 
-#meta p"fn isPow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
+$ p"fn isPow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 
-#meta {
+$ {
   let name1 = "1";
   let name2 = "2";
   let a = "ns Secret {{ fn secret{name1}(): int {{ 42 } }\n";
@@ -13,21 +13,21 @@ ns meta_defns;
   "{a}{b}"
 }
 
-#meta {
+$ {
   p"deftype Frob = { b: bool }"
 }
 
-#meta {
+$ {
   p"ability Named { fn getName(self): string }"
 }
 
-#meta {
+$ {
   p`impl Named for Frob {
     fn getName(self): string { if self.b "Bob" else "Joe" }
   }`
 }
 
-#meta core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
+$ core/meta/defineSoA[{ x: u32, y: u32, z: u8 }]("Point3List")
 
 fn test() {
   let frob: Frob = { b: false };
@@ -50,5 +50,5 @@ fn test() {
 // Only "static, true" and "meta, true" should appear
 // #if true #static { println("static, true"); {} } 
 // #if false #static { println("static, false"); {} } 
-// #if true #meta { println("meta, true"); "let u1: empty = {{};" } 
-// #if false #meta { println("meta, false"); "let u2: empty = {{};" } 
+// #if true ${ println("meta, true"); "let u1: empty = {{};" } 
+// #if false ${ println("meta, false"); "let u2: empty = {{};" } 

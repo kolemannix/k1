@@ -1,21 +1,21 @@
 // Certainly looks like a macro to me, cotton
 
-// the meta directive runs its argument at compile-time and expects a string.
-// The returned string is compiled and inserted at the site of the meta directive,
-// and the meta directive is replaced by the returned code
+// The meta command, '$', runs its argument at compile-time and expects a string.
+// The returned string is compiled and inserted at the site of the meta command,
+// and the meta command is replaced by the returned code
 
-// The meta directive can be used wherever a <definition> is expected,
+// The meta command can be used wherever a <definition> is expected,
 // and wherever an <expression> is expected
 
-// This function uses generics and invokes #meta internally to produce
+// This function uses generics and invokes meta internally to produce
 // some generic behavior, but its arguments will be eagerly evaluated
 // more like a function call than a 'macro' in the canonical understanding
 // that implies a more text-based approach.
 fn double[a](x: a, y: a): a { 
-  #meta "x + x"
+  $ "x + x"
 }
 
-// Armed with the meta directive, any function that returns a string could be considered
+// Armed with the meta command, any function that returns a string could be considered
 // a macro. This one accepts two expressions as strings, and when invoked via #meta, will
 // behave a whole lot like a replacement macro a.la Rust macro_rules! or even C, although its
 // executing much later than a C macro would, of course
@@ -31,15 +31,18 @@ fn repeat(n: int, expr: string): string {
 }
 
 fn main(): i32 {
-  let x = #meta addlazy(#code 21, #code 55);
+
+  // In order to invoke addlazy properly, we need to pass it our code
+  // as strings. It would suck to have to put them in double quotes like
+  // a regular string, and also send the wrong signal. The 'code' command,
+  // invoked with backslash, is the solution for this.
+  // Use \ <stmt> and the provided statement will be turned into a string
+
+  let thunk = fn.{ println("thunk"); 21 };
+  let x = $addlazy(\thunk(), \55);
 
   // Here is how we would invoke the 'repeat' function as 
   // a macro
-  #meta repeat(5, #code println("hello {double(x, x)}"));
-
-  // It's important to understand the 2 basic primitives, the directives
-  // #meta and #code, but this gets very noisy, so there is sugar for
-  // both #meta and #code. The below is equivalent:
   $repeat(5, \println("hello {double(x, x)}"));
 
   0

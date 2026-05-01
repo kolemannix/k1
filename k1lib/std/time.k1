@@ -18,7 +18,7 @@
 
 ns time {
   fn read-cpu-counter(): u64 {
-    // TODO: static switch
+    // FIXME: static switch
     #if k1/os is :macos
       macos-time/mach_absolute_time()
     else #if k1/os is :linux {

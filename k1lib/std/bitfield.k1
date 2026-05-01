@@ -1,7 +1,7 @@
 ns bitfield;
 
 // Lets you create bitfields with masks, bindings, and getters/setters. Example usage:
-// #meta bitfield/define[u16]("FlagsAuto", [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, b8("foo")])
+// $bitfield/define[u16]("FlagsAuto", [b1("shielded"), b1("cloaked"), b1("damaged"), { name: "sectorId", bits: 5 }, b8("foo")])
 
 fn intWidthForBits(bits: size): size {
   if bits <= 8 8
